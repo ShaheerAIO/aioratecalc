@@ -131,6 +131,41 @@ describe("buildDealProperties", () => {
     expect(props.amount).toBe("1200000");
   });
 
+  it("falls back to the quoted volume when there is no statement or form", () => {
+    // What a deal pushed on acceptance looks like: the merchant hasn't filled
+    // the onboarding form and never handed over a statement, so the only volume
+    // on the record is the one the rep quoted from. Reading processing/analysis
+    // alone put these deals in the pipeline at $0.
+    const props = buildDealProperties(appAt("quote_accepted", {
+      processing: null,
+      analysis: null,
+      quoteConfig: { monthlyVolume: 1000, avgTicket: 100 },
+    } as unknown as Partial<MerchantApplication>));
+    expect(props.amount).toBe("12000");
+  });
+
+  it("prefers the statement and the form over the quoted volume", () => {
+    const fromStatement = buildDealProperties(appAt("quote_accepted", {
+      processing: null,
+      analysis: { totalVolume: 50000 },
+      quoteConfig: { monthlyVolume: 1000, avgTicket: 100 },
+    } as unknown as Partial<MerchantApplication>));
+    expect(fromStatement.amount).toBe("600000");
+    // processing.monthlyVolume is what the merchant typed themselves — top authority.
+    const fromForm = buildDealProperties(appAt("quote_accepted", {
+      analysis: { totalVolume: 50000 },
+      quoteConfig: { monthlyVolume: 1000, avgTicket: 100 },
+    } as unknown as Partial<MerchantApplication>));
+    expect(fromForm.amount).toBe("1200000");
+  });
+
+  it("amounts a marketing-only quote at zero — it has no card volume", () => {
+    const props = buildDealProperties(appAt("quote_accepted", {
+      processing: null, analysis: null, quoteType: "marketing_only", quoteConfig: null,
+    } as unknown as Partial<MerchantApplication>));
+    expect(props.amount).toBe("0");
+  });
+
   it("omits pipeline and dealstage for a stage this build doesn't know", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const props = buildDealProperties(appAt("some_future_stage"));

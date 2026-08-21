@@ -5,7 +5,9 @@ import { db } from "@/lib/db/client";
 import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
+import { pushToHubSpot } from "@/lib/adapters/hubspot";
 import { hasQuoteBasis } from "@/lib/leadQuote";
+import { rowToApp } from "@/lib/storage/applicationRow";
 
 const TOKEN_TTL_MINUTES = 30;
 
@@ -31,8 +33,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     if (row.customerLinkExpiresAt && row.customerLinkExpiresAt.getTime() < Date.now()) {
       return NextResponse.json({ error: "This link has expired" }, { status: 410 });
     }
-    // Nothing to accept until a quote exists on the application.
-    if (!hasQuoteBasis({ analysis: row.analysis, quoteConfig: row.quoteConfig, targetMargin: null, pricingModel: null })) {
+    // Nothing to accept until a quote exists on the application. The whole row
+    // goes in, not a hand-picked subset: a marketing-only quote's basis is its
+    // priced lines, so omitting quoteType/quoteLines here read every such quote
+    // as an unrated full_pos one with no volume and refused it as "no quote yet".
+    const app = rowToApp(row);
+    if (!hasQuoteBasis(app)) {
       return NextResponse.json({ error: "There is no quote on this link yet" }, { status: 409 });
     }
 
@@ -41,14 +47,37 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     // forward-only (same rule as the Adyen webhook) so a deal already in
     // onboarding is never dragged back to quote_accepted.
     const advance = shouldAdvance(row.stage, "quote_accepted");
+    let accepted = row;
     if (advance || !row.quoteAcceptedAt) {
-      await db.update(merchantApplications)
+      const [updated] = await db.update(merchantApplications)
         .set({
           ...(advance ? { stage: "quote_accepted" as const } : {}),
           quoteAcceptedAt: row.quoteAcceptedAt ?? new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(merchantApplications.id, row.id));
+        .where(eq(merchantApplications.id, row.id))
+        .returning();
+      if (updated) accepted = updated;
+    }
+
+    // Acceptance is the moment the deal becomes real, so it's the moment it
+    // belongs in HubSpot — the push used to happen only when the merchant later
+    // submitted the onboarding form, so a merchant who accepted and then stopped
+    // at the checklist left no trace in the CRM at all.
+    //
+    // Fire-and-log, like the pushes in lib/actions/customer.ts: the customer is
+    // waiting on their login email, and a HubSpot outage must not cost them the
+    // acceptance we've already recorded. pushToHubSpot PATCHes when
+    // hubspotDealId is already set, so re-accepting updates rather than duplicates.
+    try {
+      const dealId = await pushToHubSpot(rowToApp(accepted));
+      if (dealId !== accepted.hubspotDealId) {
+        await db.update(merchantApplications)
+          .set({ hubspotDealId: dealId, updatedAt: new Date() })
+          .where(eq(merchantApplications.id, accepted.id));
+      }
+    } catch (err) {
+      console.error("HubSpot deal sync on acceptance failed:", err instanceof Error ? err.message : err);
     }
 
     const loginToken = randomUUID();

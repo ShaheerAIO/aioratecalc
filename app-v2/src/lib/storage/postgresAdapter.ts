@@ -3,77 +3,9 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications, appSettings, customerSubmissions } from "@/lib/db/schema";
 import type { IStorage, StorageScope, CustomerApplicationPatch } from "./storageInterface";
-import type { MerchantApplication, CustomerSubmission, AppSettings, DealStage, PricingModel } from "@/types/merchant";
+import { rowToApp, appToRow } from "./applicationRow";
+import type { MerchantApplication, CustomerSubmission, AppSettings } from "@/types/merchant";
 import { DEFAULT_PROCESSOR } from "@/lib/defaults";
-
-type ApplicationRow = typeof merchantApplications.$inferSelect;
-
-function rowToApp(row: ApplicationRow): MerchantApplication {
-  return {
-    id: row.id,
-    ownerUserId: row.ownerUserId,
-    customerUserId: row.customerUserId,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-    stage: row.stage as DealStage,
-    hubspotDealId: row.hubspotDealId,
-    tenantLink: row.tenantLink,
-    adyenIds: row.adyenIds,
-    adyenOnboardingUrl: row.adyenOnboardingUrl,
-    checkIds: row.checkIds,
-    hubspotIds: row.hubspotIds,
-    quoteType: row.quoteType,
-    quoteConfig: row.quoteConfig,
-    quoteLines: row.quoteLines,
-    orderPoints: row.orderPoints,
-    quoteAcceptedAt: row.quoteAcceptedAt ? row.quoteAcceptedAt.toISOString() : null,
-    targetMargin: row.targetMargin != null ? Number(row.targetMargin) : null,
-    pricingModel: row.pricingModel as PricingModel | null,
-    customerLinkToken: row.customerLinkToken,
-    customerLinkPurpose: row.customerLinkPurpose as "lead_upload" | "kyc_handoff" | null,
-    customerLinkSentAt: row.customerLinkSentAt ? row.customerLinkSentAt.toISOString() : null,
-    customerLinkExpiresAt: row.customerLinkExpiresAt ? row.customerLinkExpiresAt.toISOString() : null,
-    analysis: row.analysis,
-    proposal: row.proposal,
-    business: row.business,
-    ownerContact: row.ownerContact,
-    processing: row.processing,
-    agreement: row.agreement,
-  };
-}
-
-function appToRow(app: MerchantApplication) {
-  return {
-    id: app.id,
-    ownerUserId: app.ownerUserId,
-    customerUserId: app.customerUserId,
-    stage: app.stage,
-    hubspotDealId: app.hubspotDealId,
-    tenantLink: app.tenantLink,
-    adyenIds: app.adyenIds,
-    adyenOnboardingUrl: app.adyenOnboardingUrl,
-    checkIds: app.checkIds,
-    hubspotIds: app.hubspotIds,
-    quoteType: app.quoteType,
-    quoteConfig: app.quoteConfig,
-    quoteLines: app.quoteLines,
-    orderPoints: app.orderPoints,
-    quoteAcceptedAt: app.quoteAcceptedAt ? new Date(app.quoteAcceptedAt) : null,
-    targetMargin: app.targetMargin != null ? String(app.targetMargin) : null,
-    pricingModel: app.pricingModel,
-    customerLinkToken: app.customerLinkToken,
-    customerLinkPurpose: app.customerLinkPurpose,
-    customerLinkSentAt: app.customerLinkSentAt ? new Date(app.customerLinkSentAt) : null,
-    customerLinkExpiresAt: app.customerLinkExpiresAt ? new Date(app.customerLinkExpiresAt) : null,
-    analysis: app.analysis,
-    proposal: app.proposal,
-    business: app.business,
-    ownerContact: app.ownerContact,
-    processing: app.processing,
-    agreement: app.agreement,
-    updatedAt: new Date(),
-  };
-}
 
 export class PostgresAdapter implements IStorage {
   async listApplications(scope: StorageScope): Promise<MerchantApplication[]> {

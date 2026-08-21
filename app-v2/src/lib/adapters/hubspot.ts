@@ -93,6 +93,21 @@ export type HubspotAssociation = {
   types: Array<{ associationCategory: "HUBSPOT_DEFINED"; associationTypeId: number }>;
 };
 
+// The three places a monthly card volume can live, in order of authority: what
+// the merchant typed on the onboarding form, what their statement said, then the
+// figure the rep quoted from. The third matters because the deal is now pushed
+// on acceptance — a no-statement quote reaches HubSpot with only quoteConfig
+// filled in, and reading the first two alone put those deals in the pipeline at
+// $0. Marketing-only quotes have no volume at all and still amount to 0.
+function annualVolume(app: MerchantApplication): number {
+  const monthly =
+    parseFloat(app.processing?.monthlyVolume || "0") ||
+    app.analysis?.totalVolume ||
+    app.quoteConfig?.monthlyVolume ||
+    0;
+  return monthly * 12;
+}
+
 /**
  * Pure: the property bag for a deal write. `pipeline`/`dealstage` are omitted
  * (rather than defaulted to the pipeline's first stage) when the row carries a
@@ -102,7 +117,7 @@ export type HubspotAssociation = {
 export function buildDealProperties(app: MerchantApplication): Record<string, string> {
   const props: Record<string, string> = {
     dealname: app.business?.dba || app.business?.legalName || app.analysis?.merchantName || "New Deal",
-    amount: String(Math.round((parseFloat(app.processing?.monthlyVolume || "0") || app.analysis?.totalVolume || 0) * 12)),
+    amount: String(Math.round(annualVolume(app))),
   };
   const dealstage = (STAGE_MAP as Record<string, string | undefined>)[app.stage];
   if (dealstage) {
