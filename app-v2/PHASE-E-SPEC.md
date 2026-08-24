@@ -1,5 +1,61 @@
 # Phase E — Billing through HubSpot
 
+> ## ⚠️ BUILT 2026-08-21. Read this box before following anything below.
+>
+> This spec was **written before** the build and the build **deliberately diverged from it** in the
+> places listed here. Where this box and the body disagree, this box is what shipped and why. The
+> body is kept for its reasoning, not as instructions.
+>
+> **Decided by the product owner (Shaheer), 2026-08-21:**
+>
+> 1. **Auto-publish on merchant acceptance.** §6.2's two-step rep confirmation modal (typed-DBA gate)
+>    is **cancelled**, and with it §6.1 items 1 and 10 (rep authorization, client-submitted totals) —
+>    there is no rep in the loop and no client submission to cross-check. The whole graph is built and
+>    published inside `/api/lead/[token]/accept`. **Consequence: `canPublishBillingQuote` is now the
+>    only thing standing between a bad quote and a live, unamendable ACH mandate**, which is why §6.1
+>    item 9 was *hardened* from "or the rep acknowledged" to a hard refusal.
+> 2. **`hs_recurring_billing_period` is never written** — §3.3 is **wrong** to send `P7D`. It is a
+>    contract *term*, not the billing cycle (`label: "Term"`; HubSpot derives
+>    `hs_recurring_billing_number_of_payments` from it), so `P7D` takes one $99 charge and then
+>    silently stops collecting. 935 of AIO's 1,200 live weekly line items leave it NULL, matching the
+>    real invoice stream. This also answers **O-2**. **LIVE-VERIFIED 2026-08-24** on quote
+>    `323970722493`: the weekly platform line read back `period: NULL` / `nPayments: NULL`, while all
+>    eight one-time lines got `nPayments: 1` — HubSpot deriving the count from the period, observed
+>    directly rather than inferred.
+> 3. **The quote template is admin-configurable**, not a constant: a `quote_template_policy` table
+>    maps `quoteType` → template id, edited at `/admin/settings/quote-templates` with the list read
+>    live from HubSpot. Defaults `full_pos`/`food_truck` → AIO Quote v3 (`817263673055`),
+>    `marketing_only` → Marketing Only Quote (`817697352408`). Attached by association **286**.
+>    Closes the template half of **O-1**; the sender half is the owning rep's `users.email`.
+> 4. **`schedule_demo` and Foodbuy ship as `coming_soon` shells** (closes **O-13**).
+>
+> **Corrected by evidence, not preference** — all from `PAYMENT-TEST-PLAN.md`, which supersedes this
+> document wherever they conflict:
+>
+> 5. **§7.2's status matrix is defective.** Billing completion is gated on the **subscription**, not
+>    `hs_payment_status`: the subscription appears 1–9 min after checkout, `PAID` lags by a median of
+>    **5.7 days**. As written, the matrix invites a merchant who already paid to "Review & Pay" for
+>    most of a week.
+> 6. **`findSubscriptionForDeal` → `findSubscriptionsForQuote`** (association **304**), and
+>    `HubspotIds` carries `subscriptions[]`. One quote yields one subscription per distinct billing
+>    frequency. Closes **O-4**; `listSubscriptionsModifiedSince` was never needed.
+> 7. **Cron lookback 3 d → 10 d** (§8.1) — ACH settlement outlasts a 3-day window, permanently.
+> 8. **Quote expiry 30 d → 90 d** (§3.4), matching AIO's live quotes. Expiry gates the buyer's
+>    e-signature, which happens *after* this publish.
+> 9. Closed by live reads: **O-3** (`hs_allowed_payment_methods: "ACH"`), **O-5** (real stage ids —
+>    `STAGE_MAP` was repaired in `9aafa5d`), **O-8**, **O-15** (`BYO_STRIPE`, 46/46), **O-17**
+>    (deal→company 341, deal→contact 3), **O-14** (`hubspotDealId` is canonical; `HubspotIds` has no
+>    `dealId`).
+>
+> **Not implementable as scoped:** correction #10 in `PAYMENT-TEST-PLAN.md` §6
+> (`hs_discount_percentage`, `hs_billing_start_delay_*`) needs `QuoteLine` extended first — a
+> quoting-model change, not an adapter one.
+>
+> **Still outstanding:** the one human-run live create→publish→read-`hs_quote_link` run (§9.2, and
+> `PAYMENT-TEST-PLAN.md` §2.2), against TEST COMPANY `334295287484`; migration `0008` is generated
+> but unapplied; nobody has enumerated the portal's **workflows**, so an EasyOB-created deal could
+> still trip a customer-facing automation.
+
 Implementation spec. Companion to `E2E-PLAN.md` (Phase E, lines 409–576) and the live
 quote-publish spike of 2026-08-18 (`E2E-PLAN.md:446–504`). Where the spike settled something,
 this document cites it and does not re-open it. Where this document infers, it says so.

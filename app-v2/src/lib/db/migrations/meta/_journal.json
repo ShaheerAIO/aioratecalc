@@ -57,6 +57,13 @@
       "when": 1787266934019,
       "tag": "0007_purple_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787347920762,
+      "tag": "0008_jazzy_changeling",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,10 @@ import type { QuoteLine } from "@/types/merchant";
 
 const pushToHubSpot = vi.fn();
 const sendMagicLinkEmail = vi.fn();
+// The Phase E billing build is stubbed here and exercised for real in
+// leadAcceptBilling.test.ts — this file is about the acceptance wiring, and a
+// real orchestrator would drag the whole HubSpot quote graph into every case.
+const buildAndPublishBillingQuote = vi.fn();
 
 type Row = Record<string, unknown> & { id: string };
 
@@ -39,6 +43,7 @@ const db = {
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 vi.mock("@/lib/adapters/hubspot", () => ({ pushToHubSpot }));
+vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
 
 const { POST } = await import("@/app/api/lead/[token]/accept/route");
 
@@ -91,19 +96,27 @@ const post = (email = "ana@tortapalace.com") =>
   );
 
 let errorSpy: ReturnType<typeof vi.spyOn>;
+// The route logs the billing outcome; silenced so the suite output stays readable.
+let logSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   pushToHubSpot.mockReset();
   sendMagicLinkEmail.mockReset();
+  buildAndPublishBillingQuote.mockReset();
+  buildAndPublishBillingQuote.mockResolvedValue({ status: "skipped", reason: "nothing_to_bill" });
   patches.length = 0;
   loginTokens.length = 0;
   row = baseRow();
   pushToHubSpot.mockResolvedValue("deal-99");
   sendMagicLinkEmail.mockResolvedValue({ sent: true, devUrl: null });
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 });
 
-afterEach(() => errorSpy.mockRestore());
+afterEach(() => {
+  errorSpy.mockRestore();
+  logSpy.mockRestore();
+});
 
 describe("accepting a quote", () => {
   it("pushes the deal to HubSpot and stores the id", async () => {
@@ -148,6 +161,24 @@ describe("accepting a quote", () => {
     expect(pushToHubSpot.mock.calls[0][0].stage).toBe("adyen_kyc_pending");
     // Already the same id — no redundant write.
     expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
+  });
+
+  it("hands the billing build the deal id the acceptance push just created", async () => {
+    await post();
+    // Not the stale row: without carrying the new id onto the local copy the
+    // quote build would refuse on `no_deal` (association 64) every first time.
+    expect(buildAndPublishBillingQuote.mock.calls[0][0].hubspotDealId).toBe("deal-99");
+    expect(buildAndPublishBillingQuote.mock.calls[0][1]).toEqual({ acceptedByEmail: "ana@tortapalace.com" });
+  });
+
+  it("still logs the customer in when the billing build blows up", async () => {
+    buildAndPublishBillingQuote.mockRejectedValue(new Error("HubSpot 500"));
+    const res = await post();
+    // The acceptance is already recorded and the email already sent — a billing
+    // failure must never cost the customer their login.
+    expect(res.status).toBe(200);
+    expect(sendMagicLinkEmail).toHaveBeenCalled();
+    expect(loginTokens).toHaveLength(1);
   });
 
   it("refuses a link with no quote basis at all", async () => {

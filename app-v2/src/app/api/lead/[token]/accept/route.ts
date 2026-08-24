@@ -6,6 +6,7 @@ import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
 import { pushToHubSpot } from "@/lib/adapters/hubspot";
+import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { rowToApp } from "@/lib/storage/applicationRow";
 
@@ -75,6 +76,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         await db.update(merchantApplications)
           .set({ hubspotDealId: dealId, updatedAt: new Date() })
           .where(eq(merchantApplications.id, accepted.id));
+        // Carried onto the local row so the billing build below sees the deal
+        // it needs: the quote can't publish without association 64.
+        accepted = { ...accepted, hubspotDealId: dealId };
       }
     } catch (err) {
       console.error("HubSpot deal sync on acceptance failed:", err instanceof Error ? err.message : err);
@@ -91,6 +95,33 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
     const result = await sendMagicLinkEmail(email, `${base}/api/customer/verify?token=${loginToken}`);
+
+    // Phase E — build AND publish the HubSpot billing quote, so the checkout
+    // link is waiting on the merchant's checklist by the time they log in.
+    //
+    // AFTER the magic-link send, deliberately: the customer is sitting on a
+    // spinner waiting for that email, and this is ~8-12 HubSpot calls plus a
+    // ~3s read-after-write for hs_quote_link. Nothing here may delay it.
+    //
+    // In its own try/catch, equally deliberately: a billing failure must never
+    // fail the acceptance. The acceptance is already recorded and the email
+    // already sent, the customer sees "check your inbox" either way, and the
+    // rep picks the stuck account up from hubspotIds.lastSyncError — which the
+    // orchestrator persists rather than only logging.
+    try {
+      const outcome = await buildAndPublishBillingQuote(rowToApp(accepted), { acceptedByEmail: email });
+      if (outcome.status === "published") {
+        console.log(`[billing] ${accepted.id}: quote ${outcome.quoteId} published${outcome.alreadyPublished ? " (was already published)" : ""}`);
+      } else if (outcome.status === "refused") {
+        console.warn(`[billing] ${accepted.id}: refused — ${outcome.reasons.map(r => r.code).join(", ")}`);
+      } else if (outcome.status === "failed") {
+        console.error(`[billing] ${accepted.id}: ${outcome.step} failed — ${outcome.error}`);
+      } else {
+        console.log(`[billing] ${accepted.id}: skipped (${outcome.reason})`);
+      }
+    } catch (err) {
+      console.error("HubSpot billing quote on acceptance failed:", err instanceof Error ? err.message : err);
+    }
 
     return NextResponse.json(result);
   } catch (err) {

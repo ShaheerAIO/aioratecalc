@@ -1,0 +1,137 @@
+/* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
+
+.page {
+  min-height: 100dvh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
+}
+
+.wrap {
+  max-width: 36rem;
+  margin-inline: auto;
+}
+
+.back {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.back:hover { color: var(--ink-2); }
+
+.back:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.header {
+  margin-top: var(--space-md);
+  margin-bottom: var(--space-xl);
+}
+
+.headerTitle {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(1.5rem, 2vw + 1rem, 2rem);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0 0 var(--space-sm);
+}
+
+.headerSubtitle {
+  color: var(--ink-2);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.loading {
+  padding: var(--space-2xl);
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.warning {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.panel {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-xl);
+  margin-bottom: var(--space-lg);
+}
+
+.field { margin-bottom: var(--space-lg); }
+.field:last-child { margin-bottom: 0; }
+
+.label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  margin-bottom: var(--space-2xs);
+}
+
+.select {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 150ms var(--ease-out);
+}
+
+.select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.saveButton {
+  font-family: var(--font-body);
+  padding: var(--space-sm) var(--space-xl);
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  background: var(--accent);
+  color: white;
+  transition: background 150ms var(--ease-out), opacity 150ms var(--ease-out);
+}
+
+.saveButton:disabled { opacity: 0.6; cursor: default; }
+
+.saveButton[data-saved="true"] { background: var(--success); }
+
+.saveButton:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.saveButton:active { transform: scale(0.97); }
+
+.errorText {
+  color: var(--danger);
+  font-size: 0.82rem;
+  margin: var(--space-sm) 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select, .saveButton { transition-duration: 1ms; }
+}

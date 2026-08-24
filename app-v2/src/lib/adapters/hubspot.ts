@@ -1,7 +1,14 @@
 // Phase 3: HubSpot bidirectional sync via Private App Token
 // Scopes required: crm.objects.deals.read/write, crm.objects.contacts.read/write
 
-import type { BillingFrequency, CatalogProduct, DealStage, MerchantApplication } from "@/types/merchant";
+import type {
+  BillingFrequency,
+  CatalogProduct,
+  DealStage,
+  HubspotSubscriptionSnapshot,
+  MerchantApplication,
+  QuoteLine,
+} from "@/types/merchant";
 
 const BASE = "https://api.hubapi.com";
 
@@ -683,18 +690,769 @@ export async function backfillEasyobLinks(): Promise<EasyobLinkBackfillSummary> 
   return { checked: companies.length, updated, failed };
 }
 
-export async function pullFromHubSpot(hubspotDealId: string): Promise<Partial<MerchantApplication>> {
-  // Same DEAL_PROPERTIES list as the write path — it used to also ask for
-  // `current_processor` and `current_monthly_fees`, which don't exist on DEAL.
-  const res = await fetch(
-    `${BASE}/crm/v3/objects/deals/${hubspotDealId}?properties=${DEAL_PROPERTIES.join(",")}`,
+// ── Phase E: the billing quote ──────────────────────────────────────────────
+// Everything below is on billingHeaders() — quotes, quote templates, line
+// items, contacts and subscriptions all live on the billing app's token, which
+// probed 200 for every one of these calls with zero 403s. The general token
+// stays companies-read-only.
+//
+// Publishing a quote is a ONE-WAY DOOR: a published quote cannot be edited
+// (400 LOCKED), deleted (400 PUBLISHED_QUOTE_CANNOT_BE_DELETED) or voided via
+// the API. Everything here is shaped around that — see publishQuote.
+
+// ── Line items ──────────────────────────────────────────────────────────────
+
+// ⚠️ `hs_recurring_billing_period` IS DELIBERATELY NEVER WRITTEN. This is a
+// decision by the product owner (2026-08-21), not an unfinished mapping — do
+// not "complete" it by adding one.
+//
+// PHASE-E-SPEC.md §3.3 asks for `P7D` on weekly lines, on the strength of the
+// spike. That is wrong, and the property is misnamed for what it does. Read
+// live from the portal 2026-08-21: `label: "Term"`, `type: string/text`,
+// `description: "Product recurring billing duration"`. It is a CONTRACT TERM
+// LENGTH, not the billing cycle — the cycle is `recurringbillingfrequency`,
+// which we do send. HubSpot derives
+// `hs_recurring_billing_number_of_payments` from the term, so `P7D` on a
+// weekly line means a ONE-PAYMENT subscription: it takes a single $99 charge
+// and then silently stops collecting. `P1M` on a monthly line is the same
+// defect. The spike saw exactly that derivation and filed it as O-2 with the
+// default "accept it, the line publishes either way" — it publishes, and then
+// stops billing.
+//
+// The live evidence, all read-only 2026-08-21:
+//   - of 1,200 weekly line items, 935 leave the term NULL; 258 carry
+//     P7D/1-payment, 4 P546D/78, 2 P21D/3
+//   - of 50 monthly line items, 44 are NULL, 5 are P3M/3-payments, and
+//     exactly 1 is P1M/1-payment
+//   - a real AIO account shows 17 consecutive weekly $99 invoices, i.e. the
+//     open-ended behaviour that a NULL term produces
+//
+// Omission is also the recoverable direction, which is what settles it on a
+// document that cannot be amended after publish: an open-ended subscription
+// can be cancelled the moment anyone notices, whereas a term that quietly
+// stopped billing is discovered weeks of lost revenue later.
+//
+// Omitting cannot reintroduce the spike's `BILLING_PERIOD_TO_FREQUENCY_FORM_MISMATCH`
+// 400 either — that came from sending a period that CONTRADICTED the frequency
+// (`P12M` on a weekly line). There is no mismatch to have when nothing is sent.
+//
+// The frequency allowlist below stays, though: a frequency nobody has seen in
+// AIO's catalog must not reach a customer-facing quote silently.
+
+// The only three frequencies in AIO's live quotable catalog (O-9). Total on
+// purpose: `satisfies Record<BillingFrequency, boolean>` makes a newly added
+// BillingFrequency a COMPILE error here, forcing someone to confirm against the
+// portal how it should be quoted rather than letting it through unexamined.
+const QUOTABLE_FREQUENCY = {
+  one_time: true,
+  weekly: true,
+  monthly: true,
+  biweekly: false,
+  quarterly: false,
+  per_six_months: false,
+  annually: false,
+  per_two_years: false,
+  per_three_years: false,
+  per_four_years: false,
+  per_five_years: false,
+} satisfies Record<BillingFrequency, boolean>;
+
+/**
+ * Pure: one QuoteLine → the line-item property bag. Throws on any frequency
+ * outside AIO's quotable catalog — an unexamined frequency on a quote that
+ * cannot be edited after publish is worse than refusing to build the quote.
+ *
+ * Never emits `hs_recurring_billing_period`; see the note above for why that
+ * is deliberate.
+ */
+export function toLineItemProperties(line: QuoteLine): Record<string, string> {
+  if (!QUOTABLE_FREQUENCY[line.billingFrequency]) {
+    throw new Error(
+      `Unsupported billing frequency '${line.billingFrequency}' on line '${line.name}'. ` +
+      `Only one_time, weekly and monthly appear in AIO's quotable catalog — confirm against ` +
+      `the portal how this frequency should be quoted before putting it on a quote.`
+    );
+  }
+
+  const props: Record<string, string> = {
+    hs_product_id: line.hubspotProductId,
+    quantity: String(line.qty),
+    // PER BILLING CYCLE, never a monthly conversion — the platform products
+    // bill weekly, so $99 here means $99/week.
+    price: String(line.unitPrice),
+  };
+  if (line.billingFrequency !== "one_time") {
+    props.recurringbillingfrequency = line.billingFrequency;
+  }
+  return props;
+}
+
+// ── Quote property bags ─────────────────────────────────────────────────────
+
+export type DraftQuoteInput = {
+  title: string;
+  /** yyyy-MM-dd. hs_expiration_date is a date-typed property (verified live). */
+  expirationDate: string;
+};
+
+/**
+ * Pure: the create-time property bag for a DRAFT quote.
+ *
+ * `hs_sender_email` and `hs_status` are deliberately ABSENT — both belong to
+ * the publish PATCH, and hs_sender_email is a publish-time requirement, not a
+ * create-time one. `hs_esign_enabled` is never written at all: it is derived
+ * from hs_acceptance_method and silently ignores writes. `hs_quote_auth_method`
+ * is left at the portal default `public_access`, which is how AIO shares quotes
+ * today (confirmed on every live quote read).
+ */
+export function draftQuoteProperties(input: DraftQuoteInput): Record<string, string | boolean> {
+  return {
+    hs_template_type: "CPQ_QUOTE",
+    hs_title: input.title,
+    hs_expiration_date: input.expirationDate,
+    // The three that turn the quote into a checkout. hs_billing_enabled is what
+    // makes HubSpot create the subscription; hs_store_payment_method_at_checkout
+    // is what makes the stored ACH method reusable for the recurring charges.
+    hs_billing_enabled: true,
+    hs_payment_enabled: true,
+    hs_store_payment_method_at_checkout: true,
+    // Enum AUTO_PAYMENTS|MANUAL_PAYMENTS. NOT the subscription object's
+    // `automatic_payments` spelling, which 400s here.
+    hs_collection_process: "AUTO_PAYMENTS",
+    // print_and_sign (the default) is incompatible with hs_payment_enabled, and
+    // forcing esignature is what makes the signer association (702) mandatory.
+    hs_acceptance_method: "esignature",
+    // enumeration/checkbox: ACH|CREDIT_OR_DEBIT_CARD|SEPA|BACS|PADS. ACH is the
+    // live value on all 46 paid quotes in the portal. Never write the sibling
+    // hs_allowed_commerce_payment_methods — it is derived.
+    hs_allowed_payment_methods: "ACH",
+  };
+}
+
+/**
+ * Pure: the publish PATCH bag, and nothing else. `hs_sender_email` is the
+ * OWNING REP's address, per quote — the live portal shows a different rep on
+ * every quote, never a shared mailbox. The publish 400s without it.
+ */
+export function publishQuoteProperties(
+  senderEmail: string,
+  senderFirstName?: string,
+  senderLastName?: string
+): Record<string, string> {
+  const props: Record<string, string> = {
+    hs_sender_email: senderEmail,
+    hs_status: "APPROVAL_NOT_NEEDED",
+  };
+  if (senderFirstName) props.hs_sender_firstname = senderFirstName;
+  if (senderLastName) props.hs_sender_lastname = senderLastName;
+  return props;
+}
+
+// ── Line-item reconciliation ────────────────────────────────────────────────
+
+export type LineItemReconciliation = {
+  /** Existing line items to leave alone, each paired with the `nextLines` index it covers. */
+  keep: Array<{ lineItemId: string; nextIndex: number }>;
+  /** `nextLines` entries needing a fresh line item, in order. */
+  create: Array<{ nextIndex: number; line: QuoteLine }>;
+  /** Existing line-item ids no longer on the quote. Delete these. */
+  delete: string[];
+};
+
+// A line item's identity for reconciliation purposes. Quantity and price are
+// part of it deliberately: there is no line-item PATCH in this adapter, so a
+// qty or price change is a delete-and-recreate rather than an in-place edit.
+// That is only ever done while the quote is a DRAFT.
+function lineItemKey(line: QuoteLine): string {
+  return [line.hubspotProductId, line.qty, line.unitPrice, line.billingFrequency].join("|");
+}
+
+/**
+ * Pure: what a DRAFT re-save should do to the quote's line items. Without this
+ * a second save duplicates every line — which on a quote carrying a $999
+ * install and a weekly platform fee is a real, invoiceable error.
+ *
+ * `existingIds` are the ids created from `previousLines`, in that order. A
+ * SHORTER id list is the partial-create case (PHASE-E-SPEC.md §5.5): the
+ * unpaired previous lines simply have nothing to keep. A LONGER one means
+ * stale ids we can no longer attribute — those go straight to `delete`.
+ */
+export function planLineItemReconciliation(
+  existingIds: string[] | null | undefined,
+  previousLines: QuoteLine[] | null | undefined,
+  nextLines: QuoteLine[]
+): LineItemReconciliation {
+  const ids = existingIds ?? [];
+  const previous = previousLines ?? [];
+
+  // key → the ids still available to be reused, oldest first. A multimap, not a
+  // map: two identical lines (same product, qty and price) are legitimate and
+  // must each keep their own line item.
+  const available = new Map<string, string[]>();
+  for (let i = 0; i < previous.length && i < ids.length; i++) {
+    const key = lineItemKey(previous[i]);
+    const pool = available.get(key);
+    if (pool) pool.push(ids[i]);
+    else available.set(key, [ids[i]]);
+  }
+
+  const keep: LineItemReconciliation["keep"] = [];
+  const create: LineItemReconciliation["create"] = [];
+  nextLines.forEach((line, nextIndex) => {
+    const reused = available.get(lineItemKey(line))?.shift();
+    if (reused) keep.push({ lineItemId: reused, nextIndex });
+    else create.push({ nextIndex, line });
+  });
+
+  const kept = new Set(keep.map(k => k.lineItemId));
+  return { keep, create, delete: ids.filter(id => !kept.has(id)) };
+}
+
+// ── Quote templates ─────────────────────────────────────────────────────────
+// Attached by v4 association typeId 286 to object type `quote_template`
+// (0-14 → 0-64, HUBSPOT_DEFINED, verified live). Which template a quote uses is
+// admin-configurable rather than hardcoded: the portal carries several active
+// ones ("AIO Quote v3", "Marketing Only Quote", "Hardware Addition Quote"),
+// inactive predecessors, and at least one named "DON'T USE …" — so the choice
+// has to be a human's, made against current names.
+
+export type QuoteTemplate = { id: string; name: string; active: boolean; templateType: string | null };
+
+const QUOTE_TEMPLATE_PROPS = ["hs_name", "hs_active", "hs_template_type"];
+
+/**
+ * Every quote template in the portal, INCLUDING inactive ones — the caller
+ * filters. An admin whose configured template was deactivated needs to see it
+ * in the list to understand why quotes stopped looking right, rather than have
+ * it silently vanish.
+ *
+ * Note `hs_template_type` here is the template object's own enum
+ * (INITIAL|CHANGE|RENEWAL) and is unrelated to the QUOTE property of the same
+ * name, which is CPQ_QUOTE.
+ */
+export async function listQuoteTemplates(): Promise<QuoteTemplate[]> {
+  const templates: QuoteTemplate[] = [];
+  let after: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ limit: "100", properties: QUOTE_TEMPLATE_PROPS.join(",") });
+    if (after) params.set("after", after);
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/quote_template?${params}`, {
+      headers: billingHeaders(),
+    });
+    if (!res.ok) throw hubspotErr("HubSpot quote template list failed", res.status, await res.text());
+    const data = await res.json() as {
+      results?: Array<{ id: string; properties: Record<string, string | null> }>;
+      paging?: { next?: { after?: string } };
+    };
+    for (const row of data.results ?? []) {
+      templates.push({
+        id: row.id,
+        name: clean(row.properties.hs_name) || "(unnamed template)",
+        active: row.properties.hs_active === "true",
+        templateType: clean(row.properties.hs_template_type),
+      });
+    }
+    after = data.paging?.next?.after;
+    if (after) await sleep(REQUEST_SPACING_MS);
+  } while (after);
+
+  return templates.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ── Contact ─────────────────────────────────────────────────────────────────
+
+export type QuoteContactInput = { firstName: string; lastName: string; email: string; phone?: string };
+
+async function findContactIdByEmail(email: string): Promise<string | null> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/contacts/search`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({
+      filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
+      properties: ["email"],
+      limit: 1,
+    }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot contact search for ${email} failed`, res.status, await res.text());
+  const data = await res.json() as { results?: Array<{ id: string }> };
+  return data.results?.[0]?.id ?? null;
+}
+
+/**
+ * The Contact the quote associates (69) and takes as signer (702). Searched by
+ * email FIRST so a merchant already in AIO's CRM is not duplicated — this
+ * contact receives the e-signature request and the payment receipt, so a
+ * duplicate is a real-world "why did I get two of these" problem, not just
+ * untidy data.
+ *
+ * Also the reason the create path is retry-safe: a rerun of a failed quote
+ * build finds the contact it already made instead of making a second one.
+ */
+export async function ensureQuoteContact(input: QuoteContactInput): Promise<string> {
+  const email = input.email.trim().toLowerCase();
+  if (!email) {
+    throw new Error(
+      "ensureQuoteContact: an email is required — it is both the dedupe key and where HubSpot sends the e-signature request"
+    );
+  }
+
+  const existing = await findContactIdByEmail(email);
+  if (existing) return existing;
+
+  const props: Record<string, string> = { email };
+  const firstName = input.firstName.trim();
+  const lastName = input.lastName.trim();
+  if (firstName) props.firstname = firstName;
+  if (lastName) props.lastname = lastName;
+  const phone = input.phone?.trim();
+  if (phone) props.phone = phone;
+
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/contacts`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: props }),
+  });
+  // 409 CONFLICT means someone else created this email between our search and
+  // our POST. Re-search rather than failing the quote build — the contact we
+  // wanted now exists, it just wasn't us who made it.
+  if (res.status === 409) {
+    const raced = await findContactIdByEmail(email);
+    if (raced) return raced;
+    throw hubspotErr(`HubSpot contact create for ${email} conflicted but no contact was found`, res.status, await res.text());
+  }
+  if (!res.ok) throw hubspotErr(`HubSpot contact create for ${email} failed`, res.status, await res.text());
+  const data = await res.json() as { id: string };
+  return data.id;
+}
+
+// ── Line-item network calls ─────────────────────────────────────────────────
+
+/**
+ * One line item per quote line, ids returned in input order.
+ *
+ * Created one at a time so the returned ids are unambiguously in input order
+ * (a batch response's ordering is not contractual, and `lineItemIds` is
+ * order-significant — it is what reconciliation pairs against). If a create
+ * fails partway, the ones already made are deleted before throwing: a line item
+ * with no quote association is invisible in the CRM, so leaving it behind
+ * leaves litter nobody can find, and the caller has no id to clean up with.
+ */
+export async function createQuoteLineItems(lines: QuoteLine[]): Promise<string[]> {
+  const created: string[] = [];
+  for (const line of lines) {
+    // Throws before any network call on an unsupported frequency.
+    const properties = toLineItemProperties(line);
+    let res: Response;
+    try {
+      res = await fetchWithRetry(`${BASE}/crm/v3/objects/line_items`, {
+        method: "POST",
+        headers: billingHeaders(),
+        body: JSON.stringify({ properties }),
+      });
+    } catch (err) {
+      await discardLineItems(created);
+      throw err;
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      await discardLineItems(created);
+      throw hubspotErr(`HubSpot line item create failed for '${line.name}'`, res.status, body);
+    }
+    const data = await res.json() as { id: string };
+    created.push(data.id);
+  }
+  return created;
+}
+
+// Best-effort cleanup of line items we created and are about to forget about.
+// Never throws — it runs on a path that is already failing, and the original
+// error is the one worth reporting.
+async function discardLineItems(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    try {
+      await deleteQuoteLineItem(id);
+    } catch (err) {
+      console.error("createQuoteLineItems: failed to clean up orphan line item", id, err);
+    }
+  }
+}
+
+/** Deletes one quote-side line item. Only ever called while the quote is a DRAFT. */
+export async function deleteQuoteLineItem(lineItemId: string): Promise<void> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/line_items/${lineItemId}`, {
+    method: "DELETE",
+    headers: billingHeaders(),
+  });
+  // Already gone is the outcome we wanted — a retry of a partly-completed
+  // reconciliation must not fail on the lines it already removed.
+  if (res.status === 404) return;
+  if (!res.ok) throw hubspotErr(`HubSpot line item ${lineItemId} delete failed`, res.status, await res.text());
+}
+
+// ── Quote network calls ─────────────────────────────────────────────────────
+
+const QUOTE_SNAPSHOT_PROPS = ["hs_status", "hs_quote_link", "hs_payment_status", "hs_payment_date"];
+
+/**
+ * POSTs the DRAFT quote. The slug exists at create (so the public URL is
+ * predictable) but `hs_quote_link` does NOT — that only populates at publish.
+ * The slug read is best-effort: it is informational, and failing the quote
+ * build over it would be absurd.
+ */
+export async function createDraftQuote(
+  props: Record<string, string | boolean>
+): Promise<{ quoteId: string; slug: string | null }> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/quotes`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: props }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot draft quote create failed", res.status, await res.text());
+  const data = await res.json() as { id: string; properties?: Record<string, string | null> };
+
+  let slug = clean(data.properties?.hs_slug);
+  if (!slug) {
+    try {
+      const read = await fetchWithRetry(`${BASE}/crm/v3/objects/quotes/${data.id}?properties=hs_slug`, {
+        headers: billingHeaders(),
+      });
+      if (read.ok) {
+        const body = await read.json() as { properties?: Record<string, string | null> };
+        slug = clean(body.properties?.hs_slug);
+      }
+    } catch (err) {
+      console.warn("createDraftQuote: slug read-back failed", data.id, err);
+    }
+  }
+  return { quoteId: data.id, slug: slug ?? null };
+}
+
+/**
+ * PATCHes a DRAFT quote's properties. Enforces nothing itself — the caller owns
+ * the "draft only" precondition. A published quote answers 400 LOCKED here, and
+ * that is not something to paper over: reaching this call on a published quote
+ * is a caller bug, not a recoverable state.
+ */
+export async function updateDraftQuote(
+  quoteId: string,
+  props: Record<string, string | boolean>
+): Promise<void> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/quotes/${quoteId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: props }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot quote ${quoteId} update failed`, res.status, await res.text());
+}
+
+export type QuoteAssociation = {
+  toObjectType: "deals" | "contacts" | "line_items" | "quote_template";
+  toObjectId: string;
+  associationTypeId: number;
+};
+
+/**
+ * v4 association PUT, one per pair. Idempotent, which is what makes a
+ * half-finished quote build safe to rerun: the retry re-PUTs every association
+ * and the ones already present are no-ops.
+ *
+ * Never create deal↔quote 1393 ("Deal with Primary Quote") — HubSpot adds that
+ * itself at publish.
+ */
+export async function associateQuote(quoteId: string, assocs: QuoteAssociation[]): Promise<void> {
+  for (let i = 0; i < assocs.length; i++) {
+    const assoc = assocs[i];
+    const res = await fetchWithRetry(
+      `${BASE}/crm/v4/objects/quotes/${quoteId}/associations/${assoc.toObjectType}/${assoc.toObjectId}`,
+      {
+        method: "PUT",
+        headers: billingHeaders(),
+        body: JSON.stringify([
+          { associationCategory: "HUBSPOT_DEFINED", associationTypeId: assoc.associationTypeId },
+        ]),
+      }
+    );
+    if (!res.ok) {
+      throw hubspotErr(
+        `HubSpot quote ${quoteId} → ${assoc.toObjectType} ${assoc.toObjectId} (type ${assoc.associationTypeId}) association failed`,
+        res.status, await res.text()
+      );
+    }
+    if (i + 1 < assocs.length) await sleep(REQUEST_SPACING_MS);
+  }
+}
+
+// HUBSPOT_DEFINED deal → contact, unlabeled (verified live: the only pair in
+// the label registry for that direction).
+export const DEAL_TO_CONTACT_ASSOCIATION_TYPE_ID = 3;
+
+/**
+ * Puts the quote's contact on the deal too, so a rep opening the deal sees the
+ * person who signed. Best-effort by design: it is CRM tidiness, and failing the
+ * quote build over it would trade a working quote for a missing sidebar row.
+ */
+export async function associateDealToContact(dealId: string, contactId: string): Promise<void> {
+  try {
+    const res = await fetchWithRetry(
+      `${BASE}/crm/v4/objects/deals/${dealId}/associations/contacts/${contactId}`,
+      {
+        method: "PUT",
+        headers: billingHeaders(),
+        body: JSON.stringify([
+          {
+            associationCategory: "HUBSPOT_DEFINED",
+            associationTypeId: DEAL_TO_CONTACT_ASSOCIATION_TYPE_ID,
+          },
+        ]),
+      }
+    );
+    if (!res.ok) {
+      console.warn("associateDealToContact: failed", dealId, contactId, res.status, await res.text());
+    }
+  } catch (err) {
+    console.warn("associateDealToContact: errored", dealId, contactId, err);
+  }
+}
+
+export type QuoteSnapshot = {
+  quoteId: string;
+  status: string | null;
+  quoteLink: string | null;
+  paymentStatus: string | null;
+  paymentDate: string | null;
+};
+
+function toQuoteSnapshot(quoteId: string, props: Record<string, string | null> | undefined): QuoteSnapshot {
+  return {
+    quoteId,
+    status: clean(props?.hs_status),
+    quoteLink: clean(props?.hs_quote_link),
+    paymentStatus: clean(props?.hs_payment_status),
+    paymentDate: clean(props?.hs_payment_date),
+  };
+}
+
+export async function getQuoteSnapshot(quoteId: string): Promise<QuoteSnapshot | null> {
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v3/objects/quotes/${quoteId}?properties=${QUOTE_SNAPSHOT_PROPS.join(",")}`,
     { headers: billingHeaders() }
   );
-  if (!res.ok) throw hubspotErr(`HubSpot deal ${hubspotDealId} read failed`, res.status, await res.text());
-  const data = await res.json() as { properties: Record<string, string> };
-  const p = data.properties;
+  if (res.status === 404) return null;
+  if (!res.ok) throw hubspotErr(`HubSpot quote ${quoteId} read failed`, res.status, await res.text());
+  const data = await res.json() as { properties?: Record<string, string | null> };
+  return toQuoteSnapshot(quoteId, data.properties);
+}
+
+// hs_quote_link populates ~3s after the publish PATCH lands. One wait, one
+// re-read, no poll loop — a loop here would turn a 3-second lag into a request
+// that hangs for as long as HubSpot is slow, on the click a rep is watching.
+const QUOTE_LINK_SETTLE_MS = 3000;
+
+export type PublishedQuote = {
+  quoteId: string;
+  status: string;
+  quoteLink: string | null;
+  paymentStatus: string | null;
+  /** True when HubSpot answered LOCKED, i.e. this quote was already published. */
+  alreadyPublished: boolean;
+};
+
+/**
+ * THE ONE-WAY DOOR. Sets hs_sender_email + hs_status: APPROVAL_NOT_NEEDED, then
+ * reads hs_quote_link back once, waits ~3s and reads once more if it is still
+ * empty. After this returns, the quote cannot be edited, deleted or voided
+ * through the API.
+ *
+ * Deliberately NOT wrapped in fetchWithRetry: a retried publish is a second
+ * irreversible act, and the only thing a retry could fix is a 429 — which
+ * would have to be answered by re-reading state, not by pushing again.
+ *
+ * 400 LOCKED means ALREADY PUBLISHED, and is treated as success. That is what
+ * makes a crashed publish recoverable: if HubSpot accepted the publish but the
+ * DB write never landed, the rerun's PATCH gets LOCKED, falls through to the
+ * read, and persists the state that was true all along. Without this rule the
+ * application would be permanently stuck holding a published quote it believes
+ * is a draft.
+ */
+export async function publishQuote(
+  quoteId: string,
+  sender: { email: string; firstName?: string; lastName?: string }
+): Promise<PublishedQuote> {
+  const props = publishQuoteProperties(sender.email, sender.firstName, sender.lastName);
+
+  const res = await fetch(`${BASE}/crm/v3/objects/quotes/${quoteId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: props }),
+  });
+
+  let alreadyPublished = false;
+  if (!res.ok) {
+    const body = await res.text();
+    if (res.status === 400 && body.includes("LOCKED")) {
+      alreadyPublished = true;
+    } else {
+      throw hubspotErr(`HubSpot quote ${quoteId} publish failed`, res.status, body);
+    }
+  }
+
+  let snapshot = await getQuoteSnapshot(quoteId);
+  if (!snapshot?.quoteLink) {
+    await sleep(QUOTE_LINK_SETTLE_MS);
+    snapshot = (await getQuoteSnapshot(quoteId)) ?? snapshot;
+  }
+  if (!snapshot) {
+    // The PATCH succeeded (or was LOCKED) but the quote can't be read. Say so
+    // plainly rather than returning a fabricated snapshot — the caller must
+    // report an UNKNOWN outcome and offer a re-check, never a failure, because
+    // HubSpot may well have published it.
+    throw new Error(
+      `HubSpot quote ${quoteId} was published but could not be read back — its state is UNKNOWN. Re-check status; do NOT publish again.`
+    );
+  }
+
   return {
-    hubspotDealId,
-    business: p.dealname ? { legalName: p.dealname, dba: p.dealname } as MerchantApplication["business"] : undefined,
-  } as Partial<MerchantApplication>;
+    quoteId,
+    // Non-null by the type. An unreadable hs_status on a quote that just
+    // published is not something to silently render as an empty string.
+    status: snapshot.status ?? "UNKNOWN",
+    quoteLink: snapshot.quoteLink,
+    paymentStatus: snapshot.paymentStatus,
+    alreadyPublished,
+  };
+}
+
+// ── Subscriptions ───────────────────────────────────────────────────────────
+// Quote → subscription is v4 association typeId 304 (reverse 303), verified
+// against 45 of the 46 paid quotes in the live portal. Keyed on the QUOTE, not
+// the deal: a reused deal can carry subscriptions from earlier quotes, and
+// "deal-associated, newest wins" would attach the wrong one.
+const QUOTE_TO_SUBSCRIPTION_ASSOCIATION_TYPE_ID = 304;
+
+const SUBSCRIPTION_PROPS = [
+  "hs_status",
+  "hs_payment_method",
+  "hs_recurring_billing_frequency",
+  "hs_recurring_billing_start_date",
+  "hs_mrr",
+  "hs_next_payment_due_date",
+  "hs_last_payment_status",
+  "hs_number_of_completed_payments",
+  "hs_total_collected_amount",
+];
+
+function num(v: string | null | undefined): number | null {
+  const t = clean(v);
+  if (t === null) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toSubscriptionSnapshot(
+  subscriptionId: string,
+  props: Record<string, string | null> | undefined
+): HubspotSubscriptionSnapshot {
+  return {
+    subscriptionId,
+    status: clean(props?.hs_status),
+    paymentMethod: clean(props?.hs_payment_method),
+    billingFrequency: clean(props?.hs_recurring_billing_frequency),
+    billingStartDate: clean(props?.hs_recurring_billing_start_date),
+    mrr: num(props?.hs_mrr),
+    nextPaymentDueDate: clean(props?.hs_next_payment_due_date),
+    lastPaymentStatus: clean(props?.hs_last_payment_status),
+    completedPayments: num(props?.hs_number_of_completed_payments),
+    totalCollected: num(props?.hs_total_collected_amount),
+  };
+}
+
+/**
+ * Every subscription HubSpot created from this quote's checkout. PLURAL: one
+ * per distinct recurringbillingfrequency on the quote, so AIO's usual
+ * weekly-platform-plus-monthly-add-on quote yields two.
+ *
+ * Empty is a normal, meaningful answer — the customer hasn't checked out yet,
+ * or the quote carried only one-time charges and there was nothing to make a
+ * subscription from.
+ */
+export async function findSubscriptionsForQuote(quoteId: string): Promise<HubspotSubscriptionSnapshot[]> {
+  const assocRes = await fetchWithRetry(
+    `${BASE}/crm/v4/objects/quotes/${quoteId}/associations/subscriptions`,
+    { headers: billingHeaders() }
+  );
+  if (assocRes.status === 404) return [];
+  if (!assocRes.ok) {
+    throw hubspotErr(`HubSpot quote ${quoteId} subscription associations read failed`, assocRes.status, await assocRes.text());
+  }
+  const assocData = await assocRes.json() as {
+    results?: Array<{ toObjectId?: number | string; associationTypes?: Array<{ typeId?: number }> }>;
+  };
+
+  // Filter on 304 rather than taking every association: it is the checkout-born
+  // pair specifically, and a subscription reaching the quote by some other
+  // route is not this quote's billing outcome.
+  const ids = (assocData.results ?? [])
+    .filter(r => (r.associationTypes ?? []).some(t => t?.typeId === QUOTE_TO_SUBSCRIPTION_ASSOCIATION_TYPE_ID))
+    .map(r => clean(r.toObjectId === undefined || r.toObjectId === null ? null : String(r.toObjectId)))
+    .filter((id): id is string => id !== null);
+  if (ids.length === 0) return [];
+
+  const readRes = await fetchWithRetry(`${BASE}/crm/v3/objects/subscriptions/batch/read`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: SUBSCRIPTION_PROPS, inputs: ids.map(id => ({ id })) }),
+  });
+  if (!readRes.ok) {
+    throw hubspotErr(`HubSpot subscription batch read failed for quote ${quoteId}`, readRes.status, await readRes.text());
+  }
+  const readData = await readRes.json() as {
+    results?: Array<{ id: string; properties?: Record<string, string | null> }>;
+  };
+
+  // Mapped back by id, not by position — a batch read's ordering isn't
+  // contractual and the ids are the join key we already hold.
+  const byId = new Map((readData.results ?? []).map(r => [r.id, r.properties]));
+  return ids.map(id => toSubscriptionSnapshot(id, byId.get(id)));
+}
+
+// ── Nightly reconciliation read ─────────────────────────────────────────────
+
+/**
+ * Quotes touched since `sinceIso`, for the cron to reconcile. Search-API
+ * filtered so the cron pulls only what changed rather than one GET per
+ * application.
+ *
+ * The lookback the caller passes must be generous: a quote's flip to PAID is a
+ * daily ACH settlement batch landing a median 5.7 days after the customer
+ * checked out, so a short window silently misses it.
+ */
+export async function listQuotesModifiedSince(sinceIso: string): Promise<QuoteSnapshot[]> {
+  const snapshots: QuoteSnapshot[] = [];
+  let after: string | undefined;
+
+  do {
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/quotes/search`, {
+      method: "POST",
+      headers: billingHeaders(),
+      body: JSON.stringify({
+        filterGroups: [{ filters: [{ propertyName: "hs_lastmodifieddate", operator: "GTE", value: sinceIso }] }],
+        // Sorted so paging is stable across pages.
+        sorts: [{ propertyName: "hs_lastmodifieddate", direction: "ASCENDING" }],
+        properties: QUOTE_SNAPSHOT_PROPS,
+        limit: 100,
+        ...(after ? { after } : {}),
+      }),
+    });
+    if (!res.ok) throw hubspotErr("HubSpot quote search failed", res.status, await res.text());
+    const data = await res.json() as {
+      results?: Array<{ id: string; properties?: Record<string, string | null> }>;
+      paging?: { next?: { after?: string } };
+    };
+    snapshots.push(...(data.results ?? []).map(r => toQuoteSnapshot(r.id, r.properties)));
+    after = data.paging?.next?.after;
+    if (after) await sleep(REQUEST_SPACING_MS);
+  } while (after);
+
+  return snapshots;
 }

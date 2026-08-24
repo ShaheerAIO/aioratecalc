@@ -10,6 +10,7 @@ import {
   type RepSummary,
 } from "@/lib/actions/applications";
 import { fmt$ } from "@/lib/utils";
+import { countHubspotSyncErrors } from "@/lib/billingView";
 import { AccountsDashboard } from "./AccountsDashboard";
 import { parseAdminView, type AdminView } from "@/lib/adminView";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
@@ -95,6 +96,11 @@ function AdminDashboardInner({ userId }: { userId: string }) {
     volume: apps.reduce((sum, a) => sum + (a.analysis?.totalVolume || 0), 0),
     savings: apps.reduce((sum, a) => sum + (a.proposal?.savings?.annual || 0), 0),
     leads: subs.length,
+    // The tripwire: a HubSpot integration failure used to be visible only as
+    // a console.error, so the deal sync stayed broken for the entire life of
+    // the feature with nobody knowing. This is the number that would have
+    // caught it on day one.
+    hubspotSyncErrors: countHubspotSyncErrors(apps),
   };
 
   const repRows = reps
@@ -129,6 +135,15 @@ function AdminDashboardInner({ userId }: { userId: string }) {
             <span><b>{metrics.leads}</b> Leads</span>
             <span className={styles.statDot}>·</span>
             <span><b className={styles.statSuccess}>{fmt$(metrics.savings)}/yr</b> Projected Savings</span>
+            <span className={styles.statDot}>·</span>
+            {/* Always visible, not just when non-zero — a permanently-broken
+                integration with no visible failure state is exactly how the
+                original HubSpot deal sync went unnoticed for months. */}
+            <span>
+              <b style={{ color: metrics.hubspotSyncErrors > 0 ? "var(--danger)" : undefined }}>
+                {metrics.hubspotSyncErrors}
+              </b> HubSpot Sync Errors
+            </span>
           </div>
         </div>
 

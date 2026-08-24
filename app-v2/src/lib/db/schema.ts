@@ -35,6 +35,24 @@ export const marginPolicy = pgTable("margin_policy", {
   isActive: boolean("is_active").notNull().default(true),
 });
 
+// Global, admin-controlled mapping from EasyOB's QuoteType to the HubSpot
+// quote_template a Phase E quote is created against (v4 association typeId
+// 286). Mirrors margin_policy's shape (single active row, admin-owned).
+// Explicit per-QuoteType columns rather than a jsonb blob: QuoteType is a
+// closed, rarely-changing 3-value enum, so a column per type gives a
+// compile-time-checked, never-optional slot for each one — a new QuoteType
+// requires a migration (visible, forces a decision) instead of silently
+// falling through a jsonb key that was never populated.
+export const quoteTemplatePolicy = pgTable("quote_template_policy", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  fullPosTemplateId: text("full_pos_template_id").notNull().default("817263673055"),
+  foodTruckTemplateId: text("food_truck_template_id").notNull().default("817263673055"),
+  marketingOnlyTemplateId: text("marketing_only_template_id").notNull().default("817697352408"),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
 // Replaces localStorage "clearrate:settings" / "clearrate:adyen_config".
 export const appSettings = pgTable("app_settings", {
   id: uuid("id").primaryKey().defaultRandom(),

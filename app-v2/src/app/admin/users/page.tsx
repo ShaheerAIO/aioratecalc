@@ -12,6 +12,7 @@ import {
   type StaffRole,
 } from "@/lib/actions/users";
 import { listApplicationsAction, listRepsAction, type RepSummary } from "@/lib/actions/applications";
+import { BILLING_STATE_LABELS, billingPanelState, hasBillingSyncError } from "@/lib/billingView";
 import { fmt$ } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
 import { PROPOSAL_STAGES } from "@/lib/stages";
@@ -372,6 +373,13 @@ export default function AdminUsersPage() {
                       { label: "Fees", val: selectedApp.analysis ? fmt$(selectedApp.analysis.totalFees) : "—" },
                       { label: "Savings/yr", val: selectedApp.proposal ? fmt$(selectedApp.proposal.savings?.annual || 0) : "—" },
                       { label: "HubSpot Deal ID", val: selectedApp.hubspotDealId || "Not synced" },
+                      { label: "HubSpot Quote", val: BILLING_STATE_LABELS[billingPanelState(selectedApp)] },
+                      { label: "Payment Status", val: selectedApp.hubspotIds?.paymentStatus || "—" },
+                      { label: "Subscription Status", val: selectedApp.hubspotIds?.subscriptionStatus || "—" },
+                      {
+                        label: "HubSpot Sync",
+                        val: hasBillingSyncError(selectedApp.hubspotIds) ? "⚠ Error" : "OK",
+                      },
                       { label: "Adyen Legal Entity", val: selectedApp.adyenIds?.legalEntityId || "Not created" },
                       { label: "Onboarding URL", val: selectedApp.adyenOnboardingUrl ? "Set" : "Not generated" },
                       { label: "Merchant Contact", val: selectedApp.ownerContact ? `${selectedApp.ownerContact.firstName} ${selectedApp.ownerContact.lastName}` : "—" },

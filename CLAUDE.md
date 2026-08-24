@@ -107,13 +107,31 @@ app-v2/src/
   lib/actions/
     auth.ts                  ← loginAction, logoutAction (Server Actions wrapping signIn/signOut)
     applications.ts          ← list/get/save/delete application + settings/submissions Server Actions
-    pricing.ts                ← getActivePillowPolicy, updatePillowPolicyAction (admin-only), getPricingPreviewAction
+    pricing.ts                ← getActivePaddingPolicy, updatePaddingPolicyAction (admin-only), getPricingPreviewAction
+                                 (NB: named Padding*, not Pillow* — this doc's older "pillow" wording is drift)
     prospects.ts              ← createProspectAction — rep creates a prospect + tokenized customer link
+    billing.ts                ← retryBillingQuoteAction — rep/admin retry for a failed or refused auto-publish.
+                                 Backfills a MISSING hubspotDealId via pushToHubSpot first (rows accepted
+                                 before 511e019 have no deal, and assoc 64 is a hard publish requirement,
+                                 so they'd refuse `no_deal` forever). Only ever fills a missing id — never
+                                 re-pushes an existing one, since pushToHubSpot PATCHes and would clobber
+                                 a deal a rep has since curated in the CRM.
+    quoteTemplates.ts         ← getQuoteTemplatePolicy, updateQuoteTemplatePolicyAction (admin-only),
+                                 listQuoteTemplatesAction — quoteType → HubSpot quote template mapping
     debugRole.ts               ← setDebugRoleAction (no-ops unless ENABLE_DEBUG_ROLE_SWITCH=true)
   lib/adapters/
     adyen.ts                 ← createLegalEntityAndGetOnboardingUrl(), createOnboardingLink(), updateLegalEntity() — Phase 2, wired & in testing
     check.ts                  ← createCheckCompany(), createCheckOnboardLink(), getCheckOnboardStatus() — Check payroll onboarding, wired & in sandbox
-    hubspot.ts                ← pushToHubSpot(), pullFromHubSpot() — Phase 3 stub (written)
+    hubspot.ts                ← pushToHubSpot() (deals, repaired), listProducts(), company/contact reads,
+                                 + Phase E billing: ensureQuoteContact, createQuoteLineItems,
+                                 createDraftQuote, associateQuote, publishQuote, getQuoteSnapshot,
+                                 findSubscriptionsForQuote, listQuotesModifiedSince, listQuoteTemplates.
+                                 pullFromHubSpot() was DELETED — dead, and wrote phantom properties
+  lib/billing/                  ← Phase E
+    preconditions.ts          ← canPublishBillingQuote() — pure; the ONLY gate before an irreversible publish
+    publishBillingQuote.ts    ← buildAndPublishBillingQuote() — builds the deal→line-items→quote graph
+                                 and publishes it, persisting after every step that yields an id
+  lib/billingView.ts          ← pure view-model for the rep/admin billing panel (frequency-grouped money)
   middleware.ts               ← route protection for /rep/* and /admin/*
   app/
     login/                    ← real login (Credentials)
@@ -171,7 +189,8 @@ npm run dev
 | 1.5 | Multi-role (Customer/Rep/Admin), Postgres, NextAuth, pillowed margin, customer self-serve lead flow | **DONE** (2026-07-06) |
 | 2 | Adyen hosted onboarding (wire `adyen.ts` stub + webhook route) | **BUILT / in testing** — `adyen.ts` creates the legal-entity graph + mints onboarding links; webhook route exists; customer self-serve onboarding flow (`CustomerOnboardStep`, `saveMyApplicationOnboardingAction`) wired end-to-end. Onboarding links are single-use / ~4-min expiry, so `/customer/applications/[id]/continue` regenerates a fresh link per click via `createOnboardingLink()` — never re-serve a stored `adyenOnboardingUrl`. MCC→Adyen-industry-code mapping still a go-live TODO. |
 | 2.5 | Check payroll onboarding (the `payroll` module on the customer checklist) | **BUILT / sandbox** — opt-in, not auto-chained like Adyen: nothing reaches Check until the customer clicks "Set Up Payroll" at `/customer/applications/[id]/payroll`, which collects the two things AIO can't derive (first payday + authorized signer) and calls `startPayrollOnboardingAction`. Onboard links are one-time use / 24h, so `/customer/applications/[id]/payroll/continue` mints a fresh one per click — never store and re-serve one. Check has **no redirect-back URL**, so completion is detected by re-reading `company.onboard.status` when the customer views the application (`getMyApplicationWithPayrollSyncAction`), cached on `checkIds.onboardStatus` so list/dashboard views don't fan out one API call per app. Production base URL is a go-live TODO (`CHECK_API_BASE_URL`; Check doesn't publish it). |
-| 3 | HubSpot bidirectional sync (wire `hubspot.ts` stub) | **NOT STARTED** |
+| 3 | HubSpot bidirectional sync (wire `hubspot.ts` stub) | **SUPERSEDED / partly done.** There is no bidirectional sync and there must not be: authority **hands off at quote publish** — EasyOB → HubSpot while the quote is a draft, HubSpot → EasyOB (read-only) forever after. Deal sync is repaired and live (it had never once succeeded before commit `9aafa5d`). Billing is E2E-PLAN **Phase E**, below. `getMyApplicationWithPayrollSyncAction` was folded into `getMyApplicationWithSyncAction` (refreshes Check + HubSpot independently). |
+| E (E2E-PLAN) | **Billing through HubSpot** — quote → hosted checkout → subscription read-back, plus the `schedule_demo` / `foodbuy` checklist shells | **PUBLISH PATH LIVE-VERIFIED 2026-08-24** — the one human-run publish `PHASE-E-SPEC.md`:777 called for is DONE; see "The Phase E gate run" below. Checkout → subscription read-back remains unverified **on purpose** (`PAYMENT-TEST-PLAN.md` §2.1 recommends against a live payment test; §1's 46 live paid quotes cover it instead). **Auto-publishes on merchant acceptance** — no rep confirmation gate (user's decision, 2026-08-21), so `canPublishBillingQuote` is the *only* thing between a bad quote and a live ACH mandate. Migration `0008` (`quote_template_policy`) **IS applied** — the policy table is empty, which is harmless: `getQuoteTemplatePolicy()` falls back to `DEFAULT_TEMPLATE_IDS`, so an unseeded table can never block a publish. Wants `NEXT_PUBLIC_HUBSPOT_PORTAL_ID=244508708` (cosmetic: CRM record links). **⚠️ One go-live blocker remains: `hs_sender_email` — see the constraint below.** |
 | 4 | Merchant magic link email delivery (Resend) — link generation itself already exists from 1.5, just not auto-emailed | **NOT STARTED** |
 | 5 | Real OAuth (Entra ID?) as a fast-follow to Credentials; optional DB session strategy | **NOT STARTED** |
 
@@ -193,6 +212,36 @@ npm run dev
 - `buildQuote()` in `quoting.ts` is the **one** derivation — the configurator's live preview and the server's authoritative write both call it. Don't reintroduce a second copy in the client. Its `blockers[]` gates both the submit button and the server action.
 - A `marketing_only` quote has **no processing rate at all** — `CustomerSafeQuote` is a discriminated union whose `basis: "products"` variant carries no volume/rate/savings fields. Don't flatten that back to nullable numbers; zeros there render as a real 0.00% quote.
 - `ENABLE_DEBUG_ROLE_SWITCH` must never be set in a Vercel project environment — local `.env.local` only
+- **Publishing a HubSpot quote is a one-way door.** No API edit (400 `LOCKED`), no delete (`PUBLISHED_QUOTE_CANNOT_BE_DELETED`), and no void — setting `hs_status: VOID` is itself an edit, so voiding is HubSpot-UI-only. Never build an "unpublish", "edit published quote", or "re-publish" affordance; `retryBillingQuoteAction` refuses once `publishedAt` is set. A `400 LOCKED` from `publishQuote` means **already published** and must be treated as success, or a crash between HubSpot's ack and the DB write wedges the account forever.
+- **`hs_recurring_billing_period` is DELIBERATELY never written.** It is a contract *term*, not the billing cycle — HubSpot derives `hs_recurring_billing_number_of_payments` from it, so `P7D` on a weekly line takes one $99 charge and then silently stops collecting. 935 of AIO's 1,200 live weekly line items leave it NULL. `PHASE-E-SPEC.md` §3.3 says to send `P7D`; the spec is wrong. Product-owner decision, 2026-08-21. **LIVE-VERIFIED 2026-08-24** on quote `323970722493`: the weekly platform line came back `hs_recurring_billing_period: NULL` / `hs_recurring_billing_number_of_payments: NULL`, while all eight one-time lines got `nPayments: 1`. That is HubSpot deriving the payment count from the period, observed directly — the mechanism is no longer inferred.
+- **`hs_sender_email` is NOT validated by HubSpot — GO-LIVE BLOCKER.** It is written from the owning rep's `users.email` (`resolveSender`, `publishBillingQuote.ts:147`). The 2026-08-24 gate run published with `rep@aioapp.com`, a seeded dev user that is not a portal owner, and HubSpot **accepted it silently** — no 400, no warning. So nothing anywhere will catch a wrong sender, and a real merchant would receive their quote "from" whatever junk address sits on the owning `users` row. Before the first real customer: seeded/dev users need real addresses, or `resolveSender` needs to resolve a HubSpot owner and refuse when it can't. O-1 (`PAYMENT-TEST-PLAN.md`:249) is explicit that all 46 live paid quotes use a real rep address.
+- **A published quote carries `app.quoteLines` VERBATIM — `publishBillingQuote.ts:211` never calls `buildQuote()`.** Derivation happens at *save* time in the configurator. So a row saved before a change to the derivation rules publishes under the OLD rules, silently. Two rows accepted 2026-08-18 are $1,498 short each (no Onsite Installation, no System Onboarding and Training) because they predate `272f58b`/`c65b4b1`, and `canPublishBillingQuote` does not catch it — it verifies the *platform* line resolves, never that the included services are present. Any backfill of pre-existing accepted rows must re-derive through `buildQuote()` first, or it publishes an under-priced quote onto a document nobody can amend.
+- **Billing completion is gated on the SUBSCRIPTION, never on the quote's `hs_payment_status`.** The subscription appears 1–9 minutes after checkout; `PAID` lags it by a median of **5.7 days** (daily ~12:00 UTC ACH batch). Gating on `PAID` tells a merchant who already paid to "Review & Pay" for most of a week. Same reason the nightly cron's lookback is **10 days**, not 3.
+- One quote yields **one subscription per distinct billing frequency**, so AIO's weekly-platform + monthly-add-on mix routinely produces two. Hence `hubspotIds.subscriptions[]` and `findSubscriptionsForQuote` (association **304**), never a single id, and never a deal-keyed lookup — a reused deal carries subscriptions from earlier quotes.
+- `hs_quote_link` is **not** a one-time-use link, unlike the Adyen and Check ones — the slug exists at create, the URL is predictable, and auth is `public_access`. `/customer/applications/[id]/billing` is **read-or-refresh, not mint-per-click**. Don't "fix" it to match its two `/continue` siblings.
+- A **rate-only quote** (empty `quoteLines`) creates no HubSpot billing objects at all and its checklist module is **omitted**, not shown pending — processing margin comes out of Adyen settlement and the catalog's processing products are $0 placeholders. Discriminate on `quoteAcceptedAt`: empty lines *before* acceptance just means the rep hasn't configured it yet.
+- `hubspotDealId` (the flat column) is the canonical deal id. `HubspotIds` deliberately has **no** `dealId` — two homes would create a second deal per application.
+
+### The Phase E gate run (2026-08-24) — the reference evidence
+
+The one human-run live publish, executed by clicking **Retry HubSpot sync** on the admin accounts
+dashboard for `prospect_1787098151325` ("bob"). Read back from HubSpot, not from our own row. This is
+the record to compare against when the publish path next changes:
+
+| | |
+|---|---|
+| quote | `323970722493`, `hs_status: APPROVAL_NOT_NEEDED` (the published state, spec §181) |
+| deal | `343689933538` — **created by the retry itself**, see `retryBillingQuoteAction` below |
+| contact | `540176122579` |
+| `hs_quote_amount` | `3811.00` = $3,712 one-time + $99 first weekly |
+| `hs_quote_link` | `https://customers.aioapp.com/0f2hv0e1fjzk9q` (voided by hand afterwards, per `PAYMENT-TEST-PLAN.md` §2.2) |
+| flags | `hs_payment_enabled: true`, `hs_esign_enabled: true`, `hs_allowed_payment_methods: ACH`, `hs_acceptance_method: esignature` |
+| associations | **67** ×9 line items · **64/1393** deal (1393 added by HubSpot at publish, as documented) · **702/69** contact · **286** template `817263673055` (AIO Quote v3) · subscriptions **none** (correct until checkout) |
+
+Confirmed by this run: the deliberate-NULL `hs_recurring_billing_period` behaviour, the template
+fallback when `quote_template_policy` is empty, and that the whole association graph holds together
+live. Surfaced by this run: the `hs_sender_email` blocker and the verbatim-`quoteLines` hazard, both
+constraints above.
 
 ### Env vars needed (per phase)
 ```
@@ -206,6 +255,10 @@ ADYEN_ENVIRONMENT           # Phase 2 (test|live)
 ADYEN_WEBHOOK_HMAC_KEY      # Phase 2
 CHECK_API_KEY               # Check payroll — bearer token
 CHECK_API_BASE_URL          # Check payroll — defaults to https://sandbox.checkhq.com; set for production
+NEXT_PUBLIC_HUBSPOT_PORTAL_ID  # Phase E — 244508708. Cosmetic only: turns deal/quote ids in the
+                            # rep+admin billing panel into clickable CRM record links. Absent, they
+                            # render as copyable text rather than broken links. NOT a secret.
+CRON_SECRET                 # bearer for /api/cron/* (adyen-actuals, hubspot-links, hubspot-billing-sync)
 HUBSPOT_PRIVATE_APP_TOKEN   # Phase 3 — general CRM app: companies (tenant linkage), deal sync
 HUBSPOT_BILLING_PRIVATE_APP_TOKEN  # separate "EasyOB Billing" app: products (needs the
                             # `e-commerce` scope), quotes, line items, contacts, subscriptions

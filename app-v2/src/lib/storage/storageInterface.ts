@@ -13,7 +13,11 @@ export type StorageScope = { userId: string; role: "rep" | "admin" };
 export type CustomerApplicationPatch = Partial<
   Pick<
     MerchantApplication,
-    "business" | "ownerContact" | "processing" | "agreement" | "stage" | "adyenIds" | "adyenOnboardingUrl" | "checkIds" | "hubspotDealId"
+    // hubspotIds: the on-view billing refresh runs AS THE CUSTOMER and writes
+    // the quote/subscription snapshot back, exactly as the Check refresh does
+    // for checkIds. Only the snapshot fields are ever touched there — the
+    // quote/line-item ids themselves are written by the rep's build action.
+    "business" | "ownerContact" | "processing" | "agreement" | "stage" | "adyenIds" | "adyenOnboardingUrl" | "checkIds" | "hubspotDealId" | "hubspotIds"
   >
 >;
 

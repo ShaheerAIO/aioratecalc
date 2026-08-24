@@ -171,17 +171,152 @@ export type QuoteConfig = {
   monthlyVolume: number;
 };
 
+// One subscription HubSpot created from a quote's checkout. PLURAL on the
+// application, because a quote produces one subscription per distinct
+// `recurringbillingfrequency` — verified against 45 of the 46 paid quotes in
+// the live portal, two of which produced two each (weekly + monthly)
+// (PAYMENT-TEST-PLAN.md §1.3). AIO's catalog mixes weekly platform lines with
+// monthly add-ons, so a mixed quote routinely yields two.
+//
+// We never create these. HubSpot does, ~1–9 minutes after the buyer finishes
+// checkout — which is DAYS before the quote itself flips to `PAID`
+// (PAYMENT-TEST-PLAN.md §1.5). That ordering is why this snapshot, not the
+// quote's `paymentStatus`, is what the customer's Billing module gates on.
+export type HubspotSubscriptionSnapshot = {
+  subscriptionId: string;
+  /** hs_status: active|past_due|unpaid|canceled|expired|scheduled|paused.
+   *  `paused` and `canceled` are COMMON here (35 of 91 live subscriptions) —
+   *  real billing-ops states the UI must render, not a default to fall through. */
+  status: string | null;
+  /** hs_payment_method, e.g. "ACH - 1117". Non-null is the proof that the buyer
+   *  actually authorized at checkout; a hand-made billing-tool subscription
+   *  reads null here (PAYMENT-TEST-PLAN.md §1.2). */
+  paymentMethod: string | null;
+  /** hs_recurring_billing_frequency — weekly vs monthly, i.e. the thing that
+   *  split one quote into two subscriptions. */
+  billingFrequency: string | null;
+  /** hs_recurring_billing_start_date — what to tell the customer ("first charge
+   *  on …"). Can be up to 60 days out. */
+  billingStartDate: string | null;
+  /** hs_mrr — HubSpot's own weekly × 52/12 figure. Cached so EasyOB never
+   *  re-derives it and disagrees with the CRM. */
+  mrr: number | null;
+  nextPaymentDueDate: string | null;
+  /** hs_last_payment_status: succeeded|failed|partially_refunded|refunded|processing. */
+  lastPaymentStatus: string | null;
+  completedPayments: number | null;   // hs_number_of_completed_payments
+  totalCollected: number | null;      // hs_total_collected_amount
+};
+
 // HubSpot billing linkage. The quote is BOTH the rep-visible CRM artifact and
 // the customer's checkout — see E2E-PLAN.md. We never create the subscription
 // or its invoices; HubSpot does that when the customer pays the quote.
 export type HubspotIds = {
-  dealId: string | null;
+  // dealId intentionally absent — the canonical home is the flat hubspotDealId
+  // column (schema.ts), which is the one actually populated, read by five call
+  // sites, and on the customer-writable whitelist. Adopting a JSONB copy would
+  // create a SECOND deal per application until a backfill ran.
+  // See PHASE-E-SPEC.md §5.1 / O-14.
   quoteId: string | null;
-  quoteLink: string | null;      // hs_quote_link — public hosted quote URL (the port-out target)
-  subscriptionId: string | null; // set only after HubSpot creates it from the checkout
-  status: string | null;         // cached subscription hs_status snapshot
-  statusAt: string | null;
+  /** Which quote template this quote was built on (association typeId 286).
+   *  Admin-configurable — the portal carries several ("AIO Quote v3",
+   *  "Marketing Only Quote", "Hardware Addition Quote") plus inactive ones. */
+  quoteTemplateId: string | null;
+  /** Quote-side line items, in quoteLines order. Lets a DRAFT re-save reconcile
+   *  instead of duplicating. HubSpot clones its own deal-side copies at publish
+   *  — those ids are NOT these and are never tracked here. */
+  lineItemIds: string[] | null;
+  /** The Contact associated (69) and taken as signer (702). */
+  contactId: string | null;
+  /** hs_quote_link. Populated at publish, ~3s later. NOT a one-time-use link,
+   *  so unlike Adyen/Check links it may be stored and re-served
+   *  (PHASE-E-SPEC.md §7.3). Re-read on null; never authoritative here. */
+  quoteLink: string | null;
+  /** ISO timestamp of the successful publish. THE one-way-door marker: null
+   *  means the quote is still a DRAFT and still editable from EasyOB. A
+   *  published quote cannot be edited, deleted, or voided via the API. */
+  publishedAt: string | null;
+  /** hs_payment_status: PENDING | PROCESSING | PAID | PAYMENT_NOT_ENABLED.
+   *  Calculated and read-only in HubSpot. Worth caching as the "the money
+   *  actually moved" signal, but it lags checkout by a median 5.7 days (daily
+   *  ACH settlement batch) so it must NOT gate module completion
+   *  (PAYMENT-TEST-PLAN.md §1.5). */
+  paymentStatus: string | null;
+  paymentDate: string | null;
+  /** Every subscription this quote produced, via association 304. */
+  subscriptions: HubspotSubscriptionSnapshot[] | null;
+  /** Worst-of roll-up across `subscriptions`, so one broken subscription on a
+   *  mixed-frequency quote cannot be hidden by a healthy sibling.
+   *  Computed by rollUpSubscriptionStatus below. */
+  subscriptionStatus: string | null;
+  /** When the snapshot fields above were last refreshed. Mirrors
+   *  checkIds.onboardStatusAt — list views read this cache and never call
+   *  HubSpot. */
+  syncedAt: string | null;
+  /** Last swallowed background-sync failure, persisted so it is VISIBLE. The
+   *  deal sync failed silently for the entire life of the feature purely
+   *  because a console.error was the only record. Cleared on the next success. */
+  lastSyncError: string | null;
+  lastSyncErrorAt: string | null;
 };
+
+// The starting value for the conditional-claim lock that guards quote creation
+// against a concurrent double-click (PHASE-E-SPEC.md §5.6): claiming the row
+// means writing a non-null hubspotIds, so it has to be writable as a whole.
+export const EMPTY_HUBSPOT_IDS: HubspotIds = {
+  quoteId: null,
+  quoteTemplateId: null,
+  lineItemIds: null,
+  contactId: null,
+  quoteLink: null,
+  publishedAt: null,
+  paymentStatus: null,
+  paymentDate: null,
+  subscriptions: null,
+  subscriptionStatus: null,
+  syncedAt: null,
+  lastSyncError: null,
+  lastSyncErrorAt: null,
+};
+
+// Worst-of first. A presentation choice, not a HubSpot concept: a mixed-frequency
+// quote has two subscriptions and the account is only as healthy as its sickest
+// one, so a canceled weekly platform line must not be masked by an active
+// monthly add-on (PAYMENT-TEST-PLAN.md §1.6).
+const SUBSCRIPTION_STATUS_SEVERITY = [
+  "canceled",
+  "unpaid",
+  "past_due",
+  "paused",
+  "expired",
+  "scheduled",
+  "active",
+] as const;
+
+/**
+ * Pure: the single `subscriptionStatus` shown on an application, given every
+ * subscription its quote produced. Null for no subscriptions — that is a
+ * distinct state from any status (checkout hasn't happened, or the quote was
+ * one-time charges only) and must not collapse into one.
+ *
+ * An unrecognised status sorts WORST, ahead of `canceled`: a value this build
+ * doesn't know about is a reason to look, not a reason to reassure.
+ */
+export function rollUpSubscriptionStatus(subs: HubspotSubscriptionSnapshot[]): string | null {
+  let worst: string | null = null;
+  let worstRank = Number.POSITIVE_INFINITY;
+  for (const sub of subs) {
+    const status = (sub.status ?? "").trim();
+    if (status === "") continue;
+    const known = (SUBSCRIPTION_STATUS_SEVERITY as readonly string[]).indexOf(status);
+    const rank = known === -1 ? -1 : known;
+    if (rank < worstRank) {
+      worstRank = rank;
+      worst = status;
+    }
+  }
+  return worst;
+}
 
 export type BusinessInfo = {
   legalName: string;

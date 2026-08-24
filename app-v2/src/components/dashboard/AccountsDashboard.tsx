@@ -18,6 +18,8 @@ import { fmt$ } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
 import { getOnboardingModules } from "@/lib/onboardingModules";
+import { BILLING_STATE_LABELS, billingPanelState, hasBillingSyncError } from "@/lib/billingView";
+import { BillingPanel } from "./BillingPanel";
 import type { MerchantApplication, CustomerSubmission } from "@/types/merchant";
 import type { TenantCompany } from "@/lib/adapters/hubspot";
 import styles from "./AccountsDashboard.module.css";
@@ -492,6 +494,13 @@ function AccountsDashboardInner({
                           { label: "Rep (Commission)", val: repMap.get(selected.ownerUserId)?.name || "—" },
                           { label: "Rep Email", val: repMap.get(selected.ownerUserId)?.email || "—" },
                           { label: "HubSpot Deal ID", val: selected.hubspotDealId || "Not synced" },
+                          { label: "HubSpot Quote", val: BILLING_STATE_LABELS[billingPanelState(selected)] },
+                          { label: "Payment Status", val: selected.hubspotIds?.paymentStatus || "—" },
+                          { label: "Subscription Status", val: selected.hubspotIds?.subscriptionStatus || "—" },
+                          {
+                            label: "HubSpot Sync",
+                            val: hasBillingSyncError(selected.hubspotIds) ? "⚠ Error" : "OK",
+                          },
                           { label: "Tenant Number", val: selected.adyenIds?.tenantNumber || "Not set" },
                           { label: "Store (prod-)", val: selected.adyenIds?.tenantNumber ? `prod-${selected.adyenIds.tenantNumber}` : "Not created" },
                           { label: "Store ID", val: selected.adyenIds?.storeId || "Not created" },
@@ -505,6 +514,11 @@ function AccountsDashboardInner({
                       : [
                           { label: "Stage", val: selected.stage.replace(/_/g, " ") },
                           { label: "HubSpot Deal ID", val: selected.hubspotDealId || "Not synced" },
+                          { label: "HubSpot Quote", val: BILLING_STATE_LABELS[billingPanelState(selected)] },
+                          {
+                            label: "HubSpot Sync",
+                            val: hasBillingSyncError(selected.hubspotIds) ? "⚠ Error" : "OK",
+                          },
                           { label: "Adyen Legal Entity", val: selected.adyenIds?.legalEntityId || "Not created" },
                           { label: "Onboarding URL", val: selected.adyenOnboardingUrl ? "Set" : "Not generated" },
                           { label: "Owner", val: selected.ownerContact ? `${selected.ownerContact.firstName} ${selected.ownerContact.lastName}` : "—" },
@@ -597,6 +611,12 @@ function AccountsDashboardInner({
                       </button>
                     </div>
                   )}
+                  <BillingPanel
+                    app={selected}
+                    canManage={isAdmin || selected.ownerUserId === userId}
+                    onUpdated={updateOne}
+                  />
+
                   <div>
                     <div className={styles.modulesLabel}>Modules</div>
                     <div className={styles.modules}>

@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/hubspot-billing-sync",
+      "schedule": "0 8 * * *"
+    },
+    {
       "path": "/api/cron/adyen-actuals",
       "schedule": "0 9 * * *"
     },

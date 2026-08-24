@@ -24,7 +24,7 @@ import {
   getCheckOnboardStatus,
   type PayrollSigner,
 } from "@/lib/adapters/check";
-import { pushToHubSpot } from "@/lib/adapters/hubspot";
+import { findSubscriptionsForQuote, getQuoteSnapshot, pushToHubSpot } from "@/lib/adapters/hubspot";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
 import {
   validateOnboardingFields,
@@ -32,6 +32,7 @@ import {
   type OnboardingFieldErrors,
 } from "@/lib/onboardingValidation";
 import { usStateCode } from "@/lib/utils";
+import { rollUpSubscriptionStatus } from "@/types/merchant";
 import type {
   MerchantApplication, BusinessInfo, OwnerContact, ProcessingInfo, AgreementInfo, CustomerSafeQuote,
 } from "@/types/merchant";
@@ -387,17 +388,18 @@ export async function startPayrollOnboardingAction(
   return { url: await createCheckOnboardLink(companyId, fields.signer) };
 }
 
-// Loads the application and refreshes its cached Check onboard status.
+// Refreshes the cached Check onboard status on an already-loaded row and
+// returns the latest row (the same one back, if nothing needed writing).
 // Check's onboard links have no redirect-back URL, so the customer never
 // returns through AIO after finishing — viewing the application is the only
-// reliable moment to re-read status. Takes an id and re-loads server-side
-// rather than accepting an application object: this is a Server Action, so a
-// caller-supplied app would let a client forge the companyId it queries.
+// reliable moment to re-read status.
 // Failures are swallowed — a Check outage must not break the application page.
-export async function getMyApplicationWithPayrollSyncAction(id: string): Promise<MerchantApplication | null> {
-  const { userId } = await requireCustomer();
-  const app = await postgresStorage.getApplicationForCustomer(userId, id);
-  if (!app?.checkIds?.companyId || app.checkIds.onboardStatus === "completed") return app;
+async function refreshCheckOnboardStatus(
+  userId: string,
+  id: string,
+  app: MerchantApplication
+): Promise<MerchantApplication> {
+  if (!app.checkIds?.companyId || app.checkIds.onboardStatus === "completed") return app;
 
   try {
     const onboardStatus = await getCheckOnboardStatus(app.checkIds.companyId);
@@ -409,4 +411,123 @@ export async function getMyApplicationWithPayrollSyncAction(id: string): Promise
     console.error("Check onboard status refresh failed:", err instanceof Error ? err.message : err);
     return app;
   }
+}
+
+// ── Billing (HubSpot quote + subscriptions) ─────────────────────────────────
+
+// Skip a re-read within a minute of the last one. The Check refresh above has
+// no TTL and re-reads on every page view; that's tolerable at one API call, but
+// this one makes up to two (the quote, then its subscriptions) and a customer
+// refreshing while waiting for a payment to clear is the EXPECTED behaviour
+// here, not an edge case.
+const BILLING_SYNC_TTL_MS = 60_000;
+
+// Refreshes the cached HubSpot quote/subscription snapshot on an already-loaded
+// row and returns the latest row.
+//
+// The thing it is actually fetching is the SUBSCRIPTION, not the quote's
+// payment status. Verified against 47 live quote/subscription pairs: the
+// subscription appears 1–9 MINUTES after the customer finishes checkout, while
+// the quote's hs_payment_status doesn't flip to PAID for a median of 5.7 DAYS
+// (a daily ~12:00 UTC ACH settlement batch). So this on-view refresh — not the
+// nightly cron — is the load-bearing mechanism for the customer, and
+// billingModule() gates completion on the subscription. paymentStatus is still
+// cached, because "the money actually moved" is worth having and Phase G wants
+// it, but it is NOT the completion gate.
+//
+// Failures are swallowed — a HubSpot outage must not break the application page.
+async function refreshHubspotBilling(
+  userId: string,
+  id: string,
+  app: MerchantApplication
+): Promise<MerchantApplication> {
+  const hubspotIds = app.hubspotIds;
+  if (!hubspotIds?.quoteId || !hubspotIds.publishedAt) return app;
+
+  // The no-op condition, in the real ordering: there is something left to learn
+  // only while no subscription is cached, or every cached one is still merely
+  // `scheduled` (its first charge hasn't run), or the settlement batch hasn't
+  // marked the quote PAID yet. `scheduled` counts as pending because it becomes
+  // `active` on its own, days later, with nothing on our side to trigger it.
+  const subs = hubspotIds.subscriptions ?? [];
+  const noSubscriptions = subs.length === 0;
+  const allScheduled = !noSubscriptions && subs.every(s => s.status === "scheduled");
+  const pending = noSubscriptions || allScheduled || hubspotIds.paymentStatus !== "PAID";
+  if (!pending) return app;
+
+  const syncedAtMs = hubspotIds.syncedAt ? Date.parse(hubspotIds.syncedAt) : NaN;
+  if (!Number.isNaN(syncedAtMs) && Date.now() - syncedAtMs < BILLING_SYNC_TTL_MS) return app;
+
+  try {
+    const snapshot = await getQuoteSnapshot(hubspotIds.quoteId);
+    if (!snapshot) throw new Error(`quote ${hubspotIds.quoteId} not found in HubSpot`);
+    const subscriptions = await findSubscriptionsForQuote(hubspotIds.quoteId);
+
+    // Always written, even when nothing changed — unlike the Check refresh,
+    // which returns early on an unchanged status. syncedAt IS the TTL above, so
+    // skipping the write would mean the TTL never engages and every page view
+    // re-reads HubSpot twice.
+    return await postgresStorage.updateApplicationAsCustomer(userId, id, {
+      hubspotIds: {
+        ...hubspotIds,
+        // Never null out a link that works on a read that came back empty.
+        quoteLink: snapshot.quoteLink ?? hubspotIds.quoteLink,
+        paymentStatus: snapshot.paymentStatus,
+        paymentDate: snapshot.paymentDate,
+        subscriptions,
+        subscriptionStatus: rollUpSubscriptionStatus(subscriptions),
+        syncedAt: new Date().toISOString(),
+        lastSyncError: null,
+        lastSyncErrorAt: null,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("HubSpot billing refresh failed:", message);
+    // Persisted as well as logged, so a stuck account is visible to a rep
+    // instead of living only in a log line nobody reads.
+    try {
+      return await postgresStorage.updateApplicationAsCustomer(userId, id, {
+        hubspotIds: { ...hubspotIds, lastSyncError: message, lastSyncErrorAt: new Date().toISOString() },
+      });
+    } catch (writeErr) {
+      console.error("Failed to persist HubSpot sync error:", writeErr instanceof Error ? writeErr.message : writeErr);
+      return app;
+    }
+  }
+}
+
+// Loads the application and refreshes ONLY its cached HubSpot billing snapshot.
+// The application page wants both refreshes and calls getMyApplicationWithSync-
+// Action below; this one exists for a caller that only cares about billing.
+//
+// Takes an id and re-loads server-side rather than accepting an application
+// object: this is a Server Action, so a caller-supplied app would let a client
+// forge the quoteId it queries. Same rule in the combined action below.
+export async function getMyApplicationWithBillingSyncAction(id: string): Promise<MerchantApplication | null> {
+  const { userId } = await requireCustomer();
+  const app = await postgresStorage.getApplicationForCustomer(userId, id);
+  if (!app) return null;
+  return refreshHubspotBilling(userId, id, app);
+}
+
+// What the application detail page calls: one load, both on-view refreshes.
+//
+// The two run INDEPENDENTLY — each swallows its own failures internally — so a
+// HubSpot outage can't suppress the Check refresh, or vice versa.
+//
+// They run SEQUENTIALLY and the row is threaded from one into the next, which is
+// what keeps two updates on the same row from clobbering each other.
+// updateApplicationAsCustomer SETs only the columns in its patch, so check_ids
+// and hubspot_ids can't collide in SQL — but each refresh builds its patch by
+// spreading the snapshot it was handed, and returns the row from its own
+// RETURNING. Handing the second refresh a pre-first-write row would make the
+// value this function returns to the page miss whatever the first one wrote.
+// Do not "optimise" this into a Promise.all over two independent loads.
+export async function getMyApplicationWithSyncAction(id: string): Promise<MerchantApplication | null> {
+  const { userId } = await requireCustomer();
+  const app = await postgresStorage.getApplicationForCustomer(userId, id);
+  if (!app) return null;
+  const afterPayroll = await refreshCheckOnboardStatus(userId, id, app);
+  return refreshHubspotBilling(userId, id, afterPayroll);
 }
