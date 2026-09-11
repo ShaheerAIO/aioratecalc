@@ -30,6 +30,7 @@ function NewProspectFlow() {
 
   const [merchantName, setMerchantName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
   const [avgTicket, setAvgTicket]       = useState("");
   const [monthlyVolume, setMonthlyVolume] = useState("");
   const [targetMargin, setTargetMargin] = useState(0.008);
@@ -39,6 +40,8 @@ function NewProspectFlow() {
   const [internalOpen, setInternalOpen] = useState(false);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [linkWarning, setLinkWarning]   = useState<string | null>(null);
+  const [emailSent, setEmailSent]       = useState(false);
+  const [smsSent, setSmsSent]           = useState(false);
   const [copied, setCopied]             = useState(false);
   const [saving, setSaving]             = useState(false);
   const [error, setError]               = useState<string | null>(null);
@@ -232,8 +235,8 @@ function NewProspectFlow() {
     setSaving(true);
     setError(null);
     try {
-      const { linkUrl, warning } = await createProspectAction({
-        merchantName, contactEmail, targetMargin, pricingModel, quoteType,
+      const { linkUrl, warning, emailResult, smsResult } = await createProspectAction({
+        merchantName, contactEmail, contactPhone: contactPhone || null, targetMargin, pricingModel, quoteType,
         quoteConfig: ticket > 0 && volume > 0 ? { avgTicket: ticket, monthlyVolume: volume } : null,
         analysis: rated ? analysis : null,
         // Only the picks cross the wire — prices and the tier are re-derived
@@ -244,6 +247,8 @@ function NewProspectFlow() {
       });
       setLinkUrl(linkUrl);
       setLinkWarning(warning);
+      setEmailSent(emailResult.sent);
+      setSmsSent(smsResult?.sent ?? false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create prospect");
     }
@@ -251,10 +256,10 @@ function NewProspectFlow() {
   };
 
   const reset = () => {
-    setMerchantName(""); setContactEmail(""); setTargetMargin(0.008); setPricingModel("2-tier");
+    setMerchantName(""); setContactEmail(""); setContactPhone(""); setTargetMargin(0.008); setPricingModel("2-tier");
     setAvgTicket(""); setMonthlyVolume(""); setFile(null); setAnalysis(null);
     setQuoteType("full_pos"); setPicks([]); setChannels([]); setQuote(null);
-    setLinkUrl(null); setLinkWarning(null); setCopied(false); setError(null);
+    setLinkUrl(null); setLinkWarning(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
     setHubspotCompany(null); setHubspotNotice(null);
     setPrefill(null); setApplied(NO_PREFILL_APPLIED); appliedRef.current = NO_PREFILL_APPLIED;
     setHubspotQuery(""); setHubspotResults([]); setHubspotSearchError(null);
@@ -304,6 +309,14 @@ function NewProspectFlow() {
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
+        <p className={styles.prefillNote}>
+          {emailSent ? `Emailed to ${contactEmail}.` : "Email delivery isn't configured yet — send this link yourself."}
+        </p>
+        {contactPhone && (
+          <p className={styles.prefillNote}>
+            {smsSent ? `Texted to ${contactPhone}.` : "Text delivery isn't configured yet — send this link yourself."}
+          </p>
+        )}
         <button onClick={reset} className={styles.btnGhost}>
           Create Another
         </button>
@@ -366,6 +379,10 @@ function NewProspectFlow() {
             )}
           </label>
           <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} placeholder="owner@business.com" className={styles.input} />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Customer Phone (optional — also texts the link)</label>
+          <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="(555) 123-4567" className={styles.input} />
         </div>
 
         {!hubspotCompany && (

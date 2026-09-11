@@ -11,6 +11,9 @@ import { buildProspectPrefill, type ProspectPrefill } from "@/lib/hubspotPrefill
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { resolveLeadLinkIssue } from "@/lib/customerLink";
+import type { StorageScope } from "@/lib/storage/storageInterface";
+import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
+import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
 import { buildQuote, isAllowedForQuoteType, isProcessingQuote, toQuoteLine } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
@@ -40,6 +43,50 @@ function mintLeadLink(now: Date) {
     expiresAt: leadLinkExpiry(now),
     url: leadLinkUrl(token),
   };
+}
+
+// Best-effort delivery shared by create and resend. A Resend/Twilio hiccup
+// must not undo the persisted row — the caller always has the raw URL to
+// hand the merchant themselves.
+async function deliverLeadLink(
+  email: string,
+  url: string,
+  merchantName: string | undefined,
+  phone: string | null | undefined,
+): Promise<{ emailResult: SendMagicLinkResult; smsResult: SendSmsResult | null }> {
+  const emailResult = await sendLeadLinkEmail(email, url, merchantName).catch(err => {
+    console.error("lead link email failed", err);
+    return { sent: false, devUrl: url };
+  });
+  const smsResult = phone
+    ? await sendLeadLinkSms(phone, url).catch(err => {
+        console.error("lead link sms failed", err);
+        return { sent: false, devUrl: url };
+      })
+    : null;
+  return { emailResult, smsResult };
+}
+
+async function persistLeadLink(
+  scope: StorageScope,
+  app: MerchantApplication,
+  now: Date,
+): Promise<{ app: MerchantApplication; linkUrl: string }> {
+  const decision = resolveLeadLinkIssue(app, now.getTime());
+  const token = decision.reuse ? decision.token : randomUUID();
+  const nextStage = hasQuoteBasis(app) ? "quote_sent" : "lead_link_sent";
+
+  const updated: MerchantApplication = {
+    ...app,
+    stage: shouldAdvance(app.stage, nextStage) ? nextStage : app.stage,
+    customerLinkToken: token,
+    customerLinkPurpose: "lead_upload",
+    customerLinkSentAt: now.toISOString(),
+    customerLinkExpiresAt: leadLinkExpiry(now),
+    updatedAt: now.toISOString(),
+  };
+  await postgresStorage.saveApplication(scope, updated);
+  return { app: updated, linkUrl: leadLinkUrl(token) };
 }
 
 // ── Phase F: "Push to EasyOB" deep link from the HubSpot Company record ─────
@@ -158,6 +205,9 @@ async function deriveQuoteLines(
 export async function createProspectAction(input: {
   merchantName: string;
   contactEmail: string;
+  // Phase 4 — optional. When given, the lead link is also texted, alongside
+  // the email that's always attempted. No phone means no SMS attempt.
+  contactPhone?: string | null;
   targetMargin: number;
   pricingModel: PricingModel;
   // Dual statement path. Either (or both) may be supplied: the rep can enter
@@ -180,7 +230,13 @@ export async function createProspectAction(input: {
   // Re-fetched here (not trusted from whatever the client last showed) so the
   // persisted snapshot reflects the Company at creation time.
   hubspotCompanyId?: string | null;
-}): Promise<{ app: MerchantApplication; linkUrl: string; warning: string | null }> {
+}): Promise<{
+  app: MerchantApplication;
+  linkUrl: string;
+  warning: string | null;
+  emailResult: SendMagicLinkResult;
+  smsResult: SendSmsResult | null;
+}> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
 
@@ -259,6 +315,7 @@ export async function createProspectAction(input: {
     adyenIds: null,
     adyenOnboardingUrl: null,
     checkIds: null,
+    foodbuyIds: null,
     hubspotIds: null,
     quoteType,
     quoteConfig,
@@ -285,9 +342,10 @@ export async function createProspectAction(input: {
       legalName: input.merchantName, dba: input.merchantName,
     },
     ownerContact: {
-      firstName: "", lastName: "", title: "", phone: "",
+      firstName: "", lastName: "", title: "",
       ...prefill?.ownerContact,
       email: input.contactEmail || prefill?.ownerContact.email || "",
+      phone: input.contactPhone || prefill?.ownerContact.phone || "",
     },
     processing: prefilledProcessing,
     agreement: null,
@@ -295,7 +353,17 @@ export async function createProspectAction(input: {
 
   await postgresStorage.saveApplication({ userId: effective.userId, role: effective.role }, app);
 
-  return { app, linkUrl: link.url, warning };
+  // Best-effort from here — the prospect row is already saved, so a Resend or
+  // Twilio hiccup must not undo it or block the response. The rep always has
+  // the raw link to send by hand regardless of how these come back.
+  const { emailResult, smsResult } = await deliverLeadLink(
+    app.ownerContact!.email,
+    link.url,
+    input.merchantName,
+    app.ownerContact!.phone,
+  );
+
+  return { app, linkUrl: link.url, warning, emailResult, smsResult };
 }
 
 // ── The proposal wizard writes through the same derivation ──────────────────
@@ -418,26 +486,59 @@ export async function issueCustomerQuoteLinkAction(
   const app = await postgresStorage.getApplication(scope, applicationId);
   if (!app) throw new Error("Application not found");
 
-  const now = new Date();
-  const decision = resolveLeadLinkIssue(app, now.getTime());
-  const token = decision.reuse ? decision.token : randomUUID();
+  return persistLeadLink(scope, app, new Date());
+}
 
-  // Same gate the customer render uses: a link with nothing to show is still
-  // the "upload your statement" link, not a sent quote.
-  const nextStage = hasQuoteBasis(app) ? "quote_sent" : "lead_link_sent";
+/**
+ * Issue or re-send the `/lead/{token}` quote link for any account the caller
+ * can see. Stage does not gate this: a deal in analysis, onboarding, or even
+ * closed_lost still gets a URL, and shouldAdvance keeps a later stage from
+ * sliding backwards. A live lead_upload token is reused so the merchant's
+ * existing URL never dies; otherwise a fresh 14-day token is minted.
+ *
+ * Email/SMS are best-effort and skipped when no contact is on file — the
+ * returned URL is always shown so the rep can copy it by hand.
+ *
+ * Open to the owning rep and to any admin. Storage already enforces that a
+ * rep cannot reach someone else's row.
+ */
+export async function resendLeadLinkAction(
+  applicationId: string
+): Promise<{
+  app: MerchantApplication;
+  linkUrl: string;
+  emailResult: SendMagicLinkResult;
+  smsResult: SendSmsResult | null;
+}> {
+  const effective = await getEffectiveRole();
+  if (!effective) throw new Error("Not authenticated");
+  const scope = { userId: effective.userId, role: effective.role };
 
-  const updated: MerchantApplication = {
-    ...app,
-    stage: shouldAdvance(app.stage, nextStage) ? nextStage : app.stage,
-    customerLinkToken: token,
-    customerLinkPurpose: "lead_upload",
-    customerLinkSentAt: now.toISOString(),
-    customerLinkExpiresAt: leadLinkExpiry(now),
-    updatedAt: now.toISOString(),
-  };
-  await postgresStorage.saveApplication(scope, updated);
+  const app = await postgresStorage.getApplication(scope, applicationId);
+  if (!app) throw new Error("Application not found");
 
-  return { app: updated, linkUrl: leadLinkUrl(token) };
+  const { app: updated, linkUrl } = await persistLeadLink(scope, app, new Date());
+  const email = updated.ownerContact?.email;
+  const merchantName =
+    updated.business?.dba || updated.business?.legalName || updated.analysis?.merchantName || undefined;
+
+  if (!email) {
+    return {
+      app: updated,
+      linkUrl,
+      emailResult: { sent: false, devUrl: linkUrl },
+      smsResult: null,
+    };
+  }
+
+  const { emailResult, smsResult } = await deliverLeadLink(
+    email,
+    linkUrl,
+    merchantName,
+    updated.ownerContact?.phone,
+  );
+
+  return { app: updated, linkUrl, emailResult, smsResult };
 }
 
 /**

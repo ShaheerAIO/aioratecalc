@@ -14,6 +14,7 @@ import {
   unlinkTenantCompanyAction,
   type RepSummary,
 } from "@/lib/actions/applications";
+import { resendLeadLinkAction } from "@/lib/actions/prospects";
 import { fmt$ } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
@@ -99,9 +100,16 @@ function AccountsDashboardInner({
   const [busyId, setBusyId]     = useState<string | null>(null);
   const [search, setSearch]     = useState("");
   const [tenantDraft, setTenantDraft] = useState("");
-  // The onboarding link just minted for one account, kept per-account so it
-  // can't leak onto the next row the rep opens.
-  const [sentLink, setSentLink] = useState<{ appId: string; url: string; sent: boolean } | null>(null);
+  // The link the staff just (re)sent, kept per-account so it can't leak onto
+  // the next row they open. `kind` picks the expiry copy; `smsSent` is null
+  // when no phone was on file (so we don't claim a text that was never tried).
+  const [sentLink, setSentLink] = useState<{
+    appId: string;
+    url: string;
+    kind: "quote" | "onboarding";
+    emailSent: boolean;
+    smsSent: boolean | null;
+  } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
 
   // Tenant-linking (HubSpot Company picker for the selected account)
@@ -155,15 +163,41 @@ function AccountsDashboardInner({
     );
   });
 
+  const canManageSelected = selected != null && (isAdmin || selected.ownerUserId === userId);
+  const showQuoteLink = canManageSelected;
+  const showOnboardingSend = selected != null && canManageSelected && !!selected.ownerContact?.email && (
+    (selected.stage === "proposal_sent" && !selected.adyenOnboardingUrl) ||
+    selected.stage === "merchant_link_sent"
+  );
+
   const handleSendLink = async (app: MerchantApplication) => {
     setBusyId(app.id);
     try {
       const { app: updated, result, url } = await sendMerchantOnboardingLinkAction(app.id);
       updateOne(updated);
-      setSentLink({ appId: app.id, url, sent: result.sent });
+      setSentLink({ appId: app.id, url, kind: "onboarding", emailSent: result.sent, smsSent: null });
       setLinkCopied(false);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to send onboarding link");
+    }
+    setBusyId(null);
+  };
+
+  const handleResendQuoteLink = async (app: MerchantApplication) => {
+    setBusyId(app.id);
+    try {
+      const { app: updated, linkUrl, emailResult, smsResult } = await resendLeadLinkAction(app.id);
+      updateOne(updated);
+      setSentLink({
+        appId: app.id,
+        url: linkUrl,
+        kind: "quote",
+        emailSent: emailResult.sent,
+        smsSent: smsResult ? smsResult.sent : null,
+      });
+      setLinkCopied(false);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to resend quote link");
     }
     setBusyId(null);
   };
@@ -441,17 +475,24 @@ function AccountsDashboardInner({
                       <div className={styles.detailMeta}>ID: {selected.id} · Created {new Date(selected.createdAt).toLocaleString()}</div>
                     </div>
                     <div className={styles.detailActions}>
-                      {/* Actions are gated on ownership, not role: reps only ever see
-                          their own accounts, and an admin can work the deals they own
-                          (but only reads other reps' accounts for oversight). */}
+                      {/* Resume / closed-lost stay owner-only: those actually work
+                          the deal. Resend is operational — an admin covering for a
+                          bounced email needs it on accounts they don't own. */}
                       {selected.ownerUserId === userId && RESUMABLE_STAGES.includes(selected.stage) && (
                         <button onClick={() => router.push(`/rep/proposals/new?id=${selected.id}`)} className={styles.btnPrimary}>
                           {selected.stage === "analysis" ? "Continue Analysis" : "Resume Proposal"}
                         </button>
                       )}
-                      {selected.ownerUserId === userId && selected.stage === "proposal_sent" && !selected.adyenOnboardingUrl && (
+                      {showQuoteLink && (
+                        <button onClick={() => handleResendQuoteLink(selected)} disabled={busyId === selected.id} className={styles.btnPrimary}>
+                          {selected.customerLinkPurpose === "lead_upload" && selected.customerLinkToken
+                            ? "Resend Quote Link"
+                            : "Send Quote Link"}
+                        </button>
+                      )}
+                      {showOnboardingSend && (
                         <button onClick={() => handleSendLink(selected)} disabled={busyId === selected.id} className={styles.btnPrimary}>
-                          Send Onboarding Link
+                          {selected.stage === "merchant_link_sent" ? "Resend Onboarding Link" : "Send Onboarding Link"}
                         </button>
                       )}
                       {selected.ownerUserId === userId && selected.stage !== "closed_lost" && selected.stage !== "adyen_approved" && (
@@ -463,12 +504,14 @@ function AccountsDashboardInner({
                     </div>
                   </div>
 
-                  {/* The onboarding link the rep just minted. Shown in full with a
-                      copy affordance because email delivery (Resend) is optional —
-                      without this the "Send Onboarding Link" click surfaces nothing. */}
+                  {/* The link the staff just (re)sent. Shown in full with a copy
+                      affordance because email/SMS delivery is optional — without
+                      this the click would surface nothing they can hand over. */}
                   {sentLink?.appId === selected.id && (
                     <div>
-                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>Merchant Onboarding Link</div>
+                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>
+                        {sentLink.kind === "quote" ? "Quote Link" : "Merchant Onboarding Link"}
+                      </div>
                       <div className={styles.linkRow}>
                         <code className={styles.linkCode}>{sentLink.url}</code>
                         <button
@@ -480,7 +523,18 @@ function AccountsDashboardInner({
                         </button>
                       </div>
                       <div className={styles.detailMeta} style={{ marginTop: 6 }}>
-                        {sentLink.sent
+                        {sentLink.kind === "quote" ? (
+                          <>
+                            {sentLink.emailSent
+                              ? `Emailed to ${selected.ownerContact?.email}. Valid for 14 days.`
+                              : "Email delivery isn't configured yet — send this link to the merchant yourself. It is valid for 14 days."}
+                            {selected.ownerContact?.phone && (
+                              <> {sentLink.smsSent
+                                ? `Texted to ${selected.ownerContact.phone}.`
+                                : "Text delivery isn't configured yet."}</>
+                            )}
+                          </>
+                        ) : sentLink.emailSent
                           ? `Emailed to ${selected.ownerContact?.email}. Expires in 30 minutes.`
                           : "Email delivery isn't configured yet — send this link to the merchant yourself. It expires in 30 minutes."}
                       </div>
