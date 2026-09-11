@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import type { CustomerSafeQuote } from "@/types/merchant";
+import { prepareStatement, postStatement, type PreparedStatement } from "@/lib/statementUpload";
 import LeadQuoteView from "./LeadQuoteView";
 import styles from "./LeadUploadStep.module.css";
 
@@ -18,46 +19,63 @@ type Props = {
   alreadyAccepted?: boolean;
 };
 
+type Phase = "idle" | "preparing" | "uploading" | "analyzing";
+
 export default function LeadUploadStep({
   token, businessName, contactEmail, preparedQuote = null, alreadyAccepted = false,
 }: Props) {
   const [file, setFile]         = useState<File | null>(null);
-  const [fileData, setFileData] = useState<string | null>(null);
+  const [prepared, setPrepared] = useState<PreparedStatement | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [loading, setLoading]   = useState(false);
+  const [phase, setPhase]       = useState<Phase>("idle");
+  const [uploadPct, setUploadPct] = useState(0);
   const [error, setError]       = useState<string | null>(null);
   const [quote, setQuote]       = useState<CustomerSafeQuote | null>(preparedQuote);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Downscaling takes real time, so a second pick can resolve before the first.
+  // Only the newest one may write state, or the dropzone shows one file while
+  // the payload holds another.
+  const pickRef = useRef(0);
 
-  const readFile = (f: File, cb: (data: string) => void) => {
-    const r = new FileReader();
-    r.onload = e => cb((e.target!.result as string).split(",")[1]);
-    r.readAsDataURL(f);
-  };
+  const busy = phase !== "idle";
 
-  const handleFile = (f: File) => {
+  // Prepared as soon as the customer picks the file, so the downscale of a
+  // phone photo overlaps with them reaching for the button instead of adding
+  // to the wait after they tap it.
+  const handleFile = async (f: File) => {
+    const pick = ++pickRef.current;
     setFile(f);
+    setPrepared(null);
     setError(null);
-    readFile(f, setFileData);
+    setPhase("preparing");
+    try {
+      const ready = await prepareStatement(f);
+      if (pick !== pickRef.current) return;
+      setPrepared(ready);
+    } catch (err) {
+      if (pick !== pickRef.current) return;
+      setError(err instanceof Error ? err.message : "Could not read that file");
+      setFile(null);
+    }
+    setPhase("idle");
   };
 
   const analyze = async () => {
-    if (!fileData || !file) return;
-    setLoading(true);
+    if (!prepared) return;
     setError(null);
+    setUploadPct(0);
+    setPhase("uploading");
     try {
-      const res = await fetch(`/api/lead/${token}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileData, mediaType: file.type }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Analysis failed");
+      const data = await postStatement<{ quote: CustomerSafeQuote }>(
+        `/api/lead/${token}/analyze`,
+        { fileData: prepared.data, mediaType: prepared.mediaType },
+        { onProgress: setUploadPct, onUploadDone: () => setPhase("analyzing") }
+      );
       setQuote(data.quote);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
     }
-    setLoading(false);
+    setPhase("idle");
   };
 
   if (quote) {
@@ -81,6 +99,15 @@ export default function LeadUploadStep({
 
   const dropzoneState = file ? "done" : dragOver ? "dragging" : undefined;
 
+  const buttonLabel = () => {
+    switch (phase) {
+      case "preparing": return "Preparing…";
+      case "uploading": return "Uploading your statement…";
+      case "analyzing": return "Reading your statement…";
+      default:          return "Get My Quote →";
+    }
+  };
+
   return (
     <div className={styles.page}>
       <div className={styles.container}>
@@ -97,14 +124,16 @@ export default function LeadUploadStep({
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-          onClick={() => fileRef.current?.click()}
+          onClick={() => { if (!busy) fileRef.current?.click(); }}
         >
           <input ref={fileRef} type="file" accept=".pdf,image/*" className={styles.fileInput} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
           {file ? (
             <>
               <div className={styles.dropzoneIcon} data-state="done">✓</div>
               <p className={styles.dropzoneTitle} data-state="done">{file.name}</p>
-              <p className={styles.dropzoneSubtitle}>Click to replace</p>
+              <p className={styles.dropzoneSubtitle}>
+                {phase === "preparing" ? "Optimizing…" : "Click to replace"}
+              </p>
             </>
           ) : (
             <>
@@ -123,11 +152,38 @@ export default function LeadUploadStep({
 
         <button
           className={styles.btnPrimary}
-          disabled={!file || loading}
+          disabled={!prepared || busy}
           onClick={analyze}
         >
-          {loading ? "Analyzing statement…" : "Get My Quote →"}
+          {buttonLabel()}
         </button>
+
+        {/* Only the upload half is measurable. Once the bytes are gone the bar
+            goes indeterminate rather than faking server-side progress. */}
+        {(phase === "uploading" || phase === "analyzing") && (
+          <>
+            <div
+              className={styles.progress}
+              role="progressbar"
+              aria-label="Analyzing your statement"
+              {...(phase === "uploading"
+                ? { "aria-valuenow": uploadPct, "aria-valuemin": 0, "aria-valuemax": 100 }
+                : {})}
+            >
+              <div
+                className={styles.progressBar}
+                data-indeterminate={phase === "analyzing"}
+                style={phase === "uploading" ? { width: `${uploadPct}%` } : undefined}
+              />
+            </div>
+            <p className={styles.status} aria-live="polite">
+              {phase === "uploading" ? `Uploading… ${uploadPct}%` : "Reading your statement…"}
+            </p>
+            {phase === "analyzing" && (
+              <p className={styles.statusHint}>Pulling out your volume, fees, and effective rate.</p>
+            )}
+          </>
+        )}
 
         {preparedQuote && (
           <button className={styles.btnGhostLink} onClick={() => setQuote(preparedQuote)}>

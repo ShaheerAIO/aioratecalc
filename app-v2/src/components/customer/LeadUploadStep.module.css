@@ -156,3 +156,53 @@
     transition-duration: 1ms;
   }
 }
+
+/* ---------- Upload progress ----------
+   Shown only while a statement is in flight. The determinate bar tracks the
+   real XHR upload; once the last byte is sent there is nothing left to measure
+   server-side, so the bar switches to an indeterminate sweep rather than
+   inventing a percentage. */
+
+.progress {
+  height: 4px;
+  margin-top: var(--space-md);
+  border-radius: var(--radius-pill);
+  background: var(--rule);
+  overflow: hidden;
+}
+
+.progressBar {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width 200ms var(--ease-out);
+}
+
+.progressBar[data-indeterminate="true"] {
+  width: 40%;
+  animation: leadUploadSweep 1.1s var(--ease-out) infinite;
+}
+
+@keyframes leadUploadSweep {
+  0%   { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
+.status {
+  margin: var(--space-xs) 0 0;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.statusHint {
+  margin: var(--space-2xs) 0 0;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressBar { transition: none; }
+  .progressBar[data-indeterminate="true"] { animation: none; width: 100%; opacity: 0.5; }
+}

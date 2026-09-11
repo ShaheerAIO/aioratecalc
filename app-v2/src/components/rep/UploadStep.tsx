@@ -1,52 +1,81 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { prepareStatement, postStatement, type PreparedStatement } from "@/lib/statementUpload";
 import styles from "./UploadStep.module.css";
 
 type Props = {
   onAnalyzed: (analysis: Record<string, unknown>) => void;
 };
 
+type Phase = "idle" | "preparing" | "uploading" | "analyzing";
+
 export default function UploadStep({ onAnalyzed }: Props) {
   const [file, setFile]         = useState<File | null>(null);
-  const [fileData, setFileData] = useState<string | null>(null);
+  const [prepared, setPrepared] = useState<PreparedStatement | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [loading, setLoading]   = useState(false);
+  const [phase, setPhase]       = useState<Phase>("idle");
+  const [uploadPct, setUploadPct] = useState(0);
   const [error, setError]       = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Downscaling takes real time, so a second pick can resolve before the first.
+  // Only the newest one may write state, or the dropzone shows one file while
+  // the payload holds another.
+  const pickRef = useRef(0);
 
-  const readFile = (f: File, cb: (data: string) => void) => {
-    const r = new FileReader();
-    r.onload = e => cb((e.target!.result as string).split(",")[1]);
-    r.readAsDataURL(f);
-  };
+  const busy = phase !== "idle";
 
-  const handleFile = (f: File) => {
+  // Prepared at pick time rather than on click, so the downscale happens while
+  // the rep is still looking at the dropzone instead of adding to the wait
+  // after they commit.
+  const handleFile = async (f: File) => {
+    const pick = ++pickRef.current;
     setFile(f);
+    setPrepared(null);
     setError(null);
-    readFile(f, setFileData);
+    setPhase("preparing");
+    try {
+      const ready = await prepareStatement(f);
+      if (pick !== pickRef.current) return;
+      setPrepared(ready);
+    } catch (err) {
+      if (pick !== pickRef.current) return;
+      setError(err instanceof Error ? err.message : "Could not read that file");
+      setFile(null);
+    }
+    setPhase("idle");
   };
 
   const analyze = async () => {
-    if (!fileData || !file) return;
-    setLoading(true);
+    if (!prepared) return;
     setError(null);
+    setUploadPct(0);
+    setPhase("uploading");
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileData, mediaType: file.type }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Analysis failed");
+      const data = await postStatement<{ analysis: Record<string, unknown> }>(
+        "/api/analyze",
+        { fileData: prepared.data, mediaType: prepared.mediaType },
+        { onProgress: setUploadPct, onUploadDone: () => setPhase("analyzing") }
+      );
       onAnalyzed(data.analysis);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
     }
-    setLoading(false);
+    setPhase("idle");
   };
 
   const dropzoneState = file ? "done" : dragOver ? "dragging" : undefined;
+
+  const buttonLabel = () => {
+    switch (phase) {
+      case "preparing": return "Preparing…";
+      // Hold at "Uploading" until the transfer actually completes — the jump to
+      // "Reading" is driven by onUploadDone, not by a timer.
+      case "uploading": return `Uploading statement… ${uploadPct}%`;
+      case "analyzing": return "Reading your statement…";
+      default:          return "Analyze Statement →";
+    }
+  };
 
   return (
     <div className={styles.wrap}>
@@ -59,7 +88,7 @@ export default function UploadStep({ onAnalyzed }: Props) {
         onDragOver={e => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-        onClick={() => fileRef.current?.click()}
+        onClick={() => { if (!busy) fileRef.current?.click(); }}
       >
         <input
           ref={fileRef}
@@ -72,7 +101,15 @@ export default function UploadStep({ onAnalyzed }: Props) {
           <>
             <div className={styles.dropzoneIcon} data-state="done">✓</div>
             <p className={styles.dropzoneTitle} data-state="done">{file.name}</p>
-            <p className={styles.dropzoneSubtitle}>{(file.size / 1024).toFixed(1)} KB · Click to replace</p>
+            <p className={styles.dropzoneSubtitle}>
+              {phase === "preparing"
+                ? "Optimizing…"
+                : prepared
+                  // Show the size actually being sent, which is the downscaled
+                  // one for a phone photo.
+                  ? `${(prepared.bytes / 1024).toFixed(1)} KB${prepared.bytes < file.size ? " (optimized)" : ""} · Click to replace`
+                  : `${(file.size / 1024).toFixed(1)} KB · Click to replace`}
+            </p>
           </>
         ) : (
           <>
@@ -97,15 +134,15 @@ export default function UploadStep({ onAnalyzed }: Props) {
 
       <button
         className={styles.btnPrimary}
-        disabled={!file || loading}
+        disabled={!prepared || busy}
         onClick={analyze}
       >
-        {loading ? (
+        {busy ? (
           <>
             <span className={`${styles.spinner} spin`} />
-            Analyzing statement…
+            {buttonLabel()}
           </>
-        ) : "Analyze Statement →"}
+        ) : buttonLabel()}
       </button>
     </div>
   );
