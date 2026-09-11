@@ -415,6 +415,16 @@ export type CheckIds = {
   onboardStatusAt: string | null;
 };
 
+// Foodbuy enrollment: there is no API — it's a paper participation agreement
+// (AIO_Foodbuy_Enrollment_Form_V1) that asks for the Federal ID #, a wet
+// signature, GPO-affiliation disclosure, and per-location distributor account
+// numbers, none of which AIO ever collects. So there's nothing to poll for
+// status; this only records that the customer has generated their pre-filled
+// copy of the form (see lib/foodbuyForm.ts) to sign and hand off themselves.
+export type FoodbuyIds = {
+  generatedAt: string;
+};
+
 export type MerchantApplication = {
   id: string;
   ownerUserId: string; // the rep who owns this deal — distinct from ownerContact (merchant's contact)
@@ -436,6 +446,7 @@ export type MerchantApplication = {
   } | null;
   adyenOnboardingUrl: string | null;
   checkIds: CheckIds | null; // Check payroll onboarding — null until the customer opts in
+  foodbuyIds: FoodbuyIds | null; // Foodbuy enrollment — null until the customer opts in
   hubspotIds: HubspotIds | null; // HubSpot deal/quote/subscription — null until a quote is built
   // What kind of quote this is. Frozen with the rest of the quote, because it's
   // what the lines were derived UNDER: re-reading a marketing-only quote as a

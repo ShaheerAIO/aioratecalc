@@ -17,6 +17,7 @@ const BASE_APP: MerchantApplication = {
   adyenIds: null,
   adyenOnboardingUrl: null,
   checkIds: null,
+  foodbuyIds: null,
   hubspotIds: null,
   quoteType: "full_pos",
   quoteConfig: null,
@@ -239,7 +240,7 @@ describe("billingModule — rate-only quote (empty quoteLines) discriminator", (
     expect(modules.find(m => m.key === "billing")).toBeUndefined();
     // The other modules are unaffected — this isn't a global failure, just an
     // omission of one row.
-    expect(modules.map(m => m.key)).toEqual(["adyen", "payroll", "schedule_demo", "foodbuy"]);
+    expect(modules.map(m => m.key)).toEqual(["adyen", "payroll", "foodbuy", "schedule_demo"]);
   });
 
   it("also omits it when quoteLines is null (not just an empty array) on an accepted rate-only quote", () => {
@@ -273,32 +274,26 @@ describe("billingModule — rate-only quote (empty quoteLines) discriminator", (
   });
 });
 
-describe("scheduleDemoModule / foodbuyModule — coming_soon shells", () => {
+describe("scheduleDemoModule — coming_soon shell", () => {
   const modules = getOnboardingModules(BASE_APP);
 
-  it("both render as coming_soon with no href", () => {
+  it("renders as coming_soon with no href", () => {
     const demo = modules.find(m => m.key === "schedule_demo")!;
-    const foodbuy = modules.find(m => m.key === "foodbuy")!;
     expect(demo.status).toBe("coming_soon");
     expect(demo.href).toBeUndefined();
-    expect(foodbuy.status).toBe("coming_soon");
-    expect(foodbuy.href).toBeUndefined();
   });
 
   it("copy reads as not-yet-available, not as an error", () => {
     const demo = modules.find(m => m.key === "schedule_demo")!;
-    const foodbuy = modules.find(m => m.key === "foodbuy")!;
     expect(demo.description).toMatch(/isn't available yet/i);
-    expect(foodbuy.description).toMatch(/isn't available yet/i);
     expect(demo.description).not.toMatch(/error|fail/i);
-    expect(foodbuy.description).not.toMatch(/error|fail/i);
   });
 });
 
 describe("getOnboardingModules — order and composition", () => {
-  it("returns billing, adyen, payroll, schedule_demo, foodbuy in that order", () => {
+  it("returns billing, adyen, payroll, foodbuy, schedule_demo in that order", () => {
     const keys = getOnboardingModules(BASE_APP).map(m => m.key);
-    expect(keys).toEqual(["billing", "adyen", "payroll", "schedule_demo", "foodbuy"]);
+    expect(keys).toEqual(["billing", "adyen", "payroll", "foodbuy", "schedule_demo"]);
   });
 });
 
@@ -414,5 +409,32 @@ describe("payrollModule (regression net)", () => {
     });
     expect(m.status).toBe("complete");
     expect(m.href).toBeUndefined();
+  });
+});
+
+describe("foodbuyModule (regression net)", () => {
+  const foodbuy = (app: MerchantApplication) => getOnboardingModules(app).find(m => m.key === "foodbuy")!;
+
+  it("is not_started without an href when business/ownerContact are missing", () => {
+    const m = foodbuy({ ...BASE_APP, business: null, ownerContact: null });
+    expect(m.status).toBe("not_started");
+    expect(m.href).toBeUndefined();
+  });
+
+  it("is not_started with a Get Started CTA once business details exist", () => {
+    const m = foodbuy(BASE_APP);
+    expect(m.status).toBe("not_started");
+    expect(m.href).toBe("/customer/applications/app-1/foodbuy");
+    expect(m.ctaLabel).toBe("Get Started");
+  });
+
+  it("is complete with a Download Again CTA once the form has been generated", () => {
+    const m = foodbuy({
+      ...BASE_APP,
+      foodbuyIds: { generatedAt: "2026-08-02T00:00:00.000Z" },
+    });
+    expect(m.status).toBe("complete");
+    expect(m.href).toBe("/customer/applications/app-1/foodbuy");
+    expect(m.ctaLabel).toBe("Download Again");
   });
 });

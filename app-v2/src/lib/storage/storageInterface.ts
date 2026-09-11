@@ -17,7 +17,7 @@ export type CustomerApplicationPatch = Partial<
     // the quote/subscription snapshot back, exactly as the Check refresh does
     // for checkIds. Only the snapshot fields are ever touched there — the
     // quote/line-item ids themselves are written by the rep's build action.
-    "business" | "ownerContact" | "processing" | "agreement" | "stage" | "adyenIds" | "adyenOnboardingUrl" | "checkIds" | "hubspotDealId" | "hubspotIds"
+    "business" | "ownerContact" | "processing" | "agreement" | "stage" | "adyenIds" | "adyenOnboardingUrl" | "checkIds" | "foodbuyIds" | "hubspotDealId" | "hubspotIds"
   >
 >;
 

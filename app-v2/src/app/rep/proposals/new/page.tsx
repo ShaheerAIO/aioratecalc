@@ -41,6 +41,7 @@ function newApp(): MerchantApplication {
     adyenIds: null,
     adyenOnboardingUrl: null,
     checkIds: null,
+    foodbuyIds: null,
     hubspotIds: null,
     quoteType: "full_pos",
     quoteConfig: null,

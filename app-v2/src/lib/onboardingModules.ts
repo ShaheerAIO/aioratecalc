@@ -15,16 +15,17 @@ export function getOnboardingModules(app: MerchantApplication): OnboardingModule
   // Billing first: it's the money step and the direct continuation of the
   // acceptance the customer just performed (PHASE-E-SPEC.md §7.1). Adyen and
   // payroll follow in the order a merchant actually uses them post-signup —
-  // get paid, then get set up to pay staff. The two coming_soon shells go
-  // last: they're placeholders with no completion signal, and both
-  // ModuleChecklist (suppresses their CTA) and the dashboard count
-  // (src/app/customer/page.tsx:28 filters coming_soon out) already treat them
-  // as non-actionable, so nothing is lost by putting them at the bottom.
+  // get paid, then get set up to pay staff. Foodbuy goes after those two.
+  // scheduleDemoModule goes last: it's still a placeholder with no completion
+  // signal, and both ModuleChecklist (suppresses its CTA) and the dashboard
+  // count (src/app/customer/page.tsx:28 filters coming_soon out) already
+  // treat it as non-actionable, so nothing is lost by putting it at the
+  // bottom. foodbuyModule is NOT coming_soon anymore — see its comment.
   //
   // billingModule can return null (a rate-only accepted quote — see its
   // comment), so this list is variable-length. Every caller already maps
   // over whatever it gets, so filtering nulls out here is sufficient.
-  return [billingModule(app), adyenModule(app), payrollModule(app), scheduleDemoModule(app), foodbuyModule(app)]
+  return [billingModule(app), adyenModule(app), payrollModule(app), foodbuyModule(app), scheduleDemoModule(app)]
     .filter((m): m is OnboardingModule => m !== null);
 }
 
@@ -294,14 +295,44 @@ function scheduleDemoModule(app: MerchantApplication): OnboardingModule {
   };
 }
 
-// Scope is deliberately undefined (E2E-PLAN.md's own recommendation) — no
-// form or backend to build here, just the placeholder row. Same posture as
-// scheduleDemoModule above: no href, coming_soon, dashboard-count-exempt.
+// Foodbuy has no API — enrollment is a paper participation agreement that
+// asks for the Federal ID #, a wet signature, and per-location distributor
+// account numbers, none of which AIO collects (see lib/foodbuyForm.ts). So
+// there's no remote status to poll, unlike payrollModule/adyenModule: this
+// module just tracks whether the customer has generated their pre-filled
+// copy of the form (foodbuyIds.generatedAt). The href stays available even
+// once "complete" — re-downloading a static PDF is harmless, unlike
+// re-serving an expired Adyen/Check link.
 function foodbuyModule(app: MerchantApplication): OnboardingModule {
+  const label = "Foodbuy";
+  const href = `/customer/applications/${app.id}/foodbuy`;
+
+  if (!app.business || !app.ownerContact) {
+    return {
+      key: "foodbuy",
+      label,
+      status: "not_started",
+      description: "Add your business details first to set up Foodbuy.",
+    };
+  }
+
+  if (app.foodbuyIds?.generatedAt) {
+    return {
+      key: "foodbuy",
+      label,
+      status: "complete",
+      description: "You've downloaded your Foodbuy enrollment form. Sign it and send it to your AIO representative or Foodbuy account executive to finish enrolling.",
+      href,
+      ctaLabel: "Download Again",
+    };
+  }
+
   return {
     key: "foodbuy",
-    label: "Foodbuy",
-    status: "coming_soon",
-    description: "Foodbuy isn't available yet. We'll let you know when it is.",
+    label,
+    status: "not_started",
+    description: "Download your pre-filled Foodbuy enrollment form, sign it, and send it to your AIO representative or Foodbuy account executive.",
+    href,
+    ctaLabel: "Get Started",
   };
 }

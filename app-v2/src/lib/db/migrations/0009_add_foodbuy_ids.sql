@@ -1,0 +1,1 @@
+ALTER TABLE "merchant_applications" ADD COLUMN "foodbuy_ids" jsonb;

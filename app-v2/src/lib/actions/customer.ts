@@ -413,6 +413,28 @@ async function refreshCheckOnboardStatus(
   }
 }
 
+// ── Foodbuy ──────────────────────────────────────────────────────────────────
+// There is no Foodbuy API — enrollment is a paper participation agreement
+// (see lib/foodbuyForm.ts) that asks for the Federal ID #, a wet signature,
+// and per-location distributor account numbers, none of which AIO collects.
+// So there's no remote object to create and nothing to poll for status; this
+// just records that the customer generated their pre-filled copy, so the
+// checklist can show it's been done. The client renders the actual PDF
+// (FoodbuyOnboardStep.tsx, reusing ProposalStep.tsx's html2pdf pattern) —
+// this action only persists the timestamp once that succeeds.
+export async function markFoodbuyFormGeneratedAction(id: string): Promise<MerchantApplication> {
+  const { userId } = await requireCustomer();
+  const app = await postgresStorage.getApplicationForCustomer(userId, id);
+  if (!app) throw new Error("Application not found");
+  if (!app.business || !app.ownerContact) {
+    throw new Error("Add your business details before setting up Foodbuy");
+  }
+
+  return postgresStorage.updateApplicationAsCustomer(userId, id, {
+    foodbuyIds: { generatedAt: new Date().toISOString() },
+  });
+}
+
 // ── Billing (HubSpot quote + subscriptions) ─────────────────────────────────
 
 // Skip a re-read within a minute of the last one. The Check refresh above has
@@ -524,6 +546,9 @@ export async function getMyApplicationWithBillingSyncAction(id: string): Promise
 // RETURNING. Handing the second refresh a pre-first-write row would make the
 // value this function returns to the page miss whatever the first one wrote.
 // Do not "optimise" this into a Promise.all over two independent loads.
+//
+// No third Foodbuy refresh here — there's nothing to poll (see markFoodbuy-
+// FormGeneratedAction above).
 export async function getMyApplicationWithSyncAction(id: string): Promise<MerchantApplication | null> {
   const { userId } = await requireCustomer();
   const app = await postgresStorage.getApplicationForCustomer(userId, id);
