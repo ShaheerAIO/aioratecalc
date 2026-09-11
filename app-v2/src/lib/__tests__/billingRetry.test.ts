@@ -15,7 +15,12 @@ const patches: Array<Record<string, unknown>> = [];
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { getApplication } }));
-vi.mock("@/lib/adapters/hubspot", () => ({ pushToHubSpot }));
+// Partial mock: the pure helpers — including the tenant-link gate — stay real,
+// only the network call is stubbed.
+vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
+  pushToHubSpot,
+}));
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
 vi.mock("@/lib/db/schema", () => ({ merchantApplications: { id: "id" } }));
 vi.mock("@/lib/db/client", () => ({
@@ -31,12 +36,24 @@ vi.mock("@/lib/db/client", () => ({
 
 const { retryBillingQuoteAction } = await import("@/lib/actions/billing");
 
+// Linked by default — an unlinked account can't create a deal at all, which
+// is its own case below.
+const TENANT_LINK = {
+  hubspotCompanyId: "334295287484",
+  companyName: "TEST COMPANY",
+  tenantRef: "prod-1024",
+  adyenAccountHolderId: null,
+  linkedAt: "2026-08-21T00:00:00.000Z",
+  linkedByUserId: "rep-1",
+};
+
 const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
   ({
     id: "app-1",
     ownerUserId: "rep-1",
     hubspotDealId: null,
     hubspotIds: null,
+    tenantLink: TENANT_LINK,
     quoteLines: [{ name: "AIO Platform", qty: 1, unitPrice: 99, billingFrequency: "weekly", productType: "Software", hubspotProductId: "p-1" }],
     ...over,
   }) as unknown as MerchantApplication;
@@ -71,6 +88,18 @@ describe("retryBillingQuoteAction", () => {
     // The id has to reach the orchestrator on the in-memory row too, or the
     // publish refuses `no_deal` on the copy it was handed.
     expect(buildAndPublishBillingQuote).toHaveBeenCalledWith(expect.objectContaining({ hubspotDealId: "deal-new" }));
+  });
+
+  it("refuses to create the deal while no HubSpot company is linked", async () => {
+    getApplication.mockResolvedValue(app({ tenantLink: null }));
+
+    const result = await retryBillingQuoteAction("app-1");
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons?.map(r => r.code)).toEqual(["no_tenant_company"]);
+    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(patches).toEqual([]);
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
   });
 
   it("never re-pushes a deal that already exists", async () => {

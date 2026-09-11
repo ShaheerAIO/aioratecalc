@@ -33,7 +33,12 @@ vi.mock("@/lib/adapters/check", () => ({
   checkEnvironment: vi.fn(), createCheckCompany: vi.fn(),
   createCheckOnboardLink: vi.fn(), getCheckOnboardStatus: vi.fn(),
 }));
-vi.mock("@/lib/adapters/hubspot", () => ({ pushToHubSpot }));
+// Partial mock: the pure helpers — including the tenant-link gate — stay real,
+// only the network call is stubbed.
+vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
+  pushToHubSpot,
+}));
 
 const { saveMyApplicationOnboardingAction, updateMyApplicationDetailsAction } =
   await import("@/lib/actions/customer");

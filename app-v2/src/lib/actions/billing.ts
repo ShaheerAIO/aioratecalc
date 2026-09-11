@@ -18,7 +18,7 @@ import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
-import { pushToHubSpot } from "@/lib/adapters/hubspot";
+import { canPushToHubSpot, pushToHubSpot } from "@/lib/adapters/hubspot";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
 
@@ -70,6 +70,22 @@ export async function retryBillingQuoteAction(applicationId: string): Promise<Re
   // without a deal the publish below would only refuse anyway.
   let target = app;
   if (!target.hubspotDealId) {
+    // …unless the account has no HubSpot Company yet, in which case creating
+    // the deal is exactly the wrong move: the company association is only
+    // settable at create time, so it would produce a deal permanently detached
+    // from the Company record. Answered as a precondition rather than an
+    // error, because it names something the rep can go and do.
+    if (!canPushToHubSpot(target)) {
+      return {
+        ok: false,
+        reasons: [{
+          code: "no_tenant_company",
+          message:
+            "This account isn't linked to a HubSpot company yet, so there's nothing to create the deal under. " +
+            "Link the tenant company on the account — the deal and quote build themselves as soon as you do.",
+        }],
+      };
+    }
     try {
       const dealId = await pushToHubSpot(target);
       await db
@@ -95,13 +111,17 @@ export async function retryBillingQuoteAction(applicationId: string): Promise<Re
     case "failed":
       return { ok: false, error: `${outcome.step}: ${outcome.error}` };
     case "skipped":
-      // Nothing was created and nothing is wrong — but say which of the three
-      // it was, because "nothing to bill" and "someone else is mid-build" call
-      // for very different reactions from the rep.
+      // Nothing was created and nothing is wrong — but say which one it was,
+      // because "nothing to bill" and "someone else is mid-build" call for
+      // very different reactions from the rep.
       return outcome.reason === "nothing_to_bill"
         ? { ok: true, error: "This is a rate-only quote — there are no products for HubSpot to bill." }
         : outcome.reason === "already_published"
           ? { ok: false, error: "This quote is already published in HubSpot." }
-          : { ok: false, error: "A billing quote is already being built for this account. Try again in a minute." };
+          : outcome.reason === "awaiting_tenant_link"
+            // Reachable only for a row that already carries a deal (created
+            // before this gate existed) but still no company link.
+            ? { ok: false, error: "This account isn't linked to a HubSpot company yet. Link the tenant company and billing builds itself." }
+            : { ok: false, error: "A billing quote is already being built for this account. Try again in a minute." };
   }
 }

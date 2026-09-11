@@ -30,6 +30,7 @@ import {
   listProducts,
   planLineItemReconciliation,
   publishQuote,
+  tenantCompanyId,
   type QuoteAssociation,
 } from "@/lib/adapters/hubspot";
 import { getQuoteTemplatePolicy } from "@/lib/actions/quoteTemplates";
@@ -70,8 +71,9 @@ export type PublishBillingQuoteResult =
    *  - `nothing_to_bill`: a rate-only quote (see below).
    *  - `already_published`: the one-way door is already shut.
    *  - `build_in_progress`: another request holds the build lease.
+   *  - `awaiting_tenant_link`: no HubSpot Company linked yet — see below.
    */
-  | { status: "skipped"; reason: "nothing_to_bill" | "already_published" | "build_in_progress" }
+  | { status: "skipped"; reason: "nothing_to_bill" | "already_published" | "build_in_progress" | "awaiting_tenant_link" }
   | { status: "refused"; reasons: PublishRefusal[] }
   | { status: "failed"; step: BillingStep; error: string };
 
@@ -219,6 +221,18 @@ export async function buildAndPublishBillingQuote(
   if (lines.length === 0) return { status: "skipped", reason: "nothing_to_bill" };
 
   if (app.hubspotIds?.publishedAt) return { status: "skipped", reason: "already_published" };
+
+  // No HubSpot Company linked yet → nothing may be built. `canPublishBillingQuote`
+  // refuses on the same fact, but this short-circuits BEFORE the build claim so
+  // the wait leaves no trace: no hubspotIds row, and above all no
+  // `lastSyncError`. Waiting on a rep to link a company is the normal state of
+  // a fresh account, not a failure, and counting it as one would put every
+  // unlinked account in the admin dashboard's sync-error tripwire and drown the
+  // real failures it exists to catch.
+  //
+  // The resume is `linkTenantCompanyAction`, which calls back into here the
+  // moment the link is made.
+  if (!tenantCompanyId(app)) return { status: "skipped", reason: "awaiting_tenant_link" };
 
   // ── Claim the build ───────────────────────────────────────────────────────
   // A read-then-write check cannot stop two CONCURRENT builds: both read

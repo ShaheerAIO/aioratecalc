@@ -246,13 +246,25 @@ function AccountsDashboardInner({
     return () => { cancelled = true; clearTimeout(t); };
   }, [tenantQuery]);
 
+  // Linking is also what unblocks the deferred HubSpot work — the deal, and
+  // the billing quote if the merchant already accepted — so the outcome of
+  // that catch-up is reported here rather than left to a silent log.
   const handleLinkTenant = async (app: MerchantApplication, companyId: string) => {
     setLinking(true);
     try {
-      const updated = await linkTenantCompanyAction(app.id, companyId);
-      updateOne(updated);
+      const res = await linkTenantCompanyAction(app.id, companyId);
+      updateOne(res.app);
       setTenantQuery("");
       setTenantResults([]);
+      if (res.error) {
+        alert(`Company linked, but the HubSpot catch-up failed: ${res.error}`);
+      } else if (res.billingReasons?.length) {
+        alert(
+          "Company linked" + (res.dealCreated ? " and the deal created" : "") +
+          ", but the billing quote is still on hold:\n\n" +
+          res.billingReasons.map(r => `• ${r.message}`).join("\n")
+        );
+      }
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to link tenant");
     }

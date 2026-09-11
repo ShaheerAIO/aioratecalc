@@ -11,11 +11,23 @@ import {
 } from "@/lib/billingView";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds, type MerchantApplication, type QuoteLine } from "@/types/merchant";
 
-// Only the three fields billingPanelState/canRetryBillingSync read are set —
+// Only the fields billingPanelState/canRetryBillingSync read are set —
 // everything else on a real MerchantApplication is deliberately absent so a
 // stray dependency on another field shows up as `undefined` instead of
 // quietly passing.
-type StateInput = Pick<MerchantApplication, "quoteAcceptedAt" | "quoteLines" | "hubspotIds">;
+type StateInput = Pick<MerchantApplication, "quoteAcceptedAt" | "quoteLines" | "hubspotIds" | "tenantLink">;
+
+// The default posture for these cases is LINKED, so every pre-existing state
+// assertion still exercises the state it was written for rather than
+// collapsing into awaiting_tenant_link.
+const linked: MerchantApplication["tenantLink"] = {
+  hubspotCompanyId: "334295287484",
+  companyName: "TEST COMPANY",
+  tenantRef: "prod-1024",
+  adyenAccountHolderId: null,
+  linkedAt: "2026-08-01T00:00:00Z",
+  linkedByUserId: "u1",
+};
 
 const line = (over: Partial<QuoteLine> = {}): QuoteLine => ({
   hubspotProductId: "p1",
@@ -33,6 +45,7 @@ const app = (over: Partial<StateInput> = {}): StateInput => ({
   quoteAcceptedAt: null,
   quoteLines: null,
   hubspotIds: null,
+  tenantLink: linked,
   ...over,
 });
 
@@ -78,7 +91,7 @@ describe("billingPanelState", () => {
 
   it("is pending when accepted with billable lines but no HubSpot quote yet", () => {
     expect(
-      billingPanelState({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [line()], hubspotIds: null })
+      billingPanelState({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [line()], hubspotIds: null, tenantLink: linked })
     ).toBe("pending");
   });
 
@@ -87,9 +100,31 @@ describe("billingPanelState", () => {
       billingPanelState({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
+        tenantLink: linked,
         hubspotIds: ids({ quoteId: "q1" }),
       })
     ).toBe("draft");
+  });
+
+  it("is awaiting_tenant_link when accepted and billable but no company is linked", () => {
+    expect(
+      billingPanelState({
+        quoteAcceptedAt: "2026-08-01T00:00:00Z",
+        quoteLines: [line()],
+        hubspotIds: null,
+        tenantLink: null,
+      })
+    ).toBe("awaiting_tenant_link");
+  });
+
+  it("still reports draft/published for an unlinked row that already got that far", () => {
+    // Rows accepted before the tenant-link gate existed. What HubSpot already
+    // holds is the more useful thing to show than the missing link.
+    const base = { quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [line()], tenantLink: null };
+    expect(billingPanelState({ ...base, hubspotIds: ids({ quoteId: "q1" }) })).toBe("draft");
+    expect(
+      billingPanelState({ ...base, hubspotIds: ids({ quoteId: "q1", publishedAt: "2026-08-02T00:00:00Z" }) })
+    ).toBe("published");
   });
 
   it("is published once publishedAt is set", () => {
@@ -97,6 +132,7 @@ describe("billingPanelState", () => {
       billingPanelState({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
+        tenantLink: linked,
         hubspotIds: ids({ quoteId: "q1", publishedAt: "2026-08-02T00:00:00Z" }),
       })
     ).toBe("published");
@@ -114,7 +150,7 @@ describe("canRetryBillingSync", () => {
 
   it("is true when pending (accepted, billable, no quote id yet)", () => {
     expect(
-      canRetryBillingSync({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [line()], hubspotIds: null })
+      canRetryBillingSync({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [line()], hubspotIds: null, tenantLink: linked })
     ).toBe(true);
   });
 
@@ -123,6 +159,7 @@ describe("canRetryBillingSync", () => {
       canRetryBillingSync({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
+        tenantLink: linked,
         hubspotIds: ids({ quoteId: "q1" }),
       })
     ).toBe(true);
@@ -133,7 +170,19 @@ describe("canRetryBillingSync", () => {
       canRetryBillingSync({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
+        tenantLink: linked,
         hubspotIds: ids({ quoteId: "q1", publishedAt: "2026-08-02T00:00:00Z" }),
+      })
+    ).toBe(false);
+  });
+
+  it("is false while waiting on the company link — linking is the fix, not retrying", () => {
+    expect(
+      canRetryBillingSync({
+        quoteAcceptedAt: "2026-08-01T00:00:00Z",
+        quoteLines: [line()],
+        hubspotIds: null,
+        tenantLink: null,
       })
     ).toBe(false);
   });
@@ -143,6 +192,7 @@ describe("canRetryBillingSync", () => {
       canRetryBillingSync({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
+        tenantLink: linked,
         hubspotIds: ids({ lastSyncError: null }),
       })
     ).toBe(true);

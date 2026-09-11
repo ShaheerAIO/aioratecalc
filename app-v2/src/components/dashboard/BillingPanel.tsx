@@ -72,6 +72,20 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
     );
   }
 
+  if (state === "awaiting_tenant_link") {
+    return (
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>Billing</div>
+        <div className={styles.emptyNote}>
+          Waiting on the HubSpot company link. Nothing is created in HubSpot until this account is
+          linked to its company — a deal can only be attached to a company when it is created, so one
+          made now would never show up on the company record. Link the tenant company below and the
+          deal and quote are built automatically.
+        </div>
+      </div>
+    );
+  }
+
   const hubspotIds = app.hubspotIds;
   const dealUrl = app.hubspotDealId ? hubspotDealUrl(app.hubspotDealId, HUBSPOT_PORTAL_ID) : null;
   const quoteUrl = hubspotIds?.quoteId ? hubspotQuoteUrl(hubspotIds.quoteId, HUBSPOT_PORTAL_ID) : null;

@@ -8,7 +8,9 @@ import { db } from "@/lib/db/client";
 import { customerLoginTokens, users } from "@/lib/db/schema";
 import { sendMagicLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { applyTenantNumber } from "@/lib/adapters/adyen";
-import { searchTenantCompanies, getTenantCompany, type TenantCompany } from "@/lib/adapters/hubspot";
+import { searchTenantCompanies, getTenantCompany, pushToHubSpot, type TenantCompany } from "@/lib/adapters/hubspot";
+import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
+import type { PublishRefusal } from "@/lib/billing/preconditions";
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import type { MerchantApplication, AppSettings, CustomerSubmission } from "@/types/merchant";
 
@@ -123,7 +125,24 @@ export async function searchTenantCompaniesAction(query: string): Promise<Tenant
   return searchTenantCompanies(query);
 }
 
-export async function linkTenantCompanyAction(appId: string, companyId: string): Promise<MerchantApplication> {
+/**
+ * What the deferred CRM work did when the link unblocked it. Everything here
+ * is informational — the link itself always succeeds, and a HubSpot problem
+ * afterwards never un-links the company.
+ */
+export type TenantLinkResult = {
+  app: MerchantApplication;
+  /** True when this link created the HubSpot deal that was being held back. */
+  dealCreated: boolean;
+  /** True when the held-back billing quote published on the back of it. */
+  quotePublished: boolean;
+  /** Preconditions still unmet — billing stays pending until a rep clears them. */
+  billingReasons?: PublishRefusal[];
+  /** A HubSpot/network failure while catching up. The link is saved regardless. */
+  error?: string;
+};
+
+export async function linkTenantCompanyAction(appId: string, companyId: string): Promise<TenantLinkResult> {
   const scope = await requireScope();
   const app = await postgresStorage.getApplication(scope, appId);
   if (!app) throw new Error("Application not found"); // also the rep-not-owner case (scoped read returns null)
@@ -131,7 +150,7 @@ export async function linkTenantCompanyAction(appId: string, companyId: string):
   const company = await getTenantCompany(companyId);
   if (!company) throw new Error("HubSpot company not found");
 
-  const updated: MerchantApplication = {
+  let updated: MerchantApplication = {
     ...app,
     hubspotDealId: app.hubspotDealId,
     tenantLink: {
@@ -145,7 +164,52 @@ export async function linkTenantCompanyAction(appId: string, companyId: string):
     updatedAt: new Date().toISOString(),
   };
   await postgresStorage.saveApplication(scope, updated);
-  return updated;
+
+  // ── The deferred CRM work, now unblocked ─────────────────────────────────
+  // A deal can only be associated to its Company at create time, so both the
+  // acceptance route and the customer-side saves hold the deal push back until
+  // this link exists. This is the moment it does — and if the merchant already
+  // accepted while we were waiting, the billing quote they're owed is built and
+  // published here too, exactly as it would have been at acceptance.
+  //
+  // Note that means publishing a quote — a one-way door, with an ACH mandate
+  // behind it — can happen on the back of this click. That is the intended
+  // behaviour (the same auto-publish-on-acceptance posture, just deferred), and
+  // `canPublishBillingQuote` is the same and only gate it passes through.
+  //
+  // Nothing below can fail the link: it is already saved, and a rep who has to
+  // re-link because HubSpot 500'd would end up with the company recorded twice
+  // over. Failures come back on the result for the caller to show.
+  let dealCreated = false;
+  if (!updated.hubspotDealId) {
+    try {
+      const dealId = await pushToHubSpot(updated);
+      updated = { ...updated, hubspotDealId: dealId };
+      await postgresStorage.saveApplication(scope, updated);
+      dealCreated = true;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("HubSpot deal creation on tenant link failed:", detail);
+      return { app: updated, dealCreated: false, quotePublished: false, error: detail };
+    }
+  }
+
+  // Only for a quote the merchant has already accepted. An unaccepted one is
+  // built at acceptance as usual — linking early must not bill anybody.
+  if (!updated.quoteAcceptedAt) return { app: updated, dealCreated, quotePublished: false };
+
+  const outcome = await buildAndPublishBillingQuote(updated);
+  const refreshed = (await postgresStorage.getApplication(scope, appId)) ?? updated;
+  switch (outcome.status) {
+    case "published":
+      return { app: refreshed, dealCreated, quotePublished: true };
+    case "refused":
+      return { app: refreshed, dealCreated, quotePublished: false, billingReasons: outcome.reasons };
+    case "failed":
+      return { app: refreshed, dealCreated, quotePublished: false, error: `${outcome.step}: ${outcome.error}` };
+    case "skipped":
+      return { app: refreshed, dealCreated, quotePublished: false };
+  }
 }
 
 export async function unlinkTenantCompanyAction(appId: string): Promise<MerchantApplication> {

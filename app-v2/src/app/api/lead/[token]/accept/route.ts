@@ -5,7 +5,7 @@ import { db } from "@/lib/db/client";
 import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
-import { pushToHubSpot } from "@/lib/adapters/hubspot";
+import { canPushToHubSpot, pushToHubSpot } from "@/lib/adapters/hubspot";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { rowToApp } from "@/lib/storage/applicationRow";
@@ -47,6 +47,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     // login email keeps the original timestamp, and the stage move is
     // forward-only (same rule as the Adyen webhook) so a deal already in
     // onboarding is never dragged back to quote_accepted.
+    //
+    // It is also the FIRST acceptance that creates CRM state, and only it.
+    // Re-opening the link and clicking "Email Me a New Link" comes back through
+    // this same route (accept and resend are deliberately one call — see
+    // LeadQuoteView), and that click means "I lost my login", nothing more. On
+    // a row whose first deal push was skipped or failed it used to mint a
+    // SECOND, unasked-for deal, leaving the row pointing away from whichever
+    // one a rep had since curated. Recovery from a failed first push is
+    // `retryBillingQuoteAction`, which says what it does; a merchant asking for
+    // a login link is not it.
+    const firstAcceptance = !row.quoteAcceptedAt;
+
     const advance = shouldAdvance(row.stage, "quote_accepted");
     let accepted = row;
     if (advance || !row.quoteAcceptedAt) {
@@ -66,22 +78,33 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     // submitted the onboarding form, so a merchant who accepted and then stopped
     // at the checklist left no trace in the CRM at all.
     //
+    // Unless no HubSpot Company is linked yet, in which case it waits: a deal's
+    // company association can only be set when the deal is created, so one
+    // pushed now would float loose in the portal, off the Company record and
+    // unattachable afterwards. `linkTenantCompanyAction` does this push itself
+    // the moment a rep or admin supplies the company.
+    //
     // Fire-and-log, like the pushes in lib/actions/customer.ts: the customer is
     // waiting on their login email, and a HubSpot outage must not cost them the
-    // acceptance we've already recorded. pushToHubSpot PATCHes when
-    // hubspotDealId is already set, so re-accepting updates rather than duplicates.
-    try {
-      const dealId = await pushToHubSpot(rowToApp(accepted));
-      if (dealId !== accepted.hubspotDealId) {
-        await db.update(merchantApplications)
-          .set({ hubspotDealId: dealId, updatedAt: new Date() })
-          .where(eq(merchantApplications.id, accepted.id));
-        // Carried onto the local row so the billing build below sees the deal
-        // it needs: the quote can't publish without association 64.
-        accepted = { ...accepted, hubspotDealId: dealId };
+    // acceptance we've already recorded.
+    if (firstAcceptance) {
+      if (!canPushToHubSpot(rowToApp(accepted))) {
+        console.log(`[hubspot] ${accepted.id}: deal push deferred — no HubSpot company linked to this account yet`);
+      } else {
+        try {
+          const dealId = await pushToHubSpot(rowToApp(accepted));
+          if (dealId !== accepted.hubspotDealId) {
+            await db.update(merchantApplications)
+              .set({ hubspotDealId: dealId, updatedAt: new Date() })
+              .where(eq(merchantApplications.id, accepted.id));
+            // Carried onto the local row so the billing build below sees the
+            // deal it needs: the quote can't publish without association 64.
+            accepted = { ...accepted, hubspotDealId: dealId };
+          }
+        } catch (err) {
+          console.error("HubSpot deal sync on acceptance failed:", err instanceof Error ? err.message : err);
+        }
       }
-    } catch (err) {
-      console.error("HubSpot deal sync on acceptance failed:", err instanceof Error ? err.message : err);
     }
 
     const loginToken = randomUUID();
@@ -108,19 +131,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     // already sent, the customer sees "check your inbox" either way, and the
     // rep picks the stuck account up from hubspotIds.lastSyncError — which the
     // orchestrator persists rather than only logging.
-    try {
-      const outcome = await buildAndPublishBillingQuote(rowToApp(accepted), { acceptedByEmail: email });
-      if (outcome.status === "published") {
-        console.log(`[billing] ${accepted.id}: quote ${outcome.quoteId} published${outcome.alreadyPublished ? " (was already published)" : ""}`);
-      } else if (outcome.status === "refused") {
-        console.warn(`[billing] ${accepted.id}: refused — ${outcome.reasons.map(r => r.code).join(", ")}`);
-      } else if (outcome.status === "failed") {
-        console.error(`[billing] ${accepted.id}: ${outcome.step} failed — ${outcome.error}`);
-      } else {
-        console.log(`[billing] ${accepted.id}: skipped (${outcome.reason})`);
+    //
+    // First acceptance only, like the deal push above: a re-opened link is a
+    // login-link resend, and the build is idempotent but not free (it claims a
+    // build lease and can leave a spurious refusal on the row).
+    if (firstAcceptance) {
+      try {
+        const outcome = await buildAndPublishBillingQuote(rowToApp(accepted), { acceptedByEmail: email });
+        if (outcome.status === "published") {
+          console.log(`[billing] ${accepted.id}: quote ${outcome.quoteId} published${outcome.alreadyPublished ? " (was already published)" : ""}`);
+        } else if (outcome.status === "refused") {
+          console.warn(`[billing] ${accepted.id}: refused — ${outcome.reasons.map(r => r.code).join(", ")}`);
+        } else if (outcome.status === "failed") {
+          console.error(`[billing] ${accepted.id}: ${outcome.step} failed — ${outcome.error}`);
+        } else {
+          console.log(`[billing] ${accepted.id}: skipped (${outcome.reason})`);
+        }
+      } catch (err) {
+        console.error("HubSpot billing quote on acceptance failed:", err instanceof Error ? err.message : err);
       }
-    } catch (err) {
-      console.error("HubSpot billing quote on acceptance failed:", err instanceof Error ? err.message : err);
     }
 
     return NextResponse.json(result);

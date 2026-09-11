@@ -42,13 +42,24 @@ const db = {
 
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
-vi.mock("@/lib/adapters/hubspot", () => ({ pushToHubSpot }));
+// Partial mock: the pure helpers — including the tenant-link gate — stay real,
+// only the network call is stubbed.
+vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
+  pushToHubSpot,
+}));
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
 
 const { POST } = await import("@/app/api/lead/[token]/accept/route");
 
 const TOKEN = "tok-1";
 const NOW = new Date("2026-08-21T19:49:38.000Z");
+
+// The clock is pinned: the fixture row carries a fixed customerLinkExpiresAt,
+// and against a real clock every case in this file silently turned into a 410
+// the day that date passed. Only Date is faked — the billing build waits on a
+// real setTimeout for hs_quote_link.
+vi.useFakeTimers({ toFake: ["Date"], now: NOW });
 
 const MARKETING_LINES: QuoteLine[] = [
   { name: "AIO Marketing Platform", hubspotProductId: "223152695997", qty: 1, unitPrice: 49, billingFrequency: "weekly", productType: "Software" },
@@ -152,15 +163,42 @@ describe("accepting a quote", () => {
     expect(pushToHubSpot).not.toHaveBeenCalled();
   });
 
-  it("does not re-push a deal backwards once onboarding has started", async () => {
-    row = baseRow({ stage: "adyen_kyc_pending", quoteAcceptedAt: NOW, hubspotDealId: "deal-99" });
+  it("re-opening an accepted link only re-issues the login, touching no CRM state", async () => {
+    // "Email Me a New Link" comes through this same route. It means the
+    // merchant lost their login, nothing more — pushing again here created a
+    // second deal on any row whose first push was skipped or failed.
+    row = baseRow({ stage: "adyen_kyc_pending", quoteAcceptedAt: NOW, hubspotDealId: null });
     const res = await post();
     expect(res.status).toBe(200);
-    // Still synced (the stage may have moved on HubSpot's side), but as the
-    // stage the row actually holds.
-    expect(pushToHubSpot.mock.calls[0][0].stage).toBe("adyen_kyc_pending");
-    // Already the same id — no redundant write.
+    expect(loginTokens).toHaveLength(1);
+    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
     expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
+  });
+
+  it("keeps the original acceptance timestamp and stage on a re-open", async () => {
+    row = baseRow({ stage: "adyen_kyc_pending", quoteAcceptedAt: NOW, hubspotDealId: "deal-99" });
+    await post();
+    expect(row!.stage).toBe("adyen_kyc_pending"); // forward-only, never dragged back
+    expect(row!.quoteAcceptedAt).toEqual(NOW);
+  });
+
+  it("holds the deal push until a HubSpot company is linked", async () => {
+    // A deal's company association is only settable at create time, so a deal
+    // made now would be orphaned off the Company record for good.
+    row = baseRow({ tenantLink: null });
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(loginTokens).toHaveLength(1); // the customer still gets in
+    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
+  });
+
+  it("still pushes an unlinked account that somehow already has a deal", async () => {
+    // That push is a PATCH, which carries no associations — nothing to orphan.
+    row = baseRow({ tenantLink: null, hubspotDealId: "deal-legacy" });
+    await post();
+    expect(pushToHubSpot).toHaveBeenCalledTimes(1);
   });
 
   it("hands the billing build the deal id the acceptance push just created", async () => {

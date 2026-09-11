@@ -137,12 +137,34 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
 }
 
 /**
- * Pure: v3 inline associations for a deal CREATE. Empty when the application
- * has no tenant link yet — a prospect created without the HubSpot deep link
- * still gets a deal, and the manual tenant-link flow can attach it later.
+ * The HubSpot Company this account belongs to, or null if a rep/admin hasn't
+ * linked one yet. The gate on every HubSpot write that creates something:
+ * associations are only settable on a deal CREATE (the v3 PATCH below takes
+ * properties only), so a deal made before the link exists is orphaned for
+ * good — it never lands on the Company record where reps work, and nothing in
+ * this app can attach it afterwards. Blocking and waiting for the link is the
+ * only recoverable order of operations.
+ */
+export function tenantCompanyId(app: Pick<MerchantApplication, "tenantLink">): string | null {
+  return clean(app.tenantLink?.hubspotCompanyId);
+}
+
+/**
+ * Whether `pushToHubSpot` will do anything other than throw. An account with a
+ * deal already on it keeps syncing (that's a PATCH, no association needed);
+ * one without needs the tenant link first.
+ */
+export function canPushToHubSpot(app: Pick<MerchantApplication, "tenantLink" | "hubspotDealId">): boolean {
+  return !!app.hubspotDealId || !!tenantCompanyId(app);
+}
+
+/**
+ * Pure: v3 inline associations for a deal CREATE. Never empty in practice —
+ * `pushToHubSpot` refuses to create a deal without a tenant link — but kept
+ * total so the property/association builders stay independently testable.
  */
 export function buildDealAssociations(app: MerchantApplication): HubspotAssociation[] {
-  const companyId = clean(app.tenantLink?.hubspotCompanyId);
+  const companyId = tenantCompanyId(app);
   if (!companyId) return [];
   return [{
     to: { id: companyId },
@@ -188,8 +210,18 @@ export async function pushToHubSpot(app: MerchantApplication): Promise<string> {
     return app.hubspotDealId;
   }
 
-  // Create deal, associated to its tenant Company when we know it.
+  // Create deal, associated to its tenant Company — which must already be
+  // linked. Callers are expected to have checked `canPushToHubSpot` and held
+  // off; this throw is the backstop that keeps a new call site from quietly
+  // minting another orphan.
   const associations = buildDealAssociations(app);
+  if (associations.length === 0) {
+    throw new Error(
+      "Refusing to create a HubSpot deal: this account isn't linked to a HubSpot Company yet. " +
+      "A deal's company association can only be set when the deal is created, so one made now would " +
+      "never appear on the Company record. Link the tenant company first."
+    );
+  }
   const res = await fetch(`${BASE}/crm/v3/objects/deals`, {
     method: "POST",
     headers: billingHeaders(),

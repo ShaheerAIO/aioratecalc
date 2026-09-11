@@ -24,7 +24,7 @@ import {
   getCheckOnboardStatus,
   type PayrollSigner,
 } from "@/lib/adapters/check";
-import { findSubscriptionsForQuote, getQuoteSnapshot, pushToHubSpot } from "@/lib/adapters/hubspot";
+import { canPushToHubSpot, findSubscriptionsForQuote, getQuoteSnapshot, pushToHubSpot } from "@/lib/adapters/hubspot";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
 import {
   validateOnboardingFields,
@@ -227,6 +227,33 @@ async function advanceAdyenOnboarding(
 // because onboarding hasn't started. `fieldErrors` (validation, the customer can
 // fix it) and `adyenFailed` (our side broke) are separate outcomes and the form
 // renders them differently.
+// The deal push both customer-side saves make, best-effort as they always were
+// — the merchant is mid-form and a HubSpot outage must not cost them the save.
+//
+// Skipped entirely until the account is linked to its HubSpot Company: a deal's
+// company association is only settable when the deal is created, so creating
+// one now would strand it off the Company record permanently. An account that
+// already HAS a deal keeps syncing (that path is a PATCH). The deferred create
+// happens in linkTenantCompanyAction the moment a rep or admin links the
+// company.
+async function syncDealBestEffort(
+  userId: string,
+  id: string,
+  app: MerchantApplication
+): Promise<MerchantApplication> {
+  if (!canPushToHubSpot(app)) {
+    console.log(`[hubspot] ${id}: deal push deferred — no HubSpot company linked to this account yet`);
+    return app;
+  }
+  try {
+    const dealId = await pushToHubSpot(app);
+    return await postgresStorage.updateApplicationAsCustomer(userId, id, { hubspotDealId: dealId });
+  } catch (err) {
+    console.error("HubSpot sync not available yet:", err instanceof Error ? err.message : err);
+    return app;
+  }
+}
+
 export async function saveMyApplicationOnboardingAction(
   id: string,
   fields: { business: BusinessInfo; ownerContact: OwnerContact; processing: ProcessingInfo; agreement: AgreementInfo }
@@ -274,12 +301,7 @@ export async function saveMyApplicationOnboardingAction(
     }
   }
 
-  try {
-    const dealId = await pushToHubSpot(app);
-    app = await postgresStorage.updateApplicationAsCustomer(userId, id, { hubspotDealId: dealId });
-  } catch (err) {
-    console.error("HubSpot sync not available yet:", err instanceof Error ? err.message : err);
-  }
+  app = await syncDealBestEffort(userId, id, app);
 
   return { app, adyenReady, fieldErrors: hasFieldErrors ? errors : null, adyenFailed };
 }
@@ -335,12 +357,7 @@ export async function updateMyApplicationDetailsAction(
     }
   }
 
-  try {
-    const dealId = await pushToHubSpot(app);
-    app = await postgresStorage.updateApplicationAsCustomer(userId, id, { hubspotDealId: dealId });
-  } catch (err) {
-    console.error("HubSpot sync not available yet:", err instanceof Error ? err.message : err);
-  }
+  app = await syncDealBestEffort(userId, id, app);
 
   return { app, adyenSynced, fieldErrors: hasFieldErrors ? errors : null, adyenFailed };
 }

@@ -56,13 +56,14 @@ export function subscriptionMoney(
 // ── Empty states and retry eligibility ──────────────────────────────────────
 
 export type BillingPanelState =
-  | "not_accepted" // the merchant hasn't accepted a quote yet — nothing to show
-  | "rate_only"    // accepted, but no billable lines — no HubSpot quote will ever exist
-  | "pending"      // accepted with billable lines, but no HubSpot quote yet (building, or failed before creating one)
-  | "draft"        // a HubSpot quote exists but auto-publish hasn't completed
-  | "published";   // publishedAt is set — the one-way door has been gone through
+  | "not_accepted"         // the merchant hasn't accepted a quote yet — nothing to show
+  | "rate_only"            // accepted, but no billable lines — no HubSpot quote will ever exist
+  | "awaiting_tenant_link" // accepted and billable, but no HubSpot company linked — nothing may be created yet
+  | "pending"              // accepted with billable lines, but no HubSpot quote yet (building, or failed before creating one)
+  | "draft"                // a HubSpot quote exists but auto-publish hasn't completed
+  | "published";           // publishedAt is set — the one-way door has been gone through
 
-type BillingStateInput = Pick<MerchantApplication, "quoteAcceptedAt" | "quoteLines" | "hubspotIds">;
+type BillingStateInput = Pick<MerchantApplication, "quoteAcceptedAt" | "quoteLines" | "hubspotIds" | "tenantLink">;
 
 /**
  * Mirrors the same three facts onboardingModules.ts's billingModule() reads
@@ -78,6 +79,7 @@ type BillingStateInput = Pick<MerchantApplication, "quoteAcceptedAt" | "quoteLin
 export const BILLING_STATE_LABELS: Record<BillingPanelState, string> = {
   not_accepted: "Not started",
   rate_only: "Rate-only (no quote)",
+  awaiting_tenant_link: "Waiting on company link",
   pending: "Building…",
   draft: "Draft",
   published: "Published",
@@ -91,17 +93,23 @@ export function billingPanelState(app: BillingStateInput): BillingPanelState {
   if (!hasBillableLines) return "rate_only";
   if (hubspotIds?.publishedAt) return "published";
   if (hubspotIds?.quoteId) return "draft";
+  // Checked after the two id-bearing states, not before: a row built before
+  // the tenant-link gate existed can carry a quote and no link, and what it
+  // already has in HubSpot is the more useful thing to show.
+  if (!app.tenantLink?.hubspotCompanyId?.trim()) return "awaiting_tenant_link";
   return "pending";
 }
 
 /**
  * Whether the rep/admin billing panel should offer a Retry button at all.
  * Mirrors retryBillingQuoteAction's own refusal (already published) plus the
- * two states that are working-as-intended rather than broken — nothing
- * accepted yet, and a rate-only quote that will never produce a HubSpot
- * quote. Deliberately NOT gated on lastSyncError being set: an auto-publish
- * can be stuck on an unmet precondition (§6.1) without ever having recorded
- * an error.
+ * states that are working-as-intended rather than broken — nothing accepted
+ * yet, a rate-only quote that will never produce a HubSpot quote, and an
+ * account still waiting on its company link, where the fix is to link the
+ * company (which resumes billing itself) and a Retry button would only ever
+ * answer with the same refusal. Deliberately NOT gated on lastSyncError being
+ * set: an auto-publish can be stuck on an unmet precondition (§6.1) without
+ * ever having recorded an error.
  */
 export function canRetryBillingSync(app: BillingStateInput): boolean {
   const state = billingPanelState(app);

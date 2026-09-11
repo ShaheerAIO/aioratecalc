@@ -95,9 +95,17 @@ vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
 }));
 
 const { POST } = await import("@/app/api/lead/[token]/accept/route");
+const { buildAndPublishBillingQuote } = await import("@/lib/billing/publishBillingQuote");
+const { rowToApp } = await import("@/lib/storage/applicationRow");
 
 const TOKEN = "tok-1";
 const NOW = new Date("2026-08-21T19:49:38.000Z");
+
+// The clock is pinned: the fixture row carries a fixed customerLinkExpiresAt,
+// and against a real clock every case in this file silently turned into a 410
+// the day that date passed. Only Date is faked — the billing build waits on a
+// real setTimeout for hs_quote_link.
+vi.useFakeTimers({ toFake: ["Date"], now: NOW });
 const ACCEPT_EMAIL = "ana@tortapalace.com";
 
 const PLATFORM: CatalogProduct = {
@@ -144,7 +152,17 @@ function baseRow(extra: Partial<Row> = {}): Row {
     updatedAt: NOW,
     stage: "quote_sent",
     hubspotDealId: "deal-99",
-    tenantLink: null,
+    // Linked: nothing is built for an account without a HubSpot company, so
+    // every graph case below would otherwise short-circuit before the first
+    // call. The unlinked case is asserted on its own.
+    tenantLink: {
+      hubspotCompanyId: "334295287484",
+      companyName: "Torta Palace",
+      tenantRef: null,
+      adyenAccountHolderId: null,
+      linkedAt: "2026-08-21T00:00:00.000Z",
+      linkedByUserId: "rep-1",
+    },
     adyenIds: null,
     adyenOnboardingUrl: null,
     checkIds: null,
@@ -175,6 +193,18 @@ const post = () =>
     { json: async () => ({ email: ACCEPT_EMAIL }) } as never,
     { params: Promise.resolve({ token: TOKEN }) }
   );
+
+/**
+ * The resume path, as a rep reaches it — `retryBillingQuoteAction` calling the
+ * orchestrator again on the row as it now stands. NOT a second `post()`:
+ * re-opening an accepted link is a login-link resend and deliberately runs no
+ * billing at all, so driving a retry through the route would test nothing.
+ *
+ * `acceptedByEmail` is carried because this fixture has no `ownerContact` —
+ * the accepting address is the only signer it has.
+ */
+const resume = () =>
+  buildAndPublishBillingQuote(rowToApp(row as never), { acceptedByEmail: ACCEPT_EMAIL });
 
 /** The last hubspotIds written, i.e. what a rep or the checklist would read. */
 function storedIds(): HubspotIds | null {
@@ -340,10 +370,10 @@ describe("auto-publishing the billing quote on acceptance", () => {
     await post();
     expect(ensureQuoteContact).toHaveBeenCalledTimes(1);
 
-    // Second acceptance of the same link — the retry path. The row now carries
-    // a hubspotIds, so the conditional claim fails and the build resumes from
-    // what's on disk rather than starting a second graph.
-    await post();
+    // The retry path. The row now carries a hubspotIds, so the conditional
+    // claim fails and the build resumes from what's on disk rather than
+    // starting a second graph.
+    await resume();
     expect(ensureQuoteContact).toHaveBeenCalledTimes(1);      // reused, not re-created
     expect(createQuoteLineItems).toHaveBeenCalledTimes(2);
     expect(createDraftQuote).toHaveBeenCalledTimes(1);
@@ -359,7 +389,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
     row = { ...row!, hubspotIds: { ...storedIds()!, lineItemIds: ["li-1"] } };
 
     createQuoteLineItems.mockImplementation(async (lines: QuoteLine[]) => lines.map(() => "li-2"));
-    await post();
+    await resume();
     // Reconciliation kept li-1 and created only the missing tail — a re-create
     // of both would have double-billed a $1,200 POS unit.
     expect(createQuoteLineItems).toHaveBeenLastCalledWith([line(POS)]);
@@ -444,5 +474,34 @@ describe("auto-publishing the billing quote on acceptance", () => {
     expect(billingCallCount()).toBe(0);
     expect(storedIds()!.lastSyncError).toContain("refused before any HubSpot write");
     expect(storedIds()!.lastSyncError).toContain("isn't in HubSpot yet");
+  });
+
+  it("builds nothing, and records nothing, until a HubSpot company is linked", async () => {
+    row = baseRow({ tenantLink: null, hubspotDealId: null });
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(billingCallCount()).toBe(0);
+    // Crucially NOT a persisted sync error: waiting on a rep to link the
+    // company is the normal state of a fresh account, and counting it as a
+    // failure would fill the admin dashboard's error tripwire with accounts
+    // that are fine.
+    expect(storedIds()).toBeNull();
+    expect(loginTokens).toHaveLength(1); // the customer still gets logged in
+  });
+
+  it("builds the whole graph once the link arrives, without a second acceptance", async () => {
+    row = baseRow({ tenantLink: null, hubspotDealId: null });
+    await post();
+    expect(billingCallCount()).toBe(0);
+
+    // What linkTenantCompanyAction does: stamp the link, create the held-back
+    // deal, then re-enter the orchestrator on the same row.
+    row = { ...row!, tenantLink: baseRow().tenantLink, hubspotDealId: "deal-99" } as never;
+    const outcome = await resume();
+
+    expect(outcome.status).toBe("published");
+    expect(publishQuote).toHaveBeenCalledTimes(1);
+    expect(storedIds()!.publishedAt).not.toBeNull();
   });
 });

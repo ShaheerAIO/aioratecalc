@@ -95,6 +95,20 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
     );
   }
 
+  // 2b. A HubSpot Company behind the deal. Redundant with `no_deal` on any row
+  //     built after this rule shipped — the deal push is gated on the same
+  //     link — but stated separately because it names the fix. "There's no
+  //     deal, check the sync error" sends a rep hunting a HubSpot outage;
+  //     "link the company" is the actual one-click remedy. Same reason
+  //     `no_quote_lines` is restated here even though the orchestrator skips
+  //     an empty line set before ever calling this.
+  if (!app.tenantLink?.hubspotCompanyId?.trim()) {
+    add(
+      "no_tenant_company",
+      "This account isn't linked to a HubSpot company yet, so its deal and quote have nothing to hang off. Link the tenant company on the account, and billing picks up from there."
+    );
+  }
+
   // 3. Lines, and a catalog product behind every one of them. A line with no
   //    hs_product_id cannot become a line item.
   const lines = app.quoteLines ?? [];

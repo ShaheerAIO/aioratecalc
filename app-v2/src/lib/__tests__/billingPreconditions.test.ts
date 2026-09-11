@@ -55,10 +55,21 @@ function app(extra: Partial<MerchantApplication> = {}): MerchantApplication {
     updatedAt: "2026-08-21T00:00:00.000Z",
     stage: "quote_accepted",
     hubspotDealId: "deal-1",
-    tenantLink: null,
+    // Linked by default: an unlinked account is its own refusal
+    // (`no_tenant_company`), and leaving it null here would make every other
+    // case in this file assert against two reasons instead of the one it tests.
+    tenantLink: {
+      hubspotCompanyId: "334295287484",
+      companyName: "TEST COMPANY",
+      tenantRef: "prod-1024",
+      adyenAccountHolderId: null,
+      linkedAt: "2026-08-21T00:00:00.000Z",
+      linkedByUserId: "rep-1",
+    },
     adyenIds: null,
     adyenOnboardingUrl: null,
     checkIds: null,
+    foodbuyIds: null,
     hubspotIds: null,
     quoteType: "full_pos",
     quoteConfig: { avgTicket: 30, monthlyVolume: 40000 },
@@ -204,13 +215,19 @@ describe("canPublishBillingQuote", () => {
     expect(codes(check({ stage: "closed_lost" }))).toContain("closed_lost");
   });
 
+  it("refuses an account with no linked HubSpot company", () => {
+    expect(codes(check({ tenantLink: null }))).toEqual(["no_tenant_company"]);
+    expect(codes(check({ tenantLink: { ...app().tenantLink!, hubspotCompanyId: "  " } })))
+      .toEqual(["no_tenant_company"]);
+  });
+
   it("returns every problem at once, not the first one", () => {
     const result = check(
-      { hubspotDealId: null, stage: "closed_lost", quoteLines: [] },
+      { hubspotDealId: null, tenantLink: null, stage: "closed_lost", quoteLines: [] },
       { senderEmail: null, signerEmail: null, templateId: null }
     );
     expect(codes(result).sort()).toEqual(
-      ["closed_lost", "no_deal", "no_quote_lines", "no_sender_email", "no_signer_email", "no_template"].sort()
+      ["closed_lost", "no_deal", "no_quote_lines", "no_sender_email", "no_signer_email", "no_template", "no_tenant_company"].sort()
     );
   });
 
