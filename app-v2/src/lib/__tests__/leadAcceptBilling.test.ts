@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from "vitest";
 import { merchantApplications, users } from "@/lib/db/schema";
+import { ORDER_POINT_RULES } from "@/lib/quoting";
 import { EMPTY_HUBSPOT_IDS } from "@/types/merchant";
 import type { CatalogProduct, HubspotIds, QuoteLine } from "@/types/merchant";
 
@@ -122,13 +123,25 @@ const POS: CatalogProduct = {
   billingFrequency: "one_time",
   productType: "inventory",
 };
-const TABLET: CatalogProduct = {
-  hubspotProductId: "276751313619",
-  name: "Orders Hub Tablet",
+// Neither tablet needs review any more (both resolved to 0 points on
+// 2026-09-17), so the needs-review refusal is driven by a rule registered just
+// for this suite. By name only: quoting.ts indexes rules by product id at
+// module load, so one added here is never found by id.
+const REVIEWABLE: CatalogProduct = {
+  hubspotProductId: "900000000001",
+  name: "Mystery Ordering Device",
   price: 400,
   billingFrequency: "one_time",
   productType: "inventory",
 };
+
+beforeAll(() => {
+  ORDER_POINT_RULES[REVIEWABLE.name] = {
+    pointsPerUnit: 0,
+    needsReview: "Nobody can tell from the catalog whether this takes orders.",
+  };
+});
+afterAll(() => { delete ORDER_POINT_RULES[REVIEWABLE.name]; });
 
 function line(p: CatalogProduct, qty = 1): QuoteLine {
   return {
@@ -238,7 +251,7 @@ beforeEach(() => {
 
   pushToHubSpot.mockResolvedValue("deal-99");
   sendMagicLinkEmail.mockResolvedValue({ sent: true, devUrl: null });
-  listProducts.mockResolvedValue([PLATFORM, POS, TABLET]);
+  listProducts.mockResolvedValue([PLATFORM, POS, REVIEWABLE]);
   getQuoteTemplatePolicy.mockResolvedValue({
     full_pos: "817263673055", food_truck: "817263673055", marketing_only: "817697352408",
   });
@@ -455,15 +468,15 @@ describe("auto-publishing the billing quote on acceptance", () => {
     expect(storedIds()!.publishedAt).not.toBeNull();
   });
 
-  it("refuses an unreviewed tablet and persists the reason without touching HubSpot", async () => {
-    row = baseRow({ quoteLines: [line(PLATFORM), line(POS), line(TABLET)] });
+  it("refuses an unreviewed order-point line and persists the reason without touching HubSpot", async () => {
+    row = baseRow({ quoteLines: [line(PLATFORM), line(POS), line(REVIEWABLE)] });
     const res = await post();
     expect(res.status).toBe(200);
     expect(billingCallCount()).toBe(0);
     const ids = storedIds()!;
     expect(ids.quoteId).toBeNull();
     expect(ids.lastSyncError).toContain("refused before any HubSpot write");
-    expect(ids.lastSyncError).toContain("Orders Hub Tablet");
+    expect(ids.lastSyncError).toContain("Mystery Ordering Device");
   });
 
   it("refuses when the deal push failed, so there is nothing to associate 64 to", async () => {

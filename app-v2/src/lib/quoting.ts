@@ -267,14 +267,21 @@ export function quoteTotals(lines: QuoteLine[]): QuoteTotals {
 // POS terminals count 1 each; a kiosk counts 1 each, NOT one per lane; MPOS and
 // Tableside AI Devices count. Payment terminals, card readers, customer-facing
 // displays, KDS, printers, menu boards, mounts, network gear and cash drawers
-// do not. Tablets are conditional and cannot be resolved from a product record,
-// so they default to 0 and are surfaced for human review — over-billing is the
-// worse direction to be wrong in ($433/mo either way).
+// do not. Tablets were the one open question — conditional, unresolvable from a
+// product record — and Shaheer settled them 2026-09-17: neither tablet counts.
 type OrderPointRule = {
   pointsPerUnit: number;
   /** Live HubSpot product id — the primary key, so a rename can't drop the rule. */
   hubspotProductId?: string;
-  /** Set when the count is a human judgement the catalog can't make for us. */
+  /**
+   * Set when the count is a human judgement the catalog can't make for us.
+   * NO rule carries this today — both tablets were resolved 2026-09-17 — but
+   * the mechanism stays for the next product nobody can classify from its
+   * catalog record. It is not decorative: a rule that sets it REFUSES the
+   * billing publish (billing/preconditions.ts rule 6) until a human edits the
+   * quote, so adding one to a product reps actually pick will stall every deal
+   * carrying it. Resolve the point count instead, the way these two were.
+   */
   needsReview?: string;
 };
 
@@ -291,19 +298,14 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   // contents were unknown.
   "QSR POS Hardware Bundle": { pointsPerUnit: 1, hubspotProductId: "252941875920" },
 
-  // Needs review — quantity is a judgement, so it contributes 0 by default
-  "Orders Hub Tablet": {
-    pointsPerUnit: 0,
-    hubspotProductId: "276751313619",
-    needsReview: "Tablets count only when deployed as a POS replacement — confirm with the rep.",
-  },
-  "Clock in Tablet": {
-    pointsPerUnit: 0,
-    hubspotProductId: "276754193118",
-    needsReview: "Named as a time clock, but it is a tablet — confirm it isn't taking orders.",
-  },
-
   // Explicitly does not count
+  // Both tablets were 0-with-needsReview until Shaheer settled them
+  // 2026-09-17: neither is an ordering point. They stay 0, but WITHOUT the
+  // review flag, which was refusing the billing publish on every quote that
+  // carried one (billing/preconditions.ts rule 6) with no way for a rep to
+  // clear it short of dropping the line.
+  "Orders Hub Tablet": { pointsPerUnit: 0, hubspotProductId: "276751313619" },
+  "Clock in Tablet": { pointsPerUnit: 0, hubspotProductId: "276754193118" },
   "Payment Terminal - AMS1": { pointsPerUnit: 0, hubspotProductId: "223511653105" },
   "Customer Facing Display": { pointsPerUnit: 0, hubspotProductId: "318736467644" },
   "Kitchen Display System": { pointsPerUnit: 0, hubspotProductId: "223452690132" },

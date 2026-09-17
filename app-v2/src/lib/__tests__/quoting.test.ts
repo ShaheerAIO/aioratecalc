@@ -46,6 +46,7 @@ const CATALOG: CatalogProduct[] = [
   p("223511653105", "Payment Terminal - AMS1", 99, "one_time", "inventory"),
   p("222497165011", "Cash Drawer", 69, "one_time", "inventory"),
   p("276751313619", "Orders Hub Tablet", 199, "one_time", "inventory"),
+  p("276754193118", "Clock in Tablet", 199, "one_time", "inventory"),
   p("247901295335", "AIO Marketing Add Spend", 99, "monthly", "Service"),
   p("252941875920", "QSR POS Hardware Bundle", 1110, "one_time", "inventory"),
   // The three always-included services.
@@ -339,15 +340,25 @@ describe("deriveOrderPoints", () => {
     expect(unclassified).toEqual([]);
   });
 
-  it("flags a tablet as needs-review — never silently counted, never silently dropped", () => {
-    const lines = [line("POS Unit", 2), line("Orders Hub Tablet", 4)];
-    const { orderPoints, needsReview } = deriveOrderPoints(lines, []);
+  it("counts neither tablet, and flags neither for review", () => {
+    // Resolved by Shaheer 2026-09-17. Both were 0-with-needsReview, and that
+    // flag REFUSED the billing publish (billing/preconditions.ts rule 6) on
+    // every quote carrying one — a real deal stalled on "Clock in Tablet" with
+    // nothing a rep could click to clear it. They still contribute 0 points;
+    // what's gone is the refusal.
+    for (const name of ["Orders Hub Tablet", "Clock in Tablet"]) {
+      expect(ORDER_POINT_RULES[name].pointsPerUnit).toBe(0);
+      expect(ORDER_POINT_RULES[name].needsReview).toBeUndefined();
+    }
 
-    expect(orderPoints.total).toBe(2);                     // not counted
+    const lines = [line("POS Unit", 2), line("Orders Hub Tablet", 4), line("Clock in Tablet", 1)];
+    const { orderPoints, needsReview, unclassified } = deriveOrderPoints(lines, []);
+
+    expect(orderPoints.total).toBe(2);                     // still not counted
     expect(orderPoints.hardware["Orders Hub Tablet"]).toBeUndefined();
-    expect(needsReview).toHaveLength(1);                   // but not invisible
-    expect(needsReview[0]).toMatchObject({ name: "Orders Hub Tablet", qty: 4 });
-    expect(needsReview[0].reason).toMatch(/POS replacement/i);
+    expect(orderPoints.hardware["Clock in Tablet"]).toBeUndefined();
+    expect(needsReview).toEqual([]);                       // and no longer blocking
+    expect(unclassified).toEqual([]);                      // known rules, not mysteries
   });
 
   it("surfaces unrecognised hardware as unclassified at zero points", () => {

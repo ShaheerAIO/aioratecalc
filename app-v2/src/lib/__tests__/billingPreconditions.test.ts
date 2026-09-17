@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { canPublishBillingQuote } from "@/lib/billing/preconditions";
+import { ORDER_POINT_RULES } from "@/lib/quoting";
 import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/merchant";
 
 // The only compensating control left after the rep confirmation modal was
@@ -23,15 +24,28 @@ const POS: CatalogProduct = {
   productType: "inventory",
 };
 
-const TABLET: CatalogProduct = {
-  hubspotProductId: "276751313619",
-  name: "Orders Hub Tablet",
+// Both tablets were resolved to a flat 0 points on 2026-09-17, so NO catalog
+// product carries `needsReview` any more — and rule 6 still has to work for the
+// next product nobody can classify from its record. Registered by name only:
+// quoting.ts indexes the rules by product id at module load, so a rule added
+// here would never be found by id.
+const REVIEWABLE: CatalogProduct = {
+  hubspotProductId: "900000000001",
+  name: "Mystery Ordering Device",
   price: 400,
   billingFrequency: "one_time",
   productType: "inventory",
 };
 
-const CATALOG = [PLATFORM, POS, TABLET];
+beforeAll(() => {
+  ORDER_POINT_RULES[REVIEWABLE.name] = {
+    pointsPerUnit: 0,
+    needsReview: "Nobody can tell from the catalog whether this takes orders.",
+  };
+});
+afterAll(() => { delete ORDER_POINT_RULES[REVIEWABLE.name]; });
+
+const CATALOG = [PLATFORM, POS, REVIEWABLE];
 
 function line(p: CatalogProduct, qty = 1): QuoteLine {
   return {
@@ -159,7 +173,7 @@ describe("canPublishBillingQuote", () => {
   it("refuses when the platform tier product is missing from the catalog", () => {
     // The largest recurring line on the quote. Publishing without it undercharges
     // permanently, so the catalog not yielding it must block.
-    const result = check({}, { catalog: [POS, TABLET] });
+    const result = check({}, { catalog: [POS, REVIEWABLE] });
     expect(codes(result)).toContain("platform_tier_unresolved");
   });
 
@@ -189,13 +203,33 @@ describe("canPublishBillingQuote", () => {
 
   it("REFUSES an unreviewed order-point line rather than letting it through", () => {
     // §6.1 item 9 allowed a rep to acknowledge these. Under auto-publish there
-    // is no rep at acceptance time, and a tablet on the wrong side of the 1–5/6+
+    // is no rep at acceptance time, and a device on the wrong side of the 1–5/6+
     // boundary is ~$433/mo on a document nobody can amend.
-    const result = check({ quoteLines: [line(PLATFORM), line(POS), line(TABLET)] });
+    const result = check({ quoteLines: [line(PLATFORM), line(POS), line(REVIEWABLE)] });
     expect(codes(result)).toContain("order_points_need_review");
     if (!result.ok) {
-      expect(result.reasons.find(r => r.code === "order_points_need_review")!.message).toContain("Orders Hub Tablet");
+      expect(result.reasons.find(r => r.code === "order_points_need_review")!.message).toContain("Mystery Ordering Device");
     }
+  });
+
+  it("does NOT refuse a quote carrying either tablet — both resolved to 0 points", () => {
+    // The live failure this rule caused: a real deal picked "Clock in Tablet",
+    // auto-publish refused, and nothing a rep could click cleared it because the
+    // flag was re-derived from the line every time.
+    const clockIn: CatalogProduct = {
+      hubspotProductId: "276754193118", name: "Clock in Tablet",
+      price: 400, billingFrequency: "one_time", productType: "inventory",
+    };
+    const ordersHub: CatalogProduct = {
+      hubspotProductId: "276751313619", name: "Orders Hub Tablet",
+      price: 400, billingFrequency: "one_time", productType: "inventory",
+    };
+    const result = check(
+      { quoteLines: [line(PLATFORM), line(POS), line(clockIn), line(ordersHub)] },
+      { catalog: [PLATFORM, POS, clockIn, ordersHub] }
+    );
+    expect(codes(result)).not.toContain("order_points_need_review");
+    expect(result.ok).toBe(true);
   });
 
   it("refuses with no signer email — 702 makes that contact the legal signer", () => {
