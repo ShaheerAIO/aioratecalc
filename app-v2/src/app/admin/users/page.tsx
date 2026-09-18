@@ -7,7 +7,9 @@ import {
   createUserAction,
   updateUserRoleAction,
   setUserDisabledAction,
-  resetUserPasswordAction,
+  unlinkEntraAction,
+  setBreakglassPasswordAction,
+  clearBreakglassPasswordAction,
   type AdminUserSummary,
   type StaffRole,
 } from "@/lib/actions/users";
@@ -20,7 +22,7 @@ import type { MerchantApplication } from "@/types/merchant";
 import styles from "./users.module.css";
 
 const STAFF_ROLES: StaffRole[] = ["rep", "admin"];
-const EMPTY_FORM = { email: "", name: "", role: "rep" as StaffRole, password: "" };
+const EMPTY_FORM = { email: "", name: "", role: "rep" as StaffRole };
 
 export default function AdminUsersPage() {
   const [tab, setTab]             = useState<"reps" | "customers">("reps");
@@ -37,6 +39,7 @@ export default function AdminUsersPage() {
   const [creating, setCreating]   = useState(false);
   const [resetTarget, setResetTarget] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  const [notice, setNotice] = useState("");
   const [busyId, setBusyId]       = useState<string | null>(null);
 
   const refreshStaff = () => listStaffUsersAction().then(setStaff).catch(e => setError(e.message));
@@ -108,16 +111,49 @@ export default function AdminUsersPage() {
     }
   };
 
-  const handleResetPassword = async (id: string) => {
-    if (!resetPassword) return;
+  const handleUnlinkEntra = async (id: string) => {
     setError("");
+    setNotice("");
     setBusyId(id);
     try {
-      await resetUserPasswordAction(id, resetPassword);
+      const updated = await unlinkEntraAction(id);
+      setStaff(us => us.map(u => (u.id === id ? updated : u)));
+      setNotice("Unlinked. Their next Microsoft sign-in will re-link this account by email.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to unlink");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleSetBreakglass = async (id: string) => {
+    if (!resetPassword) return;
+    setError("");
+    setNotice("");
+    setBusyId(id);
+    try {
+      await setBreakglassPasswordAction(id, resetPassword);
       setResetTarget(null);
       setResetPassword("");
+      setNotice("Breakglass password set. It only works at /login/breakglass.");
+      await refreshStaff();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to reset password");
+      setError(e instanceof Error ? e.message : "Failed to set breakglass password");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleClearBreakglass = async (id: string) => {
+    setError("");
+    setNotice("");
+    setBusyId(id);
+    try {
+      await clearBreakglassPasswordAction(id);
+      setNotice("Password cleared. Microsoft sign-in is now the only way into this account.");
+      await refreshStaff();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to clear password");
     } finally {
       setBusyId(null);
     }
@@ -136,6 +172,7 @@ export default function AdminUsersPage() {
         </div>
 
         {error && <div className={styles.errorBanner}>{error}</div>}
+        {notice && <div className={styles.noticeBanner}>{notice}</div>}
 
         <div className={styles.tabsRow}>
           <div className={styles.tabs} data-active={tab} role="tablist">
@@ -179,15 +216,12 @@ export default function AdminUsersPage() {
                       {STAFF_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </div>
-                  <div className={styles.field}>
-                    <label className={styles.label}>Temporary password</label>
-                    <input
-                      type="text" required value={form.password}
-                      onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                      className={styles.input}
-                    />
-                  </div>
                 </div>
+                <p className={styles.formHint}>
+                  Use the person&apos;s Microsoft work account address. They sign in with
+                  Microsoft; this row is what grants them access, and it links itself to
+                  their account the first time they sign in.
+                </p>
                 <button type="submit" disabled={creating} className={styles.saveButton}>
                   {creating ? "Adding…" : "Add Rep / Admin"}
                 </button>
@@ -209,6 +243,9 @@ export default function AdminUsersPage() {
                     </div>
                     <div className={styles.repRowMeta}>
                       <span className={styles.roleBadge} data-role={u.role}>{u.role}</span>
+                      <span className={styles.badge} data-linked={!!u.entraLinkedAt}>
+                        {u.entraLinkedAt ? "Microsoft linked" : "Not signed in yet"}
+                      </span>
                       <span className={styles.badge} data-disabled={!!u.disabledAt}>
                         {u.disabledAt ? "Disabled" : "Active"}
                       </span>
@@ -252,27 +289,58 @@ export default function AdminUsersPage() {
                     >
                       {selectedRep.disabledAt ? "Enable account" : "Disable account"}
                     </button>
-                    <button
-                      disabled={busyId === selectedRep.id}
-                      onClick={() => setResetTarget(resetTarget === selectedRep.id ? null : selectedRep.id)}
-                      className={styles.btnGhost}
-                    >
-                      Reset password
-                    </button>
+                    {selectedRep.entraLinkedAt && (
+                      <button
+                        disabled={busyId === selectedRep.id}
+                        onClick={() => handleUnlinkEntra(selectedRep.id)}
+                        className={styles.btnGhost}
+                      >
+                        Unlink Microsoft account
+                      </button>
+                    )}
+                    {selectedRep.role === "admin" && (
+                      <button
+                        disabled={busyId === selectedRep.id}
+                        onClick={() => setResetTarget(resetTarget === selectedRep.id ? null : selectedRep.id)}
+                        className={styles.btnGhost}
+                      >
+                        {selectedRep.hasPassword ? "Change breakglass password" : "Set breakglass password"}
+                      </button>
+                    )}
+                    {selectedRep.hasPassword && (
+                      <button
+                        disabled={busyId === selectedRep.id}
+                        onClick={() => handleClearBreakglass(selectedRep.id)}
+                        className={styles.btnGhost}
+                        data-danger
+                      >
+                        Clear password
+                      </button>
+                    )}
+                  </div>
+
+                  <div className={styles.linkState}>
+                    {selectedRep.entraLinkedAt
+                      ? `Signs in with Microsoft — linked ${new Date(selectedRep.entraLinkedAt).toLocaleString()}.`
+                      : "Not linked to a Microsoft account yet. It links itself on their first sign-in, matching on this email address."}
+                    {selectedRep.hasPassword && selectedRep.role === "admin" &&
+                      " Also has a breakglass password for /login/breakglass."}
+                    {selectedRep.hasPassword && selectedRep.role === "rep" &&
+                      " Still has a leftover password from before Microsoft sign-in — it no longer works anywhere, and can be cleared."}
                   </div>
 
                   {resetTarget === selectedRep.id && (
                     <div className={styles.resetRow}>
                       <input
                         type="text"
-                        placeholder="New password"
+                        placeholder="Breakglass password (min 12 characters)"
                         value={resetPassword}
                         onChange={e => setResetPassword(e.target.value)}
                         className={styles.input}
                       />
                       <button
                         disabled={busyId === selectedRep.id || !resetPassword}
-                        onClick={() => handleResetPassword(selectedRep.id)}
+                        onClick={() => handleSetBreakglass(selectedRep.id)}
                         className={styles.saveButton}
                       >
                         Save

@@ -1,6 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 import { NextResponse } from "next/server";
 import { DEBUG_ROLE_COOKIE, isDebugRoleSwitchEnabled, parseDebugRole } from "@/lib/auth/debugRole";
+import { ENTRA_PROVIDER_ID } from "@/lib/auth/entraDenial";
 
 // Edge-safe: no DB/bcrypt imports here (those live in auth.ts, providers only
 // run in the Node route-handler context). Middleware imports this file
@@ -10,6 +11,19 @@ export const authConfig: NextAuthConfig = {
   session: { strategy: "jwt" },
   providers: [],
   callbacks: {
+    // The gate for Entra sign-ins. The account lookup already happened in the
+    // provider's profile() (it has to — see auth.ts); this turns a refusal
+    // into a real message instead of a bare "AccessDenied", and is the last
+    // thing standing between an unprovisioned tenant member and a session.
+    //
+    // Edge-safe on purpose: middleware imports this file, so no DB reads here.
+    // It only reads the marker profile() already put on the user.
+    signIn({ user, account }) {
+      if (account?.provider !== ENTRA_PROVIDER_ID) return true;
+      if (user.denied) return `/login?error=${user.denied}`;
+      if (!user.role) return "/login?error=not_provisioned";
+      return true;
+    },
     authorized({ auth, request }) {
       let role = auth?.user?.role;
       const { pathname } = request.nextUrl;

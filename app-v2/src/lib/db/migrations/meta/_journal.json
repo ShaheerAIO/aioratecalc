@@ -71,6 +71,13 @@
       "when": 1787777842496,
       "tag": "0009_add_foodbuy_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789506806881,
+      "tag": "0010_grey_the_stranger",
+      "breakpoints": true
     }
   ]
 }

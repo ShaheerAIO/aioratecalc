@@ -59,6 +59,16 @@
   margin-bottom: var(--space-lg);
 }
 
+.noticeBanner {
+  background: var(--success-bg);
+  color: var(--success);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: var(--space-lg);
+}
+
 /* ---------- Tabs ---------- */
 
 .tabsRow {
@@ -305,6 +315,12 @@
   color: var(--danger);
 }
 
+/* An unlinked row is pending, not broken — it links itself on first sign-in. */
+.badge[data-linked="false"] {
+  background: var(--paper);
+  color: var(--ink-3);
+}
+
 .emptyState {
   padding: var(--space-2xl) var(--space-lg);
   text-align: center;
@@ -368,6 +384,20 @@
 }
 
 .manageRow .field { flex: 1 1 8rem; }
+
+.formHint {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  line-height: 1.6;
+  margin: 0 0 var(--space-md);
+}
+
+.linkState {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  line-height: 1.6;
+  margin: calc(var(--space-lg) * -1) 0 var(--space-lg);
+}
 
 .resetRow {
   display: flex;

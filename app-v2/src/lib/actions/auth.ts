@@ -2,36 +2,37 @@
 
 import { AuthError } from "next-auth";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
 import { signIn, signOut } from "@/lib/auth";
-import { db } from "@/lib/db/client";
-import { users } from "@/lib/db/schema";
+import { ENTRA_PROVIDER_ID } from "@/lib/auth/entraDenial";
 
-export async function loginAction(formData: FormData): Promise<string | undefined> {
-  const email = String(formData.get("email") ?? "");
+// Staff sign-in. Redirects to Microsoft, comes back through
+// /api/auth/callback/microsoft-entra-id, and the provider's profile() +
+// the signIn callback decide whether a session is issued at all
+// (lib/auth/entra.ts). Role routing isn't needed here the way it was for
+// password login: only rep/admin rows can complete an Entra sign-in.
+export async function entraSignInAction(): Promise<void> {
+  await signIn(ENTRA_PROVIDER_ID, { redirectTo: "/rep" });
+}
+
+// Admin breakglass — the way back into /admin when Entra is unreachable or
+// the app registration is misconfigured. Deliberately unlinked from anywhere
+// in the UI; reachable only at /login/breakglass. The `scope` credential is
+// what restricts it to admin rows (see lib/auth.ts).
+export async function breakglassLoginAction(formData: FormData): Promise<string | undefined> {
   try {
     await signIn("credentials", {
-      email,
+      email: formData.get("email"),
       password: formData.get("password"),
+      scope: "breakglass",
       redirect: false,
     });
   } catch (error) {
     if (error instanceof AuthError) {
-      return "Invalid email or password";
+      return "Invalid credentials, or that account isn't an admin";
     }
     throw error; // rethrow the internal redirect "error" so navigation still happens
   }
-  // Route by role: a customer who signs in on the staff /login page must land
-  // on /customer, not /rep — otherwise middleware bounces them straight back
-  // to /login and it looks like the form just "reloads".
-  const [u] = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
-  // Staff land on their dashboard (the "Accounts" home), not straight into the
-  // creation wizard — the wizard is one click away via "New Account" in the nav.
-  redirect(u?.role === "customer" ? "/customer" : "/rep");
+  redirect("/admin");
 }
 
 export async function logoutAction() {

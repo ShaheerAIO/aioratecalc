@@ -71,18 +71,108 @@ There is **no build, install, or test tooling** in this repo (no `package.json`,
 - **No CSS framework** — inline styles, dark theme CSS variables (`--bg: #0a0f1e`, `--accent: #f9674e`, etc.)
 - **AI:** Anthropic `claude-sonnet-4-6` called server-side via `ANTHROPIC_API_KEY` env var (never in localStorage)
 - **Database:** Postgres via Vercel Marketplace (Neon integration), project `aioapp1/aioratecalc`. ORM: Drizzle (`drizzle-orm` + `@neondatabase/serverless`).
-- **Auth:** NextAuth v5 (Credentials provider, bcrypt, JWT sessions). No OAuth yet — AIO uses Microsoft 365, so Entra ID (Azure AD) is a plausible fast-follow, not built.
+- **Auth:** NextAuth v5, JWT sessions. **Staff (rep/admin) sign in with Microsoft Entra ID** (`microsoft-entra-id`, OIDC) — see "Entra ID staff sign-in" below. Customers still use Credentials (magic link, or a password they set themselves); the only remaining staff password is the admin breakglass at `/login/breakglass`.
 - **Storage:** all reads/writes go through Server Actions (`src/lib/actions/`) → `PostgresAdapter` (`src/lib/storage/postgresAdapter.ts`). `LocalStorageAdapter` was deleted in Phase 1.5 — nothing in the running app touches `localStorage` for application/settings data anymore.
 - **Adyen:** hosted onboarding only — AIO creates a legal entity skeleton, Adyen returns a URL, merchant fills SSN/bank/EIN directly on Adyen's hosted page. Phase 2 is **built and in testing** (see phase table) — legal-entity graph + on-demand onboarding-link regeneration are wired; keys must be `\$`-escaped in `.env.local` (see gotcha above).
 - **Check (checkhq.com):** embedded payroll. Hosted onboarding only, same posture as Adyen — AIO creates the Check *company* from details it already holds, Check collects EIN/bank/tax data on its own hosted pages. Wired & in sandbox testing (see the payroll module below).
 - **HubSpot:** Private App Token (`HUBSPOT_PRIVATE_APP_TOKEN`), no OAuth. Still Phase 3, not started.
 
 ### Roles & the pillowed margin model (Phase 1.5)
-Three roles: **Customer** (no account — tokenized links only), **Rep**, **Admin**. `middleware.ts` guards `/rep/*` (rep or admin) and `/admin/*` (admin only) using NextAuth sessions.
+Three roles: **Customer** (no account — tokenized links only), **Rep**, **Admin**. `middleware.ts` guards `/rep/*` (rep or admin) and `/admin/*` (admin only) using NextAuth sessions. Roles live in `users.role` and are set by an admin at `/admin/users` — **not** derived from Entra groups or app roles (see "Entra ID staff sign-in").
 
 The core trust boundary: **reps must never see or derive AIO's true minimum profitable margin.** `pricing.ts`'s `getMarginFloor()` (true volume-tiered floor) and `calcAdyenCost`/`adyenRateOnVolume` (true per-transaction processing cost) are real numbers computed correctly everywhere internally, but a rep's UI/API responses only ever see a **pillowed** (padded) floor and, by default, no exact Adyen cost at all — controlled by an admin-editable global policy (`margin_policy` table, `/admin/settings/pillow`). This is enforced **server-side** in `derivePricingForRole()` (`pricing.ts`) via `src/lib/actions/pricing.ts`'s `getPricingPreviewAction()` — `PricingStep.tsx` has no client-side access to the true numbers at all, it only renders whatever the server decided this role gets to see. Don't move this computation back to the client.
 
 A **temporary, dev-only debug role switcher** (`src/lib/auth/debugRole.ts`, `src/components/dev/RoleSwitcher.tsx`) lets you click through Rep/Admin views without logging in/out, hard-gated on `ENABLE_DEBUG_ROLE_SWITCH` (must only ever be set in a local `.env.local`, never a Vercel project env — Preview deployments also run `NODE_ENV=production`, so that alone isn't a safe gate). It resolves to the real seeded `rep@aioapp.com`/`admin@aioapp.com` DB rows (not fake IDs) since `merchant_applications.owner_user_id` is a strict FK. Safe to delete later: that file, the component, `src/lib/actions/debugRole.ts`, and their two call sites in `middleware.ts`/`auth.config.ts` and `app/layout.tsx`.
+
+### Entra ID staff sign-in
+
+Staff authenticate against AIO's Microsoft 365 (Entra) tenant. **Entra proves identity; `users.role`
+grants authority.** There is deliberately no groups/appRoles claim plumbing — a rep is a rep because an
+admin said so at `/admin/users`, not because of directory membership. Don't add group-driven roles
+without raising it: it would make `/admin/users`' role editor a lie.
+
+**Nothing is auto-provisioned.** A tenant member with no `users` row is refused (`not_provisioned`).
+A rep account can read pillowed margins, configure quotes and open the one-way HubSpot publish door,
+so that access is granted deliberately, never inherited from being an AIO employee.
+
+**The merge.** Old password logins were joined to Entra lazily, on first sign-in, in
+`resolveEntraStaffUser` (`lib/auth/entra.ts`): match `entra_oid` first, then `users.email`
+(lowercased) — and on an email hit, stamp `entra_oid`/`entra_linked_at` onto the row. From then on
+the immutable `oid` is authoritative, so a rep who changes their surname (and therefore their UPN)
+keeps their account and their deals. Refusals: `not_provisioned`, `not_staff` (a customer row reached
+by a colliding address — never silently upgraded), `disabled`, `oid_conflict` (a second Entra identity
+claiming a linked row; recovery is "Unlink Microsoft account" at `/admin/users`), `wrong_tenant`,
+`no_email`, `no_identity`. Copy for each lives in `entraDenial.ts`.
+
+**Why the lookup is inside the provider's `profile()`** and not the `signIn` callback: `@auth/core`
+seeds the session token's `sub` from whatever `profile()` returns as `id`, and `sub` becomes
+`session.user.id`, which is written to `merchant_applications.owner_user_id` — a strict FK. So the
+AIO user id has to be the id `profile()` returns. A refusal can't throw from there without becoming an
+opaque OAuth error, so it's carried on the user object as `denied` and turned into a message by the
+`signIn` callback in `auth.config.ts` (edge-safe: it only reads the marker, never the DB). A refused
+identity is returned with **no `role`**, so even a session that escaped the gate fails every check in
+`authorized`.
+
+**The `email` claim is not reliable.** Entra emits it only when the user has a `mail` attribute or the
+app registration requests it as an optional claim, so `readEntraIdentity` falls back to
+`preferred_username` (the UPN) and then `upn`. Don't remove the fallback — a tenant whose users lack
+`mail` would match nobody. The email **on file** is what's returned, not the claim's: it feeds
+`hs_sender_email` on published HubSpot quotes, which can't be amended.
+
+**Tenant pinning** comes from `AUTH_MICROSOFT_ENTRA_ID_ISSUER`; `expectedTenantId()` parses the tenant
+out of it and the `tid` claim is checked against it. `common`/`organizations` are treated as
+unconfigured (they mean "any Microsoft account"), which makes the `tid` check a no-op rather than a
+false guarantee — so **pin the issuer to the real tenant id**.
+
+**Passwords.** Reps have no password path at all. `credentials` now requires a `scope`
+(`"customer"` | `"breakglass"`) and refuses a role that doesn't match it — the two surfaces post the
+same email+password shape, so without it a customer password would open a staff session. `scope`
+missing → refused, so no stale bare-credentials caller can slip through. The admin breakglass
+(`/login/breakglass`, unlisted) is the only staff password and exists solely so a broken or
+unreachable Entra tenant can't lock everyone out of `/admin`.
+
+**The app registration exists.** `EasyOB Staff Sign-In`, created 2026-09-17 in the AIO tenant
+`e951f5b3-da6a-4b3d-9f40-993a88995573`, single-tenant (`signInAudience: AzureADMyOrg`). It carries
+both redirect URIs, `email` + `upn` as optional ID-token claims, implicit flows off, and tenant-wide
+admin consent for `openid profile email` so staff never see a consent prompt. It was created by
+`scripts/entra-app-registration.ps1`, which is idempotent — re-running it is also the
+**secret-rotation** path. **The client secret expires 2028-09-17**; rotating means re-running that
+script (it rewrites `.env.local`, `\$`-escaped) and then replacing
+`AUTH_MICROSOFT_ENTRA_ID_SECRET` in the Vercel project by hand, with the RAW `$`.
+
+Requested scopes are just `openid profile email`; the provider's default adds Graph `User.Read`
+purely to fetch a profile photo and base64 it into the session JWT, which `auth.ts` overrides away.
+
+A registration created through Graph rather than the portal needs its **service principal created
+explicitly** (`POST /servicePrincipals { appId }`) — the portal does that implicitly, Graph does not,
+and without it sign-in fails with "application not found in the directory."
+
+**Entra allows no wildcard redirect URIs**, and Auth.js builds `redirect_uri` from the request's own
+Host header (`trustHost` is auto-true on Vercel, and `AUTH_URL` is deliberately unset so local dev
+and production can share one config). So **only `http://localhost:5001` and the stable production
+alias `https://aioeasyob.vercel.app` can complete an Entra sign-in** — per-deployment and preview
+hostnames get a `redirect_uri` mismatch from Microsoft. Previews use `/login/breakglass`. Adding a
+custom domain means adding its callback URI to the registration too.
+
+**The sign-in button opens a popup, except on Safari.** `/login` POSTs to Auth.js's REST signin
+endpoint into a named popup and watches it from the opener; success lands on
+`/login/popup-complete` — a stub page that exists only so `/rep` never renders inside the popup —
+and the opener then navigates the top window.
+
+Two things there are load-bearing and easy to "simplify" wrongly:
+
+- The outcome is read by **polling the popup's URL from the opener**, not by `postMessage`. Chrome
+  clears `window.name` across a cross-origin navigation, so a page loaded inside the popup cannot
+  reliably tell that it *is* the popup. The opener always can, and a cross-origin read simply throws
+  while the popup is still on `login.microsoftonline.com` — that throw is the "keep waiting" signal.
+- `/login/popup-complete` **must not call `window.close()`**. The opener tells "signed in" from
+  "user cancelled" by whether the window closed before reaching that path, so self-closing would
+  make every success look like a cancellation.
+
+Safari and every iOS browser (all WebKit) keep the plain top-level redirect: popup blocking plus
+storage partitioning that can drop the PKCE/state cookies the callback needs. The same redirect is
+the fallback when JS hasn't hydrated, the CSRF fetch fails, or the popup is blocked — the form's
+`entraSignInAction` server action is the no-JS path, so the button degrades instead of breaking.
 
 ### Key files
 ```
@@ -99,13 +189,18 @@ app-v2/src/
   lib/storage/
     storageInterface.ts      ← IStorage interface, scoped by { userId, role }
     postgresAdapter.ts       ← server-only IStorage impl (the only one — LocalStorageAdapter is gone)
-  lib/auth.ts                ← NextAuth instance (Credentials provider, DB-backed) — Node-only
+  lib/auth.ts                ← NextAuth instance — Node-only. MicrosoftEntraID (staff) + Credentials
+                                 (customer magic link / password, admin breakglass), DB-backed
   lib/auth.config.ts         ← edge-safe NextAuth config (no DB imports) — used by middleware.ts
   lib/auth/
     getEffectiveRole.ts      ← the one place that resolves "who's asking" (real session or debug role)
+    entra.ts                 ← server-only. Entra claims → the AIO staff row they own, linking the
+                                 two on first sign-in. The provider's profile() calls this.
+    entraDenial.ts           ← edge/client-safe half: provider id, refusal vocabulary, refusal copy
     debugRole.ts             ← DEBUG-ROLE-SWITCHER — see note above
   lib/actions/
-    auth.ts                  ← loginAction, logoutAction (Server Actions wrapping signIn/signOut)
+    auth.ts                  ← entraSignInAction (staff), breakglassLoginAction (admin recovery),
+                                 logoutAction. `loginAction` is GONE — there is no staff password form.
     applications.ts          ← list/get/save/delete application + settings/submissions Server Actions
     pricing.ts                ← getActivePaddingPolicy, updatePaddingPolicyAction (admin-only), getPricingPreviewAction
                                  (NB: named Padding*, not Pillow* — this doc's older "pillow" wording is drift)
@@ -143,7 +238,10 @@ app-v2/src/
   lib/billingView.ts          ← pure view-model for the rep/admin billing panel (frequency-grouped money)
   middleware.ts               ← route protection for /rep/* and /admin/*
   app/
-    login/                    ← real login (Credentials)
+    login/                    ← staff login — a single "Sign in with Microsoft" button
+    login/breakglass/         ← UNLISTED admin password recovery; linked from nowhere
+    login/popup-complete/     ← where popup sign-in lands. Must NOT self-close — the opener
+                                 closes it, and uses that to tell success from cancellation
     rep/proposals/new/        ← 5-step rep flow (upload→analysis→pricing→proposal→apply)
     rep/prospects/new/        ← rep sets a margin target + generates a customer self-serve link
     rep/settings/             ← processor/tier config (rep-editable; pillow policy is admin-only, separate)
@@ -167,6 +265,9 @@ app-v2/src/
 scripts/
   seed-users.ts                ← seeds admin@aioapp.com / rep@aioapp.com (see credentials below)
   db.ts                        ← standalone (non-"server-only") Drizzle client, for scripts run via tsx
+  entra-app-registration.ps1   ← creates/updates the Entra app registration via Graph (pwsh +
+                                 Microsoft.Graph.Authentication). Idempotent, so it's also the
+                                 secret-rotation path. Writes the 3 env vars into .env.local.
 ```
 
 ### To run v2
@@ -182,12 +283,26 @@ npx tsx scripts/seed-users.ts   # seeds admin@aioapp.com / rep@aioapp.com — se
 npm run dev
 ```
 
-**Dev login credentials** (seeded, not production-safe — rotate before this ever ships):
-- Admin: `admin@aioapp.com` / `admin123`
-- Rep: `rep@aioapp.com` / `rep123`
-- Customer: `customer@aioapp.com` / `customer123`
+**Dev login credentials** (seeded, not production-safe):
+- Admin: `admin@aioapp.com` / `admin123` — at `/login/breakglass`, **not** `/login`. This is the
+  breakglass credential now, so it is load-bearing: override it with `SEED_ADMIN_PASSWORD` anywhere
+  that isn't a local machine, or change it from `/admin/users` → "Change breakglass password".
+- Rep: `rep@aioapp.com` — **no password** (reps sign in with Entra). Exists for the debug role switcher.
+- Customer: `customer@aioapp.com` / `customer123` — at `/customer/login`.
+
+**Bootstrapping a real staff roster:** sign in at `/login/breakglass` as the admin, then add each
+person at `/admin/users` using their Microsoft work-account address. Their first "Sign in with
+Microsoft" links the row. `admin@aioapp.com`/`rep@aioapp.com` are fake and have no Entra counterpart
+— they will never link, which is fine.
 
 **⚠️ `vercel integration add` / `vercel env pull` will overwrite `.env.local` wholesale**, wiping any local-only vars (like `ANTHROPIC_API_KEY`) that aren't stored in the Vercel project's env. Back up `.env.local` before running Vercel CLI commands that touch env vars.
+
+**⚠️ The Entra vars are stored in Vercel as type `Sensitive`, i.e. write-only** — `vercel env pull`
+cannot read them back. So a pull doesn't just fail to restore `AUTH_MICROSOFT_ENTRA_ID_SECRET`, it
+*destroys* the local copy along with everything else in `.env.local`. If that happens, recover from
+the `.env.local.bak-*` the registration script leaves behind, or re-run
+`scripts/entra-app-registration.ps1` to mint a fresh secret (then update Vercel, since the old
+secret stays valid but you no longer have it).
 
 **⚠️ Adyen (and any) API keys containing `$` MUST be `\$`-escaped in `.env.local`.** Next's `@next/env` runs `dotenv-expand`, so a raw `$AB` in a key value is silently expanded away (treated as a `${AB}` reference), corrupting the key and producing Adyen `401 Unauthorized`. Single/double quotes do NOT prevent this in `@next/env` — only backslash-escaping (`\$`) does. **In the Vercel project env UI, do the opposite: paste the RAW `$`** (Vercel stores values literally and does not run dotenv-expand; a `\$` there becomes part of the key and 401s). The Adyen LEM/Config keys map as: LEM test key → `ADYEN_LEM_API_KEY`, platform web service key → `ADYEN_CONFIG_API_KEY`, HMAC → `ADYEN_WEBHOOK_HMAC_KEY`.
 
@@ -201,7 +316,7 @@ npm run dev
 | 3 | HubSpot bidirectional sync (wire `hubspot.ts` stub) | **SUPERSEDED / partly done.** There is no bidirectional sync and there must not be: authority **hands off at quote publish** — EasyOB → HubSpot while the quote is a draft, HubSpot → EasyOB (read-only) forever after. Deal sync is repaired and live (it had never once succeeded before commit `9aafa5d`). Billing is E2E-PLAN **Phase E**, below. `getMyApplicationWithPayrollSyncAction` was folded into `getMyApplicationWithSyncAction` (refreshes Check + HubSpot independently). |
 | E (E2E-PLAN) | **Billing through HubSpot** — quote → hosted checkout → subscription read-back, plus the `schedule_demo` checklist shell | **PUBLISH PATH LIVE-VERIFIED 2026-08-24** — the one human-run publish `PHASE-E-SPEC.md`:777 called for is DONE; see "The Phase E gate run" below. Checkout → subscription read-back remains unverified **on purpose** (`PAYMENT-TEST-PLAN.md` §2.1 recommends against a live payment test; §1's 46 live paid quotes cover it instead). **Auto-publishes on merchant acceptance** — no rep confirmation gate (user's decision, 2026-08-21), so `canPublishBillingQuote` is the *only* thing between a bad quote and a live ACH mandate. Migration `0008` (`quote_template_policy`) **IS applied** — the policy table is empty, which is harmless: `getQuoteTemplatePolicy()` falls back to `DEFAULT_TEMPLATE_IDS`, so an unseeded table can never block a publish. Wants `NEXT_PUBLIC_HUBSPOT_PORTAL_ID=244508708` (cosmetic: CRM record links). **⚠️ One go-live blocker remains: `hs_sender_email` — see the constraint below.** |
 | 4 | Merchant magic link email + SMS delivery on prospect creation (Resend + Twilio) | **BUILT / awaiting Resend domain + Twilio account** — `createProspectAction` now auto-sends the lead link via `sendLeadLinkEmail` (always attempted) and `sendLeadLinkSms` (only if the rep entered a phone), right after the prospect row is saved; a send failure never blocks prospect creation, and the rep always sees the raw link with a copy button as fallback (same pattern as the existing `sendMerchantOnboardingLinkAction`/"Send Onboarding Link" KYC-handoff button, which is unchanged). Both degrade gracefully — with `RESEND_API_KEY`/`TWILIO_*` unset, sends just no-op and the UI shows "delivery isn't configured yet." Still needed before this reaches a real merchant: a verified Resend sending domain (`RESEND_FROM_EMAIL`, e.g. a `send.aioapp.com` subdomain — needs SPF/DKIM/DMARC DNS records) and a Twilio account + number (`TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER`). Phone is optional on the prospect form — no phone means no SMS attempt. |
-| 5 | Real OAuth (Entra ID?) as a fast-follow to Credentials; optional DB session strategy | **NOT STARTED** |
+| 5 | Entra ID (Microsoft 365) staff sign-in, replacing staff passwords | **LIVE-VERIFIED 2026-09-18** — `microsoft-entra-id` provider wired, old logins merge to their Entra identity lazily on first sign-in (`lib/auth/entra.ts`, migration `0010` adds `users.entra_oid`/`entra_linked_at`). Roles stay in `users.role`; nothing is auto-provisioned; admin breakglass at `/login/breakglass`. App registration done 2026-09-17 (see "Entra ID staff sign-in"); the three env vars are in `.env.local` **and** the Vercel project (Production, type Sensitive). A real staff sign-in has now run end to end: `shaheer.hasnain@aioapp.com` (admin, created at `/admin/users`) signed in with Microsoft and `resolveEntraStaffUser` stamped its `entra_oid`/`entra_linked_at`. `joe@aioapp.com` is still unlinked and will link on his own first sign-in; `admin@aioapp.com`/`rep@aioapp.com` are fake and will never link. **Not yet deployed** — the whole change is still uncommitted. Optional DB session strategy still NOT STARTED. |
 | F | Foodbuy enrollment (the `foodbuy` checklist module — graduated off the `coming_soon` shell) | **DONE** — Foodbuy turned out to have **no API at all**: enrollment is a paper "Foodbuy Foodservice Enrollment" participation agreement (source form: `AIO_Foodbuy_Enrollment_Form_V1`) that asks for the Federal ID # (EIN), a wet/e-signature, GPO-affiliation disclosure, and per-location distributor account numbers — none of which AIO collects, matching the no-EIN/no-bank-details posture already enforced for Adyen/Check. So the Phase 2/2.5-style hosted-onboarding-API scaffold built for this module first was wrong and was torn out. What's built instead: `lib/foodbuyForm.ts` renders a pre-filled copy of the real form as printable HTML (business identity/address + main contact only — everything requiring a legal attestation or Foodbuy-side data stays a blank line), exported client-side via the same `html2pdf`-in-a-new-window pattern `ProposalStep.tsx` already uses for proposal PDFs — no new dependency, no server-side PDF lib. `foodbuyModule()` just tracks `foodbuyIds.generatedAt` (has the customer downloaded their copy yet) since there's no remote status to poll; the CTA stays available even once "complete" so they can re-download. The customer signs the printed/downloaded copy and hands it to their AIO rep or a Foodbuy account executive themselves — AIO's system never transmits or receives it. |
 
 ### Critical constraints (do not reverse)
@@ -210,6 +325,17 @@ npm run dev
 - `generateProposal()` force-overrides any AI-returned numbers with locally computed `exactRates`/`exactProjected`
 - HubSpot uses Private App Token — **no OAuth**
 - All v2 work in `app-v2/` — **do not touch the root HTML files**
+- **Staff roles are NOT derived from Entra groups or app roles.** Entra authenticates; `users.role`
+  authorizes. And **nothing is auto-provisioned** — an AIO tenant member with no `users` row is
+  refused. Both are deliberate (2026-09-15): rep access reads pillowed margins and can open the
+  one-way HubSpot publish door, so it's granted at `/admin/users`, never inherited from employment.
+- **`credentials` requires a `scope` (`"customer"` | `"breakglass"`).** Customer password login and
+  the admin breakglass post the identical email+password shape, so the scope is the only thing keeping
+  them apart — without it a customer password opens a staff session. A call with no scope is refused,
+  which is what stops a stale bare-credentials caller. Reps have no password path at all.
+- **Don't delete the `preferred_username`/`upn` fallback in `readEntraIdentity`.** Entra emits the
+  `email` claim only when the user has a `mail` attribute or the app requests it as an optional claim;
+  without the fallback an AIO tenant whose users lack `mail` would match nobody.
 - **Reps never see the true margin floor or true Adyen cost** — always go through `derivePricingForRole`/`getPricingPreviewAction`, never `derivePricing` directly from a rep-facing client component
 - `owner_user_id` (the rep who owns a deal, FK to `users.id`) and `ownerContact` (the merchant's own business contact person) are two different "owner" concepts — don't conflate them
 - `customer_link_token`/`customer_link_purpose` is a **generalized, reusable** token slot: `"lead_upload"` (Phase 1.5, pre-analysis self-serve) and `"kyc_handoff"` (Phase 2, post-proposal Adyen KYC) are different moments in the deal lifecycle sharing the same field — don't assume a token is one or the other without checking `customer_link_purpose`
@@ -224,7 +350,7 @@ npm run dev
 - `ENABLE_DEBUG_ROLE_SWITCH` must never be set in a Vercel project environment — local `.env.local` only
 - **Publishing a HubSpot quote is a one-way door.** No API edit (400 `LOCKED`), no delete (`PUBLISHED_QUOTE_CANNOT_BE_DELETED`), and no void — setting `hs_status: VOID` is itself an edit, so voiding is HubSpot-UI-only. Never build an "unpublish", "edit published quote", or "re-publish" affordance; `retryBillingQuoteAction` refuses once `publishedAt` is set. A `400 LOCKED` from `publishQuote` means **already published** and must be treated as success, or a crash between HubSpot's ack and the DB write wedges the account forever.
 - **`hs_recurring_billing_period` is DELIBERATELY never written.** It is a contract *term*, not the billing cycle — HubSpot derives `hs_recurring_billing_number_of_payments` from it, so `P7D` on a weekly line takes one $99 charge and then silently stops collecting. 935 of AIO's 1,200 live weekly line items leave it NULL. `PHASE-E-SPEC.md` §3.3 says to send `P7D`; the spec is wrong. Product-owner decision, 2026-08-21. **LIVE-VERIFIED 2026-08-24** on quote `323970722493`: the weekly platform line came back `hs_recurring_billing_period: NULL` / `hs_recurring_billing_number_of_payments: NULL`, while all eight one-time lines got `nPayments: 1`. That is HubSpot deriving the payment count from the period, observed directly — the mechanism is no longer inferred.
-- **`hs_sender_email` is NOT validated by HubSpot — GO-LIVE BLOCKER.** It is written from the owning rep's `users.email` (`resolveSender`, `publishBillingQuote.ts:147`). The 2026-08-24 gate run published with `rep@aioapp.com`, a seeded dev user that is not a portal owner, and HubSpot **accepted it silently** — no 400, no warning. So nothing anywhere will catch a wrong sender, and a real merchant would receive their quote "from" whatever junk address sits on the owning `users` row. Before the first real customer: seeded/dev users need real addresses, or `resolveSender` needs to resolve a HubSpot owner and refuse when it can't. O-1 (`PAYMENT-TEST-PLAN.md`:249) is explicit that all 46 live paid quotes use a real rep address.
+- **`hs_sender_email` is NOT validated by HubSpot — STILL A GO-LIVE BLOCKER.** It is written from the owning rep's `users.email` (`resolveSender`, `publishBillingQuote.ts:147`). The 2026-08-24 gate run published with `rep@aioapp.com`, a seeded dev user that is not a portal owner, and HubSpot **accepted it silently** — no 400, no warning. So nothing anywhere will catch a wrong sender, and a real merchant would receive their quote "from" whatever junk address sits on the owning `users` row. Entra sign-in (Phase 5) **narrows but does not close this**: a rep who signed in through Entra necessarily has a real tenant address, and `resolveEntraStaffUser` deliberately keeps the email on file rather than overwriting it from the claim. But `rep@aioapp.com` is still a valid `owner_user_id` — the debug role switcher writes as that row — so a fake sender remains reachable. Before the first real customer: `resolveSender` needs to resolve a HubSpot owner and refuse when it can't. O-1 (`PAYMENT-TEST-PLAN.md`:249) is explicit that all 46 live paid quotes use a real rep address.
 - **A published quote carries `app.quoteLines` VERBATIM — `publishBillingQuote.ts:211` never calls `buildQuote()`.** Derivation happens at *save* time in the configurator. So a row saved before a change to the derivation rules publishes under the OLD rules, silently. Two rows accepted 2026-08-18 are $1,498 short each (no Onsite Installation, no System Onboarding and Training) because they predate `272f58b`/`c65b4b1`, and `canPublishBillingQuote` does not catch it — it verifies the *platform* line resolves, never that the included services are present. Any backfill of pre-existing accepted rows must re-derive through `buildQuote()` first, or it publishes an under-priced quote onto a document nobody can amend.
 - **Billing completion is gated on the SUBSCRIPTION, never on the quote's `hs_payment_status`.** The subscription appears 1–9 minutes after checkout; `PAID` lags it by a median of **5.7 days** (daily ~12:00 UTC ACH batch). Gating on `PAID` tells a merchant who already paid to "Review & Pay" for most of a week. Same reason the nightly cron's lookback is **10 days**, not 3.
 - One quote yields **one subscription per distinct billing frequency**, so AIO's weekly-platform + monthly-add-on mix routinely produces two. Hence `hubspotIds.subscriptions[]` and `findSubscriptionsForQuote` (association **304**), never a single id, and never a deal-keyed lookup — a reused deal carries subscriptions from earlier quotes.
@@ -261,6 +387,14 @@ constraints above.
 ANTHROPIC_API_KEY           # Phase 1 — required now
 DATABASE_URL                # Phase 1.5 — Neon Postgres (+ several other PG*/POSTGRES_* vars, all Vercel-managed)
 AUTH_SECRET                 # Phase 1.5 — NextAuth
+AUTH_MICROSOFT_ENTRA_ID_ID       # Phase 5 — Entra app registration: Application (client) ID
+AUTH_MICROSOFT_ENTRA_ID_SECRET   # Phase 5 — client secret VALUE
+AUTH_MICROSOFT_ENTRA_ID_ISSUER   # Phase 5 — https://login.microsoftonline.com/<tenant-id>/v2.0
+                            # PIN IT TO THE TENANT. Unset (or /common/) means any Microsoft
+                            # account in the world can reach the sign-in; the tid check then
+                            # can't fire, and only the "no users row" gate stops them.
+SEED_ADMIN_PASSWORD         # Phase 5 — breakglass password for scripts/seed-users.ts; the
+                            # seeded admin123 default is fine locally and nowhere else.
 ENABLE_DEBUG_ROLE_SWITCH    # Phase 1.5 — local dev only, never in Vercel project env
 ADYEN_LEM_API_KEY           # Phase 2
 ADYEN_COMPANY_ID            # Phase 2

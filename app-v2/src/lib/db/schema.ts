@@ -16,9 +16,20 @@ import type {
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),
+  // Staff no longer sign in with a password — Entra ID does that (see
+  // lib/auth/entra.ts). Still populated for two cases: customers, who set
+  // their own password after a magic-link signup, and the admin breakglass
+  // (/login/breakglass) that keeps /admin reachable if Entra is unavailable.
   passwordHash: text("password_hash"),
   name: text("name").notNull(),
   role: text("role", { enum: ["rep", "admin", "customer"] }).notNull(),
+  // The Entra directory object id (`oid`) this staff row is bound to, stamped
+  // on first successful Entra sign-in. Immutable and tenant-scoped, unlike
+  // email/UPN — so once linked, a rename in Entra still resolves to this row.
+  // Unique: two Entra identities must never claim one account. Null means
+  // "not linked yet" (a row an admin pre-created, or a customer).
+  entraOid: text("entra_oid").unique(),
+  entraLinkedAt: timestamp("entra_linked_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
 });

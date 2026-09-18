@@ -79,6 +79,9 @@ export async function customerLoginAction(formData: FormData): Promise<string | 
     await signIn("credentials", {
       email: formData.get("email"),
       password: formData.get("password"),
+      // Restricts this form to customer rows — staff have no password login
+      // (Entra) beyond the unlisted admin breakglass. See lib/auth.ts.
+      scope: "customer",
       redirectTo: "/customer",
     });
   } catch (error) {
