@@ -17,26 +17,78 @@ function blank(v: string | null | undefined): boolean {
   return !(v ?? "").trim();
 }
 
-// ── Rep side: the prospect form ─────────────────────────────────────────────
+// ── Rep side: the prospect form's "Review What We Know" section ────────────
+//
+// THE RULE: HubSpot owns a field until the rep types in it. A field reads as
+// HubSpot's while it's blank or still holds exactly what the last prefill
+// wrote there; once the rep changes it, it's theirs, and its "from HubSpot"
+// hint goes away because the value is no longer HubSpot's. A company switch
+// (or clearing the company) leaves rep-owned fields alone.
+//
+// Generalized over every text field the Review section renders — business
+// name/address/contact/current processor, not just the two the form used to
+// show — because surfacing that invisible half is the point of the Review
+// section: createProspectAction used to stamp the rest onto the application
+// without ever showing it to the rep.
+
+export type ReviewSections = { business: BusinessInfo; ownerContact: OwnerContact; processing: ProcessingInfo };
 
 /**
- * What the LAST prefill put on the form. Not the prefill itself — only the
- * values it actually wrote, so a later company switch knows exactly which
- * fields are still HubSpot's to replace and which the rep has taken over.
+ * Dotted path → the value the LAST prefill actually wrote there. Not the
+ * prefill itself — only what it wrote, so a later company switch knows
+ * exactly which fields are still HubSpot's to replace and which the rep has
+ * taken over.
  */
-export type AppliedProspectPrefill = {
-  merchantName?: string;
-  contactEmail?: string;
-  channels: string[];
-};
+export type AppliedReviewFields = Record<string, string>;
 
-export const NO_PREFILL_APPLIED: AppliedProspectPrefill = { channels: [] };
+export const NO_REVIEW_PREFILL_APPLIED: AppliedReviewFields = {};
 
-export type ProspectFormValues = {
-  merchantName: string;
-  contactEmail: string;
-  channels: string[];
-};
+// Every text field a HubSpot Company/Contact read can actually supply, walked
+// by one dotted-path list so the merge loop and isFromHubspotField share one
+// vocabulary. Deliberately excludes the fields hubspotPrefill.ts documents as
+// unmapped (business.bizType/yearsInBusiness/annualRevenue,
+// processing.mcc/monthlyVolume/avgTicket/cardPresentPct) — HubSpot has no data
+// for those at all, so merging them would be a no-op dressed up as a rule; the
+// Review section marks them "HubSpot doesn't have this" instead (see
+// UNKNOWABLE_REVIEW_FIELDS below).
+const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => string | undefined }> = [
+  { path: "business.legalName", read: p => p.business.legalName },
+  { path: "business.dba", read: p => p.business.dba },
+  { path: "business.address", read: p => p.business.address },
+  { path: "business.city", read: p => p.business.city },
+  { path: "business.state", read: p => p.business.state },
+  { path: "business.zip", read: p => p.business.zip },
+  { path: "business.phone", read: p => p.business.phone },
+  { path: "business.website", read: p => p.business.website },
+  { path: "ownerContact.firstName", read: p => p.ownerContact.firstName },
+  { path: "ownerContact.lastName", read: p => p.ownerContact.lastName },
+  { path: "ownerContact.title", read: p => p.ownerContact.title },
+  { path: "ownerContact.email", read: p => p.ownerContact.email },
+  { path: "ownerContact.phone", read: p => p.ownerContact.phone },
+  { path: "processing.currentProcessor", read: p => p.processing.currentProcessor },
+  { path: "processing.businessDescription", read: p => p.processing.businessDescription },
+];
+
+/**
+ * Dotted paths HubSpot structurally never has an answer for (see
+ * hubspotPrefill.ts's "NOT mapped" note) — the Review section renders these
+ * as "HubSpot doesn't have this" rather than a silent empty box, so a rep can
+ * tell "nobody knows" apart from "we didn't ask".
+ */
+export const UNKNOWABLE_REVIEW_FIELDS: string[] = [
+  "business.bizType", "business.yearsInBusiness", "business.annualRevenue",
+  "processing.mcc", "processing.monthlyVolume", "processing.avgTicket", "processing.cardPresentPct",
+];
+
+function readPath(sections: ReviewSections, path: string): string {
+  const [section, key] = path.split(".") as [keyof ReviewSections, string];
+  return (sections[section] as unknown as Record<string, string>)[key] ?? "";
+}
+
+function writePath(sections: ReviewSections, path: string, value: string): void {
+  const [section, key] = path.split(".") as [keyof ReviewSections, string];
+  (sections[section] as unknown as Record<string, string>)[key] = value;
+}
 
 /**
  * THE RULE: HubSpot owns a field until the rep types in it.
@@ -57,85 +109,54 @@ function mergeText(
 }
 
 /**
- * Fold a prefill into the form. `incoming: null` means the company was cleared
- * or couldn't be read — what HubSpot filled is withdrawn, what the rep typed
- * stays.
+ * Fold a prefill into the Review form. `incoming: null` means the company was
+ * cleared or couldn't be read — what HubSpot filled is withdrawn, what the rep
+ * typed stays.
  *
  * Switching companies REPLACES rather than merges: the previous company's
- * values were recorded in `applied`, so they're overwritten (or cleared) rather
- * than left behind to blend with the new company's.
+ * values were recorded in `applied`, so they're overwritten (or cleared)
+ * rather than left behind to blend with the new company's.
  */
-export function mergeProspectPrefill(
-  current: ProspectFormValues,
-  applied: AppliedProspectPrefill,
+export function mergeReviewPrefill(
+  current: ReviewSections,
+  applied: AppliedReviewFields,
   incoming: ProspectPrefill | null
-): ProspectFormValues & { applied: AppliedProspectPrefill } {
-  // HubSpot has no separate legal name, so the mapper seeds both from `name`;
-  // this form has one "Business Name" field, so either will do.
-  const name = mergeText(
-    current.merchantName,
-    applied.merchantName,
-    incoming?.business.legalName ?? incoming?.business.dba
-  );
-  const email = mergeText(current.contactEmail, applied.contactEmail, incoming?.ownerContact.email);
-
-  // Channels are checkboxes, so "typed in" means "ticked by the rep": anything
-  // on the form that the last prefill didn't put there. Those survive; the rest
-  // is replaced wholesale by the new company's channels. A channel that's both
-  // rep-ticked and in the incoming set becomes the rep's, so a later switch
-  // can't take it away.
-  const repChosen = current.channels.filter(c => !applied.channels.includes(c));
-  const incomingChannels = (incoming?.channels ?? []).filter(c => !repChosen.includes(c));
-
-  return {
-    merchantName: name.value,
-    contactEmail: email.value,
-    channels: [...repChosen, ...incomingChannels],
-    applied: { merchantName: name.applied, contactEmail: email.applied, channels: incomingChannels },
+): { values: ReviewSections; applied: AppliedReviewFields } {
+  const values: ReviewSections = {
+    business: { ...current.business },
+    ownerContact: { ...current.ownerContact },
+    processing: { ...current.processing },
   };
+  const nextApplied: AppliedReviewFields = {};
+  for (const { path, read } of REVIEW_FIELD_PATHS) {
+    const { value, applied: a } = mergeText(readPath(current, path), applied[path], incoming ? read(incoming) : undefined);
+    writePath(values, path, value);
+    if (a !== undefined) nextApplied[path] = a;
+  }
+  return { values, applied: nextApplied };
 }
 
-/** Is this form field currently showing exactly what HubSpot put there? */
-export function isFromHubspot(
-  applied: AppliedProspectPrefill,
-  field: "merchantName" | "contactEmail",
-  current: string
-): boolean {
-  const value = applied[field];
+/** Is this Review field currently showing exactly what HubSpot put there? */
+export function isFromHubspotField(applied: AppliedReviewFields, path: string, current: string): boolean {
+  const value = applied[path];
   return value !== undefined && current === value;
 }
 
-// The prefill reaches the application even when this form has no field for it
-// (createProspectAction stamps it server-side), so the rep is told what's coming
-// along rather than being left to assume only the two visible fields carried.
-// Keyed in display order; first/last name collapse into one label.
-const CARRYOVER_LABELS: Array<[string, string]> = [
-  ["business.address", "street address"],
-  ["business.city", "city"],
-  ["business.state", "state"],
-  ["business.zip", "ZIP"],
-  ["business.phone", "business phone"],
-  ["business.website", "website"],
-  ["ownerContact.firstName", "owner name"],
-  ["ownerContact.lastName", "owner name"],
-  ["ownerContact.title", "owner title"],
-  ["ownerContact.phone", "owner phone"],
-  ["processing.currentProcessor", "current processor"],
-  ["processing.businessDescription", "business description"],
-];
-
-/**
- * Human labels for everything in `fromHubspot` that ISN'T already a visible
- * field on the prospect form. Unknown paths are dropped rather than guessed at
- * — a label nobody wrote is not a label worth showing.
- */
-export function prefillCarryoverLabels(fromHubspot: string[]): string[] {
-  const have = new Set(fromHubspot);
-  const out: string[] = [];
-  for (const [path, label] of CARRYOVER_LABELS) {
-    if (have.has(path) && !out.includes(label)) out.push(label);
-  }
-  return out;
+// ── Channels ─────────────────────────────────────────────────────────────
+//
+// Same rule, checkbox mechanics: "typed in" means "ticked by the rep" —
+// anything on the form that the last prefill didn't put there. Those survive;
+// the rest is replaced wholesale by the new company's channels. A channel
+// that's both rep-ticked and in the incoming set becomes the rep's, so a
+// later switch can't take it away.
+export function mergeChannels(
+  current: string[],
+  appliedChannels: string[],
+  incoming: string[]
+): { channels: string[]; applied: string[] } {
+  const repChosen = current.filter(c => !appliedChannels.includes(c));
+  const incomingChannels = incoming.filter(c => !repChosen.includes(c));
+  return { channels: [...repChosen, ...incomingChannels], applied: incomingChannels };
 }
 
 // ── Customer side: the onboarding form ──────────────────────────────────────

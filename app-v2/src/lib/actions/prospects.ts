@@ -11,15 +11,19 @@ import { buildProspectPrefill, type ProspectPrefill } from "@/lib/hubspotPrefill
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { resolveLeadLinkIssue } from "@/lib/customerLink";
+import { resolveDealForCompany, type DealChoice, type DealResolution } from "@/lib/hubspotDeal";
+import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
-import { analysisFromQuoteConfig } from "@/lib/pricing";
+import { analysisFromQuoteConfig, getMarginFloor, getPaddedFloorRate } from "@/lib/pricing";
+import { getActivePaddingPolicy } from "@/lib/actions/pricing";
 import { buildQuote, isAllowedForQuoteType, isProcessingQuote, toQuoteLine } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
+import { fmtBps } from "@/lib/utils";
 import type {
-  MerchantApplication, OrderPoints, PricingModel, ProcessingInfo, QuoteConfig, QuoteLine,
-  QuoteType, StatementAnalysis, TenantLink,
+  BusinessInfo, DealLink, MerchantApplication, OrderPoints, OwnerContact, PricingModel, ProcessingInfo,
+  QuoteConfig, QuoteLine, QuoteType, StatementAnalysis, TenantLink,
 } from "@/types/merchant";
 
 const LINK_TTL_DAYS = 14;
@@ -128,6 +132,24 @@ export async function getHubspotCompanyForProspectAction(companyId: string): Pro
   }
 }
 
+/**
+ * Preview-resolve a rep's deal pick BEFORE they submit the form — the same
+ * `resolveDealForCompany` createProspectAction calls at save time, exposed
+ * here so the Company & Deal picker can show a refusal (including the
+ * `ambiguous` candidates) or a confirmed deal name/stage inline, without
+ * losing everything else the rep has already filled in on the page.
+ * createProspectAction re-resolves at submit regardless — this is a preview,
+ * not the authority.
+ */
+export async function resolveDealChoiceAction(input: {
+  companyId: string;
+  choice: DealChoice;
+}): Promise<DealResolution> {
+  const effective = await getEffectiveRole();
+  if (!effective) throw new Error("Not authenticated");
+  return resolveDealForCompany({ companyId: input.companyId, choice: input.choice });
+}
+
 // Mirrors the shape linkTenantCompanyAction persists in applications.ts —
 // only what's actually known from the Company read, no invented variant.
 function tenantLinkFromCompany(company: TenantCompany, linkedByUserId: string): TenantLink {
@@ -151,6 +173,72 @@ function tenantLinkFromCompany(company: TenantCompany, linkedByUserId: string): 
 
 /** What the rep picked. Prices and the derived tier are the server's business. */
 export type QuotePick = { hubspotProductId: string; qty: number };
+
+// ── Floor enforcement, defence in depth ──────────────────────────────────────
+// PricingStep and EditQuotePanel already block a below-floor target client-side,
+// against the PADDED floor a rep is shown (derivePricingForRole in pricing.ts).
+// This is the write-path backstop for the same Server Actions, and it is
+// deliberately scoped PER ROLE rather than always enforcing the true floor:
+//
+//   admin → the true floor (getMarginFloor's minMargin)
+//   rep   → the padded floor (getPaddedFloorRate of that same minMargin) —
+//           the exact number their own UI already blocks at
+//
+// An earlier version of this guard enforced the true floor for every role,
+// on the theory that a number-free refusal message keeps the true floor
+// hidden from a rep. It doesn't: the refusal itself is an oracle. A rep who
+// calls this Server Action directly (skipping the client, which stops at the
+// padded floor) can binary-search targetMargin — refuse, refuse, succeed —
+// and recover the true floor to arbitrary precision, which is exactly the
+// number derivePricingForRole's pillow exists to keep from them.
+//
+// Enforcing the padded floor for reps closes that oracle (the only number a
+// rep can now recover by probing is the padded one, already shown on screen)
+// and it costs nothing: the padded floor is strictly above the true floor, so
+// this is a STRICTER limit than before, not a weaker one — no honest rep
+// workflow that passed the client-side check can fail here. A rep who
+// genuinely needs to go below the padded floor asks an admin, who saves it
+// themselves and is held to the true floor.
+//
+// The refusal text still never states the floor to a rep, even though it's
+// now the padded number — a rep isn't supposed to learn even that one from
+// the error text; PricingStep/EditQuotePanel already show it to them directly.
+// An admin's refusal names the true floor, same as before.
+async function assertMarginAboveFloor(
+  quoteType: QuoteType,
+  targetMargin: number,
+  analysis: StatementAnalysis | null,
+  quoteConfig: QuoteConfig | null,
+  role: "admin" | "rep"
+): Promise<void> {
+  // A marketing-only quote has no processing rate at all (isProcessingQuote) —
+  // there is nothing to floor.
+  if (!isProcessingQuote(quoteType)) return;
+
+  // Same volume precedence used elsewhere for a rated quote: a statement's
+  // totalVolume wins when one exists, otherwise the rep-entered config — see
+  // quotableAnalysis in leadQuote.ts and annualVolume in adapters/hubspot.ts.
+  const volume = analysis?.totalVolume || quoteConfig?.monthlyVolume || 0;
+
+  // No statement and no config means there's no volume to floor a rate
+  // against yet (a bare/pre-statement quote is a legitimate state — see
+  // createProspectAction) — refusing here would just make the action unusable.
+  if (!(volume > 0)) return;
+
+  const trueFloor = getMarginFloor(volume).minMargin;
+  if (role === "admin") {
+    if (targetMargin >= trueFloor) return;
+    throw new Error(
+      `Target margin is below AIO's true minimum floor for this volume (${fmtBps(trueFloor)}) — raise it.`
+    );
+  }
+
+  const padding = await getActivePaddingPolicy();
+  const floor = getPaddedFloorRate(trueFloor, padding);
+  if (targetMargin >= floor) return;
+
+  throw new Error("That target margin is below AIO's minimum for this volume — raise it and save again.");
+}
 
 async function deriveQuoteLines(
   quoteType: QuoteType,
@@ -203,11 +291,19 @@ async function deriveQuoteLines(
 }
 
 export async function createProspectAction(input: {
-  merchantName: string;
-  contactEmail: string;
-  // Phase 4 — optional. When given, the lead link is also texted, alongside
-  // the email that's always attempted. No phone means no SMS attempt.
-  contactPhone?: string | null;
+  // Required — the rep now reviews and edits these directly on
+  // /rep/prospects/new's "Review What We Know" section (prefilled from
+  // HubSpot when a company is linked, but the rep's own edits always win: see
+  // the comment below on why this replaces the old server-side prefill
+  // stamp). `business.legalName`/`ownerContact.email` are hard-blocked client
+  // side and re-checked below — the link has to have a name and somewhere to
+  // send it.
+  business: BusinessInfo;
+  ownerContact: OwnerContact;
+  // Optional — a marketing-only quote's Review section still asks for
+  // contact info, but processing details (mcc, current processor, …) don't
+  // apply to it, so the form may omit this section entirely.
+  processing?: ProcessingInfo | null;
   targetMargin: number;
   pricingModel: PricingModel;
   // Dual statement path. Either (or both) may be supplied: the rep can enter
@@ -225,48 +321,61 @@ export async function createProspectAction(input: {
   // these (see deriveQuoteLines); the client's own copy is preview only.
   picks?: QuotePick[] | null;
   channels?: string[] | null;
-  // Phase F — set when the rep arrived via the HubSpot Company deep link, so
-  // the linkage is stamped from day one instead of attached manually/late.
-  // Re-fetched here (not trusted from whatever the client last showed) so the
-  // persisted snapshot reflects the Company at creation time.
-  hubspotCompanyId?: string | null;
+  // Required — the Company & Deal section makes both mandatory before submit
+  // is enabled. Re-fetched here (not trusted from whatever the client last
+  // showed) so the persisted tenant-link snapshot reflects the Company at
+  // creation time; the deal is re-resolved through the same
+  // resolveDealForCompany the picker previewed with (see
+  // resolveDealChoiceAction), since a client-side preview is not the
+  // authority — a race (another rep adopting the same deal in the interim)
+  // must still be caught here.
+  hubspotCompanyId: string;
+  deal: DealChoice;
 }): Promise<{
   app: MerchantApplication;
   linkUrl: string;
-  warning: string | null;
   emailResult: SendMagicLinkResult;
   smsResult: SendSmsResult | null;
 }> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
 
+  // ── Hard blocks ────────────────────────────────────────────────────────
+  // Mirrors what the Review section's own submit gate checks client-side —
+  // never trust the browser to have actually enforced it. Malformed (not
+  // merely missing) fields also block: see stripBlanks' doc comment for why
+  // that split needs no second copy of validateOnboardingFields' rules.
+  if (!input.business.legalName.trim()) throw new Error("Enter the legal business name.");
+  if (!input.ownerContact.email.trim()) throw new Error("Enter the customer's contact email — the link has to go somewhere.");
+  const malformed = validateOnboardingFields(stripBlanks({ business: input.business, ownerContact: input.ownerContact }));
+  const malformedMessages = Object.values(malformed);
+  if (malformedMessages.length) throw new Error(malformedMessages.join(" "));
+
   const now = new Date();
   const link = mintLeadLink(now);
 
-  let tenantLink: TenantLink | null = null;
-  // The same HubSpot read also prefills business/owner details onto the new
-  // application, so whatever the CRM already knows reaches the customer's
-  // onboarding form instead of being asked for again. Derived here rather than
-  // accepted from the browser, for the same reason quote lines are.
-  let prefill: ProspectPrefill | null = null;
-  // Surfaced on the success screen: the rep is told the prospect was created,
-  // so they also have to be told the linkage they asked for wasn't.
-  let warning: string | null = null;
-  if (input.hubspotCompanyId) {
-    try {
-      const company = await getCompanyProfile(input.hubspotCompanyId);
-      if (company) {
-        tenantLink = tenantLinkFromCompany(company, effective.userId);
-        prefill = buildProspectPrefill(company, await getCompanyOwnerContact(input.hubspotCompanyId));
-      } else warning = `HubSpot company ${input.hubspotCompanyId} wasn't found, so the prospect isn't linked — attach it manually.`;
-    } catch (err) {
-      // HubSpot unreachable at submit time — create the prospect unlinked
-      // rather than blocking prospect creation on a read-only enrichment call,
-      // but never silently: an unlinked application breaks the Phase F chain.
-      console.error("createProspectAction: HubSpot company link failed", input.hubspotCompanyId, err);
-      warning = "Prospect created, but the HubSpot company link could not be stamped — attach it manually.";
-    }
-  }
+  // A failed company read is a hard error, not the old soft warning: the deal
+  // hangs off this company (resolveDealForCompany needs a real companyId),
+  // so an application can no longer exist without one.
+  const company = await getCompanyProfile(input.hubspotCompanyId);
+  if (!company) throw new Error(`HubSpot company ${input.hubspotCompanyId} wasn't found.`);
+  const tenantLink = tenantLinkFromCompany(company, effective.userId);
+
+  const dealResolution = await resolveDealForCompany({ companyId: input.hubspotCompanyId, choice: input.deal });
+  if (!dealResolution.ok) throw new Error(dealResolution.message);
+
+  // Stamped from resolveDealForCompany's own `created` answer — the
+  // authoritative signal for whether this deal was just minted or already
+  // existed — never guessed from `input.deal.mode` alone. This is what
+  // buildDealProperties gates the dealname/amount writes on: an adopted deal
+  // must never have either overwritten.
+  const dealLink: DealLink = {
+    origin: dealResolution.created ? "created" : "adopted",
+    dealName: dealResolution.deal.name,
+    pipelineStageAtLink: dealResolution.deal.stageId,
+    linkedAt: now.toISOString(),
+    linkedByUserId: effective.userId,
+  };
 
   // A marketing-only quote has no processing behind it, so the whole rate half
   // is dropped rather than stored-but-ignored: a statement, a ticket/volume
@@ -281,6 +390,12 @@ export async function createProspectAction(input: {
       : null;
   const analysis = rated ? input.analysis ?? null : null;
 
+  // Server-side floor check — see assertMarginAboveFloor. A rep filling
+  // out the prospect form is exactly as capable of typing a below-floor
+  // number here as through the wizard, so this write path gets the same
+  // defence-in-depth backstop saveQuoteConfigurationAction has.
+  await assertMarginAboveFloor(quoteType, input.targetMargin, analysis, quoteConfig, effective.role);
+
   const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? []);
 
   // The same predicate the customer-facing render uses, so a quote can't be
@@ -289,17 +404,6 @@ export async function createProspectAction(input: {
   const hasQuote = hasQuoteBasis({
     quoteType, analysis, quoteConfig, targetMargin: null, pricingModel: null, quoteLines,
   });
-
-  // Only materialize a ProcessingInfo when HubSpot actually gave us something —
-  // an all-blank record would read as "the rep answered these" downstream.
-  const prefilledProcessing: ProcessingInfo | null =
-    prefill && Object.keys(prefill.processing).length
-      ? {
-          monthlyVolume: "", avgTicket: "", cardPresentPct: "", mcc: "",
-          businessDescription: "", previouslyTerminated: "no", bankruptcy: "no", currentProcessor: "",
-          ...prefill.processing,
-        }
-      : null;
 
   const app: MerchantApplication = {
     id: `prospect_${now.getTime()}`,
@@ -310,7 +414,9 @@ export async function createProspectAction(input: {
     // The link goes out with a quote already on it when the rep supplied a
     // basis; otherwise it's still the "upload your statement" link.
     stage: hasQuote ? "quote_sent" : "lead_link_sent",
-    hubspotDealId: null,
+    hubspotDealId: dealResolution.deal.id,
+    dealLink,
+    demo: null,
     tenantLink,
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -333,21 +439,13 @@ export async function createProspectAction(input: {
     customerLinkExpiresAt: link.expiresAt,
     analysis,
     proposal: null,
-    // HubSpot fills the blanks; what the rep actually typed always wins.
-    business: {
-      bizType: "llc",
-      address: "", city: "", state: "", zip: "", phone: "", website: "",
-      yearsInBusiness: "", annualRevenue: "",
-      ...prefill?.business,
-      legalName: input.merchantName, dba: input.merchantName,
-    },
-    ownerContact: {
-      firstName: "", lastName: "", title: "",
-      ...prefill?.ownerContact,
-      email: input.contactEmail || prefill?.ownerContact.email || "",
-      phone: input.contactPhone || prefill?.ownerContact.phone || "",
-    },
-    processing: prefilledProcessing,
+    // The rep's own reviewed values — no server-side HubSpot merge here
+    // anymore. They already saw the HubSpot prefill on screen (badged "from
+    // HubSpot") and either kept or overrode it; re-merging server-side would
+    // let a stale/overridden field silently revert to whatever HubSpot holds.
+    business: input.business,
+    ownerContact: input.ownerContact,
+    processing: input.processing ?? null,
     agreement: null,
   };
 
@@ -359,11 +457,11 @@ export async function createProspectAction(input: {
   const { emailResult, smsResult } = await deliverLeadLink(
     app.ownerContact!.email,
     link.url,
-    input.merchantName,
+    app.business?.dba || app.business?.legalName,
     app.ownerContact!.phone,
   );
 
-  return { app, linkUrl: link.url, warning, emailResult, smsResult };
+  return { app, linkUrl: link.url, emailResult, smsResult };
 }
 
 // ── The proposal wizard writes through the same derivation ──────────────────
@@ -382,6 +480,21 @@ export async function createProspectAction(input: {
  * This reads the stored row, replaces only the quoting fields, and re-derives
  * the lines from the picks against the live catalog (deriveQuoteLines, shared
  * with createProspectAction) — the browser never sends a price.
+ *
+ * This is also the ONE write path for a rep reworking an already-sent quote
+ * (the account-detail "Edit Quote" panel calls it too) — which is why the
+ * guard below lives here rather than in either caller's UI.
+ *
+ * Refuses once `quoteAcceptedAt` is set. `quoteLines`/`quoteConfig` are frozen
+ * at acceptance on purpose: they record what the merchant was actually quoted,
+ * and the gap between that frozen snapshot and the live billing state is the
+ * whole quoted-vs-actual comparison the admin view is built on. Worse,
+ * `publishBillingQuote.ts` carries `app.quoteLines` onto the published HubSpot
+ * quote VERBATIM, and a published HubSpot quote is a one-way door — no API
+ * edit, no delete, no void. So an edit after acceptance would either
+ * desynchronize our record from the document the merchant actually signed, or
+ * silently do nothing. A rep who needs to change terms after acceptance needs
+ * a new quote, not an edit to this one.
  */
 export async function saveQuoteConfigurationAction(input: {
   applicationId: string;
@@ -403,6 +516,15 @@ export async function saveQuoteConfigurationAction(input: {
   const app = await postgresStorage.getApplication(scope, input.applicationId);
   if (!app) throw new Error("Application not found");
 
+  if (app.quoteAcceptedAt) {
+    throw new Error(
+      "This quote was accepted on " + new Date(app.quoteAcceptedAt).toLocaleDateString() +
+      " and is frozen — it records what the merchant was actually quoted, and a published " +
+      "HubSpot billing quote can't be edited or voided through the API. Start a new quote " +
+      "instead of editing this one."
+    );
+  }
+
   const quoteType: QuoteType = input.quoteType ?? "full_pos";
   const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? []);
 
@@ -410,6 +532,14 @@ export async function saveQuoteConfigurationAction(input: {
     input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0
       ? input.quoteConfig
       : app.quoteConfig;
+
+  // Server-side floor check — see assertMarginAboveFloor. This action is
+  // the one write path for quote configuration (wizard + Edit Quote panel),
+  // so it's the one place this needs to live rather than duplicated per
+  // caller. `app.analysis` (not an input here — this action doesn't touch the
+  // statement) is the analysis half of the same volume precedence used
+  // elsewhere.
+  await assertMarginAboveFloor(quoteType, input.targetMargin, app.analysis, quoteConfig, effective.role);
 
   const updated: MerchantApplication = {
     ...app,

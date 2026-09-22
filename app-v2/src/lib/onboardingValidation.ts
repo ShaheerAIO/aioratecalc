@@ -130,3 +130,44 @@ export function validateOnboardingConsent(
 export function validateOnboardingSubmission(input: OnboardingSubmissionInput): OnboardingFieldErrors {
   return { ...validateOnboardingFields(input), ...validateOnboardingConsent(input.agreement) };
 }
+
+// ── Malformed-only checking (the rep's "Review What We Know" step) ─────────
+//
+// The rep step needs a different split than the rules above: a MALFORMED
+// value should block (it reaches the customer as fact, and 422s Adyen later),
+// but a merely MISSING one should only warn (the customer fills it in
+// themselves downstream). validateOnboardingFields conflates the two — every
+// required check above is "if blank, required-error; else if malformed,
+// malformed-error" — so the malformed branch never even runs for a blank
+// field.
+//
+// Rather than re-implement each format rule to tell "missing" from "wrong"
+// apart, stripBlanks swaps every required-but-blank field for a placeholder
+// that's ALREADY valid under that same rule (a real state code, a real ZIP
+// shape). The required branch stops firing because the field isn't blank
+// anymore, and the format branch trivially passes because the placeholder is
+// well-formed — so validateOnboardingFields(stripBlanks(input)) reports only
+// fields that are non-blank but wrong. No format rule is duplicated: each
+// placeholder is just a value the existing rule already accepts.
+//
+// legalName/address/city have no format check beyond "not blank", so any
+// non-blank placeholder clears them; state/zip need one that's also
+// well-formed. Optional fields (phone, website, ownerContact.email) are left
+// alone — they already produce no error when blank.
+const BLANK_PLACEHOLDER: Partial<Record<keyof BusinessInfo, string>> = {
+  legalName: "placeholder",
+  address: "placeholder",
+  city: "placeholder",
+  state: "CA",
+  zip: "00000",
+};
+
+export function stripBlanks(input: OnboardingValidationInput): OnboardingValidationInput {
+  const business: Partial<BusinessInfo> = { ...(input.business ?? {}) };
+  for (const key of Object.keys(BLANK_PLACEHOLDER) as Array<keyof BusinessInfo>) {
+    if (!s(business[key] as string | undefined)) {
+      (business as Record<string, string>)[key] = BLANK_PLACEHOLDER[key]!;
+    }
+  }
+  return { business, ownerContact: input.ownerContact };
+}

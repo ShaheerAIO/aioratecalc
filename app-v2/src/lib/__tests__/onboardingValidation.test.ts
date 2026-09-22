@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  stripBlanks,
   validateOnboardingConsent,
   validateOnboardingFields,
   validateOnboardingSubmission,
@@ -188,6 +189,41 @@ describe("validateOnboardingConsent", () => {
     // merchant's consent — the safe direction to be wrong in.
     expect(Object.keys(validateOnboardingConsent(withoutActor(CONSENT))))
       .toEqual(["agreement.consent"]);
+  });
+});
+
+// The rep step's "block on malformed, warn on missing" split — see the doc
+// comment on stripBlanks for the mechanism.
+describe("validateOnboardingFields(stripBlanks(input)) — malformed-only", () => {
+  it("reports nothing for a wholly blank business section", () => {
+    expect(validateOnboardingFields(stripBlanks({}))).toEqual({});
+  });
+
+  it("reports nothing when required fields are merely missing", () => {
+    const errors = validateOnboardingFields(stripBlanks({
+      business: { ...BUSINESS, legalName: "", address: "", city: "", state: "", zip: "" },
+    }));
+    expect(errors).toEqual({});
+  });
+
+  it("still reports a malformed state even though it's non-blank", () => {
+    const errors = validateOnboardingFields(stripBlanks({ business: { ...BUSINESS, state: "XX" } }));
+    expect(Object.keys(errors)).toEqual(["business.state"]);
+  });
+
+  it("still reports a malformed ZIP even though it's non-blank", () => {
+    const errors = validateOnboardingFields(stripBlanks({ business: { ...BUSINESS, zip: "bad" } }));
+    expect(Object.keys(errors)).toEqual(["business.zip"]);
+  });
+
+  it("still reports a malformed phone, website or owner email", () => {
+    expect(Object.keys(validateOnboardingFields(stripBlanks({ business: { ...BUSINESS, phone: "call the office" } })))).toEqual(["business.phone"]);
+    expect(Object.keys(validateOnboardingFields(stripBlanks({ business: { ...BUSINESS, website: "n/a" } })))).toEqual(["business.website"]);
+    expect(Object.keys(validateOnboardingFields(stripBlanks({ ownerContact: { ...OWNER, email: "nope" } })))).toEqual(["ownerContact.email"]);
+  });
+
+  it("passes a fully valid form with no errors at all", () => {
+    expect(validateOnboardingFields(stripBlanks({ business: BUSINESS, ownerContact: OWNER }))).toEqual({});
   });
 });
 

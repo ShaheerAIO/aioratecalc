@@ -262,7 +262,9 @@ export function getPaddedFloorRate(minMargin: number, padding: PaddingConfig): n
 
 export type RoleScopedPricing = DerivedPricing & {
   belowCostFloor: boolean;    // computed from the TRUE Adyen cost server-side; the cost itself is never derived from this flag
-  belowMarginFloor: boolean;  // target margin is below the (padded, for reps) min-margin floor — blocks proposal generation
+  belowMarginFloor: boolean;  // target margin is below the (padded, for reps) min-margin floor — blocks the client-side
+                              // save button (PricingStep.tsx, EditQuotePanel.tsx); the write-path backstop against the
+                              // TRUE floor lives server-side in actions/prospects.ts (assertMarginAboveTrueFloor)
   adyenCostRate: number | null; // null when hidden from this role (reps, per paddingAdyenCostHide)
   desiredMargin: number;      // per-tier default target (rep-visible)
   maxMargin: number;          // per-tier soft ceiling (rep-visible)

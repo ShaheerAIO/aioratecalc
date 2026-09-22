@@ -24,6 +24,20 @@ vi.mock("@/lib/adapters/hubspot", () => ({
   getCompanyOwnerContact: vi.fn(),
   getCompanyProfile: vi.fn(),
 }));
+// prospects.ts now imports getActivePaddingPolicy for the role-scoped floor
+// guard (assertMarginAboveFloor) — mocked so the real module (which pulls in
+// the server-only db client) is never loaded here. This suite doesn't
+// exercise that guard at all (resendLeadLinkAction never calls it).
+vi.mock("@/lib/actions/pricing", () => ({
+  getActivePaddingPolicy: vi.fn().mockResolvedValue({
+    paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
+  }),
+}));
+// prospects.ts now imports resolveDealForCompany for the Company & Deal
+// picker — mocked so the real module (which pulls in the server-only db
+// client) is never loaded here. This suite doesn't exercise deal resolution
+// at all (resendLeadLinkAction never calls it).
+vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany: vi.fn() }));
 
 const { resendLeadLinkAction } = await import("@/lib/actions/prospects");
 

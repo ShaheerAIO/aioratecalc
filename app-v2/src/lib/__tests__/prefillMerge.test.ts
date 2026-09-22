@@ -3,12 +3,13 @@ import {
   agreementToSubmit,
   customerOnboardInitial,
   flattenSections,
-  isFromHubspot,
-  mergeProspectPrefill,
-  prefillCarryoverLabels,
+  isFromHubspotField,
+  mergeChannels,
+  mergeReviewPrefill,
   recordedConsent,
-  NO_PREFILL_APPLIED,
-  type AppliedProspectPrefill,
+  NO_REVIEW_PREFILL_APPLIED,
+  type AppliedReviewFields,
+  type ReviewSections,
 } from "@/lib/prefillMerge";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import type { AgreementInfo, MerchantApplication, StatementAnalysis } from "@/types/merchant";
@@ -34,119 +35,124 @@ const BETA = prefill({
   fromHubspot: ["business.legalName", "business.dba", "ownerContact.email", "channels"],
 });
 
-const BLANK_FORM = { merchantName: "", contactEmail: "", channels: [] as string[] };
+const BLANK_SECTIONS: ReviewSections = {
+  business: {
+    legalName: "", dba: "", bizType: "llc", address: "", city: "", state: "", zip: "",
+    phone: "", website: "", yearsInBusiness: "", annualRevenue: "",
+  },
+  ownerContact: { firstName: "", lastName: "", title: "", email: "", phone: "" },
+  processing: {
+    monthlyVolume: "", avgTicket: "", cardPresentPct: "", mcc: "", businessDescription: "",
+    previouslyTerminated: "no", bankruptcy: "no", currentProcessor: "",
+  },
+};
 
 // ── Rep side: prefill vs. what the rep typed ────────────────────────────────
 
-describe("mergeProspectPrefill", () => {
+describe("mergeReviewPrefill", () => {
   it("fills a blank form from the prefill", () => {
-    const r = mergeProspectPrefill(BLANK_FORM, NO_PREFILL_APPLIED, ACME);
-    expect(r.merchantName).toBe("Acme Pizza");
-    expect(r.contactEmail).toBe("owner@acme.com");
-    expect(r.channels).toEqual(["website", "qr"]);
-    expect(r.applied).toEqual({ merchantName: "Acme Pizza", contactEmail: "owner@acme.com", channels: ["website", "qr"] });
-  });
-
-  it("falls back to dba when HubSpot had no legal name", () => {
-    const r = mergeProspectPrefill(BLANK_FORM, NO_PREFILL_APPLIED, prefill({ business: { dba: "Corner Cafe" } }));
-    expect(r.merchantName).toBe("Corner Cafe");
+    const r = mergeReviewPrefill(BLANK_SECTIONS, NO_REVIEW_PREFILL_APPLIED, ACME);
+    expect(r.values.business.legalName).toBe("Acme Pizza");
+    expect(r.values.business.city).toBe("Anaheim");
+    expect(r.values.ownerContact.email).toBe("owner@acme.com");
+    expect(r.applied).toEqual({
+      "business.legalName": "Acme Pizza", "business.dba": "Acme Pizza", "business.city": "Anaheim",
+      "ownerContact.email": "owner@acme.com",
+    });
   });
 
   it("never overwrites what the rep typed", () => {
-    const typed = { merchantName: "Acme Pizza LLC", contactEmail: "gm@acme.com", channels: [] as string[] };
-    const r = mergeProspectPrefill(typed, NO_PREFILL_APPLIED, ACME);
-    expect(r.merchantName).toBe("Acme Pizza LLC");
-    expect(r.contactEmail).toBe("gm@acme.com");
+    const typed: ReviewSections = {
+      ...BLANK_SECTIONS,
+      business: { ...BLANK_SECTIONS.business, legalName: "Acme Pizza LLC" },
+      ownerContact: { ...BLANK_SECTIONS.ownerContact, email: "gm@acme.com" },
+    };
+    const r = mergeReviewPrefill(typed, NO_REVIEW_PREFILL_APPLIED, ACME);
+    expect(r.values.business.legalName).toBe("Acme Pizza LLC");
+    expect(r.values.ownerContact.email).toBe("gm@acme.com");
     // Rep-owned now, so no "from HubSpot" hint and nothing for a later switch to replace.
-    expect(r.applied.merchantName).toBeUndefined();
-    expect(r.applied.contactEmail).toBeUndefined();
+    expect(r.applied["business.legalName"]).toBeUndefined();
+    expect(r.applied["ownerContact.email"]).toBeUndefined();
   });
 
   it("treats a whitespace-only field as blank, not as rep input", () => {
-    const r = mergeProspectPrefill({ ...BLANK_FORM, merchantName: "   " }, NO_PREFILL_APPLIED, ACME);
-    expect(r.merchantName).toBe("Acme Pizza");
+    const r = mergeReviewPrefill(
+      { ...BLANK_SECTIONS, business: { ...BLANK_SECTIONS.business, legalName: "   " } },
+      NO_REVIEW_PREFILL_APPLIED, ACME
+    );
+    expect(r.values.business.legalName).toBe("Acme Pizza");
   });
 
   it("replaces the previous company's values on a switch rather than merging", () => {
-    const first = mergeProspectPrefill(BLANK_FORM, NO_PREFILL_APPLIED, ACME);
-    const second = mergeProspectPrefill(first, first.applied, BETA);
-    expect(second.merchantName).toBe("Beta Tacos");
-    expect(second.contactEmail).toBe("hi@beta.com");
-    expect(second.channels).toEqual(["third_party_delivery"]);
+    const first = mergeReviewPrefill(BLANK_SECTIONS, NO_REVIEW_PREFILL_APPLIED, ACME);
+    const second = mergeReviewPrefill(first.values, first.applied, BETA);
+    expect(second.values.business.legalName).toBe("Beta Tacos");
+    expect(second.values.ownerContact.email).toBe("hi@beta.com");
+    expect(second.values.business.city).toBe(""); // BETA has no city → withdrawn
   });
 
   it("keeps rep edits across a company switch", () => {
-    const first = mergeProspectPrefill(BLANK_FORM, NO_PREFILL_APPLIED, ACME);
-    const edited = { ...first, contactEmail: "gm@acme.com" };
-    const second = mergeProspectPrefill(edited, first.applied, BETA);
-    expect(second.merchantName).toBe("Beta Tacos"); // untouched → follows HubSpot
-    expect(second.contactEmail).toBe("gm@acme.com"); // typed → the rep's
+    const first = mergeReviewPrefill(BLANK_SECTIONS, NO_REVIEW_PREFILL_APPLIED, ACME);
+    const edited: ReviewSections = { ...first.values, ownerContact: { ...first.values.ownerContact, email: "gm@acme.com" } };
+    const second = mergeReviewPrefill(edited, first.applied, BETA);
+    expect(second.values.business.legalName).toBe("Beta Tacos"); // untouched → follows HubSpot
+    expect(second.values.ownerContact.email).toBe("gm@acme.com"); // typed → the rep's
   });
 
+  it("withdraws what HubSpot filled when the company is cleared", () => {
+    const first = mergeReviewPrefill(BLANK_SECTIONS, NO_REVIEW_PREFILL_APPLIED, ACME);
+    const edited: ReviewSections = { ...first.values, ownerContact: { ...first.values.ownerContact, email: "gm@acme.com" } };
+    const cleared = mergeReviewPrefill(edited, first.applied, null);
+    expect(cleared.values.business.legalName).toBe("");
+    expect(cleared.values.ownerContact.email).toBe("gm@acme.com");
+    expect(cleared.applied).toEqual({});
+  });
+
+  it("leaves a field alone when HubSpot has nothing for it", () => {
+    const r = mergeReviewPrefill(BLANK_SECTIONS, NO_REVIEW_PREFILL_APPLIED, prefill({ business: { city: "Anaheim" } }));
+    expect(r.values.business.legalName).toBe("");
+    expect(r.applied["business.legalName"]).toBeUndefined();
+  });
+});
+
+describe("isFromHubspotField", () => {
+  const applied: AppliedReviewFields = { "business.legalName": "Acme Pizza" };
+
+  it("marks a field still showing the prefilled value", () => {
+    expect(isFromHubspotField(applied, "business.legalName", "Acme Pizza")).toBe(true);
+  });
+
+  it("stops marking it once the value differs", () => {
+    expect(isFromHubspotField(applied, "business.legalName", "Acme Pizza LLC")).toBe(false);
+  });
+
+  it("never marks a field HubSpot didn't fill", () => {
+    expect(isFromHubspotField(applied, "ownerContact.email", "")).toBe(false);
+  });
+});
+
+describe("mergeChannels", () => {
   it("keeps rep-ticked channels and replaces only the seeded ones", () => {
-    const first = mergeProspectPrefill(BLANK_FORM, NO_PREFILL_APPLIED, ACME);
-    const edited = { ...first, channels: [...first.channels, "phone_ai"] };
-    const second = mergeProspectPrefill(edited, first.applied, BETA);
+    const first = mergeChannels([], [], ACME.channels);
+    expect(first.channels).toEqual(["website", "qr"]);
+    const edited = [...first.channels, "phone_ai"];
+    const second = mergeChannels(edited, first.applied, BETA.channels);
     expect(second.channels).toEqual(["phone_ai", "third_party_delivery"]);
   });
 
   it("hands a channel to the rep when they ticked it themselves, so a later switch can't take it", () => {
-    const repTicked = { ...BLANK_FORM, channels: ["website"] };
-    const first = mergeProspectPrefill(repTicked, NO_PREFILL_APPLIED, ACME);
+    const first = mergeChannels(["website"], [], ACME.channels);
     expect(first.channels).toEqual(["website", "qr"]);
-    expect(first.applied.channels).toEqual(["qr"]);
-    const second = mergeProspectPrefill(first, first.applied, BETA);
+    expect(first.applied).toEqual(["qr"]);
+    const second = mergeChannels(first.channels, first.applied, BETA.channels);
     expect(second.channels).toEqual(["website", "third_party_delivery"]);
   });
 
-  it("withdraws what HubSpot filled when the company is cleared", () => {
-    const first = mergeProspectPrefill(BLANK_FORM, NO_PREFILL_APPLIED, ACME);
-    const edited = { ...first, contactEmail: "gm@acme.com" };
-    const cleared = mergeProspectPrefill(edited, first.applied, null);
-    expect(cleared.merchantName).toBe("");
-    expect(cleared.contactEmail).toBe("gm@acme.com");
+  it("withdraws HubSpot's channels when the company is cleared", () => {
+    const first = mergeChannels([], [], ACME.channels);
+    const cleared = mergeChannels(first.channels, first.applied, []);
     expect(cleared.channels).toEqual([]);
-    expect(cleared.applied).toEqual({ merchantName: undefined, contactEmail: undefined, channels: [] });
-  });
-
-  it("leaves a field alone when HubSpot has nothing for it", () => {
-    const r = mergeProspectPrefill(BLANK_FORM, NO_PREFILL_APPLIED, prefill({ business: { city: "Anaheim" } }));
-    expect(r.merchantName).toBe("");
-    expect(r.applied.merchantName).toBeUndefined();
-  });
-});
-
-describe("isFromHubspot", () => {
-  const applied: AppliedProspectPrefill = { merchantName: "Acme Pizza", channels: [] };
-
-  it("marks a field still showing the prefilled value", () => {
-    expect(isFromHubspot(applied, "merchantName", "Acme Pizza")).toBe(true);
-  });
-
-  it("stops marking it once the value differs", () => {
-    expect(isFromHubspot(applied, "merchantName", "Acme Pizza LLC")).toBe(false);
-  });
-
-  it("never marks a field HubSpot didn't fill", () => {
-    expect(isFromHubspot(applied, "contactEmail", "")).toBe(false);
-  });
-});
-
-describe("prefillCarryoverLabels", () => {
-  it("names only what isn't a visible field on the prospect form", () => {
-    expect(prefillCarryoverLabels(ACME.fromHubspot)).toEqual(["city"]);
-  });
-
-  it("collapses first and last name into one label", () => {
-    expect(prefillCarryoverLabels(["ownerContact.firstName", "ownerContact.lastName"])).toEqual(["owner name"]);
-  });
-
-  it("drops paths it has no label for rather than guessing", () => {
-    expect(prefillCarryoverLabels(["business.somethingNew"])).toEqual([]);
-  });
-
-  it("is empty when nothing came from HubSpot", () => {
-    expect(prefillCarryoverLabels([])).toEqual([]);
+    expect(cleared.applied).toEqual([]);
   });
 });
 
