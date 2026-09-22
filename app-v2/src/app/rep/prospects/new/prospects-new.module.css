@@ -1,10 +1,12 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
 
 .main {
-  max-width: 38rem;
+  max-width: 48rem;
   margin-inline: auto;
   padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
 }
+
+.row { margin-top: var(--space-lg); }
 
 .headerTitle {
   font-family: var(--font-display);

@@ -37,6 +37,8 @@ function newApp(): MerchantApplication {
     updatedAt: new Date().toISOString(),
     stage: "analysis",
     hubspotDealId: null,
+    dealLink: null,
+    demo: null,
     tenantLink: null,
     adyenIds: null,
     adyenOnboardingUrl: null,

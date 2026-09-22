@@ -1,0 +1,198 @@
+/* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
+
+.wrap { display: flex; flex-direction: column; gap: var(--space-md); }
+
+.lagNote {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.meta {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  margin: 0;
+}
+
+.field { display: flex; flex-direction: column; gap: var(--space-2xs); }
+
+.label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.input {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 150ms var(--ease-out);
+}
+
+.input:focus-visible {
+  border-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.inlineRow {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.inlineRow .input { flex: 1; }
+
+.smallBtn {
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms var(--ease-out);
+}
+
+.smallBtn:hover:not(:disabled) { background: var(--rule); }
+.smallBtn:disabled { opacity: 0.5; cursor: default; }
+.smallBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.ghostBtn {
+  align-self: flex-start;
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-text);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ghostBtn:hover { text-decoration: underline; }
+.ghostBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.list {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.list[data-nested="true"] { margin-top: var(--space-xs); }
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  border: none;
+  border-top: 1px solid var(--rule);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out);
+}
+
+.row:first-child { border-top: none; }
+.row:hover:not(:disabled) { background: var(--paper-2); }
+.row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.row:disabled { cursor: default; }
+
+.row[data-closed="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rowName {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+
+.error {
+  font-size: 0.85rem;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  line-height: 1.5;
+}
+
+/* ---------- Confirmed state ---------- */
+
+.confirmed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--success-bg);
+  border: 1px solid var(--success);
+  border-radius: var(--radius-sm);
+}
+
+.confirmedInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.confirmedName {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.confirmedMeta {
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+.changeBtn {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink-2);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2xs) var(--space-md);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.changeBtn:hover { background: var(--rule); }
+.changeBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+@media (max-width: 30rem) {
+  .inlineRow { flex-direction: column; }
+  .smallBtn { padding: var(--space-xs); }
+}

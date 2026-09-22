@@ -8,29 +8,38 @@ import ProductConfigurator, {
   type ConfiguredQuote,
   type ProductPick,
 } from "@/components/quoting/ProductConfigurator";
+import DealPicker, { type ResolvedDeal } from "@/components/rep/DealPicker";
+import ReviewSection from "@/components/rep/ReviewSection";
 import {
-  isFromHubspot,
-  mergeProspectPrefill,
-  prefillCarryoverLabels,
-  NO_PREFILL_APPLIED,
-  type AppliedProspectPrefill,
+  mergeChannels,
+  mergeReviewPrefill,
+  NO_REVIEW_PREFILL_APPLIED,
+  type AppliedReviewFields,
 } from "@/lib/prefillMerge";
+import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import { ORDER_POINT_CHANNELS, isProcessingQuote } from "@/lib/quoting";
 import { fmtPct2 } from "@/lib/utils";
-import type { PricingModel, QuoteType, StatementAnalysis } from "@/types/merchant";
+import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import type { TenantCompany } from "@/lib/adapters/hubspot";
 import styles from "./prospects-new.module.css";
 
 const MODELS: PricingModel[] = ["flat-rate", "2-tier", "interchange-plus"];
 
+const BLANK_BUSINESS: BusinessInfo = {
+  legalName: "", dba: "", bizType: "llc", address: "", city: "", state: "", zip: "",
+  phone: "", website: "", yearsInBusiness: "", annualRevenue: "",
+};
+const BLANK_OWNER: OwnerContact = { firstName: "", lastName: "", title: "", email: "", phone: "" };
+const BLANK_PROCESSING: ProcessingInfo = {
+  monthlyVolume: "", avgTicket: "", cardPresentPct: "", mcc: "", businessDescription: "",
+  previouslyTerminated: "no", bankruptcy: "no", currentProcessor: "",
+};
+
 function NewProspectFlow() {
   const searchParams = useSearchParams();
   const hubspotCompanyId = searchParams.get("hubspotCompanyId");
 
-  const [merchantName, setMerchantName] = useState("");
-  const [contactEmail, setContactEmail] = useState("");
-  const [contactPhone, setContactPhone] = useState("");
   const [avgTicket, setAvgTicket]       = useState("");
   const [monthlyVolume, setMonthlyVolume] = useState("");
   const [targetMargin, setTargetMargin] = useState(0.008);
@@ -39,7 +48,6 @@ function NewProspectFlow() {
   // until the rep opens it. The default above still applies while collapsed.
   const [internalOpen, setInternalOpen] = useState(false);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
-  const [linkWarning, setLinkWarning]   = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
   const [smsSent, setSmsSent]           = useState(false);
   const [copied, setCopied]             = useState(false);
@@ -53,31 +61,44 @@ function NewProspectFlow() {
   const [quoteType, setQuoteType] = useState<QuoteType>("full_pos");
   const [picks, setPicks]       = useState<ProductPick[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
+  const [channelsApplied, setChannelsApplied] = useState<string[]>([]);
   const [quote, setQuote]       = useState<ConfiguredQuote | null>(null);
 
   // A marketing-only quote has no processing behind it: no rate, no margin
-  // target, no statement. The server drops those fields for this type too — this
-  // is just not asking for them.
+  // target, no statement, no processing details in Review. The server drops
+  // those fields for this type too — this is just not asking for them.
   const rated = isProcessingQuote(quoteType);
 
-  // Phase F — deep link from the HubSpot Company record. Fetched server-side
-  // via the server action; failure here must never block the form, only show
-  // a non-blocking notice, so it's kept separate from `error` (which blocks
-  // submit).
+  // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
+  // prefilled from whatever HubSpot company is linked. Company is now a
+  // required part of this form (see the Company & Deal section below) rather
+  // than an optional deep-link enrichment — see prospects.ts's
+  // createProspectAction for why the rep's own edits win over a server-side
+  // re-merge on submit.
+  const [business, setBusiness] = useState<BusinessInfo>(BLANK_BUSINESS);
+  const [ownerContact, setOwnerContact] = useState<OwnerContact>(BLANK_OWNER);
+  const [processing, setProcessing] = useState<ProcessingInfo>(BLANK_PROCESSING);
+  const [reviewApplied, setReviewApplied] = useState<AppliedReviewFields>(NO_REVIEW_PREFILL_APPLIED);
+
   const [hubspotCompany, setHubspotCompany]   = useState<TenantCompany | null>(null);
   const [hubspotNotice, setHubspotNotice]     = useState<string | null>(null);
   const [prefill, setPrefill]                 = useState<ProspectPrefill | null>(null);
-  const [applied, setApplied]                 = useState<AppliedProspectPrefill>(NO_PREFILL_APPLIED);
   const [prefillLoading, setPrefillLoading]   = useState(false);
+
+  // The deal picked (or created) for the linked company — see DealPicker.
+  // Cleared whenever the company changes, since a deal belongs to exactly one
+  // company and a stale resolution from a previous company must not survive
+  // the switch.
+  const [dealResolved, setDealResolved] = useState<ResolvedDeal | null>(null);
 
   // Latest form values, so applying a prefill from an async callback merges
   // against what's on screen now rather than whatever was there when the fetch
   // started. Same ref-mirror trick ProductConfigurator uses for its emit.
-  const formRef    = useRef({ merchantName, contactEmail, channels });
-  const appliedRef = useRef(applied);
+  const formRef    = useRef({ business, ownerContact, processing, channels });
+  const appliedRef = useRef({ review: reviewApplied, channels: channelsApplied });
   useEffect(() => {
-    formRef.current = { merchantName, contactEmail, channels };
-    appliedRef.current = applied;
+    formRef.current = { business, ownerContact, processing, channels };
+    appliedRef.current = { review: reviewApplied, channels: channelsApplied };
   });
 
   // THE RULE (see prefillMerge.ts): HubSpot owns a field until the rep types in
@@ -85,16 +106,22 @@ function NewProspectFlow() {
   // they were recorded as HubSpot's — while anything the rep typed survives.
   // Passing null (company cleared / unreadable) withdraws what HubSpot filled.
   const applyPrefill = useCallback((next: ProspectPrefill | null) => {
-    const merged = mergeProspectPrefill(formRef.current, appliedRef.current, next);
-    setMerchantName(merged.merchantName);
-    setContactEmail(merged.contactEmail);
-    setChannels(merged.channels);
-    setApplied(merged.applied);
+    const { business: curBiz, ownerContact: curOwner, processing: curProc, channels: curChannels } = formRef.current;
+    const merged = mergeReviewPrefill({ business: curBiz, ownerContact: curOwner, processing: curProc }, appliedRef.current.review, next);
+    const channelsMerged = mergeChannels(curChannels, appliedRef.current.channels, next?.channels ?? []);
+
+    setBusiness(merged.values.business);
+    setOwnerContact(merged.values.ownerContact);
+    setProcessing(merged.values.processing);
+    setReviewApplied(merged.applied);
+    setChannels(channelsMerged.channels);
+    setChannelsApplied(channelsMerged.applied);
     setPrefill(next);
+
     // Kept in step immediately so two prefills in a row can't merge against a
     // pre-render snapshot.
-    formRef.current = { merchantName: merged.merchantName, contactEmail: merged.contactEmail, channels: merged.channels };
-    appliedRef.current = merged.applied;
+    formRef.current = { business: merged.values.business, ownerContact: merged.values.ownerContact, processing: merged.values.processing, channels: channelsMerged.channels };
+    appliedRef.current = { review: merged.applied, channels: channelsMerged.applied };
   }, []);
 
   useEffect(() => {
@@ -105,6 +132,7 @@ function NewProspectFlow() {
         if (cancelled) return;
         if (res.company) {
           setHubspotCompany(res.company);
+          setDealResolved(null);
           applyPrefill(res.prefill);
         }
         if (res.error) setHubspotNotice(res.error);
@@ -116,7 +144,7 @@ function NewProspectFlow() {
   // HubSpot deprecated classic CRM cards, so there's no "start from HubSpot"
   // button anymore — the flow inverts: start here, find the company. This is
   // a second way to set the SAME `hubspotCompany` state the deep link sets;
-  // everything downstream (prefill, badge, submit) is shared.
+  // everything downstream (prefill, badges, deal picker, submit) is shared.
   const [hubspotQuery, setHubspotQuery]         = useState("");
   const [hubspotResults, setHubspotResults]     = useState<TenantCompany[]>([]);
   const [hubspotSearching, setHubspotSearching] = useState(false);
@@ -149,6 +177,7 @@ function NewProspectFlow() {
     setHubspotNotice(null);
     setHubspotQuery("");
     setHubspotResults([]);
+    setDealResolved(null);
     setPrefillLoading(true);
     prefillRequestRef.current = company.id;
     getHubspotCompanyForProspectAction(company.id)
@@ -168,6 +197,7 @@ function NewProspectFlow() {
   const clearHubspotCompany = () => {
     setHubspotCompany(null);
     setHubspotNotice(null);
+    setDealResolved(null);
     prefillRequestRef.current = null;
     setPrefillLoading(false);
     applyPrefill(null);
@@ -185,7 +215,7 @@ function NewProspectFlow() {
   // A required line — the platform tier, or one of the always-included services
   // — is owed but the catalog didn't yield it. Blocks the save rather than
   // quietly shipping a quote with a hole in it; the server refuses it too.
-  const blockers = quote?.blockers ?? [];
+  const quoteBlockers = quote?.blockers ?? [];
 
   const handleFile = (f: File) => {
     setFile(f);
@@ -213,19 +243,40 @@ function NewProspectFlow() {
     r.readAsDataURL(f);
   };
 
+  // ── Block on malformed, warn on missing ─────────────────────────────────
+  // A malformed value is worse than an absent one — it reaches the customer as
+  // fact and 422s Adyen later — so it blocks. A merely missing (but otherwise
+  // fine) address/city/state/zip only warns: the customer fills it in
+  // themselves downstream, and this list IS the value of the step — it tells
+  // the rep exactly how much work they're pushing onto the customer.
+  // validateOnboardingFields is reused verbatim (see stripBlanks' doc comment
+  // in onboardingValidation.ts) — no rule is duplicated here.
+  const malformedErrors = validateOnboardingFields(stripBlanks({ business, ownerContact }));
+  const malformedMessages = Object.values(malformedErrors);
+
+  const missingWarnings: string[] = [];
+  if (!business.address.trim()) missingWarnings.push("street address");
+  if (!business.city.trim()) missingWarnings.push("city");
+  if (!business.state.trim()) missingWarnings.push("state");
+  if (!business.zip.trim()) missingWarnings.push("ZIP");
+
+  const hardBlocks: string[] = [];
+  if (!hubspotCompany) hardBlocks.push("Link a HubSpot company before sending this link.");
+  if (hubspotCompany && !dealResolved) hardBlocks.push("Pick or create a HubSpot deal for this company.");
+  if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name.");
+  if (!ownerContact.email.trim()) hardBlocks.push("Enter the customer's contact email.");
+  hardBlocks.push(...malformedMessages);
+  hardBlocks.push(...quoteBlockers);
+
   const submit = async () => {
-    if (!merchantName || !contactEmail) {
-      setError("Business name and contact email are required.");
-      return;
-    }
     const ticket = rated ? parseFloat(avgTicket) || 0 : 0;
     const volume = rated ? parseFloat(monthlyVolume) || 0 : 0;
     if ((ticket > 0) !== (volume > 0)) {
       setError("Enter both average ticket and monthly volume, or neither.");
       return;
     }
-    if (blockers.length) {
-      setError(blockers.join(" "));
+    if (hardBlocks.length) {
+      setError(hardBlocks.join(" "));
       return;
     }
     if (!rated && !picks.length) {
@@ -235,18 +286,19 @@ function NewProspectFlow() {
     setSaving(true);
     setError(null);
     try {
-      const { linkUrl, warning, emailResult, smsResult } = await createProspectAction({
-        merchantName, contactEmail, contactPhone: contactPhone || null, targetMargin, pricingModel, quoteType,
+      const { linkUrl, emailResult, smsResult } = await createProspectAction({
+        business, ownerContact, processing: rated ? processing : null,
+        targetMargin, pricingModel, quoteType,
         quoteConfig: ticket > 0 && volume > 0 ? { avgTicket: ticket, monthlyVolume: volume } : null,
         analysis: rated ? analysis : null,
         // Only the picks cross the wire — prices and the tier are re-derived
         // server-side against the live catalog.
         picks,
         channels,
-        hubspotCompanyId: hubspotCompany?.id ?? null,
+        hubspotCompanyId: hubspotCompany!.id,
+        deal: dealResolved!.choice,
       });
       setLinkUrl(linkUrl);
-      setLinkWarning(warning);
       setEmailSent(emailResult.sent);
       setSmsSent(smsResult?.sent ?? false);
     } catch (e) {
@@ -256,12 +308,13 @@ function NewProspectFlow() {
   };
 
   const reset = () => {
-    setMerchantName(""); setContactEmail(""); setContactPhone(""); setTargetMargin(0.008); setPricingModel("2-tier");
+    setTargetMargin(0.008); setPricingModel("2-tier");
     setAvgTicket(""); setMonthlyVolume(""); setFile(null); setAnalysis(null);
-    setQuoteType("full_pos"); setPicks([]); setChannels([]); setQuote(null);
-    setLinkUrl(null); setLinkWarning(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
-    setHubspotCompany(null); setHubspotNotice(null);
-    setPrefill(null); setApplied(NO_PREFILL_APPLIED); appliedRef.current = NO_PREFILL_APPLIED;
+    setQuoteType("full_pos"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
+    setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
+    setHubspotCompany(null); setHubspotNotice(null); setDealResolved(null);
+    setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
+    setPrefill(null); setReviewApplied(NO_REVIEW_PREFILL_APPLIED); appliedRef.current = { review: NO_REVIEW_PREFILL_APPLIED, channels: [] };
     setHubspotQuery(""); setHubspotResults([]); setHubspotSearchError(null);
   };
 
@@ -272,11 +325,8 @@ function NewProspectFlow() {
     ? (analysis?.totalVolume ?? 0) > 0 || (parseFloat(avgTicket) > 0 && parseFloat(monthlyVolume) > 0)
     : picks.length > 0;
 
-  // The prefill covers more than this form shows — createProspectAction stamps
-  // the rest onto the application server-side — so name what's riding along
-  // rather than letting the rep assume only the two visible fields carried.
-  const carriedOver = prefillCarryoverLabels(prefill?.fromHubspot ?? []);
-  const prefilledChannels = applied.channels.map(
+  const merchantName = business.dba || business.legalName;
+  const prefilledChannels = channelsApplied.map(
     id => ORDER_POINT_CHANNELS.find(c => c.id === id)?.label ?? id
   );
 
@@ -298,7 +348,6 @@ function NewProspectFlow() {
             </>
           )}
         </p>
-        {linkWarning && <div className={styles.error}>{linkWarning}</div>}
         <div className={`${styles.panel} ${styles.linkRow}`}>
           <code className={styles.linkCode}>{linkUrl}</code>
           <button
@@ -310,11 +359,11 @@ function NewProspectFlow() {
           </button>
         </div>
         <p className={styles.prefillNote}>
-          {emailSent ? `Emailed to ${contactEmail}.` : "Email delivery isn't configured yet — send this link yourself."}
+          {emailSent ? `Emailed to ${ownerContact.email}.` : "Email delivery isn't configured yet — send this link yourself."}
         </p>
-        {contactPhone && (
+        {ownerContact.phone && (
           <p className={styles.prefillNote}>
-            {smsSent ? `Texted to ${contactPhone}.` : "Text delivery isn't configured yet — send this link yourself."}
+            {smsSent ? `Texted to ${ownerContact.phone}.` : "Text delivery isn't configured yet — send this link yourself."}
           </p>
         )}
         <button onClick={reset} className={styles.btnGhost}>
@@ -328,66 +377,32 @@ function NewProspectFlow() {
     <div className={styles.main}>
       <h1 className={styles.headerTitle}>Send Customer a Quote Link</h1>
       <p className={styles.headerSubtitle}>
-        Set a margin target, then either prepare the quote yourself — with their ticket size and volume,
-        or their statement — or send the link bare and let them upload it. Either way they see a quote at
-        exactly this margin, with no cost breakdown and no account required.
+        Find the company and its deal in HubSpot, confirm what it already knows about the merchant,
+        then set a margin target and either prepare the quote yourself or send the link bare and let
+        them upload their own statement. Either way they see a quote at exactly this margin, with no
+        cost breakdown and no account required.
       </p>
 
-      {hubspotCompany && (
-        <p className={styles.hubspotBadge}>
-          Linked to HubSpot company: <strong>{hubspotCompany.name}</strong> ({hubspotCompany.id})
-          <button type="button" className={styles.hubspotBadgeClear} onClick={clearHubspotCompany} aria-label="Remove HubSpot link">
-            ×
-          </button>
-        </p>
-      )}
-      {hubspotNotice && (
-        <div className={styles.error}>
-          {hubspotCompany
-            ? `Couldn't read this company's details from HubSpot (${hubspotNotice}) — the link is saved, but nothing was prefilled.`
-            : `Couldn't load the linked HubSpot company (${hubspotNotice}) — continuing unlinked.`}
-        </div>
-      )}
-      {prefillLoading && <p className={styles.prefillNote}>Loading details from HubSpot…</p>}
-      {carriedOver.length > 0 && (
-        <p className={styles.prefillNote}>
-          Also carried onto their application from HubSpot: {carriedOver.join(", ")}. Anything you
-          change here wins.
-        </p>
-      )}
-      {prefilledChannels.length > 0 && (
-        <p className={styles.prefillNote}>
-          Ordering channels ticked below from HubSpot: {prefilledChannels.join(", ")}.
-        </p>
-      )}
-
+      {/* ── Section 1: Company & Deal ────────────────────────────────────── */}
       <div className={styles.panel}>
-        <div className={styles.field}>
-          <label className={styles.label}>
-            Business Name
-            {isFromHubspot(applied, "merchantName", merchantName) && (
-              <span className={styles.fromHubspot}>from HubSpot</span>
-            )}
-          </label>
-          <input value={merchantName} onChange={e => setMerchantName(e.target.value)} placeholder="Joe's Pizza" className={styles.input} />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label}>
-            Customer Contact Email
-            {isFromHubspot(applied, "contactEmail", contactEmail) && (
-              <span className={styles.fromHubspot}>from HubSpot</span>
-            )}
-          </label>
-          <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} placeholder="owner@business.com" className={styles.input} />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label}>Customer Phone (optional — also texts the link)</label>
-          <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="(555) 123-4567" className={styles.input} />
+        <div className={styles.sectionHead}>
+          <h2 className={styles.sectionTitle}>Company &amp; Deal</h2>
+          <p className={styles.sectionNote}>
+            Both are required — the customer link rides on the HubSpot deal the rep already owns,
+            rather than EasyOB minting a duplicate.
+          </p>
         </div>
 
-        {!hubspotCompany && (
+        {hubspotCompany ? (
+          <p className={styles.hubspotBadge}>
+            Linked to HubSpot company: <strong>{hubspotCompany.name}</strong> ({hubspotCompany.id})
+            <button type="button" className={styles.hubspotBadgeClear} onClick={clearHubspotCompany} aria-label="Remove HubSpot link">
+              ×
+            </button>
+          </p>
+        ) : (
           <div className={styles.field}>
-            <label className={styles.label}>Link HubSpot Company (optional)</label>
+            <label className={styles.label}>Search HubSpot companies</label>
             <input
               type="search"
               value={hubspotQuery}
@@ -396,9 +411,7 @@ function NewProspectFlow() {
               className={styles.input}
             />
             {hubspotSearchError && (
-              <div className={styles.error}>
-                Couldn&apos;t search HubSpot ({hubspotSearchError}) — you can still send this quote unlinked.
-              </div>
+              <div className={styles.error}>Couldn&apos;t search HubSpot ({hubspotSearchError}).</div>
             )}
             {!hubspotSearchError && hubspotQuery.trim().length >= 2 && (
               <div className={styles.hubspotResults}>
@@ -421,9 +434,54 @@ function NewProspectFlow() {
             )}
           </div>
         )}
+        {hubspotNotice && (
+          <div className={styles.error}>
+            {hubspotCompany
+              ? `Couldn't read this company's details from HubSpot (${hubspotNotice}) — nothing was prefilled below.`
+              : `Couldn't load that HubSpot company (${hubspotNotice}).`}
+          </div>
+        )}
+        {prefillLoading && <p className={styles.prefillNote}>Loading details from HubSpot…</p>}
+
+        {hubspotCompany && (
+          <div className={styles.row}>
+            <DealPicker
+              companyId={hubspotCompany.id}
+              companyName={hubspotCompany.name}
+              defaultDealName={merchantName || hubspotCompany.name}
+              resolved={dealResolved}
+              onResolved={setDealResolved}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Rate half. A marketing-only quote has no processing behind it, so there
+      {/* ── Section 2: Review What We Know ───────────────────────────────── */}
+      <div className={styles.sectionHead}>
+        <h2 className={styles.sectionTitle}>Review What We Know</h2>
+        <p className={styles.sectionNote}>
+          Prefilled from HubSpot where a field is badged &ldquo;from HubSpot&rdquo; — everything here
+          is editable, and whatever you change wins.
+        </p>
+      </div>
+      <ReviewSection
+        business={business}
+        ownerContact={ownerContact}
+        processing={processing}
+        applied={reviewApplied}
+        showProcessing={rated}
+        onBusinessChange={setBusiness}
+        onOwnerChange={setOwnerContact}
+        onProcessingChange={setProcessing}
+      />
+      {missingWarnings.length > 0 && (
+        <p className={styles.prefillNote}>
+          The customer will have to fill these in themselves: {missingWarnings.join(", ")}.
+        </p>
+      )}
+
+      {/* ── Section 3: Quote ─────────────────────────────────────────────── */}
+      {/* A marketing-only quote has no processing behind it, so there
           is nothing to price against a statement — the products ARE the quote. */}
       {rated && (
       <div className={styles.panel}>
@@ -495,6 +553,11 @@ function NewProspectFlow() {
         onChannelsChange={setChannels}
         onDerivedChange={setQuote}
       />
+      {prefilledChannels.length > 0 && (
+        <p className={styles.prefillNote}>
+          Ordering channels ticked above from HubSpot: {prefilledChannels.join(", ")}.
+        </p>
+      )}
 
       {rated && (
       <div className={styles.panel}>
@@ -540,7 +603,7 @@ function NewProspectFlow() {
         </div>
       )}
 
-      <button onClick={submit} disabled={saving || analyzing || blockers.length > 0} className={styles.btnPrimary}>
+      <button onClick={submit} disabled={saving || analyzing || hardBlocks.length > 0} className={styles.btnPrimary}>
         {saving ? "Creating…" : hasQuote ? "Create Quote Link →" : "Create Link →"}
       </button>
     </div>

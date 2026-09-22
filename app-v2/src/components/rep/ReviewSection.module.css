@@ -1,0 +1,112 @@
+/* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
+/* Shares field language with ApplyStep.module.css/CustomerOnboardStep.module.css. */
+
+/* Two panels side by side where there's room — the direct answer to the
+   "so much unused horizontal real estate" complaint on a single-column form;
+   Processing Details spans both columns since it's the longest panel. */
+.wrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg);
+}
+
+.wrap > .panel:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+.panel {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-lg);
+}
+
+.sectionTitle {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--ink);
+  margin: 0 0 var(--space-md);
+}
+
+.row { margin-top: var(--space-md); }
+.row:first-child { margin-top: 0; }
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+}
+
+.inlineRow { display: flex; gap: var(--space-lg); }
+
+.field { display: flex; flex-direction: column; }
+
+.label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--space-2xs);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2xs);
+  flex-wrap: wrap;
+}
+
+.input {
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 150ms var(--ease-out);
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.textarea { min-height: 5rem; resize: vertical; }
+
+/* ---------- Provenance hints ---------- */
+
+.badgeHubspot {
+  font-size: 0.62rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink-3);
+}
+
+.badgeUnknown {
+  font-size: 0.62rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  font-style: italic;
+  color: var(--ink-3);
+  opacity: 0.75;
+}
+
+@media (max-width: 48rem) {
+  .wrap { grid-template-columns: 1fr; }
+  .wrap > .panel:nth-child(3) { grid-column: auto; }
+}
+
+@media (max-width: 40rem) {
+  .grid2 { grid-template-columns: 1fr; }
+  .inlineRow { flex-direction: column; gap: var(--space-md); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input { transition-duration: 1ms; }
+}
