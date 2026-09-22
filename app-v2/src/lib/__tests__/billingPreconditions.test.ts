@@ -69,6 +69,8 @@ function app(extra: Partial<MerchantApplication> = {}): MerchantApplication {
     updatedAt: "2026-08-21T00:00:00.000Z",
     stage: "quote_accepted",
     hubspotDealId: "deal-1",
+    dealLink: null,
+    demo: null,
     // Linked by default: an unlinked account is its own refusal
     // (`no_tenant_company`), and leaving it null here would make every other
     // case in this file assert against two reasons instead of the one it tests.

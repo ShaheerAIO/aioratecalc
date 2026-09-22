@@ -69,6 +69,10 @@ export const appSettings = pgTable("app_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
   processors: jsonb("processors").$type<Processor[]>().notNull(),
   adyenConfig: jsonb("adyen_config").$type<AppSettings["adyenConfig"] | null>(),
+  // The org-wide demo-booking link (see AppSettings.demoBookingUrl). Admin-only
+  // to write — enforced in the Server Action, not here, since /rep/settings
+  // reads/writes this same row for processors/adyenConfig.
+  demoBookingUrl: text("demo_booking_url"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -83,6 +87,10 @@ export const merchantApplications = pgTable("merchant_applications", {
   customerUserId: uuid("customer_user_id").references(() => users.id),
   stage: text("stage").notNull(),
   hubspotDealId: text("hubspot_deal_id"),
+  // How this application got hubspotDealId — adopted an existing deal, or
+  // EasyOB created one. Null (every pre-adoption row) is read as "adopted"
+  // by buildDealProperties. See DealLink.
+  dealLink: jsonb("deal_link").$type<MerchantApplication["dealLink"]>(),
   // Phase 3 — links this ezacc to the HubSpot Company (AIO tenant). See TenantLink.
   tenantLink: jsonb("tenant_link").$type<MerchantApplication["tenantLink"]>(),
   adyenIds: jsonb("adyen_ids").$type<MerchantApplication["adyenIds"]>(),
@@ -99,6 +107,11 @@ export const merchantApplications = pgTable("merchant_applications", {
   // We never write the subscription or its invoices — HubSpot creates both when
   // the customer pays the quote (see E2E-PLAN.md).
   hubspotIds: jsonb("hubspot_ids").$type<MerchantApplication["hubspotIds"]>(),
+  // Demo-tracking state (see DemoState). A COLUMN, not a field inside
+  // hubspotIds: publishBillingQuote.ts claims the billing build by
+  // overwriting the whole hubspotIds blob wholesale, which would destroy
+  // demo state living inside it on the very first billing build.
+  demo: jsonb("demo").$type<MerchantApplication["demo"]>(),
   // What kind of quote this is — it decides which products may be on it, which
   // platform line was derived, and whether there's a processing rate at all.
   // Nullable because rows predate quote types; read those as "full_pos".

@@ -392,6 +392,13 @@ export type AppSettings = {
     balancePlatformApiKey: string;
     corsProxy?: string;
   };
+  // The org-wide demo-booking calendar link every merchant's checklist points
+  // at. A runtime-editable admin setting rather than an env var — AIO's
+  // booking calendar is moving into HubSpot but isn't live yet, so a human
+  // needs to be able to paste the link in later without a redeploy.
+  // Admin-only to write (see updateDemoBookingUrlAction in actions/applications.ts);
+  // optional/undefined for a settings object built before this field existed.
+  demoBookingUrl?: string | null;
 };
 
 // Check's own read of how far a company got through payroll onboarding.
@@ -425,6 +432,54 @@ export type FoodbuyIds = {
   generatedAt: string;
 };
 
+// The HubSpot deal an application is currently backed by, captured at the
+// moment a rep attaches it — either by ADOPTING a deal that already existed
+// in the rep's own pipeline, or by EasyOB CREATING a brand-new one. Mirrors
+// TenantLink's self-describing-snapshot shape below: it lets the app answer
+// "how did we get this deal" without a live HubSpot call.
+//
+// `origin` is what `buildDealProperties` (adapters/hubspot.ts) gates on to
+// decide whether `dealname`/`amount` may be written back:
+//   - "created" — EasyOB minted this deal itself, so it owns those fields.
+//   - "adopted" — the deal existed first; a rep has had it in the pipeline
+//     for weeks, with their own forecast in `amount` and a name a HubSpot
+//     portal workflow renames on its own schedule. EasyOB must never write
+//     either back onto an adopted deal.
+//
+// `dealName` is what the deal was called AT LINK TIME — for display only,
+// NEVER written back (see the "adopted" case above for why).
+//
+// A NULL `dealLink` is every row written before deal adoption existed. It is
+// read as "adopted" — the conservative default, since we genuinely don't
+// know whether EasyOB created this deal, and writing nothing is the only
+// safe assumption when we don't know what we own.
+export type DealLink = {
+  origin: "adopted" | "created";
+  dealName: string;
+  pipelineStageAtLink: string | null;
+  linkedAt: string;
+  linkedByUserId: string;
+};
+
+// The demo gate: whether a merchant's demo has happened, derived from
+// HubSpot meetings and/or a rep's manual mark. Lives on `src/lib/demo.ts`'s
+// pure `deriveDemoState`/`isDemoHeld` — this is just the shape, defined here
+// (not there) so it can sit on MerchantApplication; `demo.ts` re-exports it.
+export type DemoSource = "hubspot_meeting" | "manual";
+
+export type DemoState = {
+  bookedAt: string | null; // start of the next scheduled Demo meeting
+  heldAt: string | null;   // terminal once set — see deriveDemoState's rule 1
+  source: DemoSource | null;
+  meetingId: string | null;
+  meetingTitle: string | null;
+  outcome: string | null;
+  markedByUserId: string | null; // set only when source === "manual"
+  checkedAt: string | null;      // last time this state was (re)computed — the TTL
+  lastSyncError: string | null;
+  lastSyncErrorAt: string | null;
+};
+
 export type MerchantApplication = {
   id: string;
   ownerUserId: string; // the rep who owns this deal — distinct from ownerContact (merchant's contact)
@@ -433,6 +488,10 @@ export type MerchantApplication = {
   updatedAt: string;
   stage: DealStage;
   hubspotDealId: string | null;
+  // See DealLink above. Null (every pre-adoption row) reads as "adopted".
+  dealLink: DealLink | null;
+  // See DemoState above. Null until the first demo-status read/mark.
+  demo: DemoState | null;
   tenantLink: TenantLink | null; // Phase 3 — HubSpot Company (AIO tenant) this ezacc is linked to
   adyenIds: {
     legalEntityId: string | null;

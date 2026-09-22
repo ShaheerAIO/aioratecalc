@@ -40,15 +40,24 @@ export class PostgresAdapter implements IStorage {
 
   async getSettings(): Promise<AppSettings> {
     const [row] = await db.select().from(appSettings).limit(1);
-    if (!row) return { processors: [DEFAULT_PROCESSOR] };
-    return { processors: row.processors, adyenConfig: row.adyenConfig ?? undefined };
+    if (!row) return { processors: [DEFAULT_PROCESSOR], demoBookingUrl: null };
+    return { processors: row.processors, adyenConfig: row.adyenConfig ?? undefined, demoBookingUrl: row.demoBookingUrl ?? null };
   }
 
   async saveSettings(_scope: StorageScope, s: AppSettings): Promise<void> {
     // AppSettings (processors/adyenConfig) stays rep-editable — the admin-only
-    // padding/margin policy lives in a separate table (margin_policy).
+    // padding/margin policy lives in a separate table (margin_policy). The
+    // admin-only demoBookingUrl also lives in this row, but the write gate for
+    // IT is enforced one level up, in actions/applications.ts's
+    // saveSettingsAction/updateDemoBookingUrlAction — this method just persists
+    // whatever AppSettings it's handed.
     const [existing] = await db.select({ id: appSettings.id }).from(appSettings).limit(1);
-    const values = { processors: s.processors, adyenConfig: s.adyenConfig ?? null, updatedAt: new Date() };
+    const values = {
+      processors: s.processors,
+      adyenConfig: s.adyenConfig ?? null,
+      demoBookingUrl: s.demoBookingUrl ?? null,
+      updatedAt: new Date(),
+    };
     if (existing) {
       await db.update(appSettings).set(values).where(eq(appSettings.id, existing.id));
     } else {
