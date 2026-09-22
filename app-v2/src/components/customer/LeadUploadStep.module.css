@@ -1,32 +1,10 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
 
-.page {
-  min-height: 100dvh;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-body);
-}
-
-.container {
-  max-width: 40rem;
-  margin-inline: auto;
-  padding: var(--space-3xl) var(--space-lg);
-}
-
-.title {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: clamp(1.5rem, 1.8vw + 1rem, 1.9rem);
-  letter-spacing: -0.02em;
-  color: var(--ink);
-  margin: 0 0 var(--space-2xs);
-}
-
-.subtitle {
-  color: var(--ink-2);
-  font-size: 0.9rem;
-  line-height: 1.6;
-  margin: 0 0 var(--space-xl);
+/* Page title/subtitle/shell are owned by /lead/[token]/quote/page.tsx now —
+ * this component is just the dropzone + progress bar + toggle back to the
+ * prepared quote. */
+.formArea {
+  /* no styling of its own — spacing comes from the page around it */
 }
 
 /* ---------- Dropzone (shared language with rep UploadStep) ---------- */

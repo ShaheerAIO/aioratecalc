@@ -7,8 +7,14 @@ import type { QuoteLine } from "@/types/merchant";
 // what's under test is the wiring between them — a hand-rolled fake row shape
 // would have hidden both bugs this file covers (a marketing-only quote refused
 // as "no quote yet", and acceptance never reaching HubSpot at all).
+//
+// Under the mandatory-deal model a row reaches this route with a
+// `hubspotDealId` already on it (`createProspectAction` resolves one before
+// the row exists), so the deal sync here is PATCH-only (`syncDealFromApplication`,
+// formerly `pushToHubSpot`) — it is a no-op for the sole remaining exception, a
+// legacy row created before deal adoption existed.
 
-const pushToHubSpot = vi.fn();
+const syncDealFromApplication = vi.fn();
 const sendMagicLinkEmail = vi.fn();
 // The Phase E billing build is stubbed here and exercised for real in
 // leadAcceptBilling.test.ts — this file is about the acceptance wiring, and a
@@ -23,8 +29,8 @@ const loginTokens: Array<Record<string, unknown>> = [];
 
 // Minimal chainable stand-in for the three drizzle shapes this route uses:
 // select→from→where→limit, insert→values, and update→set→where — where the
-// update's `.where()` is both awaited directly (the hubspotDealId write) and
-// `.returning()`-ed (the acceptance write), so it's a promise carrying a method.
+// update's `.where()` is both awaited directly and `.returning()`-ed (the
+// acceptance write), so it's a promise carrying a method.
 const db = {
   select: () => ({ from: () => ({ where: () => ({ limit: async () => (row ? [row] : []) }) }) }),
   update: () => ({
@@ -46,7 +52,7 @@ vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 // only the network call is stubbed.
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
-  pushToHubSpot,
+  syncDealFromApplication,
 }));
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
 
@@ -65,6 +71,17 @@ const MARKETING_LINES: QuoteLine[] = [
   { name: "AIO Marketing Platform", hubspotProductId: "223152695997", qty: 1, unitPrice: 49, billingFrequency: "weekly", productType: "Software" },
 ];
 
+// Every acceptance test in this file is about what happens AFTER the demo
+// gate, so the row defaults to a held demo — the same posture as a customer
+// who reached the accept route for real, through the checklist. The
+// `demo_not_held` describe block below overrides this back to null.
+const HELD_DEMO = {
+  bookedAt: null, heldAt: "2026-08-10T18:00:00.000Z", source: "manual" as const,
+  meetingId: null, meetingTitle: null, outcome: null,
+  markedByUserId: "rep-1", checkedAt: "2026-08-10T18:00:00.000Z",
+  lastSyncError: null, lastSyncErrorAt: null,
+};
+
 function baseRow(extra: Partial<Row> = {}): Row {
   return {
     id: "prospect-1",
@@ -73,7 +90,14 @@ function baseRow(extra: Partial<Row> = {}): Row {
     createdAt: NOW,
     updatedAt: NOW,
     stage: "quote_sent",
-    hubspotDealId: null,
+    // A deal already on the row is the normal, new-model case — it's resolved
+    // at prospect creation, long before a customer ever reaches this route.
+    // Individual tests below override this to null to exercise the one
+    // remaining case that leaves: a legacy row from before deal adoption
+    // existed.
+    hubspotDealId: "deal-99",
+    dealLink: null,
+    demo: HELD_DEMO,
     tenantLink: { hubspotCompanyId: "334295287484", companyName: "Torta Palace", tenantRef: null, adyenAccountHolderId: null, linkedAt: NOW.toISOString(), linkedByUserId: "rep-1" },
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -111,14 +135,14 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 let logSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  pushToHubSpot.mockReset();
+  syncDealFromApplication.mockReset();
   sendMagicLinkEmail.mockReset();
   buildAndPublishBillingQuote.mockReset();
   buildAndPublishBillingQuote.mockResolvedValue({ status: "skipped", reason: "nothing_to_bill" });
   patches.length = 0;
   loginTokens.length = 0;
   row = baseRow();
-  pushToHubSpot.mockResolvedValue("deal-99");
+  syncDealFromApplication.mockResolvedValue("deal-99");
   sendMagicLinkEmail.mockResolvedValue({ sent: true, devUrl: null });
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -130,50 +154,49 @@ afterEach(() => {
 });
 
 describe("accepting a quote", () => {
-  it("pushes the deal to HubSpot and stores the id", async () => {
+  it("syncs the deal to HubSpot (PATCH-only) when one already exists", async () => {
     const res = await post();
     expect(res.status).toBe(200);
-    expect(pushToHubSpot).toHaveBeenCalledTimes(1);
-    // The stage the push carries is the accepted one, not the pre-acceptance
+    expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
+    // The stage the sync carries is the accepted one, not the pre-acceptance
     // row — the deal must land in HubSpot as accepted, not as quote_sent.
-    expect(pushToHubSpot.mock.calls[0][0].stage).toBe("quote_accepted");
-    expect(patches.some(p => p.hubspotDealId === "deal-99")).toBe(true);
+    expect(syncDealFromApplication.mock.calls[0][0].stage).toBe("quote_accepted");
+    // A PATCH can't change the id it's targeting — nothing to persist locally.
+    expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
   });
 
   it("still logs the customer in when HubSpot is down", async () => {
-    pushToHubSpot.mockRejectedValue(new Error("HUBSPOT_BILLING_PRIVATE_APP_TOKEN is not set"));
+    syncDealFromApplication.mockRejectedValue(new Error("HUBSPOT_BILLING_PRIVATE_APP_TOKEN is not set"));
     const res = await post();
     expect(res.status).toBe(200);
     expect(loginTokens).toHaveLength(1);
     expect(sendMagicLinkEmail).toHaveBeenCalled();
-    expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
   });
 
   it("accepts a marketing-only quote, whose basis is its priced lines", async () => {
     row = baseRow({ quoteType: "marketing_only", quoteConfig: null, quoteLines: MARKETING_LINES });
     const res = await post();
     expect(res.status).toBe(200);
-    expect(pushToHubSpot).toHaveBeenCalledTimes(1);
+    expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a marketing-only quote with no lines on it yet", async () => {
     row = baseRow({ quoteType: "marketing_only", quoteConfig: null, quoteLines: [] });
     const res = await post();
     expect(res.status).toBe(409);
-    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
   });
 
   it("re-opening an accepted link only re-issues the login, touching no CRM state", async () => {
     // "Email Me a New Link" comes through this same route. It means the
-    // merchant lost their login, nothing more — pushing again here created a
-    // second deal on any row whose first push was skipped or failed.
-    row = baseRow({ stage: "adyen_kyc_pending", quoteAcceptedAt: NOW, hubspotDealId: null });
+    // merchant lost their login, nothing more — syncing again here would be
+    // pointless CRM traffic for a no-op acceptance.
+    row = baseRow({ stage: "adyen_kyc_pending", quoteAcceptedAt: NOW, hubspotDealId: "deal-99" });
     const res = await post();
     expect(res.status).toBe(200);
     expect(loginTokens).toHaveLength(1);
-    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
     expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
-    expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
   });
 
   it("keeps the original acceptance timestamp and stage on a re-open", async () => {
@@ -183,28 +206,26 @@ describe("accepting a quote", () => {
     expect(row!.quoteAcceptedAt).toEqual(NOW);
   });
 
-  it("holds the deal push until a HubSpot company is linked", async () => {
-    // A deal's company association is only settable at create time, so a deal
-    // made now would be orphaned off the Company record for good.
-    row = baseRow({ tenantLink: null });
+  it("does nothing for a legacy row with no HubSpot deal at all", async () => {
+    // syncDealFromApplication has no CREATE branch any more — a null
+    // hubspotDealId is only reachable on a row from before deal adoption
+    // existed, and its recovery is adoptDealAction/linkTenantCompanyAction,
+    // never this route minting one on the fly.
+    row = baseRow({ hubspotDealId: null });
     const res = await post();
     expect(res.status).toBe(200);
     expect(loginTokens).toHaveLength(1); // the customer still gets in
-    expect(pushToHubSpot).not.toHaveBeenCalled();
-    expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
   });
 
-  it("still pushes an unlinked account that somehow already has a deal", async () => {
-    // That push is a PATCH, which carries no associations — nothing to orphan.
+  it("syncs regardless of whether a HubSpot company is linked — a PATCH needs no association", async () => {
     row = baseRow({ tenantLink: null, hubspotDealId: "deal-legacy" });
     await post();
-    expect(pushToHubSpot).toHaveBeenCalledTimes(1);
+    expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
   });
 
-  it("hands the billing build the deal id the acceptance push just created", async () => {
+  it("hands the billing build the row's existing deal id", async () => {
     await post();
-    // Not the stale row: without carrying the new id onto the local copy the
-    // quote build would refuse on `no_deal` (association 64) every first time.
     expect(buildAndPublishBillingQuote.mock.calls[0][0].hubspotDealId).toBe("deal-99");
     expect(buildAndPublishBillingQuote.mock.calls[0][1]).toEqual({ acceptedByEmail: "ana@tortapalace.com" });
   });
@@ -223,6 +244,24 @@ describe("accepting a quote", () => {
     row = baseRow({ quoteConfig: null });
     const res = await post();
     expect(res.status).toBe(409);
-    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
+  });
+});
+
+describe("the demo gate", () => {
+  it("refuses acceptance before the demo is held, even with a quote basis on the row", async () => {
+    row = baseRow({ demo: null });
+    const res = await post();
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("demo_not_held");
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
+  });
+
+  it("accepts once the demo is held", async () => {
+    row = baseRow({ demo: { ...HELD_DEMO } });
+    const res = await post();
+    expect(res.status).toBe(200);
   });
 });

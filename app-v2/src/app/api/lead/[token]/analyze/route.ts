@@ -5,6 +5,7 @@ import { merchantApplications } from "@/lib/db/schema";
 import { analyzeStatement } from "@/lib/claude";
 import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
+import { isDemoHeld } from "@/lib/demo";
 import { isProcessingQuote, quoteTypeOf } from "@/lib/quoting";
 import type { StatementAnalysis } from "@/types/merchant";
 
@@ -27,6 +28,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     }
     if (row.customerLinkExpiresAt && row.customerLinkExpiresAt.getTime() < Date.now()) {
       return NextResponse.json({ error: "This link has expired" }, { status: 410 });
+    }
+
+    // This route RETURNS a CustomerSafeQuote — the analysis it produces IS the
+    // rate the demo gate exists to withhold. Without this, a customer who
+    // never held a demo could POST a statement straight to this route and
+    // read their rate out of the response, bypassing the page-level gate
+    // entirely (the page never calls buildCustomerSafeQuote pre-demo, but
+    // nothing stopped a direct POST here from doing it anyway).
+    if (!isDemoHeld(row.demo)) {
+      return NextResponse.json({ error: "demo_not_held" }, { status: 409 });
     }
 
     // A marketing-only quote has no processing behind it, so there is nothing a

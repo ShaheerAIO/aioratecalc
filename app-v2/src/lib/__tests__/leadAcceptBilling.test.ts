@@ -14,7 +14,7 @@ import type { CatalogProduct, HubspotIds, QuoteLine } from "@/types/merchant";
 // leadAccept.test.ts stubs this whole module out and covers the acceptance
 // wiring instead. The two files are deliberately separate.
 
-const pushToHubSpot = vi.fn();
+const syncDealFromApplication = vi.fn();
 const sendMagicLinkEmail = vi.fn();
 const ensureQuoteContact = vi.fn();
 const createQuoteLineItems = vi.fn();
@@ -84,7 +84,7 @@ vi.mock("@/lib/actions/quoteTemplates", () => ({ getQuoteTemplatePolicy }));
 // Partial mock: the pure builders stay real, only the network calls are stubbed.
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
-  pushToHubSpot,
+  syncDealFromApplication,
   ensureQuoteContact,
   createQuoteLineItems,
   deleteQuoteLineItem,
@@ -101,6 +101,15 @@ const { rowToApp } = await import("@/lib/storage/applicationRow");
 
 const TOKEN = "tok-1";
 const NOW = new Date("2026-08-21T19:49:38.000Z");
+
+// Every case here is post-demo — the demo gate itself is covered in
+// leadAccept.test.ts, not re-tested against the full billing graph.
+const HELD_DEMO = {
+  bookedAt: null, heldAt: "2026-08-10T18:00:00.000Z", source: "manual" as const,
+  meetingId: null, meetingTitle: null, outcome: null,
+  markedByUserId: "rep-1", checkedAt: "2026-08-10T18:00:00.000Z",
+  lastSyncError: null, lastSyncErrorAt: null,
+};
 
 // The clock is pinned: the fixture row carries a fixed customerLinkExpiresAt,
 // and against a real clock every case in this file silently turned into a 410
@@ -165,6 +174,7 @@ function baseRow(extra: Partial<Row> = {}): Row {
     updatedAt: NOW,
     stage: "quote_sent",
     hubspotDealId: "deal-99",
+    demo: HELD_DEMO,
     // Linked: nothing is built for an account without a HubSpot company, so
     // every graph case below would otherwise short-circuit before the first
     // call. The unlinked case is asserted on its own.
@@ -240,7 +250,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   for (const fn of [
-    pushToHubSpot, sendMagicLinkEmail, ensureQuoteContact, createQuoteLineItems,
+    syncDealFromApplication, sendMagicLinkEmail, ensureQuoteContact, createQuoteLineItems,
     deleteQuoteLineItem, createDraftQuote, associateQuote, associateDealToContact,
     publishQuote, listProducts, getQuoteTemplatePolicy,
   ]) fn.mockReset();
@@ -249,7 +259,7 @@ beforeEach(() => {
   loginTokens.length = 0;
   row = baseRow();
 
-  pushToHubSpot.mockResolvedValue("deal-99");
+  syncDealFromApplication.mockResolvedValue("deal-99");
   sendMagicLinkEmail.mockResolvedValue({ sent: true, devUrl: null });
   listProducts.mockResolvedValue([PLATFORM, POS, REVIEWABLE]);
   getQuoteTemplatePolicy.mockResolvedValue({
@@ -479,11 +489,15 @@ describe("auto-publishing the billing quote on acceptance", () => {
     expect(ids.lastSyncError).toContain("Mystery Ordering Device");
   });
 
-  it("refuses when the deal push failed, so there is nothing to associate 64 to", async () => {
+  it("refuses when there's no deal at all, so there is nothing to associate 64 to", async () => {
+    // Under the mandatory-deal model this is only reachable on a legacy row
+    // (from before deal adoption existed) — `syncDealFromApplication` has no
+    // CREATE branch any more, so a null hubspotDealId is never an attempted-
+    // and-failed push, it's simply nothing to sync at all.
     row = baseRow({ hubspotDealId: null });
-    pushToHubSpot.mockRejectedValue(new Error("HUBSPOT_BILLING_PRIVATE_APP_TOKEN is not set"));
     const res = await post();
     expect(res.status).toBe(200);
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
     expect(billingCallCount()).toBe(0);
     expect(storedIds()!.lastSyncError).toContain("refused before any HubSpot write");
     expect(storedIds()!.lastSyncError).toContain("isn't in HubSpot yet");
@@ -493,7 +507,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
     row = baseRow({ tenantLink: null, hubspotDealId: null });
     const res = await post();
     expect(res.status).toBe(200);
-    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
     expect(billingCallCount()).toBe(0);
     // Crucially NOT a persisted sync error: waiting on a rep to link the
     // company is the normal state of a fresh account, and counting it as a

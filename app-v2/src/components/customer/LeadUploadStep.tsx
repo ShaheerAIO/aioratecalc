@@ -6,11 +6,15 @@ import { prepareStatement, postStatement, type PreparedStatement } from "@/lib/s
 import LeadQuoteView from "./LeadQuoteView";
 import styles from "./LeadUploadStep.module.css";
 
-// The public lead flow's client shell. Two entries into the same destination:
-// a quote the rep prepared arrives as `preparedQuote` and renders immediately,
-// and a customer who has none uploads a statement to generate one. Both end on
-// LeadQuoteView. The quote is always a CustomerSafeQuote — this component never
-// sees the raw analysis.
+// The public lead flow's client shell — reached at /lead/[token]/quote, which
+// owns the page title/subtitle/back-to-checklist chrome. This component is
+// pared to the dropzone + progress bar + the toggle between the upload form
+// and LeadQuoteView; it doesn't render its own page shell.
+//
+// Two entries into the same destination: a quote the rep prepared arrives as
+// `preparedQuote` and renders immediately, and a customer who has none
+// uploads a statement to generate one. Both end on LeadQuoteView. The quote
+// is always a CustomerSafeQuote — this component never sees the raw analysis.
 type Props = {
   token: string;
   businessName: string | null;
@@ -109,88 +113,79 @@ export default function LeadUploadStep({
   };
 
   return (
-    <div className={styles.page}>
-      <div className={styles.container}>
-        <h1 className={styles.title}>
-          {businessName ? `Hi ${businessName}, upload your statement` : "Upload Your Statement"}
-        </h1>
-        <p className={styles.subtitle}>
-          Upload a recent processing statement (PDF or image) and get an instant estimate of your savings with AIO.
-        </p>
-
-        <div
-          className={styles.dropzone}
-          data-state={dropzoneState}
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-          onClick={() => { if (!busy) fileRef.current?.click(); }}
-        >
-          <input ref={fileRef} type="file" accept=".pdf,image/*" className={styles.fileInput} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-          {file ? (
-            <>
-              <div className={styles.dropzoneIcon} data-state="done">✓</div>
-              <p className={styles.dropzoneTitle} data-state="done">{file.name}</p>
-              <p className={styles.dropzoneSubtitle}>
-                {phase === "preparing" ? "Optimizing…" : "Click to replace"}
-              </p>
-            </>
-          ) : (
-            <>
-              <div className={styles.dropzoneIcon}>⬆</div>
-              <p className={styles.dropzoneTitle}>Drop statement here or click to browse</p>
-              <p className={styles.dropzoneSubtitle}>PDF or image · Any processor format</p>
-            </>
-          )}
-        </div>
-
-        {error && (
-          <div className={styles.error}>
-            {error}
-          </div>
-        )}
-
-        <button
-          className={styles.btnPrimary}
-          disabled={!prepared || busy}
-          onClick={analyze}
-        >
-          {buttonLabel()}
-        </button>
-
-        {/* Only the upload half is measurable. Once the bytes are gone the bar
-            goes indeterminate rather than faking server-side progress. */}
-        {(phase === "uploading" || phase === "analyzing") && (
+    <div className={styles.formArea}>
+      <div
+        className={styles.dropzone}
+        data-state={dropzoneState}
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+        onClick={() => { if (!busy) fileRef.current?.click(); }}
+      >
+        <input ref={fileRef} type="file" accept=".pdf,image/*" className={styles.fileInput} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+        {file ? (
           <>
-            <div
-              className={styles.progress}
-              role="progressbar"
-              aria-label="Analyzing your statement"
-              {...(phase === "uploading"
-                ? { "aria-valuenow": uploadPct, "aria-valuemin": 0, "aria-valuemax": 100 }
-                : {})}
-            >
-              <div
-                className={styles.progressBar}
-                data-indeterminate={phase === "analyzing"}
-                style={phase === "uploading" ? { width: `${uploadPct}%` } : undefined}
-              />
-            </div>
-            <p className={styles.status} aria-live="polite">
-              {phase === "uploading" ? `Uploading… ${uploadPct}%` : "Reading your statement…"}
+            <div className={styles.dropzoneIcon} data-state="done">✓</div>
+            <p className={styles.dropzoneTitle} data-state="done">{file.name}</p>
+            <p className={styles.dropzoneSubtitle}>
+              {phase === "preparing" ? "Optimizing…" : "Click to replace"}
             </p>
-            {phase === "analyzing" && (
-              <p className={styles.statusHint}>Pulling out your volume, fees, and effective rate.</p>
-            )}
+          </>
+        ) : (
+          <>
+            <div className={styles.dropzoneIcon}>⬆</div>
+            <p className={styles.dropzoneTitle}>Drop statement here or click to browse</p>
+            <p className={styles.dropzoneSubtitle}>PDF or image · Any processor format</p>
           </>
         )}
-
-        {preparedQuote && (
-          <button className={styles.btnGhostLink} onClick={() => setQuote(preparedQuote)}>
-            ← Back to my quote
-          </button>
-        )}
       </div>
+
+      {error && (
+        <div className={styles.error}>
+          {error}
+        </div>
+      )}
+
+      <button
+        className={styles.btnPrimary}
+        disabled={!prepared || busy}
+        onClick={analyze}
+      >
+        {buttonLabel()}
+      </button>
+
+      {/* Only the upload half is measurable. Once the bytes are gone the bar
+          goes indeterminate rather than faking server-side progress. */}
+      {(phase === "uploading" || phase === "analyzing") && (
+        <>
+          <div
+            className={styles.progress}
+            role="progressbar"
+            aria-label="Analyzing your statement"
+            {...(phase === "uploading"
+              ? { "aria-valuenow": uploadPct, "aria-valuemin": 0, "aria-valuemax": 100 }
+              : {})}
+          >
+            <div
+              className={styles.progressBar}
+              data-indeterminate={phase === "analyzing"}
+              style={phase === "uploading" ? { width: `${uploadPct}%` } : undefined}
+            />
+          </div>
+          <p className={styles.status} aria-live="polite">
+            {phase === "uploading" ? `Uploading… ${uploadPct}%` : "Reading your statement…"}
+          </p>
+          {phase === "analyzing" && (
+            <p className={styles.statusHint}>Pulling out your volume, fees, and effective rate.</p>
+          )}
+        </>
+      )}
+
+      {preparedQuote && (
+        <button className={styles.btnGhostLink} onClick={() => setQuote(preparedQuote)}>
+          ← Back to my quote
+        </button>
+      )}
     </div>
   );
 }

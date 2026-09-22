@@ -5,9 +5,10 @@ import { db } from "@/lib/db/client";
 import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
-import { canPushToHubSpot, pushToHubSpot } from "@/lib/adapters/hubspot";
+import { syncDealFromApplication } from "@/lib/adapters/hubspot";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import { hasQuoteBasis } from "@/lib/leadQuote";
+import { isDemoHeld } from "@/lib/demo";
 import { rowToApp } from "@/lib/storage/applicationRow";
 
 const TOKEN_TTL_MINUTES = 30;
@@ -33,6 +34,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     }
     if (row.customerLinkExpiresAt && row.customerLinkExpiresAt.getTime() < Date.now()) {
       return NextResponse.json({ error: "This link has expired" }, { status: 410 });
+    }
+    // The quote is withheld until the demo is held — same rule as the
+    // checklist page and /lead/[token]/quote, and enforced here too because
+    // acceptance is itself a disclosure: accepting freezes (and later
+    // publishes) a quote the customer isn't supposed to have seen yet. A
+    // customer who never got past the checklist gate has no legitimate way to
+    // reach this route pre-demo, so this is a backstop, not the primary gate.
+    if (!isDemoHeld(row.demo)) {
+      return NextResponse.json({ error: "demo_not_held" }, { status: 409 });
     }
     // Nothing to accept until a quote exists on the application. The whole row
     // goes in, not a hand-picked subset: a marketing-only quote's basis is its
@@ -73,37 +83,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       if (updated) accepted = updated;
     }
 
-    // Acceptance is the moment the deal becomes real, so it's the moment it
-    // belongs in HubSpot — the push used to happen only when the merchant later
-    // submitted the onboarding form, so a merchant who accepted and then stopped
-    // at the checklist left no trace in the CRM at all.
+    // Acceptance is the moment the deal becomes real in HubSpot's eyes, so
+    // it's the moment its stage moves there — the sync used to happen only
+    // when the merchant later submitted the onboarding form, so a merchant who
+    // accepted and then stopped at the checklist left no trace in the CRM.
     //
-    // Unless no HubSpot Company is linked yet, in which case it waits: a deal's
-    // company association can only be set when the deal is created, so one
-    // pushed now would float loose in the portal, off the Company record and
-    // unattachable afterwards. `linkTenantCompanyAction` does this push itself
-    // the moment a rep or admin supplies the company.
+    // PATCH-only, and a no-op when there's no deal at all: under the
+    // mandatory-deal model every new row is created with `hubspotDealId`
+    // already set (`createProspectAction` resolves it through
+    // `resolveDealForCompany` before the row ever exists), so this is only
+    // ever skipped for a legacy row from before deal adoption existed.
+    // Recovery for one of those is `adoptDealAction`/`linkTenantCompanyAction`,
+    // never this route minting a deal on the fly.
     //
-    // Fire-and-log, like the pushes in lib/actions/customer.ts: the customer is
+    // Fire-and-log, like the syncs in lib/actions/customer.ts: the customer is
     // waiting on their login email, and a HubSpot outage must not cost them the
     // acceptance we've already recorded.
-    if (firstAcceptance) {
-      if (!canPushToHubSpot(rowToApp(accepted))) {
-        console.log(`[hubspot] ${accepted.id}: deal push deferred — no HubSpot company linked to this account yet`);
-      } else {
-        try {
-          const dealId = await pushToHubSpot(rowToApp(accepted));
-          if (dealId !== accepted.hubspotDealId) {
-            await db.update(merchantApplications)
-              .set({ hubspotDealId: dealId, updatedAt: new Date() })
-              .where(eq(merchantApplications.id, accepted.id));
-            // Carried onto the local row so the billing build below sees the
-            // deal it needs: the quote can't publish without association 64.
-            accepted = { ...accepted, hubspotDealId: dealId };
-          }
-        } catch (err) {
-          console.error("HubSpot deal sync on acceptance failed:", err instanceof Error ? err.message : err);
-        }
+    if (firstAcceptance && accepted.hubspotDealId) {
+      try {
+        await syncDealFromApplication(rowToApp(accepted));
+      } catch (err) {
+        console.error("HubSpot deal sync on acceptance failed:", err instanceof Error ? err.message : err);
       }
     }
 
