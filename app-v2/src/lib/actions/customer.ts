@@ -24,8 +24,12 @@ import {
   getCheckOnboardStatus,
   type PayrollSigner,
 } from "@/lib/adapters/check";
-import { canPushToHubSpot, findSubscriptionsForQuote, getQuoteSnapshot, pushToHubSpot } from "@/lib/adapters/hubspot";
+import {
+  findSubscriptionsForQuote, getQuoteSnapshot, syncDealFromApplication,
+  getDealById, listMeetingsForDeal, listDemoMeetingsForCompany,
+} from "@/lib/adapters/hubspot";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
+import { refreshDemoStatus as syncDemoStatus } from "@/lib/demoSync";
 import {
   validateOnboardingFields,
   validateOnboardingSubmission,
@@ -230,31 +234,26 @@ async function advanceAdyenOnboarding(
 // because onboarding hasn't started. `fieldErrors` (validation, the customer can
 // fix it) and `adyenFailed` (our side broke) are separate outcomes and the form
 // renders them differently.
-// The deal push both customer-side saves make, best-effort as they always were
+// The deal sync both customer-side saves make, best-effort as it always was
 // — the merchant is mid-form and a HubSpot outage must not cost them the save.
 //
-// Skipped entirely until the account is linked to its HubSpot Company: a deal's
-// company association is only settable when the deal is created, so creating
-// one now would strand it off the Company record permanently. An account that
-// already HAS a deal keeps syncing (that path is a PATCH). The deferred create
-// happens in linkTenantCompanyAction the moment a rep or admin links the
-// company.
-async function syncDealBestEffort(
-  userId: string,
-  id: string,
-  app: MerchantApplication
-): Promise<MerchantApplication> {
-  if (!canPushToHubSpot(app)) {
-    console.log(`[hubspot] ${id}: deal push deferred — no HubSpot company linked to this account yet`);
-    return app;
-  }
+// PATCH-only: `syncDealFromApplication` never creates a deal, so this simply
+// does nothing for an application with no `hubspotDealId` yet. Under the
+// mandatory-deal model that's only ever a legacy row from before deal
+// adoption existed — every new row carries a deal from the moment
+// `createProspectAction` saves it — and its recovery is `adoptDealAction`/
+// `linkTenantCompanyAction`'s repair path, not this function creating one on
+// the fly. Nothing to persist locally on success either: the sync only
+// changes HubSpot's copy of the deal, never `hubspotDealId` itself (a PATCH
+// can't change the id it's targeting).
+async function syncDealBestEffort(app: MerchantApplication): Promise<MerchantApplication> {
+  if (!app.hubspotDealId) return app;
   try {
-    const dealId = await pushToHubSpot(app);
-    return await postgresStorage.updateApplicationAsCustomer(userId, id, { hubspotDealId: dealId });
+    await syncDealFromApplication(app);
   } catch (err) {
     console.error("HubSpot sync not available yet:", err instanceof Error ? err.message : err);
-    return app;
   }
+  return app;
 }
 
 export async function saveMyApplicationOnboardingAction(
@@ -304,7 +303,7 @@ export async function saveMyApplicationOnboardingAction(
     }
   }
 
-  app = await syncDealBestEffort(userId, id, app);
+  app = await syncDealBestEffort(app);
 
   return { app, adyenReady, fieldErrors: hasFieldErrors ? errors : null, adyenFailed };
 }
@@ -360,7 +359,7 @@ export async function updateMyApplicationDetailsAction(
     }
   }
 
-  app = await syncDealBestEffort(userId, id, app);
+  app = await syncDealBestEffort(app);
 
   return { app, adyenSynced, fieldErrors: hasFieldErrors ? errors : null, adyenFailed };
 }
@@ -452,6 +451,29 @@ export async function markFoodbuyFormGeneratedAction(id: string): Promise<Mercha
 
   return postgresStorage.updateApplicationAsCustomer(userId, id, {
     foodbuyIds: { generatedAt: new Date().toISOString() },
+  });
+}
+
+// ── Demo tracking ────────────────────────────────────────────────────────────
+
+// The TTL/terminal-heldAt/always-write/swallow-failures rules live in
+// lib/demoSync.ts — shared with the public /lead/[token] checklist host,
+// which injects a token-scoped persist instead of this customer-session-
+// scoped one. Don't re-derive the rules here; see that file's comment.
+async function refreshDemoStatus(
+  userId: string,
+  id: string,
+  app: MerchantApplication
+): Promise<MerchantApplication> {
+  return syncDemoStatus(app, {
+    // Thunked, not passed directly: demoSync's own early-returns (no deal yet,
+    // already held, within the TTL) mean these are often never invoked at
+    // all, and a direct reference here would still touch the import binding
+    // eagerly on every call regardless of whether demoSync ends up using it.
+    getDeal: dealId => getDealById(dealId),
+    listDealMeetings: dealId => listMeetingsForDeal(dealId),
+    listCompanyMeetings: companyId => listDemoMeetingsForCompany(companyId),
+    persist: demo => postgresStorage.updateApplicationAsCustomer(userId, id, { demo }),
   });
 }
 
@@ -553,26 +575,31 @@ export async function getMyApplicationWithBillingSyncAction(id: string): Promise
   return refreshHubspotBilling(userId, id, app);
 }
 
-// What the application detail page calls: one load, both on-view refreshes.
+// What the application detail page calls: one load, all three on-view refreshes.
 //
-// The two run INDEPENDENTLY — each swallows its own failures internally — so a
-// HubSpot outage can't suppress the Check refresh, or vice versa.
+// They run INDEPENDENTLY — each swallows its own failures internally — so a
+// HubSpot/Check outage can't suppress either of the others.
 //
 // They run SEQUENTIALLY and the row is threaded from one into the next, which is
-// what keeps two updates on the same row from clobbering each other.
-// updateApplicationAsCustomer SETs only the columns in its patch, so check_ids
-// and hubspot_ids can't collide in SQL — but each refresh builds its patch by
-// spreading the snapshot it was handed, and returns the row from its own
-// RETURNING. Handing the second refresh a pre-first-write row would make the
-// value this function returns to the page miss whatever the first one wrote.
-// Do not "optimise" this into a Promise.all over two independent loads.
+// what keeps updates on the same row from clobbering each other.
+// updateApplicationAsCustomer SETs only the columns in its patch, so check_ids,
+// demo, and hubspot_ids can't collide in SQL — but each refresh builds its patch
+// by spreading the snapshot it was handed, and returns the row from its own
+// RETURNING. Handing the next refresh a pre-previous-write row would make the
+// value this function returns to the page miss whatever the earlier one wrote.
+// Do not "optimise" this into a Promise.all over independent loads.
 //
-// No third Foodbuy refresh here — there's nothing to poll (see markFoodbuy-
+// Demo runs BEFORE billing, deliberately: the demo gate decides whether
+// billing is even shown to the merchant, so a page render that skipped this
+// ordering could flash a billing module the demo hasn't cleared yet.
+//
+// No fourth Foodbuy refresh here — there's nothing to poll (see markFoodbuy-
 // FormGeneratedAction above).
 export async function getMyApplicationWithSyncAction(id: string): Promise<MerchantApplication | null> {
   const { userId } = await requireCustomer();
   const app = await postgresStorage.getApplicationForCustomer(userId, id);
   if (!app) return null;
   const afterPayroll = await refreshCheckOnboardStatus(userId, id, app);
-  return refreshHubspotBilling(userId, id, afterPayroll);
+  const afterDemo = await refreshDemoStatus(userId, id, afterPayroll);
+  return refreshHubspotBilling(userId, id, afterDemo);
 }

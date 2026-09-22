@@ -18,9 +18,11 @@ import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
-import { canPushToHubSpot, pushToHubSpot } from "@/lib/adapters/hubspot";
+import { buildDealProperties, tenantCompanyId } from "@/lib/adapters/hubspot";
+import { resolveDealForCompany } from "@/lib/hubspotDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
+import type { DealLink } from "@/types/merchant";
 
 export type RetryBillingQuoteResult = {
   ok: boolean;
@@ -63,11 +65,17 @@ export async function retryBillingQuoteAction(applicationId: string): Promise<Re
   // account is unrecoverable from the UI.
   //
   // Only ever fills a MISSING id. It deliberately does not re-push an existing
-  // one: pushToHubSpot PATCHes when hubspotDealId is set, and silently
-  // overwriting a deal a rep has since curated in the CRM is not this button's
-  // job. Unlike the fire-and-log push in the acceptance route, a failure here
-  // is returned as a hard error — the rep clicked this to get a quote out, and
-  // without a deal the publish below would only refuse anyway.
+  // one: `syncDealFromApplication` PATCHes when hubspotDealId is set, and
+  // silently overwriting a deal a rep has since curated in the CRM is not this
+  // button's job. Unlike the fire-and-log push in the acceptance route, a
+  // failure here is returned as a hard error — the rep clicked this to get a
+  // quote out, and without a deal the publish below would only refuse anyway.
+  //
+  // Routed through `resolveDealForCompany` (`mode: "create"`) rather than
+  // creating blind: under the mandatory-deal model a company that already has
+  // deals almost certainly has the one the rep actually wants — the picker on
+  // the account is where to adopt it — so this refuses `ambiguous` rather than
+  // minting a second deal on top of one a rep is already working.
   let target = app;
   if (!target.hubspotDealId) {
     // …unless the account has no HubSpot Company yet, in which case creating
@@ -75,7 +83,8 @@ export async function retryBillingQuoteAction(applicationId: string): Promise<Re
     // settable at create time, so it would produce a deal permanently detached
     // from the Company record. Answered as a precondition rather than an
     // error, because it names something the rep can go and do.
-    if (!canPushToHubSpot(target)) {
+    const companyId = tenantCompanyId(target);
+    if (!companyId) {
       return {
         ok: false,
         reasons: [{
@@ -86,20 +95,48 @@ export async function retryBillingQuoteAction(applicationId: string): Promise<Re
         }],
       };
     }
-    try {
-      const dealId = await pushToHubSpot(target);
-      await db
-        .update(merchantApplications)
-        .set({ hubspotDealId: dealId, updatedAt: new Date() })
-        .where(eq(merchantApplications.id, target.id));
-      target = { ...target, hubspotDealId: dealId };
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+
+    const createdProps = buildDealProperties(target);
+    const resolution = await resolveDealForCompany({
+      companyId,
+      choice: {
+        mode: "create",
+        dealName: createdProps.dealname ?? "New Deal",
+        amount: createdProps.amount ? Number(createdProps.amount) : undefined,
+      },
+      excludeApplicationId: target.id,
+    });
+
+    if (!resolution.ok) {
+      if (resolution.code === "ambiguous") {
+        return {
+          ok: false,
+          reasons: [{
+            code: "deal_ambiguous",
+            message:
+              `This company already has ${resolution.candidates?.length ?? "multiple"} deal(s) in HubSpot. ` +
+              "Open the deal picker on the account and adopt the right one instead of creating a new one.",
+          }],
+        };
+      }
       return {
         ok: false,
-        error: `This deal isn't in HubSpot yet and creating it just failed, so there's nothing to attach a quote to: ${detail}`,
+        error: `This deal isn't in HubSpot yet and creating it just failed, so there's nothing to attach a quote to: ${resolution.message}`,
       };
     }
+
+    const dealLink: DealLink = {
+      origin: resolution.created ? "created" : "adopted",
+      dealName: resolution.deal.name,
+      pipelineStageAtLink: resolution.deal.stageId,
+      linkedAt: new Date().toISOString(),
+      linkedByUserId: effective.userId,
+    };
+    await db
+      .update(merchantApplications)
+      .set({ hubspotDealId: resolution.deal.id, dealLink, updatedAt: new Date() })
+      .where(eq(merchantApplications.id, target.id));
+    target = { ...target, hubspotDealId: resolution.deal.id, dealLink };
   }
 
   const outcome = await buildAndPublishBillingQuote(target);

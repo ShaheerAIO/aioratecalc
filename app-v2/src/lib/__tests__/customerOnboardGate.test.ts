@@ -16,7 +16,7 @@ const createAdyenBusinessLine = vi.fn();
 const createAdyenBalanceAccount = vi.fn();
 const createOnboardingLink = vi.fn();
 const updateLegalEntity = vi.fn();
-const pushToHubSpot = vi.fn();
+const syncDealFromApplication = vi.fn();
 
 vi.mock("@/lib/auth", () => ({ auth, signIn: vi.fn() }));
 vi.mock("next-auth", () => ({ AuthError: class AuthError extends Error {} }));
@@ -37,7 +37,7 @@ vi.mock("@/lib/adapters/check", () => ({
 // only the network call is stubbed.
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
-  pushToHubSpot,
+  syncDealFromApplication,
 }));
 
 const { saveMyApplicationOnboardingAction, updateMyApplicationDetailsAction } =
@@ -88,7 +88,7 @@ beforeEach(() => {
   for (const m of [auth, getApplicationForCustomer, updateApplicationAsCustomer,
                    createAdyenLegalEntity, createAdyenAccountHolder, createAdyenBusinessLine,
                    createAdyenBalanceAccount, createOnboardingLink, updateLegalEntity,
-                   pushToHubSpot]) m.mockReset();
+                   syncDealFromApplication]) m.mockReset();
   auth.mockResolvedValue(CUSTOMER_SESSION);
   // A stand-in row rather than a static echo: the resumable chain reads the ids
   // back out of what it just wrote, so the stub has to accumulate patches the
@@ -104,7 +104,7 @@ beforeEach(() => {
   createAdyenBusinessLine.mockResolvedValue("BL1");
   createAdyenBalanceAccount.mockResolvedValue("BA1");
   createOnboardingLink.mockResolvedValue("https://kyc-test.adyen.com/uo/abc");
-  pushToHubSpot.mockRejectedValue(new Error("HUBSPOT_PRIVATE_APP_TOKEN not set"));
+  syncDealFromApplication.mockRejectedValue(new Error("HUBSPOT_PRIVATE_APP_TOKEN not set"));
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 

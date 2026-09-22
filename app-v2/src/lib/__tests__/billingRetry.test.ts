@@ -1,25 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MerchantApplication } from "@/types/merchant";
+import type { HubspotDeal } from "@/lib/adapters/hubspot";
 
 // retryBillingQuoteAction — the rep's only billing affordance. The orchestrator
 // itself is covered by leadAcceptBilling.test.ts against the real thing; what's
 // under test here is only what the action adds around it: the role/ownership
-// hand-off, the already-published refusal, and the missing-deal backfill.
+// hand-off, the already-published refusal, and the missing-deal backfill —
+// which now goes through resolveDealForCompany (mode: "create") rather than
+// creating blind, so a company that already has deals refuses `ambiguous`
+// instead of minting a duplicate.
 
 const getEffectiveRole = vi.fn();
 const getApplication = vi.fn();
-const pushToHubSpot = vi.fn();
+const resolveDealForCompany = vi.fn();
 const buildAndPublishBillingQuote = vi.fn();
 
 const patches: Array<Record<string, unknown>> = [];
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { getApplication } }));
-// Partial mock: the pure helpers — including the tenant-link gate — stay real,
-// only the network call is stubbed.
+// The Company & Deal resolution service — mocked so the real module (which
+// pulls in the server-only db client) is never loaded here. Same pattern as
+// createProspect.test.ts.
+vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany }));
+// Partial mock: the pure property builder stays real, nothing here makes a
+// network call.
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
-  pushToHubSpot,
 }));
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
 vi.mock("@/lib/db/schema", () => ({ merchantApplications: { id: "id" } }));
@@ -47,6 +54,12 @@ const TENANT_LINK = {
   linkedByUserId: "rep-1",
 };
 
+const NEW_DEAL: HubspotDeal = {
+  id: "deal-new", name: "Torta Palace", pipelineId: "default", stageId: null,
+  stageLabel: null, amount: 12000, createdAt: "2026-09-21T00:00:00.000Z",
+  closed: false, won: false, companyIds: ["334295287484"],
+};
+
 const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
   ({
     id: "app-1",
@@ -54,6 +67,7 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
     hubspotDealId: null,
     hubspotIds: null,
     tenantLink: TENANT_LINK,
+    business: { legalName: "Torta Palace LLC", dba: "Torta Palace" },
     quoteLines: [{ name: "AIO Platform", qty: 1, unitPrice: 99, billingFrequency: "weekly", productType: "Software", hubspotProductId: "p-1" }],
     ...over,
   }) as unknown as MerchantApplication;
@@ -73,21 +87,35 @@ describe("retryBillingQuoteAction", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("already published");
-    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(resolveDealForCompany).not.toHaveBeenCalled();
     expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
   });
 
-  it("creates the missing deal, persists it, and publishes against it", async () => {
+  it("creates the missing deal via resolveDealForCompany, persists it, and publishes against it", async () => {
     getApplication.mockResolvedValue(app());
-    pushToHubSpot.mockResolvedValue("deal-new");
+    resolveDealForCompany.mockResolvedValue({ ok: true, deal: NEW_DEAL, created: true });
 
     const result = await retryBillingQuoteAction("app-1");
 
+    expect(resolveDealForCompany).toHaveBeenCalledWith({
+      companyId: "334295287484",
+      choice: { mode: "create", dealName: "Torta Palace", amount: 0 },
+      excludeApplicationId: "app-1",
+    });
     expect(result).toEqual({ ok: true, quoteLink: "https://customers.aioapp.com/abc" });
     expect(patches).toEqual([expect.objectContaining({ hubspotDealId: "deal-new" })]);
     // The id has to reach the orchestrator on the in-memory row too, or the
     // publish refuses `no_deal` on the copy it was handed.
     expect(buildAndPublishBillingQuote).toHaveBeenCalledWith(expect.objectContaining({ hubspotDealId: "deal-new" }));
+  });
+
+  it("stamps dealLink with origin 'created' when the deal was just minted", async () => {
+    getApplication.mockResolvedValue(app());
+    resolveDealForCompany.mockResolvedValue({ ok: true, deal: NEW_DEAL, created: true });
+
+    await retryBillingQuoteAction("app-1");
+
+    expect(patches[0].dealLink).toEqual(expect.objectContaining({ origin: "created", dealName: NEW_DEAL.name }));
   });
 
   it("refuses to create the deal while no HubSpot company is linked", async () => {
@@ -97,24 +125,41 @@ describe("retryBillingQuoteAction", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reasons?.map(r => r.code)).toEqual(["no_tenant_company"]);
-    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(resolveDealForCompany).not.toHaveBeenCalled();
     expect(patches).toEqual([]);
     expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
   });
 
-  it("never re-pushes a deal that already exists", async () => {
+  it("refuses ambiguous — forcing a human to pick — rather than minting a duplicate deal", async () => {
+    getApplication.mockResolvedValue(app());
+    resolveDealForCompany.mockResolvedValue({
+      ok: false,
+      code: "ambiguous",
+      message: "This company already has 2 deals in HubSpot. Pick one instead of creating a new one.",
+      candidates: [NEW_DEAL, { ...NEW_DEAL, id: "deal-other" }],
+    });
+
+    const result = await retryBillingQuoteAction("app-1");
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons?.map(r => r.code)).toEqual(["deal_ambiguous"]);
+    expect(patches).toEqual([]);
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
+  });
+
+  it("never re-resolves a deal that already exists", async () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: "d-1" }));
 
     await retryBillingQuoteAction("app-1");
 
-    expect(pushToHubSpot).not.toHaveBeenCalled();
+    expect(resolveDealForCompany).not.toHaveBeenCalled();
     expect(patches).toEqual([]);
     expect(buildAndPublishBillingQuote).toHaveBeenCalledWith(expect.objectContaining({ hubspotDealId: "d-1" }));
   });
 
-  it("stops at a failed deal push rather than letting the publish refuse no_deal", async () => {
+  it("stops at a failed deal resolution rather than letting the publish refuse no_deal", async () => {
     getApplication.mockResolvedValue(app());
-    pushToHubSpot.mockRejectedValue(new Error("403 Forbidden"));
+    resolveDealForCompany.mockResolvedValue({ ok: false, code: "hubspot_error", message: "403 Forbidden" });
 
     const result = await retryBillingQuoteAction("app-1");
 
