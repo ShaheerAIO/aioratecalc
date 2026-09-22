@@ -18,7 +18,7 @@
   padding: var(--space-lg);
 }
 
-.row--placeholder { opacity: 0.6; }
+.row--locked { opacity: 0.6; }
 
 .labelRow {
   display: flex;
@@ -44,11 +44,18 @@
 .status--not_started { background: var(--rule); color: var(--ink-2); }
 .status--in_progress { background: var(--info-bg); color: var(--info); }
 .status--complete { background: var(--success-bg); color: var(--success); }
-.status--coming_soon { background: var(--rule); color: var(--ink-3); }
 
 .description {
   font-size: 0.82rem;
   color: var(--ink-2);
+}
+
+.lockedNote {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--ink-3);
+  white-space: nowrap;
 }
 
 .cta {

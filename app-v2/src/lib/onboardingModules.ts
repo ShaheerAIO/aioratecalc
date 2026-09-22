@@ -1,6 +1,6 @@
 import type { HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/merchant";
 
-export type ModuleStatus = "not_started" | "in_progress" | "complete" | "coming_soon";
+export type ModuleStatus = "not_started" | "in_progress" | "complete";
 
 export type OnboardingModule = {
   key: string;
@@ -9,31 +9,213 @@ export type OnboardingModule = {
   description: string;
   href?: string;
   ctaLabel?: string;
+  // Whether the customer may act on this module yet — orthogonal to `status`,
+  // which answers "how far along", not "may you start". Set only by the lock
+  // post-pass at the bottom of this file, never by an individual module
+  // function. Kept as its own field rather than folded into `status` (the
+  // way the old `coming_soon` was) because the dashboard's "N of M complete"
+  // count (src/app/customer/page.tsx) counts every module, locked included —
+  // if locked modules were filtered out the way `coming_soon` was, the
+  // denominator would *grow* as the customer progressed.
+  locked?: { reason: "demo" | "quote"; message: string };
 };
 
-export function getOnboardingModules(app: MerchantApplication): OnboardingModule[] {
-  // Billing first: it's the money step and the direct continuation of the
-  // acceptance the customer just performed (PHASE-E-SPEC.md §7.1). Adyen and
-  // payroll follow in the order a merchant actually uses them post-signup —
-  // get paid, then get set up to pay staff. Foodbuy goes after those two.
-  // scheduleDemoModule goes last: it's still a placeholder with no completion
-  // signal, and both ModuleChecklist (suppresses its CTA) and the dashboard
-  // count (src/app/customer/page.tsx:28 filters coming_soon out) already
-  // treat it as non-actionable, so nothing is lost by putting it at the
-  // bottom. foodbuyModule is NOT coming_soon anymore — see its comment.
-  //
-  // billingModule can return null (a rate-only accepted quote — see its
-  // comment), so this list is variable-length. Every caller already maps
-  // over whatever it gets, so filtering nulls out here is sufficient.
-  return [billingModule(app), adyenModule(app), payrollModule(app), foodbuyModule(app), scheduleDemoModule(app)]
-    .filter((m): m is OnboardingModule => m !== null);
+export type OnboardingModulesOpts = {
+  // Defaults to `/customer/applications/${app.id}` so the two existing
+  // authenticated call sites are unchanged; a token-scoped host (a later
+  // task) will pass a different path.
+  basePath?: string;
+  // Where the quote module's own CTA points. Defaults to `basePath` — on the
+  // authenticated host the quote is a TAB on the application page, so its
+  // href really is just basePath, and that host's call sites need no edit.
+  // The token host has no tabs: its quote lives on its own route one level
+  // below the checklist, so it must pass a DIFFERENT quoteHref
+  // (`/lead/{token}/quote`) than its basePath (`/lead/{token}`). Without this
+  // split, quoteModule used to reuse `basePath` itself, which forced the
+  // token host to set basePath to the quote route just to make that one
+  // module work — making every OTHER module's `${basePath}/...` href resolve
+  // to a nonexistent nested route (`/lead/{token}/quote/billing`, etc). Don't
+  // collapse this back into `basePath`.
+  quoteHref?: string;
+  // Whether there's a quote ready to show (a rep-configured basis or a
+  // readable statement). MUST be computed by the caller via `hasQuoteBasis`
+  // in leadQuote.ts, never here — that module imports pricing.ts, and
+  // pulling it into this file would ship MARGIN_REQS, AIO's true margin
+  // floors, into the browser bundle. Defaults to false.
+  hasQuote?: boolean;
+  // The org-wide demo-booking link (AppSettings.demoBookingUrl) — admin-
+  // editable since AIO's HubSpot calendar isn't live yet. Absent/null means
+  // no CTA and no href are rendered for the demo module — never a dead
+  // button; the rep's manual "mark held" override works regardless of
+  // whether this is set.
+  demoBookingUrl?: string | null;
+  // Injected so tests can pin a clock — the registry is now time-dependent
+  // (a demo can be booked for a future date). Defaults to Date.now().
+  now?: number;
+};
+
+// Order: demo → quote → everything else. The quote is signed after the demo
+// in real life, so `schedule_demo` — previously a `coming_soon` placeholder
+// at the bottom of this list — is now a real gate at the top: the quote
+// module is locked until the demo is held, and billing/adyen/payroll/foodbuy
+// are all locked until the quote is signed (see `applyLock` below). Within
+// that back half, the order is still the one a merchant actually uses them
+// in post-signup: get paid (billing, then Adyen), then get set up to pay
+// staff (payroll), then Foodbuy.
+//
+// demoModule/quoteModule are pure, reading only the cached `app.demo` /
+// `app.quoteAcceptedAt` — same constraint billingModule/payrollModule below
+// already document: getOnboardingModules runs in a loop over every row on
+// both the customer dashboard (src/app/customer/page.tsx) and the admin
+// accounts dashboard (AccountsDashboard.tsx), so a network call here would
+// fan out one request per row. This file imports only types — keep it that
+// way.
+//
+// billingModule can return null (a rate-only accepted quote — see its
+// comment), so the list below is variable-length before the lock pass runs.
+export function getOnboardingModules(
+  app: MerchantApplication,
+  opts?: OnboardingModulesOpts,
+): OnboardingModule[] {
+  const basePath = opts?.basePath ?? `/customer/applications/${app.id}`;
+  const quoteHref = opts?.quoteHref ?? basePath;
+  const now = opts?.now ?? Date.now();
+  const demoHeld = !!app.demo?.heldAt;
+  const quoteAccepted = !!app.quoteAcceptedAt;
+
+  // Forced false until the demo is held, regardless of what the caller
+  // passed in. This is what makes "the locked quote row never reveals
+  // whether a quote exists" structural rather than a copy choice: quoteModule
+  // is simply never TOLD a quote exists before the gate that's supposed to
+  // withhold it has actually opened, so there is no description branch left
+  // for a future edit to leak by accident.
+  const hasQuote = demoHeld && (opts?.hasQuote ?? false);
+
+  const modules = [
+    demoModule(app, { demoBookingUrl: opts?.demoBookingUrl ?? null, now }),
+    quoteModule(app, { hasQuote, quoteHref }),
+    billingModule(app, basePath),
+    adyenModule(app, basePath),
+    payrollModule(app, basePath),
+    foodbuyModule(app, basePath),
+  ].filter((m): m is OnboardingModule => m !== null);
+
+  return modules.map(m => applyLock(m, { demoHeld, quoteAccepted }));
+}
+
+// The one lock rule, applied once over the built list rather than scattered
+// through the module functions above, so each one stays about its own
+// domain:
+//   - demo is never locked.
+//   - quote is locked until the demo is held.
+//   - everything else is locked until the quote is signed — gated on
+//     `quoteAcceptedAt`, NOT on billing being complete: billingModule
+//     returns null for a rate-only quote (see its comment), which would
+//     otherwise lock those merchants out of Adyen forever.
+// A `complete` module is never downgraded to locked, regardless of key.
+function applyLock(
+  m: OnboardingModule,
+  gates: { demoHeld: boolean; quoteAccepted: boolean },
+): OnboardingModule {
+  if (m.status === "complete") return m;
+  if (m.key === "demo") return m;
+  if (m.key === "quote") {
+    return gates.demoHeld ? m : { ...m, locked: { reason: "demo", message: "Available after your demo" } };
+  }
+  return gates.quoteAccepted
+    ? m
+    : { ...m, locked: { reason: "quote", message: "Available after your quote is signed" } };
+}
+
+// Reads the cached `app.demo` (DemoState, src/types/merchant.ts) — never a
+// network call, see the purity note above. Replaces the old
+// `scheduleDemoModule` shell now that the demo gate is real.
+function demoModule(
+  app: MerchantApplication,
+  opts: { demoBookingUrl: string | null; now: number },
+): OnboardingModule {
+  const key = "demo";
+  const label = "Schedule a Demo";
+  const demo = app.demo;
+
+  if (demo?.heldAt) {
+    const date = new Date(demo.heldAt).toLocaleDateString();
+    return {
+      key, label, status: "complete",
+      description: demo.source === "manual"
+        ? `Your demo was recorded by your AIO representative on ${date}.`
+        : `Your demo was held on ${date}.`,
+    };
+  }
+
+  if (demo?.bookedAt && Date.parse(demo.bookedAt) > opts.now) {
+    const date = new Date(demo.bookedAt).toLocaleDateString();
+    return {
+      key, label, status: "in_progress",
+      description: `Your demo is scheduled for ${date}.`,
+      ...(opts.demoBookingUrl ? { href: opts.demoBookingUrl, ctaLabel: "Reschedule" } : {}),
+    };
+  }
+
+  // Past bookedAt, not held: HubSpot hasn't synced the outcome yet, or a rep
+  // hasn't marked it. There's nothing for the customer to do — no CTA.
+  if (demo?.bookedAt) {
+    return {
+      key, label, status: "in_progress",
+      description: "We're confirming your demo — no action needed yet.",
+    };
+  }
+
+  return {
+    key, label, status: "not_started",
+    description: opts.demoBookingUrl
+      ? "Book a time to see AIO in action."
+      : "Your AIO representative will reach out to schedule your demo.",
+    ...(opts.demoBookingUrl ? { href: opts.demoBookingUrl, ctaLabel: "Book Your Demo" } : {}),
+  };
+}
+
+// `hasQuote` arrives pre-gated by getOnboardingModules (forced false before
+// the demo is held) — this function never reads `app.demo` itself. MUST NOT
+// import `hasQuoteBasis` from leadQuote.ts: see OnboardingModulesOpts.
+function quoteModule(
+  app: MerchantApplication,
+  opts: { hasQuote: boolean; quoteHref: string },
+): OnboardingModule {
+  const key = "quote";
+  const label = "Quote";
+
+  if (app.quoteAcceptedAt) {
+    // Re-viewing a frozen quote is harmless — same reasoning as
+    // foodbuyModule's "Download Again" below.
+    return {
+      key, label, status: "complete",
+      description: "You've reviewed and signed your quote.",
+      href: opts.quoteHref,
+      ctaLabel: "View Quote",
+    };
+  }
+
+  if (opts.hasQuote) {
+    return {
+      key, label, status: "not_started",
+      description: "Your quote is ready to review.",
+      href: opts.quoteHref,
+      ctaLabel: "Review & Sign",
+    };
+  }
+
+  return {
+    key, label, status: "not_started",
+    description: "Your rep is preparing your quote.",
+  };
 }
 
 // Billing is a pure function of the cached hubspotIds snapshot — see the
 // payrollModule note below, which documents the same constraint for Check.
 // getOnboardingModules is called in a loop over every application on the
-// customer dashboard (src/app/customer/page.tsx:28) and the admin accounts
-// dashboard (src/components/dashboard/AccountsDashboard.tsx:603); a network
+// customer dashboard (src/app/customer/page.tsx) and the admin accounts
+// dashboard (src/components/dashboard/AccountsDashboard.tsx); a network
 // call here would fan out one HubSpot request per row.
 //
 // The status matrix below is PAYMENT-TEST-PLAN.md §1.5, NOT PHASE-E-SPEC.md
@@ -43,7 +225,7 @@ export function getOnboardingModules(app: MerchantApplication): OnboardingModule
 // checkout appears within 1–9 minutes. Gating on paymentStatus would tell a
 // merchant who already paid to "Review & Pay" for most of a week, so
 // completion is derived from the subscription instead.
-function billingModule(app: MerchantApplication): OnboardingModule | null {
+function billingModule(app: MerchantApplication, basePath: string): OnboardingModule | null {
   const key = "billing";
   const label = "Billing";
   const notStarted = (): OnboardingModule => ({
@@ -167,7 +349,7 @@ function billingModule(app: MerchantApplication): OnboardingModule | null {
     return {
       key, label, status: "in_progress",
       description: "Review your quote and set up billing.",
-      href: `/customer/applications/${app.id}/billing`,
+      href: `${basePath}/billing`,
       ctaLabel: "Review & Pay",
     };
   }
@@ -180,8 +362,8 @@ function billingModule(app: MerchantApplication): OnboardingModule | null {
   };
 }
 
-function adyenModule(app: MerchantApplication): OnboardingModule {
-  const editHref = `/customer/applications/${app.id}/edit`;
+function adyenModule(app: MerchantApplication, basePath: string): OnboardingModule {
+  const editHref = `${basePath}/edit`;
 
   if (app.stage === "adyen_kyc_complete" || app.stage === "adyen_approved") {
     return {
@@ -201,7 +383,7 @@ function adyenModule(app: MerchantApplication): OnboardingModule {
       // NOT the stored adyenOnboardingUrl — Adyen links are single-use and
       // expire in minutes, so reusing a stored one fails at startup. This
       // route mints a fresh link on each click, then redirects to Adyen.
-      href: `/customer/applications/${app.id}/continue`,
+      href: `${basePath}/continue`,
       ctaLabel: "Continue Verification",
     };
   }
@@ -231,7 +413,7 @@ function adyenModule(app: MerchantApplication): OnboardingModule {
 // customer starts this module themselves. Status reads the cached
 // checkIds.onboardStatus snapshot rather than calling Check — the list and
 // dashboard views render many applications at once (see syncPayrollStatusAction).
-function payrollModule(app: MerchantApplication): OnboardingModule {
+function payrollModule(app: MerchantApplication, basePath: string): OnboardingModule {
   const label = "Payroll (Check)";
 
   if (app.checkIds?.companyId) {
@@ -252,7 +434,7 @@ function payrollModule(app: MerchantApplication): OnboardingModule {
         : "Finish setting up payroll with our payroll partner.",
       // NOT a stored link — Check onboard links are one-time use and expire
       // after 24h, so this route mints a fresh one per click (same rule as Adyen).
-      href: `/customer/applications/${app.id}/payroll/continue`,
+      href: `${basePath}/payroll/continue`,
       ctaLabel: "Continue Payroll Setup",
     };
   }
@@ -273,25 +455,8 @@ function payrollModule(app: MerchantApplication): OnboardingModule {
     label,
     status: "not_started",
     description: "Run payroll for your team through AIO.",
-    href: `/customer/applications/${app.id}/payroll`,
+    href: `${basePath}/payroll`,
     ctaLabel: "Set Up Payroll",
-  };
-}
-
-// Shell only — the user's decision was to ship this row now and paste in the
-// HubSpot Meetings link later, once one is chosen. No href yet on purpose:
-// ModuleChecklist suppresses the CTA for coming_soon even when href is set
-// (ModuleChecklist.tsx:30), so there's nothing to gain from setting one now.
-// coming_soon is also filtered out of the dashboard's module count
-// (src/app/customer/page.tsx:28), so this only ever renders on the
-// application detail page, not on the applications list. Copy reads as
-// "not yet available", not as a failure.
-function scheduleDemoModule(app: MerchantApplication): OnboardingModule {
-  return {
-    key: "schedule_demo",
-    label: "Schedule a Demo",
-    status: "coming_soon",
-    description: "Scheduling a demo isn't available yet. We'll let you know when it is.",
   };
 }
 
@@ -303,9 +468,9 @@ function scheduleDemoModule(app: MerchantApplication): OnboardingModule {
 // copy of the form (foodbuyIds.generatedAt). The href stays available even
 // once "complete" — re-downloading a static PDF is harmless, unlike
 // re-serving an expired Adyen/Check link.
-function foodbuyModule(app: MerchantApplication): OnboardingModule {
+function foodbuyModule(app: MerchantApplication, basePath: string): OnboardingModule {
   const label = "Foodbuy";
-  const href = `/customer/applications/${app.id}/foodbuy`;
+  const href = `${basePath}/foodbuy`;
 
   if (!app.business || !app.ownerContact) {
     return {

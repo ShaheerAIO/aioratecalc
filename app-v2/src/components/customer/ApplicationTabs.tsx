@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { CustomerSafeQuote, MerchantApplication } from "@/types/merchant";
 import type { OnboardingModule } from "@/lib/onboardingModules";
-import ModuleChecklist from "@/components/customer/ModuleChecklist";
+import OnboardingChecklistPanel from "@/components/customer/OnboardingChecklistPanel";
 import CustomerOnboardStep from "@/components/customer/CustomerOnboardStep";
 import { DataGroups } from "@/components/customer/MyDataSection";
 import QuoteSummary from "@/components/customer/QuoteSummary";
@@ -54,7 +54,7 @@ export default function ApplicationTabs({ app, modules, quote }: Props) {
         </div>
       ) : tab === "checklist" ? (
         <div className={styles.tabPanel}>
-          <ModuleChecklist modules={modules} />
+          <OnboardingChecklistPanel modules={modules} />
         </div>
       ) : (
         <div className={styles.tabPanel}>

@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { listMyApplicationsAction } from "@/lib/actions/customer";
+import { getSettingsAction } from "@/lib/actions/applications";
 import { getOnboardingModules } from "@/lib/onboardingModules";
+import { hasQuoteBasis } from "@/lib/leadQuote";
 import MyDataSection, { pickProfileApp } from "@/components/customer/MyDataSection";
 import styles from "./customer.module.css";
 
 export default async function CustomerDashboardPage() {
-  const apps = await listMyApplicationsAction();
+  const [apps, settings] = await Promise.all([listMyApplicationsAction(), getSettingsAction()]);
 
   return (
     <div className={styles.shell}>
@@ -25,7 +27,10 @@ export default async function CustomerDashboardPage() {
         ) : (
           <div className={styles.panel}>
             {apps.map(app => {
-              const modules = getOnboardingModules(app).filter(m => m.status !== "coming_soon");
+              const modules = getOnboardingModules(app, {
+                hasQuote: hasQuoteBasis(app),
+                demoBookingUrl: settings.demoBookingUrl,
+              });
               const complete = modules.filter(m => m.status === "complete").length;
               return (
                 <Link key={app.id} href={`/customer/applications/${app.id}`} className={styles.appRow}>

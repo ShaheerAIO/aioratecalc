@@ -6,7 +6,6 @@ const STATUS_LABELS: Record<ModuleStatus, string> = {
   not_started: "Not Started",
   in_progress: "In Progress",
   complete: "Complete",
-  coming_soon: "Coming Soon",
 };
 
 export default function ModuleChecklist({ modules }: { modules: OnboardingModule[] }) {
@@ -15,9 +14,9 @@ export default function ModuleChecklist({ modules }: { modules: OnboardingModule
   return (
     <div className={styles.list}>
       {modules.map(m => {
-        const isPlaceholder = m.status === "coming_soon";
+        const isLocked = !!m.locked;
         return (
-          <div key={m.key} className={`${styles.row} ${isPlaceholder ? styles["row--placeholder"] : ""}`}>
+          <div key={m.key} className={`${styles.row} ${isLocked ? styles["row--locked"] : ""}`}>
             <div>
               <div className={styles.labelRow}>
                 <span className={styles.label}>{m.label}</span>
@@ -27,15 +26,19 @@ export default function ModuleChecklist({ modules }: { modules: OnboardingModule
               </div>
               <div className={styles.description}>{m.description}</div>
             </div>
-            {m.href && !isPlaceholder && (
-              <Link
-                href={m.href}
-                target={isExternal(m.href) ? "_blank" : undefined}
-                rel={isExternal(m.href) ? "noopener noreferrer" : undefined}
-                className={styles.cta}
-              >
-                {m.ctaLabel || "Continue"}
-              </Link>
+            {isLocked ? (
+              <span className={styles.lockedNote}>{m.locked!.message}</span>
+            ) : (
+              m.href && (
+                <Link
+                  href={m.href}
+                  target={isExternal(m.href) ? "_blank" : undefined}
+                  rel={isExternal(m.href) ? "noopener noreferrer" : undefined}
+                  className={styles.cta}
+                >
+                  {m.ctaLabel || "Continue"}
+                </Link>
+              )
             )}
           </div>
         );

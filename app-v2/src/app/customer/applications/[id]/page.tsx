@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { getMyApplicationWithSyncAction, getMyQuoteAction } from "@/lib/actions/customer";
+import { getSettingsAction } from "@/lib/actions/applications";
 import { getOnboardingModules } from "@/lib/onboardingModules";
+import { hasQuoteBasis } from "@/lib/leadQuote";
 import ApplicationTabs from "@/components/customer/ApplicationTabs";
 import styles from "../../customer.module.css";
 
@@ -26,7 +28,11 @@ export default async function CustomerApplicationPage({ params }: { params: Prom
     );
   }
 
-  const modules = getOnboardingModules(app);
+  const settings = await getSettingsAction();
+  const modules = getOnboardingModules(app, {
+    hasQuote: hasQuoteBasis(app),
+    demoBookingUrl: settings.demoBookingUrl,
+  });
   // Built here, server-side: leadQuote.ts pulls in pricing.ts, so only the
   // finished CustomerSafeQuote may cross into the client tabs.
   const quote = await getMyQuoteAction(id);
