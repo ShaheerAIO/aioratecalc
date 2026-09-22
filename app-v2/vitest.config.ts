@@ -9,4 +9,11 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  // tsconfig.json sets "jsx": "preserve" (Next.js does its own JSX transform
+  // at build time), which isn't one of esbuild's own modes — without this,
+  // esbuild falls back to the classic transform and any .tsx test that
+  // renders a component fails with "React is not defined".
+  esbuild: {
+    jsx: "automatic",
+  },
 });
