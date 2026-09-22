@@ -12,9 +12,14 @@ import {
   searchTenantCompaniesAction,
   linkTenantCompanyAction,
   unlinkTenantCompanyAction,
+  adoptDealAction,
+  markDemoHeldAction,
+  clearDemoHeldAction,
   type RepSummary,
 } from "@/lib/actions/applications";
 import { resendLeadLinkAction } from "@/lib/actions/prospects";
+import EditQuotePanel from "@/components/rep/EditQuotePanel";
+import DealPicker, { type ResolvedDeal } from "@/components/rep/DealPicker";
 import { fmt$ } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
@@ -117,6 +122,25 @@ function AccountsDashboardInner({
   const [tenantResults, setTenantResults]   = useState<TenantCompany[]>([]);
   const [tenantSearching, setTenantSearching] = useState(false);
   const [linking, setLinking]               = useState(false);
+  // A deal-company mismatch found while linking — see handleLinkTenant. Kept
+  // as a persistent banner (not an alert()) because it names something that
+  // needs a human to go fix in HubSpot, not a click a rep can dismiss and
+  // forget.
+  const [tenantMismatch, setTenantMismatch] = useState<{
+    appId: string;
+    dealId: string;
+    otherCompanyIds: string[];
+  } | null>(null);
+
+  // Deal adoption (existing-deal picker for a row with no HubSpot deal at
+  // all). A resolved-but-not-yet-committed pick, so the account gets one
+  // extra confirm click before the (possibly billing-publishing) adoption
+  // actually happens — see handleAdoptDeal.
+  const [dealAdoptPreview, setDealAdoptPreview] = useState<ResolvedDeal | null>(null);
+  const [adoptingDeal, setAdoptingDeal] = useState(false);
+
+  // Rep quote editing (account-detail "Edit Quote" panel).
+  const [editQuoteOpen, setEditQuoteOpen] = useState(false);
 
   useEffect(() => {
     listApplicationsAction().then(setApps).catch(() => {});
@@ -229,6 +253,9 @@ function AccountsDashboardInner({
   useEffect(() => {
     setTenantQuery("");
     setTenantResults([]);
+    setEditQuoteOpen(false);
+    setTenantMismatch(null);
+    setDealAdoptPreview(null);
   }, [selected?.id]);
 
   // Debounced HubSpot Company search for the tenant picker.
@@ -256,6 +283,11 @@ function AccountsDashboardInner({
       updateOne(res.app);
       setTenantQuery("");
       setTenantResults([]);
+      setTenantMismatch(
+        res.dealCompanyMismatch
+          ? { appId: app.id, dealId: res.dealCompanyMismatch.dealId, otherCompanyIds: res.dealCompanyMismatch.otherCompanyIds }
+          : null
+      );
       if (res.error) {
         alert(`Company linked, but the HubSpot catch-up failed: ${res.error}`);
       } else if (res.billingReasons?.length) {
@@ -264,6 +296,8 @@ function AccountsDashboardInner({
           ", but the billing quote is still on hold:\n\n" +
           res.billingReasons.map(r => `• ${r.message}`).join("\n")
         );
+      } else if (res.dealCompanyRepaired) {
+        alert("Company linked. Its HubSpot deal had no company on it, so we attached this one.");
       }
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to link tenant");
@@ -277,10 +311,73 @@ function AccountsDashboardInner({
     try {
       const updated = await unlinkTenantCompanyAction(app.id);
       updateOne(updated);
+      setTenantMismatch(null);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to unlink tenant");
     }
     setLinking(false);
+  };
+
+  // Adopts a deal DealPicker resolved (mode: "existing" only — see
+  // adoptDealAction's comment) onto a row with no HubSpot deal at all. Same
+  // deferred-billing-catch-up posture as handleLinkTenant: if the merchant
+  // already accepted, this call can publish a live HubSpot quote, which is
+  // why the confirm panel below warns about that before this ever runs.
+  const handleAdoptDeal = async (app: MerchantApplication, dealId: string) => {
+    setAdoptingDeal(true);
+    try {
+      const res = await adoptDealAction(app.id, dealId);
+      if (!res.ok) {
+        alert(res.error);
+        return;
+      }
+      updateOne(res.app);
+      setDealAdoptPreview(null);
+      if (res.error) {
+        alert(`Deal adopted, but the billing catch-up failed: ${res.error}`);
+      } else if (res.billingReasons?.length) {
+        alert(
+          "Deal adopted, but the billing quote is still on hold:\n\n" +
+          res.billingReasons.map(r => `• ${r.message}`).join("\n")
+        );
+      } else if (res.quotePublished) {
+        alert("Deal adopted — the merchant's billing quote has been published to HubSpot.");
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to adopt deal");
+    } finally {
+      setAdoptingDeal(false);
+    }
+  };
+
+  // The rep/admin override for a demo AIO can't see in HubSpot — see
+  // markDemoHeldAction's comment. Not a hidden admin escape hatch: only 125 of
+  // 8,018 portal meetings carry the Demo tag, so this manual mark is the
+  // normal path most demos take, not a fallback.
+  const handleMarkDemo = async (app: MerchantApplication) => {
+    setBusyId(app.id);
+    try {
+      const updated = await markDemoHeldAction(app.id);
+      updateOne(updated);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to mark demo held");
+    }
+    setBusyId(null);
+  };
+
+  // Undo is not admin-only — a rep who mis-clicked needs to fix it themselves
+  // — but it re-locks a quote the customer may already be looking at, so it
+  // confirms first.
+  const handleUndoDemo = async (app: MerchantApplication) => {
+    if (!window.confirm("Undo the demo-held mark? This re-locks the customer's quote until a demo is confirmed again.")) return;
+    setBusyId(app.id);
+    try {
+      const updated = await clearDemoHeldAction(app.id);
+      updateOne(updated);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to undo demo mark");
+    }
+    setBusyId(null);
   };
 
   // Client-side CSV of every account and its Adyen ids — admin-only view, data
@@ -653,6 +750,119 @@ function AccountsDashboardInner({
                           )}
                         </div>
                       )}
+                      {tenantMismatch?.appId === selected.id && (
+                        <div className={styles.warningBanner} role="alert">
+                          <strong>Deal attached to a different company.</strong> HubSpot deal{" "}
+                          {tenantMismatch.dealId} is still linked to{" "}
+                          {tenantMismatch.otherCompanyIds.length > 1 ? "companies" : "company"}{" "}
+                          {tenantMismatch.otherCompanyIds.join(", ")} — not this tenant. We left it
+                          alone rather than silently give one deal two companies. Resolve the
+                          deal's company association in HubSpot directly.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* HubSpot deal adoption — the account has NO deal at all (a
+                      legacy row from before deal adoption existed, or a
+                      company whose deal was never attached). This is the
+                      "go pick one" destination retryBillingQuoteAction's
+                      `ambiguous` refusal points reps at; it disappears the
+                      moment a deal is attached, in favor of the "HubSpot
+                      Deal ID" field above. Existing-deal only — creating a
+                      brand-new deal for a company with none is
+                      retryBillingQuoteAction's job (mode: "create"). */}
+                  {(isAdmin || selected.ownerUserId === userId) && !selected.hubspotDealId && (
+                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
+                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>HubSpot Deal</div>
+                      {!selected.tenantLink ? (
+                        <div className={styles.detailMeta}>
+                          Link the HubSpot tenant company above first — the deal picker needs to know
+                          which company&apos;s deals to search.
+                        </div>
+                      ) : dealAdoptPreview ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <div>
+                            <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
+                              {dealAdoptPreview.deal.name}
+                            </div>
+                            <div className={styles.detailMeta} style={{ marginTop: 4 }}>
+                              {dealAdoptPreview.deal.stageLabel ?? "no stage"}
+                            </div>
+                          </div>
+                          <div className={styles.warningBanner} role="alert">
+                            {selected.quoteAcceptedAt
+                              ? "This merchant already accepted their quote. Adopting this deal will immediately build and PUBLISH a live HubSpot billing quote — a one-way door: no edit, no delete, no void through the API."
+                              : "No quote has been accepted yet, so adopting this deal just attaches it — nothing publishes."}
+                          </div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              className={styles.btnPrimary}
+                              disabled={adoptingDeal}
+                              onClick={() => handleAdoptDeal(selected, dealAdoptPreview.deal.id)}
+                            >
+                              {adoptingDeal ? "Adopting…" : "Confirm & Adopt Deal"}
+                            </button>
+                            <button className={styles.btnGhost} disabled={adoptingDeal} onClick={() => setDealAdoptPreview(null)}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <DealPicker
+                          companyId={selected.tenantLink.hubspotCompanyId}
+                          companyName={selected.tenantLink.companyName}
+                          defaultDealName={selected.business?.dba || selected.business?.legalName || selected.analysis?.merchantName || ""}
+                          resolved={null}
+                          onResolved={setDealAdoptPreview}
+                          allowCreate={false}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {/* Demo gate — HubSpot only tags ~1.5% of portal meetings as
+                      "Demo", so this manual mark is the normal way a demo gets
+                      recorded, not a fallback. Same owner/admin gate as the
+                      tenant link above. */}
+                  {(isAdmin || selected.ownerUserId === userId) && (
+                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
+                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>Demo</div>
+                      {selected.demo?.heldAt ? (
+                        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                          <div style={{ flex: 1, minWidth: 240 }}>
+                            <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
+                              Held {new Date(selected.demo.heldAt).toLocaleString()}
+                            </div>
+                            <div className={styles.detailMeta} style={{ marginTop: 4 }}>
+                              {selected.demo.source === "manual" ? "Marked manually" : "From HubSpot"}
+                              {" · checked "}
+                              {selected.demo.checkedAt ? new Date(selected.demo.checkedAt).toLocaleString() : "never"}
+                            </div>
+                          </div>
+                          <button className={styles.btnGhost} disabled={busyId === selected.id} onClick={() => handleUndoDemo(selected)}>
+                            Undo
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className={styles.detailMeta} style={{ marginBottom: 4 }}>
+                            {selected.demo?.bookedAt
+                              ? `Booked for ${new Date(selected.demo.bookedAt).toLocaleString()}.`
+                              : "No demo on file yet."}
+                            {" "}
+                            {selected.demo?.source === "manual" ? "Marked manually" : selected.demo?.source === "hubspot_meeting" ? "From HubSpot" : "Never checked"}
+                            {" · checked "}
+                            {selected.demo?.checkedAt ? new Date(selected.demo.checkedAt).toLocaleString() : "never"}
+                          </div>
+                          <div className={styles.detailMeta} style={{ marginBottom: 8, fontWeight: 600 }}>
+                            Marking it held is what unlocks the customer&apos;s quote.
+                          </div>
+                          <button className={styles.btnPrimary} disabled={busyId === selected.id} onClick={() => handleMarkDemo(selected)}>
+                            Mark Demo Held
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -677,6 +887,37 @@ function AccountsDashboardInner({
                       </button>
                     </div>
                   )}
+                  {/* Rework the quote at any time up to acceptance — "things change
+                      after the demo". Owner rep or any admin, same gate as the
+                      tenant link above. saveQuoteConfigurationAction (which this
+                      calls) refuses once quoteAcceptedAt is set; EditQuotePanel
+                      shows the frozen notice instead of the form in that case. */}
+                  {(isAdmin || selected.ownerUserId === userId) && (
+                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: editQuoteOpen ? 12 : 0 }}>
+                        <div className={styles.detailFieldLabel}>Quote</div>
+                        {!selected.quoteAcceptedAt && (
+                          <button className={styles.btnGhost} onClick={() => setEditQuoteOpen(o => !o)}>
+                            {editQuoteOpen ? "Close" : "Edit Quote"}
+                          </button>
+                        )}
+                      </div>
+                      {selected.quoteAcceptedAt && !editQuoteOpen && (
+                        <div className={styles.detailMeta}>
+                          Accepted {new Date(selected.quoteAcceptedAt).toLocaleDateString()} — locked. Start a new
+                          quote to change terms.
+                        </div>
+                      )}
+                      {editQuoteOpen && (
+                        <EditQuotePanel
+                          app={selected}
+                          onSaved={updated => { updateOne(updated); setEditQuoteOpen(false); }}
+                          onCancel={() => setEditQuoteOpen(false)}
+                        />
+                      )}
+                    </div>
+                  )}
+
                   <BillingPanel
                     app={selected}
                     canManage={isAdmin || selected.ownerUserId === userId}
@@ -689,6 +930,7 @@ function AccountsDashboardInner({
                       {getOnboardingModules(selected).map(m => (
                         <span key={m.key} className={styles.modulePill}>
                           {m.label}: {m.status.replace(/_/g, " ")}
+                          {m.locked ? ` · locked (${m.locked.reason})` : ""}
                         </span>
                       ))}
                     </div>

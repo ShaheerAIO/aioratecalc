@@ -612,6 +612,19 @@
 .btnCopy:active { transform: scale(0.97); }
 .btnCopy:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
+/* ---------- Persistent warning banner (e.g. a tenant-link deal/company mismatch) ---------- */
+
+.warningBanner {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--ink);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
 /* ---------- Reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
