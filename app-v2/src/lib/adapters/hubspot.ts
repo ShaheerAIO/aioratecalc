@@ -13,47 +13,103 @@ import type {
 const BASE = "https://api.hubapi.com";
 
 // AIO's real sales pipeline. Its *id* is the literal string "default" but its
-// *label* is "Sales " and it carries 19 custom, mostly-numeric stage ids
-// (PAYMENT-TEST-PLAN.md §1.8, O-5, read from the live portal 2026-08-20). The
+// *label* is "Sales " and it carries 17 custom, mostly-numeric stage ids
+// (verified live against portal 244508708, 2026-09-21 — do not re-probe). The
 // portal's only other deal pipeline is "Onboarding" (2329370331), which EasyOB
 // never writes to. Sent explicitly on every write so the stage ids below are
 // unambiguously scoped rather than relying on HubSpot's default.
 export const HUBSPOT_DEAL_PIPELINE_ID = "default";
 
-// EasyOB's 15 DealStage values onto that pipeline's real stage ids. `satisfies
-// Record<DealStage, string>` makes a newly added DealStage a COMPILE error
-// rather than a silent fall-through: the previous map omitted four values
-// (including `merchant_filling`, the stage set immediately before the push)
-// and fell back to the pipeline's first stage, dragging live deals backwards.
+export type SalesPipelineStage = {
+  id: string;
+  label: string;
+  closed: boolean; // the deal has left the working pipeline, won or lost
+  won: boolean;     // the one closed outcome that counts as revenue
+};
+
+// The Sales pipeline's 17 stages, in display (and pipeline) order — the
+// index a stage sits at IS its rank, which is what dealStageRank returns.
+// Two ids a previous version of this file wrote to are deliberately absent:
+// `3262845631` ("Sales Accepted", STAGE_MAP's old target for
+// prospect_created/lead_link_sent) and `appointmentscheduled` ("Appointment
+// Scheduled") no longer exist on the live pipeline at all — a search for
+// either returns 0 deals. Nothing in this module should reference them again.
+export const SALES_PIPELINE_STAGES: readonly SalesPipelineStage[] = [
+  { id: "2717103849", label: "Discovery Meeting", closed: false, won: false },
+  { id: "stage_0", label: "Demo Meeting", closed: false, won: false },
+  { id: "3634617027", label: "Quote Sent", closed: false, won: false },
+  { id: "3891166952", label: "Signing Delayed", closed: false, won: false },
+  { id: "3814929108", label: "Signed Awaiting Features", closed: false, won: false },
+  { id: "2767738593", label: "Signed/Awaiting Payment Info", closed: false, won: false },
+  { id: "closedwon", label: "Closed Won", closed: true, won: true },
+  { id: "2992070353", label: "Onboarding", closed: false, won: false },
+  { id: "3888148172", label: "Onboarding Delayed", closed: false, won: false },
+  { id: "2986384064", label: "Configuration", closed: false, won: false },
+  { id: "2986384063", label: "Deployment/Training", closed: false, won: false },
+  { id: "3888148173", label: "Deployment/Training Delayed", closed: false, won: false },
+  { id: "3888148174", label: "Non-Start", closed: true, won: false },
+  { id: "3452539597", label: "Deal Active", closed: false, won: false },
+  { id: "3060460231", label: "Cancelled Before Live", closed: true, won: false },
+  { id: "3069369052", label: "Churned", closed: true, won: false },
+  { id: "closedlost", label: "Closed Lost", closed: true, won: false },
+];
+
+/**
+ * Pure: how far along the Sales pipeline a stage id sits — its index in
+ * SALES_PIPELINE_STAGES. -1 for null or any id this build doesn't recognize
+ * (a brand-new stage, or one of the two dead ids above lingering on an old
+ * deal). Treating unknown as "behind everything" is deliberate, not a bug:
+ * it's the same convention `shouldAdvance` (adyenWebhook.ts) already uses for
+ * STAGE_RANK, and it means an unrecognized CURRENT stage never blocks a
+ * forward write — only a recognized one that's genuinely further along does.
+ */
+export function dealStageRank(stageId: string | null): number {
+  if (!stageId) return -1;
+  return SALES_PIPELINE_STAGES.findIndex(s => s.id === stageId);
+}
+
+/** Pure: the label and closed/won flags for a stage id, or nulls/false for one this build doesn't recognize. */
+export function classifyDealStage(stageId: string | null): { label: string | null; closed: boolean; won: boolean } {
+  const stage = stageId ? SALES_PIPELINE_STAGES.find(s => s.id === stageId) : undefined;
+  return stage ? { label: stage.label, closed: stage.closed, won: stage.won } : { label: null, closed: false, won: false };
+}
+
+// EasyOB writes a HubSpot stage only at moments it genuinely OBSERVES; every
+// other DealStage is left alone. This used to be `satisfies Record<DealStage,
+// string>` — one HubSpot target per EasyOB stage, no exceptions — which meant
+// five purely-internal stages (prospect_created, lead_analysis_pending,
+// analysis, pricing, proposal_ready — none of them anything a merchant or
+// HubSpot ever sees) had to be jammed onto "Discovery Meeting" anyway. That's
+// exactly the kind of unconditional write that could drag a deal a rep had
+// since moved forward back down again — the failure mode `advanceDealStage`
+// and the forward-only PATCH guard below now exist to prevent. `satisfies
+// Partial<Record<DealStage, string>>` still makes a renamed/removed DealStage
+// a compile error; it just no longer demands every stage name a target.
 //
-// Several EasyOB stages deliberately share one HubSpot stage: AIO's pipeline is
-// meeting- and signature-driven and has no equivalent of "waiting on the
-// merchant's statement" or "the proposal is generated but not sent yet". Two
-// real stages are deliberately left unused — `appointmentscheduled`
-// ("Appointment Scheduled") and `stage_0` ("Demo Meeting") are calendar events
-// a rep books, not states EasyOB can observe — and so is everything after
-// `closedwon` (Onboarding / Configuration / Deployment / Deal Active), which
-// AIO's ops team owns in HubSpot; pushing those from here would fight them.
+// `stage_0` (Demo Meeting) is deliberately absent even though it's a real,
+// current stage: nothing here writes it. It's written later, directly, by
+// `advanceDealStage`, at the moment a demo is confirmed held (read back from
+// HubSpot, or marked by a rep) — see the demo-tracking work this pipeline
+// data was built for. `3634617027` (Quote Sent) is absent for a related
+// reason: the HubSpot billing quote only ever publishes at acceptance, so a
+// `quote_sent`/`proposal_sent` write landing on "Quote Sent" here would be
+// superseded by "Signed/Awaiting Payment Info" in the same breath the
+// customer accepts — a stage that would flash for zero observable time.
 export const STAGE_MAP = {
-  prospect_created: "3262845631",      // Sales Accepted
-  lead_link_sent: "3262845631",        // Sales Accepted — nothing presented yet
-  lead_analysis_pending: "2717103849", // Discovery Meeting — merchant handed over a statement
-  analysis: "2717103849",              // Discovery Meeting
-  pricing: "2717103849",               // Discovery Meeting — internal work, nothing sent
-  proposal_ready: "2717103849",        // Discovery Meeting — generated, not sent
-  quote_sent: "3634617027",            // Quote Sent
-  proposal_sent: "3634617027",         // Quote Sent
-  quote_accepted: "2767738593",        // Signed/Awaiting Payment Info
-  merchant_link_sent: "2767738593",    // Signed/Awaiting Payment Info
-  merchant_filling: "2767738593",      // Signed/Awaiting Payment Info
-  adyen_kyc_pending: "2767738593",     // Signed/Awaiting Payment Info
+  lead_link_sent: "2717103849",     // Discovery Meeting
+  quote_sent: "2717103849",         // Discovery Meeting
+  proposal_sent: "2717103849",      // Discovery Meeting
+  quote_accepted: "2767738593",     // Signed/Awaiting Payment Info
+  merchant_link_sent: "2767738593", // Signed/Awaiting Payment Info
+  merchant_filling: "2767738593",   // Signed/Awaiting Payment Info
+  adyen_kyc_pending: "2767738593",  // Signed/Awaiting Payment Info
   // Finishing KYC is the merchant's side of the work, not Adyen's verdict on
   // it — a deal isn't won until Adyen actually approves. Only adyen_approved
   // reaches closedwon, so EasyOB never inflates the forecast.
   adyen_kyc_complete: "2767738593", // Signed/Awaiting Payment Info
   adyen_approved: "closedwon",
   closed_lost: "closedlost",
-} satisfies Record<DealStage, string>;
+} satisfies Partial<Record<DealStage, string>>;
 
 // Two private apps, two tokens. The general CRM app is companies-read-only,
 // covering the tenant linkage lookups below; the billing app covers deals,
@@ -85,6 +141,13 @@ function billingHeaders() {
 // application itself (quoteConfig / analysis / targetMargin / quoteLines).
 // Anything added here MUST exist on DEAL first — verify with
 // GET /crm/v3/properties/deals before adding a name.
+//
+// NOT all four are sent on every write. `dealname`/`amount` are gated in
+// buildDealProperties on `app.dealLink?.origin` — only a deal EasyOB created
+// itself gets them; an adopted (or origin-unknown/null) deal gets neither.
+// `pipeline`/`dealstage` are separately gated on whether the current stage
+// maps to something (see STAGE_MAP's own comment) and, on an existing deal,
+// on the forward-only guard (guardDealStageProps).
 export const DEAL_PROPERTIES = ["dealname", "pipeline", "dealstage", "amount"] as const;
 
 // HUBSPOT_DEFINED deal → company, unlabeled (PAYMENT-TEST-PLAN.md §1.1; 5 is
@@ -120,48 +183,76 @@ function annualVolume(app: MerchantApplication): number {
  * (rather than defaulted to the pipeline's first stage) when the row carries a
  * stage this build doesn't know — leaving a deal where it is beats shoving it
  * backwards through AIO's pipeline.
+ *
+ * `dealname`/`amount` are gated on whether EasyOB actually owns them — this
+ * is the fix for two live bugs deal ADOPTION introduced (a rep can now attach
+ * an application to a deal they already owned in HubSpot, rather than EasyOB
+ * always minting its own):
+ *
+ *   - `amount` here is 12x monthly card volume — EasyOB's own annualized
+ *     processing estimate, not a deal value a rep set. On an adopted deal
+ *     the rep already has their OWN forecast in `amount`; writing this number
+ *     over it silently overwrites a rep's work in a production CRM.
+ *   - `dealname` is worse: a HubSpot portal workflow renames deals to
+ *     `{company} / Deal-{n}` on its own schedule (real deals are named
+ *     exactly that, e.g. "Rocharin Thai Bistro / Deal - 1" — see CLAUDE.md).
+ *     Writing `dealname` here would fight that automation on every sync.
+ *
+ * Ownership is `!app.hubspotDealId || app.dealLink?.origin === "created"` —
+ * NOT simply `dealLink?.origin === "created"` — because a deal with no id
+ * yet doesn't exist to have a rep-owned name/forecast to clobber: this is a
+ * genuine CREATE (every legacy creator — `createDeal`, via `resolveDealForCompany`
+ * or `linkTenantCompanyAction`'s repair path — still creates its own deal this
+ * way, none of them pre-stamp `dealLink`), and it needs a name
+ * to be created with. Only a PATCH — `app.hubspotDealId` already set — onto
+ * a deal that ISN'T known to be EasyOB's own gets these two omitted. A null
+ * `dealLink` on an existing deal id — every row written before adoption
+ * existed — is read as "adopted": the conservative default, since we
+ * genuinely don't know whether EasyOB created that deal, and omitting is the
+ * only safe assumption for a field we might not own.
  */
 export function buildDealProperties(app: MerchantApplication): Record<string, string> {
-  const props: Record<string, string> = {
-    dealname: app.business?.dba || app.business?.legalName || app.analysis?.merchantName || "New Deal",
-    amount: String(Math.round(annualVolume(app))),
-  };
+  const props: Record<string, string> = {};
+  if (!app.hubspotDealId || app.dealLink?.origin === "created") {
+    props.dealname = app.business?.dba || app.business?.legalName || app.analysis?.merchantName || "New Deal";
+    props.amount = String(Math.round(annualVolume(app)));
+  }
   const dealstage = (STAGE_MAP as Record<string, string | undefined>)[app.stage];
   if (dealstage) {
     props.pipeline = HUBSPOT_DEAL_PIPELINE_ID;
     props.dealstage = dealstage;
-  } else {
-    console.warn(`pushToHubSpot: unmapped deal stage '${app.stage}' — leaving pipeline/dealstage untouched`);
   }
+  // No warn on the unmapped branch: STAGE_MAP is now a deliberately PARTIAL
+  // milestone map (see its own comment), so an app.stage with no HubSpot
+  // target is the normal, designed case for five real stages — not an
+  // anomaly worth logging on every single write that hits one of them.
   return props;
 }
 
 /**
  * The HubSpot Company this account belongs to, or null if a rep/admin hasn't
- * linked one yet. The gate on every HubSpot write that creates something:
- * associations are only settable on a deal CREATE (the v3 PATCH below takes
- * properties only), so a deal made before the link exists is orphaned for
- * good — it never lands on the Company record where reps work, and nothing in
- * this app can attach it afterwards. Blocking and waiting for the link is the
- * only recoverable order of operations.
+ * linked one yet. The gate on every HubSpot write that creates something: the
+ * v3 properties PATCH `syncDealFromApplication` uses on an existing deal cannot
+ * touch associations at all, so this code path never tries. A v4 associations PUT
+ * CAN attach a company to an already-created deal (verified live against the
+ * portal 2026-09-21 — see `associateDealToCompany`), so an orphaned deal is
+ * repairable, not stuck forever. That doesn't relax this gate, though: a deal
+ * minted before the link exists is invisible on the Company record from the
+ * instant it's created, and nothing here would prompt anyone to notice and
+ * repair it. So blocking and waiting for the link stays the only way IN —
+ * repair is a deliberate act (`linkTenantCompanyAction`), never a substitute
+ * for creating it right the first time.
  */
 export function tenantCompanyId(app: Pick<MerchantApplication, "tenantLink">): string | null {
   return clean(app.tenantLink?.hubspotCompanyId);
 }
 
 /**
- * Whether `pushToHubSpot` will do anything other than throw. An account with a
- * deal already on it keeps syncing (that's a PATCH, no association needed);
- * one without needs the tenant link first.
- */
-export function canPushToHubSpot(app: Pick<MerchantApplication, "tenantLink" | "hubspotDealId">): boolean {
-  return !!app.hubspotDealId || !!tenantCompanyId(app);
-}
-
-/**
- * Pure: v3 inline associations for a deal CREATE. Never empty in practice —
- * `pushToHubSpot` refuses to create a deal without a tenant link — but kept
- * total so the property/association builders stay independently testable.
+ * Pure: v3 inline associations for a deal CREATE. Not wired to a live call
+ * site any more — `createDeal` builds its own association array inline, and
+ * `syncDealFromApplication` never creates — but kept as an independently
+ * testable primitive: total (empty array for no tenant link) rather than
+ * throwing, so a future creator can compose it freely.
  */
 export function buildDealAssociations(app: MerchantApplication): HubspotAssociation[] {
   const companyId = tenantCompanyId(app);
@@ -190,51 +281,387 @@ function describeDealWrite(
   return parts.join("; ");
 }
 
-export async function pushToHubSpot(app: MerchantApplication): Promise<string> {
-  const props = buildDealProperties(app);
+// Reads only `dealstage` — the one property every rank comparison below
+// needs, and nothing else, so a caller that's only guarding a write doesn't
+// have to pull the rest of DEAL_PROPERTIES along with it.
+async function getDealStage(dealId: string): Promise<string | null> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/${dealId}?properties=dealstage`, {
+    headers: billingHeaders(),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot deal ${dealId} stage read failed`, res.status, await res.text());
+  const data = await res.json() as { properties?: { dealstage?: string | null } };
+  return data.properties?.dealstage ?? null;
+}
 
-  if (app.hubspotDealId) {
-    // Update existing deal. v3 PATCH takes properties only — associations are
-    // set on create (and via the v4 surface), never here.
-    const res = await fetch(`${BASE}/crm/v3/objects/deals/${app.hubspotDealId}`, {
-      method: "PATCH",
-      headers: billingHeaders(),
-      body: JSON.stringify({ properties: props }),
-    });
-    if (!res.ok) {
-      throw hubspotErr(
-        `HubSpot deal ${app.hubspotDealId} update failed (${describeDealWrite(app, props, [])})`,
-        res.status, await res.text()
-      );
-    }
-    return app.hubspotDealId;
+/**
+ * Pure: the forward-only decision itself, split out from the network read so
+ * it's testable without stubbing fetch. Drops `dealstage`/`pipeline` from a
+ * deal-write payload when writing them would move the deal BACKWARDS from
+ * where it currently sits — the same rule the field comment on `syncDealFromApplication`'s
+ * PATCH branch below explains. Equal ranks are left alone (re-affirming the
+ * stage a deal is already at is harmless), only a strictly lower rank drops
+ * the fields.
+ */
+export function guardDealStageProps(
+  currentStageId: string | null,
+  props: Record<string, string>
+): Record<string, string> {
+  if (!props.dealstage) return props; // buildDealProperties already omitted it — nothing to guard
+  if (dealStageRank(props.dealstage) >= dealStageRank(currentStageId)) return props;
+  const rest: Record<string, string> = { ...props };
+  delete rest.dealstage;
+  delete rest.pipeline;
+  return rest;
+}
+
+/**
+ * Pure: the fallback write when the deal's current stage could not be read AT
+ * ALL (network error, HubSpot 5xx, deal deleted) — as opposed to a successful
+ * read that simply comes back with no dealstage (a deal that genuinely has
+ * none, which `guardDealStageProps` already handles via rank -1). A failed
+ * READ carries no information, so unlike an unrecognized/absent CURRENT stage
+ * — which `guardDealStageProps` treats as "behind everything", letting a real
+ * target write through — the only safe move here is to never touch the
+ * stage, letting the rest of the write (name, amount) proceed regardless.
+ */
+export function omitStageOnUnreadableDeal(props: Record<string, string>): Record<string, string> {
+  if (!props.dealstage) return props;
+  const rest: Record<string, string> = { ...props };
+  delete rest.dealstage;
+  delete rest.pipeline;
+  return rest;
+}
+
+async function dropBackwardStage(dealId: string, props: Record<string, string>): Promise<Record<string, string>> {
+  if (!props.dealstage) return props;
+  let currentStageId: string | null;
+  try {
+    currentStageId = await getDealStage(dealId);
+  } catch (err) {
+    // getDealStage throws on a failed read, and syncDealFromApplication's PATCH
+    // branch is a hard error (not fire-and-log) in retryBillingQuoteAction — so a
+    // transient HubSpot read failure must not break a retry that would
+    // otherwise have succeeded. Degrade instead: never move a deal we
+    // couldn't inspect, and let name/amount still go through.
+    console.warn(`dropBackwardStage: could not read deal ${dealId}'s current stage — omitting dealstage/pipeline from this write`, err);
+    return omitStageOnUnreadableDeal(props);
   }
+  return guardDealStageProps(currentStageId, props);
+}
 
-  // Create deal, associated to its tenant Company — which must already be
-  // linked. Callers are expected to have checked `canPushToHubSpot` and held
-  // off; this throw is the backstop that keeps a new call site from quietly
-  // minting another orphan.
-  const associations = buildDealAssociations(app);
-  if (associations.length === 0) {
+/**
+ * Move a deal to `targetStageId`, but only if that's strictly ahead of where
+ * it currently sits — read the live stage first rather than trust whatever
+ * this app last wrote, since a rep can drag a deal forward in HubSpot itself.
+ * `"unknown_stage"` guards the caller, not the deal: a targetStageId this
+ * build doesn't recognize (a typo, or a stage retired since this shipped)
+ * can't be ranked against anything, so nothing is read or written.
+ */
+export async function advanceDealStage(
+  dealId: string,
+  targetStageId: string
+): Promise<"advanced" | "already_ahead" | "unknown_stage"> {
+  const targetRank = dealStageRank(targetStageId);
+  if (targetRank === -1) return "unknown_stage";
+
+  const currentStageId = await getDealStage(dealId);
+  if (targetRank <= dealStageRank(currentStageId)) return "already_ahead";
+
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/${dealId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: { pipeline: HUBSPOT_DEAL_PIPELINE_ID, dealstage: targetStageId } }),
+  });
+  if (!res.ok) {
+    throw hubspotErr(`HubSpot deal ${dealId} advance to ${targetStageId} failed`, res.status, await res.text());
+  }
+  return "advanced";
+}
+
+/**
+ * PATCH-only. Deal *creation* is no longer this function's job: under the
+ * mandatory-deal model a deal is adopted or minted through `resolveDealForCompany`
+ * at prospect time (`createDeal`, `hubspotDeal.ts`), so every application this
+ * function is ever called on already carries a `hubspotDealId` — the sole
+ * remaining exception is a legacy row from before deal adoption existed, whose
+ * recovery is `adoptDealAction` (attaches an EXISTING deal, never creates one)
+ * or, if no deal exists on the company at all, `linkTenantCompanyAction`'s
+ * repair path (which goes through `createDeal` directly) — never this
+ * function creating one on the fly. Throws rather than creating, so a stale
+ * call site can't quietly mint an orphaned duplicate deal.
+ */
+export async function syncDealFromApplication(app: MerchantApplication): Promise<string> {
+  if (!app.hubspotDealId) {
     throw new Error(
-      "Refusing to create a HubSpot deal: this account isn't linked to a HubSpot Company yet. " +
-      "A deal's company association can only be set when the deal is created, so one made now would " +
-      "never appear on the Company record. Link the tenant company first."
+      "Refusing to sync a HubSpot deal: this application has no hubspotDealId. " +
+      "A deal is adopted or created at prospect time (or via adoptDealAction for a legacy row) — " +
+      "this function only ever PATCHes an existing one, it never mints a new one."
     );
   }
-  const res = await fetch(`${BASE}/crm/v3/objects/deals`, {
-    method: "POST",
+
+  const props = buildDealProperties(app);
+
+  // Update existing deal. v3 PATCH takes properties only — associations are
+  // set on create, or after the fact via the v4 PUT (verified live
+  // 2026-09-21; see `associateDealToCompany`) — never here.
+  //
+  // Forward-only: read the deal's LIVE stage first and drop dealstage/
+  // pipeline from the payload if the mapped target would move it backwards.
+  // Nothing ever read a deal back before this, so dealstage was written
+  // unconditionally — a rep who has since dragged the deal forward in
+  // HubSpot (say, to "Onboarding") would get yanked back to whatever
+  // milestone EasyOB last observed. This can only ever DROP those two
+  // properties from the payload; it never rewrites them to something else,
+  // and name/amount still get updated regardless.
+  const guardedProps = await dropBackwardStage(app.hubspotDealId, props);
+  const res = await fetch(`${BASE}/crm/v3/objects/deals/${app.hubspotDealId}`, {
+    method: "PATCH",
     headers: billingHeaders(),
-    body: JSON.stringify(associations.length ? { properties: props, associations } : { properties: props }),
+    body: JSON.stringify({ properties: guardedProps }),
   });
   if (!res.ok) {
     throw hubspotErr(
-      `HubSpot deal create failed (${describeDealWrite(app, props, associations)})`,
+      `HubSpot deal ${app.hubspotDealId} update failed (${describeDealWrite(app, guardedProps, [])})`,
       res.status, await res.text()
     );
   }
+  return app.hubspotDealId;
+}
+
+// ── Deal reads, and adoption of an EXISTING deal ────────────────────────────
+// Nothing above this point ever read a deal back except getDealStage's single
+// `dealstage` property (for the forward-only guard). This is the wider read
+// side: what a rep sees while picking a deal to attach an application to,
+// instead of EasyOB always minting a new one. All on billingHeaders() — the
+// general app has no deals scope at all.
+//
+// `associations.company` deals/search filter and the `?associations=companies`
+// GET are both verified live against portal 244508708 (2026-09-21). The
+// company-side association read (`GET /crm/v4/objects/companies/{id}/associations/deals`)
+// 403s on the billing token — it has zero company-read scope — so every read
+// here goes deal-first, never company-first. See the adjacent probe notes on
+// `listDealsForCompany` below for what that costs.
+
+export type HubspotDeal = {
+  id: string;
+  name: string;
+  pipelineId: string | null;
+  stageId: string | null;
+  stageLabel: string | null;
+  amount: number | null;
+  createdAt: string | null;
+  closed: boolean;
+  won: boolean;
+  companyIds: string[];
+};
+
+// Superset of DEAL_PROPERTIES for reads only: `createdate` is never written
+// (buildDealProperties doesn't set it) but is confirmed to exist and be
+// correctly typed (verified live 2026-09-21) and is needed to compare a
+// candidate deal's age against other signals a caller may hold.
+const DEAL_READ_PROPERTIES = ["dealname", "pipeline", "dealstage", "amount", "createdate"] as const;
+
+/**
+ * Pure: collapses HubSpot's labeled + unlabeled association rows for the same
+ * company (`deal_to_company` / `deal_to_company_unlabeled` — verified live,
+ * both point at the one company a deal is actually on) down to one id each.
+ */
+export function dedupeCompanyIds(results: Array<{ id: string | number }> | undefined): string[] {
+  return Array.from(new Set((results ?? []).map(r => String(r.id))));
+}
+
+/** Pure: one deal row → HubspotDeal. `closed`/`won`/`stageLabel` are derived from
+ * classifyDealStage rather than read off `hs_is_closed`/`hs_is_closed_won` — this
+ * adapter is deliberately conservative about which DEAL properties it names (see
+ * DEAL_PROPERTIES' own comment), and the local pipeline table already carries
+ * that information for every stage id this build recognizes.
+ */
+function toHubspotDeal(
+  row: { id: string; properties: Record<string, string | null> },
+  companyIds: string[]
+): HubspotDeal {
+  const p = row.properties;
+  const stageId = clean(p.dealstage);
+  const { label, closed, won } = classifyDealStage(stageId);
+  return {
+    id: row.id,
+    name: clean(p.dealname) || "(unnamed deal)",
+    pipelineId: clean(p.pipeline),
+    stageId,
+    stageLabel: label,
+    amount: num(p.amount),
+    createdAt: clean(p.createdate),
+    closed,
+    won,
+    companyIds,
+  };
+}
+
+/**
+ * Every deal HubSpot has associated to this company. Index-backed (deals/search),
+ * so it lags a freshly created deal by seconds to minutes — a rep who just made
+ * one in HubSpot may not see it here yet. `getDealById`/the paste-a-link escape
+ * hatch below are the answer for that; both read the object directly and carry
+ * no lag. Surface that honestly in a picker UI ("just created it? paste the
+ * link") rather than presenting an incomplete list as complete.
+ */
+export async function listDealsForCompany(companyId: string): Promise<HubspotDeal[]> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/search`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({
+      filterGroups: [{ filters: [{ propertyName: "associations.company", operator: "EQ", value: companyId }] }],
+      properties: DEAL_READ_PROPERTIES,
+      limit: 100,
+    }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot deal search for company ${companyId} failed`, res.status, await res.text());
+  const data = await res.json() as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
+  // The filter guarantees every hit is on this company — no per-deal
+  // association read needed to fill in companyIds.
+  return (data.results ?? []).map(row => toHubspotDeal(row, [companyId]));
+}
+
+/**
+ * Free-text search over deal names — the escape hatch for a deal that isn't
+ * (yet) associated to the company in HubSpot. Same `q.length < 2 → []` guard
+ * as `searchTenantCompanies`. Companies are unknown from this search (HubSpot's
+ * search API doesn't return associations), so `companyIds` comes back empty —
+ * callers must re-validate via `getDealById` before treating a hit as "on this
+ * company", same as `resolveDealForCompany` already does for every adoption.
+ */
+export async function searchDealsByName(query: string, limit = 10): Promise<HubspotDeal[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/search`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ query: q, limit, properties: DEAL_READ_PROPERTIES }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot deal search failed", res.status, await res.text());
+  const data = await res.json() as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
+  return (data.results ?? []).map(row => toHubspotDeal(row, []));
+}
+
+/**
+ * Pure: extract a deal id from either a bare numeric id or a pasted HubSpot
+ * record URL (e.g. `https://app-na2.hubspot.com/contacts/244508708/record/0-3/348349741779`).
+ * Returns null for anything that resolves to neither — the caller treats that
+ * as "not found" rather than guessing at a malformed paste.
+ */
+export function parseDealIdInput(input: string): string | null {
+  const trimmed = input.trim();
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  try {
+    const segments = new URL(trimmed).pathname.split("/").filter(Boolean);
+    const last = segments[segments.length - 1];
+    return last && /^\d+$/.test(last) ? last : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A single deal by id (or a pasted HubSpot record URL — see parseDealIdInput),
+ * with the companies it's associated to. NOT index-backed (a direct GET, not
+ * deals/search), so unlike `listDealsForCompany` this sees a deal the instant
+ * it's created — which is what makes it the answer to that function's lag: a
+ * rep who just made a deal in HubSpot pastes its link here instead of waiting
+ * for the search index to catch up.
+ */
+export async function getDealById(dealIdOrUrl: string): Promise<HubspotDeal | null> {
+  const dealId = parseDealIdInput(dealIdOrUrl);
+  if (!dealId) return null;
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v3/objects/deals/${dealId}?properties=${DEAL_READ_PROPERTIES.join(",")}&associations=companies`,
+    { headers: billingHeaders() }
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw hubspotErr(`HubSpot deal ${dealId} fetch failed`, res.status, await res.text());
+  const data = await res.json() as {
+    id: string;
+    properties: Record<string, string | null>;
+    associations?: { companies?: { results?: Array<{ id: string | number }> } };
+  };
+  return toHubspotDeal(data, dedupeCompanyIds(data.associations?.companies?.results));
+}
+
+export type CreateDealInput = { name: string; companyId: string; amount?: number; stageId?: string };
+
+/**
+ * Create a deal associated to a Company (341) — this is now the ONLY way this
+ * module creates one: `syncDealFromApplication` (formerly `pushToHubSpot`) no
+ * longer has a CREATE branch at all, since a deal is adopted or minted through
+ * `resolveDealForCompany` at prospect time. This primitive backs that
+ * resolution's `mode: "create"` path and `linkTenantCompanyAction`'s legacy
+ * repair path (a row from before deal adoption existed, whose company link
+ * only just arrived).
+ *
+ * Refuses without a company — not because a v3 CREATE is the only way to set
+ * the association (`associateDealToCompany`'s v4 PUT can attach one
+ * afterwards, verified live 2026-09-21) but because a deal created without one
+ * sits invisible off the Company record with nothing to prompt anyone to go
+ * back and fix it.
+ */
+export async function createDeal(input: CreateDealInput): Promise<string> {
+  const companyId = clean(input.companyId);
+  if (!companyId) {
+    throw new Error(
+      "Refusing to create a HubSpot deal with no company: it would go in unassociated, with nothing to " +
+      "prompt anyone to attach one afterwards."
+    );
+  }
+  const props: Record<string, string> = { dealname: input.name };
+  if (typeof input.amount === "number") props.amount = String(Math.round(input.amount));
+  if (input.stageId) {
+    props.pipeline = HUBSPOT_DEAL_PIPELINE_ID;
+    props.dealstage = input.stageId;
+  }
+  const associations: HubspotAssociation[] = [{
+    to: { id: companyId },
+    types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: DEAL_TO_COMPANY_ASSOCIATION_TYPE_ID }],
+  }];
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: props, associations }),
+  });
+  if (!res.ok) {
+    throw hubspotErr(`HubSpot deal create failed (name '${input.name}', company ${companyId})`, res.status, await res.text());
+  }
   const data = await res.json() as { id: string };
   return data.id;
+}
+
+/**
+ * Sets a deal↔company association on an EXISTING deal via a v4 associations
+ * PUT — the repair primitive for a deal that's missing (or, someday, wrong)
+ * its company. VERIFIED live against the production portal 2026-09-21: three
+ * independent PUT/read-back/company-search confirmations on a throwaway deal
+ * (deleted afterwards) all showed HubSpot accepting the write, applying its
+ * own auto-primary label (`deal_to_company` + `deal_to_company_unlabeled`),
+ * and a company-scoped `deals/search` picking the deal up immediately after.
+ * So "a deal's company association can only be set at CREATE" — asserted
+ * elsewhere in this file — was a v3-PATCH limitation, not an absolute one:
+ * the v3 properties PATCH genuinely cannot touch associations, but this v4
+ * surface can. That does NOT license creating a deal without a company —
+ * this is `linkTenantCompanyAction`'s repair path for a deal that already
+ * exists, never a way around the creation gates elsewhere in this file.
+ */
+export async function associateDealToCompany(dealId: string, companyId: string): Promise<void> {
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v4/objects/deals/${dealId}/associations/companies/${companyId}`,
+    {
+      method: "PUT",
+      headers: billingHeaders(),
+      body: JSON.stringify([
+        { associationCategory: "HUBSPOT_DEFINED", associationTypeId: DEAL_TO_COMPANY_ASSOCIATION_TYPE_ID },
+      ]),
+    }
+  );
+  if (!res.ok) {
+    throw hubspotErr(`HubSpot deal ${dealId} → company ${companyId} association failed`, res.status, await res.text());
+  }
 }
 
 // ── Phase 3: tenant linkage (read-only) ─────────────────────────────────────
@@ -1487,4 +1914,106 @@ export async function listQuotesModifiedSince(sinceIso: string): Promise<QuoteSn
   } while (after);
 
   return snapshots;
+}
+
+// ── Demo tracking: meeting reads ────────────────────────────────────────────
+// Feeds src/lib/demo.ts's pure derivation — this file only fetches and shapes
+// meetings; which ones count as "the demo" is decided over there, not here.
+// Both verified live against portal 244508708 (2026-09-21, don't re-probe):
+//   - GET /crm/v4/objects/deals/{id}/associations/meetings → 200 on the
+//     billing token (deal→meeting is typeId 211), same v4 shape as
+//     getCompanyOwnerContact's associations read (`{results: [{toObjectId,
+//     associationTypes}]}`).
+//   - POST /crm/v3/objects/meetings/search filtered on `associations.company`
+//     → 200, same posture as `listDealsForCompany`'s `associations.company`
+//     filter on deals/search.
+// No new scope needed — billingHeaders() already reads both.
+
+export type MeetingSnapshot = {
+  id: string;
+  title: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  activityType: string | null;
+  outcome: string | null;
+};
+
+const MEETING_PROPS = [
+  "hs_activity_type", "hs_meeting_outcome", "hs_meeting_start_time", "hs_meeting_end_time", "hs_meeting_title",
+];
+
+function toMeetingSnapshot(id: string, props: Record<string, string | null> | undefined): MeetingSnapshot {
+  return {
+    id,
+    title: clean(props?.hs_meeting_title),
+    startTime: clean(props?.hs_meeting_start_time),
+    endTime: clean(props?.hs_meeting_end_time),
+    activityType: clean(props?.hs_activity_type),
+    outcome: clean(props?.hs_meeting_outcome),
+  };
+}
+
+/**
+ * Every meeting associated to a deal, of any `hs_activity_type` — filtering to
+ * `Demo` is `deriveDemoState`'s job, not this read's. The association read
+ * (v4) is not index-backed, so a meeting logged moments ago shows up
+ * immediately; the batch/read that follows is mapped back BY ID, not
+ * position, since a batch read's ordering isn't contractual.
+ */
+export async function listMeetingsForDeal(dealId: string): Promise<MeetingSnapshot[]> {
+  const assocRes = await fetchWithRetry(
+    `${BASE}/crm/v4/objects/deals/${dealId}/associations/meetings`,
+    { headers: billingHeaders() }
+  );
+  if (assocRes.status === 404) return [];
+  if (!assocRes.ok) {
+    throw hubspotErr(`HubSpot deal ${dealId} meeting associations read failed`, assocRes.status, await assocRes.text());
+  }
+  const assocData = await assocRes.json() as { results?: Array<{ toObjectId?: number | string }> };
+  const ids = (assocData.results ?? [])
+    .map(r => clean(r.toObjectId === undefined || r.toObjectId === null ? null : String(r.toObjectId)))
+    .filter((id): id is string => id !== null);
+  if (ids.length === 0) return [];
+
+  const readRes = await fetchWithRetry(`${BASE}/crm/v3/objects/meetings/batch/read`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: MEETING_PROPS, inputs: ids.map(id => ({ id })) }),
+  });
+  if (!readRes.ok) {
+    throw hubspotErr(`HubSpot meeting batch read failed for deal ${dealId}`, readRes.status, await readRes.text());
+  }
+  const readData = await readRes.json() as {
+    results?: Array<{ id: string; properties?: Record<string, string | null> }>;
+  };
+  const byId = new Map((readData.results ?? []).map(r => [r.id, r.properties]));
+  return ids.map(id => toMeetingSnapshot(id, byId.get(id)));
+}
+
+/**
+ * `Demo`-typed meetings associated to a company — the fallback source when a
+ * deal carries none of its own (see `deriveDemoState`'s candidate-set rule;
+ * ~30% of real `Demo` meetings carry no deal edge at all, but 95%+ carry a
+ * company edge). Filtered server-side to `hs_activity_type = "Demo"` rather
+ * than reading everything and filtering client-side, since a company can
+ * carry hundreds of unrelated meetings.
+ */
+export async function listDemoMeetingsForCompany(companyId: string): Promise<MeetingSnapshot[]> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/meetings/search`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({
+      filterGroups: [{
+        filters: [
+          { propertyName: "associations.company", operator: "EQ", value: companyId },
+          { propertyName: "hs_activity_type", operator: "EQ", value: "Demo" },
+        ],
+      }],
+      properties: MEETING_PROPS,
+      limit: 100,
+    }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot demo meeting search for company ${companyId} failed`, res.status, await res.text());
+  const data = await res.json() as { results?: Array<{ id: string; properties?: Record<string, string | null> }> };
+  return (data.results ?? []).map(row => toMeetingSnapshot(row.id, row.properties));
 }
