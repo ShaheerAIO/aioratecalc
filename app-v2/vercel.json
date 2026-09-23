@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/hubspot-links",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/aio-provisioning",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

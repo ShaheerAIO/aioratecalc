@@ -225,6 +225,32 @@ function quoteModule(
 // checkout appears within 1–9 minutes. Gating on paymentStatus would tell a
 // merchant who already paid to "Review & Pay" for most of a week, so
 // completion is derived from the subscription instead.
+// Subscription rollup states that are NOT "the merchant is paying us". A
+// canceled or unpaid subscription can still carry a paymentMethod from when it
+// was first authorized, so these have to be excluded before the
+// has-a-payment-method check below, exactly as billingModule does it.
+const NOT_PAYING = new Set(["canceled", "unpaid", "past_due", "paused", "expired"]);
+
+/** "Has this merchant's billing actually gone through?" — the single rule
+ *  shared by the customer checklist and AIO tenant provisioning.
+ *
+ *  It exists because provisioning is triggered by payment: if this disagreed
+ *  with what billingModule renders, the checklist could say "Billing is set
+ *  up" while nothing ever provisioned (or the reverse). billingModule keeps
+ *  its own branches because each bad state needs its own copy; a test in
+ *  onboardingModules.test.ts asserts the two can never disagree on the
+ *  complete/not-complete verdict. */
+export function hasBillingCompleted(hubspotIds: MerchantApplication["hubspotIds"]): boolean {
+  if (!hubspotIds?.quoteId || !hubspotIds.publishedAt) return false;
+  const { subscriptionStatus, subscriptions } = hubspotIds;
+  if (subscriptionStatus && NOT_PAYING.has(subscriptionStatus)) return false;
+  if (subscriptionStatus === "active") return true;
+  // A non-null paymentMethod proves the buyer completed checkout. Gating on
+  // the SUBSCRIPTION, never on hs_payment_status — PAID lags checkout by a
+  // median of 5.7 days on ACH.
+  return (subscriptions ?? []).some(s => s.paymentMethod);
+}
+
 function billingModule(app: MerchantApplication, basePath: string): OnboardingModule | null {
   const key = "billing";
   const label = "Billing";
