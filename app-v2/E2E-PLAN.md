@@ -1,5 +1,13 @@
 # E2E Implementation Plan
 
+> **⚠️ SUPERSEDED IN PART (2026-09-23).** Everything in this document describing EasyOB creating
+> Adyen objects itself — legal entity, account holder, business line, balance account, onboarding
+> link, the Balance Platform webhook, the manual "Save tenant number" step — is **no longer how it
+> works**. That code is deleted. A merchant now gets a tenant, a location and an Adyen KYC link
+> from **AIO's own dashboard API**, triggered once their billing is paid. See the root `CLAUDE.md`
+> section "The AIO dashboard provisioning path". The settlement/actuals half of this document
+> (Phase G) is unaffected and still current.
+
 Gap analysis of the current app against `E2E.md`, turned into phased work. Updated 2026-08-18
 after four rounds of clarification:
 

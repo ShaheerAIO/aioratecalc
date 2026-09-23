@@ -73,7 +73,7 @@ There is **no build, install, or test tooling** in this repo (no `package.json`,
 - **Database:** Postgres via Vercel Marketplace (Neon integration), project `aioapp1/aioratecalc`. ORM: Drizzle (`drizzle-orm` + `@neondatabase/serverless`).
 - **Auth:** NextAuth v5, JWT sessions. **Staff (rep/admin) sign in with Microsoft Entra ID** (`microsoft-entra-id`, OIDC) — see "Entra ID staff sign-in" below. Customers still use Credentials (magic link, or a password they set themselves); the only remaining staff password is the admin breakglass at `/login/breakglass`.
 - **Storage:** all reads/writes go through Server Actions (`src/lib/actions/`) → `PostgresAdapter` (`src/lib/storage/postgresAdapter.ts`). `LocalStorageAdapter` was deleted in Phase 1.5 — nothing in the running app touches `localStorage` for application/settings data anymore.
-- **Adyen:** hosted onboarding only — AIO creates a legal entity skeleton, Adyen returns a URL, merchant fills SSN/bank/EIN directly on Adyen's hosted page. Phase 2 is **built and in testing** (see phase table) — legal-entity graph + on-demand onboarding-link regeneration are wired; keys must be `\$`-escaped in `.env.local` (see gotcha above).
+- **Adyen:** EasyOB no longer creates Adyen accounts. As of 2026-09-23 the ONLY way a merchant gets one is through **AIO's own dashboard API** (`adapters/aioDashboard.ts`), which creates the tenant, the location, and mints an Adyen hosted-onboarding link already wired to the right tenant. EasyOB's own legal-entity/account-holder/business-line chain was deleted: it produced balance accounts that were misnamed and unlinked from AIO's tenant graph. The merchant still fills SSN/bank/EIN on Adyen's hosted page. EasyOB keeps ONE direct Adyen dependency — the read-only **settlement report** download that feeds the P&L (`adapters/adyenReports.ts`).
 - **Check (checkhq.com):** embedded payroll. Hosted onboarding only, same posture as Adyen — AIO creates the Check *company* from details it already holds, Check collects EIN/bank/tax data on its own hosted pages. Wired & in sandbox testing (see the payroll module below).
 - **HubSpot:** Private App Token (`HUBSPOT_PRIVATE_APP_TOKEN`), no OAuth. Still Phase 3, not started.
 
@@ -215,7 +215,13 @@ app-v2/src/
                                  listQuoteTemplatesAction — quoteType → HubSpot quote template mapping
     debugRole.ts               ← setDebugRoleAction (no-ops unless ENABLE_DEBUG_ROLE_SWITCH=true)
   lib/adapters/
-    adyen.ts                 ← createLegalEntityAndGetOnboardingUrl(), createOnboardingLink(), updateLegalEntity() — Phase 2, wired & in testing
+    aioDashboard.ts           ← THE way a merchant gets an Adyen account. createAioBusiness()
+                                 (tenant), createAioLocation(), createAioAdyenOnboardingLink(),
+                                 findAioBusinessByAlias() (reconcile). Absorbs two AIO bugs —
+                                 location create 500s on the FIRST call, and adyen-onboard returns
+                                 201 with url:"" on the FIRST call — with narrow predicated retries.
+                                 adapters/adyen.ts is DELETED; don't reintroduce it.
+    adyenReports.ts           ← the ONLY remaining direct Adyen call: read-only settlement CSV
     check.ts                  ← createCheckCompany(), createCheckOnboardLink(), getCheckOnboardStatus() — Check payroll onboarding, wired & in sandbox
     hubspot.ts                ← pushToHubSpot() (deals, repaired), listProducts(), company/contact reads,
                                  + Phase E billing: ensureQuoteContact, createQuoteLineItems,
@@ -224,7 +230,7 @@ app-v2/src/
                                  pullFromHubSpot() was DELETED — dead, and wrote phantom properties
     email.ts                  ← sendMagicLinkEmail() (KYC-handoff resend) + sendLeadLinkEmail() (Phase 4,
                                  prospect creation) via Resend's HTTP API — no SDK. Degrades gracefully
-                                 (returns sent:false) when RESEND_API_KEY is unset, unlike adyen.ts/hubspot.ts
+                                 (returns sent:false) when RESEND_API_KEY is unset, unlike aioDashboard.ts/hubspot.ts
     sms.ts                     ← sendLeadLinkSms() — Phase 4, Twilio HTTP API, no SDK. Same
                                  degrade-gracefully posture as email.ts; only called when a phone is given
   lib/foodbuyForm.ts            ← buildFoodbuyFormHtml() — Foodbuy has NO API (it's a paper participation
@@ -304,14 +310,14 @@ the `.env.local.bak-*` the registration script leaves behind, or re-run
 `scripts/entra-app-registration.ps1` to mint a fresh secret (then update Vercel, since the old
 secret stays valid but you no longer have it).
 
-**⚠️ Adyen (and any) API keys containing `$` MUST be `\$`-escaped in `.env.local`.** Next's `@next/env` runs `dotenv-expand`, so a raw `$AB` in a key value is silently expanded away (treated as a `${AB}` reference), corrupting the key and producing Adyen `401 Unauthorized`. Single/double quotes do NOT prevent this in `@next/env` — only backslash-escaping (`\$`) does. **In the Vercel project env UI, do the opposite: paste the RAW `$`** (Vercel stores values literally and does not run dotenv-expand; a `\$` there becomes part of the key and 401s). The Adyen LEM/Config keys map as: LEM test key → `ADYEN_LEM_API_KEY`, platform web service key → `ADYEN_CONFIG_API_KEY`, HMAC → `ADYEN_WEBHOOK_HMAC_KEY`.
+**⚠️ Adyen (and any) API keys containing `$` MUST be `\$`-escaped in `.env.local`.** Next's `@next/env` runs `dotenv-expand`, so a raw `$AB` in a key value is silently expanded away (treated as a `${AB}` reference), corrupting the key and producing Adyen `401 Unauthorized`. Single/double quotes do NOT prevent this in `@next/env` — only backslash-escaping (`\$`) does. **In the Vercel project env UI, do the opposite: paste the RAW `$`** (Vercel stores values literally and does not run dotenv-expand; a `\$` there becomes part of the key and 401s). (The Adyen LEM/Config/HMAC keys this originally described are gone — EasyOB no longer creates Adyen objects — but the rule still applies to any key containing `$`, including `AIO_DASHBOARD_PASSWORD`.)
 
 ### Phase status
 | Phase | What | Status |
 |---|---|---|
 | 1 | Next.js scaffold + 5-step rep flow + localStorage | **DONE** (committed 2026-07-06) |
 | 1.5 | Multi-role (Customer/Rep/Admin), Postgres, NextAuth, pillowed margin, customer self-serve lead flow | **DONE** (2026-07-06) |
-| 2 | Adyen hosted onboarding (wire `adyen.ts` stub + webhook route) | **BUILT / in testing** — `adyen.ts` creates the legal-entity graph + mints onboarding links; webhook route exists; customer self-serve onboarding flow (`CustomerOnboardStep`, `saveMyApplicationOnboardingAction`) wired end-to-end. Onboarding links are single-use / ~4-min expiry, so `/customer/applications/[id]/continue` regenerates a fresh link per click via `createOnboardingLink()` — never re-serve a stored `adyenOnboardingUrl`. MCC→Adyen-industry-code mapping still a go-live TODO. |
+| 2 | Adyen onboarding | **REPLACED 2026-09-23 — EasyOB no longer creates Adyen accounts.** Product-owner decision: our own integration was "harmful and redundant", producing balance accounts that were misnamed and unlinked from the AIO tenant graph. `adapters/adyen.ts`, `adapters/adyenWebhook.ts` and `/api/adyen/webhook` are DELETED. A merchant now gets a tenant + location + KYC link from **AIO's dashboard API**, triggered when their **billing is paid** (the HubSpot subscription appears), by `/api/cron/aio-provisioning` → `lib/aio/provision.ts`. Behind `AIO_DASHBOARD_ENABLED`, **default OFF** — the API exists only on internal dev and its own developer calls it proof-of-concept. See "The AIO dashboard provisioning path" below. |
 | 2.5 | Check payroll onboarding (the `payroll` module on the customer checklist) | **BUILT / sandbox** — opt-in, not auto-chained like Adyen: nothing reaches Check until the customer clicks "Set Up Payroll" at `/customer/applications/[id]/payroll`, which collects the two things AIO can't derive (first payday + authorized signer) and calls `startPayrollOnboardingAction`. Onboard links are one-time use / 24h, so `/customer/applications/[id]/payroll/continue` mints a fresh one per click — never store and re-serve one. Check has **no redirect-back URL**, so completion is detected by re-reading `company.onboard.status` when the customer views the application (`getMyApplicationWithPayrollSyncAction`), cached on `checkIds.onboardStatus` so list/dashboard views don't fan out one API call per app. Production base URL is a go-live TODO (`CHECK_API_BASE_URL`; Check doesn't publish it). |
 | 3 | HubSpot bidirectional sync (wire `hubspot.ts` stub) | **SUPERSEDED / partly done.** There is no bidirectional sync and there must not be: authority **hands off at quote publish** — EasyOB → HubSpot while the quote is a draft, HubSpot → EasyOB (read-only) forever after. Deal sync is repaired and live (it had never once succeeded before commit `9aafa5d`). Billing is E2E-PLAN **Phase E**, below. `getMyApplicationWithPayrollSyncAction` was folded into `getMyApplicationWithSyncAction` (refreshes Check + HubSpot independently). |
 | E (E2E-PLAN) | **Billing through HubSpot** — quote → hosted checkout → subscription read-back, plus the `schedule_demo` checklist shell | **PUBLISH PATH LIVE-VERIFIED 2026-08-24** — the one human-run publish `PHASE-E-SPEC.md`:777 called for is DONE; see "The Phase E gate run" below. Checkout → subscription read-back remains unverified **on purpose** (`PAYMENT-TEST-PLAN.md` §2.1 recommends against a live payment test; §1's 46 live paid quotes cover it instead). **Auto-publishes on merchant acceptance** — no rep confirmation gate (user's decision, 2026-08-21), so `canPublishBillingQuote` is the *only* thing between a bad quote and a live ACH mandate. Migration `0008` (`quote_template_policy`) **IS applied** — the policy table is empty, which is harmless: `getQuoteTemplatePolicy()` falls back to `DEFAULT_TEMPLATE_IDS`, so an unseeded table can never block a publish. Wants `NEXT_PUBLIC_HUBSPOT_PORTAL_ID=244508708` (cosmetic: CRM record links). **⚠️ One go-live blocker remains: `hs_sender_email` — see the constraint below.** |
@@ -320,6 +326,32 @@ secret stays valid but you no longer have it).
 | F | Foodbuy enrollment (the `foodbuy` checklist module — graduated off the `coming_soon` shell) | **DONE** — Foodbuy turned out to have **no API at all**: enrollment is a paper "Foodbuy Foodservice Enrollment" participation agreement (source form: `AIO_Foodbuy_Enrollment_Form_V1`) that asks for the Federal ID # (EIN), a wet/e-signature, GPO-affiliation disclosure, and per-location distributor account numbers — none of which AIO collects, matching the no-EIN/no-bank-details posture already enforced for Adyen/Check. So the Phase 2/2.5-style hosted-onboarding-API scaffold built for this module first was wrong and was torn out. What's built instead: `lib/foodbuyForm.ts` renders a pre-filled copy of the real form as printable HTML (business identity/address + main contact only — everything requiring a legal attestation or Foodbuy-side data stays a blank line), exported client-side via the same `html2pdf`-in-a-new-window pattern `ProposalStep.tsx` already uses for proposal PDFs — no new dependency, no server-side PDF lib. `foodbuyModule()` just tracks `foodbuyIds.generatedAt` (has the customer downloaded their copy yet) since there's no remote status to poll; the CTA stays available even once "complete" so they can re-download. The customer signs the printed/downloaded copy and hands it to their AIO rep or a Foodbuy account executive themselves — AIO's system never transmits or receives it. |
 
 ### Critical constraints (do not reverse)
+- **EasyOB must NEVER create an Adyen object directly.** No legal entity, no account holder, no
+  business line, no balance account, no onboarding link. That was deleted on 2026-09-23 because it
+  produced accounts misnamed and unlinked from AIO's tenant graph. Everything goes through
+  `adapters/aioDashboard.ts`. Don't reintroduce `adapters/adyen.ts`. The one surviving direct call
+  is `adyenReports.ts`, which only DOWNLOADS the settlement CSV.
+- **Everything the AIO dashboard API creates is IRREVERSIBLE.** A business alias is globally unique,
+  delete is soft and never frees it, and the database is shared with other AIO teams. Hence: a
+  DETERMINISTIC alias (`easyob_{app.id}` — a random one would mint a second tenant on retry), a
+  conditional-UPDATE lease, resume-from-persisted-ids, reconcile-by-alias before creating, and the
+  `AIO_DASHBOARD_APP_ALLOWLIST` canary. Don't simplify any of those away.
+- **Two AIO endpoints are buggy on their FIRST call and the handling is narrow on purpose.**
+  `restaurant/post/create` 500s with `relation "tenant_N.state" does not exist`;
+  `restaurant/adyen-onboard` returns HTTP 201 `success:true` with `url: ""`. So **success is the
+  PAYLOAD, never the status code** — a status-only client hands the merchant a blank KYC link.
+  Never widen these to a blanket retry: there is no idempotency key, so retrying the wrong error
+  creates a duplicate nobody can delete.
+- **`adyenIds.tenantNumber` is the AIO business id, and the settlement ingest builds `prod-{n}` from
+  it.** If AIO's store reference is not literally `prod-{businessId}`, the Phase G P&L silently
+  stops attributing revenue and nothing alerts. Verify against one real settlement row before
+  enabling the flag anywhere real.
+- **There is no automatic Adyen KYC completion signal any more.** The webhook went with the rest of
+  the integration and AIO exposes no status we can read. A deal reaches `adyen_approved` via a human
+  (`markAdyenKycCompleteAction`) or via the settlement backstop (a tenant that settles money is
+  demonstrably approved). Don't assume `stage` advances on its own.
+- **Marketing-only merchants never get an Adyen module.** They pay us but sell nothing, so KYC would
+  sit permanently incomplete. Gated on the existing `isProcessingQuote` — don't invent a second notion.
 - `MerchantApplication` has **no SSN, bank account, routing number, or EIN fields** — Adyen collects those on their hosted page
 - Pricing math (`MARGIN_REQS`, `derivePricing`) lives in `pricing.ts`, **not** in Claude prompts
 - `generateProposal()` force-overrides any AI-returned numbers with locally computed `exactRates`/`exactProjected`
@@ -382,6 +414,36 @@ fallback when `quote_template_policy` is empty, and that the whole association g
 live. Surfaced by this run: the `hs_sender_email` blocker and the verbatim-`quoteLines` hazard, both
 constraints above.
 
+### The AIO dashboard provisioning path (2026-09-23)
+
+Base `https://backend.internal.dev.aioapp.com`. **Auth is TWO headers**, not one:
+`Authorization: Bearer <AccessToken>` AND `x-id-token: <IdToken>`, both from
+`POST /api/authentication/user-login` (which also needs `Content-Type: application/json` — without
+it the body parses as form-encoded and every field reads empty). Bearer alone fails most routes with
+"Invalid access token provided", which blames the wrong token.
+
+Vocabulary mismatch worth knowing, since it cost several rounds with AIO's developer: what they call
+a **"Restaurant (Tenant)"** the API calls a `Business`, and what they call a **"Location"** the API
+calls a `Restaurant`.
+
+| Step | Call | Returns |
+|---|---|---|
+| 1 | `POST /api/business/create` | `data.id` — **the AIO tenant number** — and `data.companyId`, a **Check company the platform auto-creates** |
+| 2 | `POST /api/restaurant/post/create` | `data.id` (location), `data.workplaceId` (a Check workplace) |
+| 3 | `POST /api/restaurant/adyen-onboard` + header `x-tenant-id`, body `{restaurantId}` | `data.url` — the hosted KYC link |
+
+Each call to step 3 mints a **different** URL for the **same** legal entity, so fresh-link-per-click
+works (`/customer/applications/[id]/continue`). The `legalEntityId` is obtainable **only** by parsing
+`/legalEntities/(LE\w+)` out of that URL: `accountDetails` comes back empty and `restaurant.accountId`
+stays null.
+
+Open asks blocking flag-on, tracked in `app-v2/ADYEN-KYC-LINK-QUESTIONS.md` and
+`app-v2/AIO-DASHBOARD-API-TRANSCRIPT.md`: is the store reference `prod-{businessId}` or
+`prod-{restaurantId}`; is there a readable KYC status; a service account instead of a human
+super-admin password; a stage/production base URL; and **who owns the Check company**, since AIO
+creates one at tenant create and `startPayrollOnboardingAction` creates another — two Check
+companies for one restaurant is real payroll, not a sandbox object.
+
 ### Env vars needed (per phase)
 ```
 ANTHROPIC_API_KEY           # Phase 1 — required now
@@ -396,10 +458,17 @@ AUTH_MICROSOFT_ENTRA_ID_ISSUER   # Phase 5 — https://login.microsoftonline.com
 SEED_ADMIN_PASSWORD         # Phase 5 — breakglass password for scripts/seed-users.ts; the
                             # seeded admin123 default is fine locally and nowhere else.
 ENABLE_DEBUG_ROLE_SWITCH    # Phase 1.5 — local dev only, never in Vercel project env
-ADYEN_LEM_API_KEY           # Phase 2
-ADYEN_COMPANY_ID            # Phase 2
-ADYEN_ENVIRONMENT           # Phase 2 (test|live)
-ADYEN_WEBHOOK_HMAC_KEY      # Phase 2
+AIO_DASHBOARD_ENABLED       # master switch, must be exactly "true". DEFAULT OFF.
+AIO_DASHBOARD_BASE_URL      # no default on purpose — unset means OFF. Internal dev today.
+AIO_DASHBOARD_USERNAME      # a human super-admin today; a service account is an open ask
+AIO_DASHBOARD_PASSWORD
+AIO_DASHBOARD_BROWSER_ID    # optional, a STABLE uuid — Cognito treats it as a device
+AIO_DASHBOARD_APP_ALLOWLIST # comma-separated application ids; empty = every eligible row.
+                            # Populate it for the first real runs: every create burns a
+                            # globally-unique alias that is NEVER freed, in a shared DB.
+ADYEN_REPORT_API_KEY        # settlement reporting — KEPT, read-only, separate LIVE credential
+ADYEN_REPORT_BASE_URL       # optional; defaults to https://ca-live.adyen.com/reports/download
+ADYEN_POS_MERCHANT_ACCOUNT  # the merchant account the settlement report path is built from
 CHECK_API_KEY               # Check payroll — bearer token
 CHECK_API_BASE_URL          # Check payroll — defaults to https://sandbox.checkhq.com; set for production
 NEXT_PUBLIC_HUBSPOT_PORTAL_ID  # Phase E — 244508708. Cosmetic only: turns deal/quote ids in the
