@@ -128,26 +128,30 @@ export async function getMyQuoteAction(id: string): Promise<CustomerSafeQuote | 
 }
 
 
-// Saves the customer's self-serve business/owner/processing/agreement
-// details, then chains into Adyen (legal entity + hosted onboarding URL) and
-// HubSpot (deal sync). Both are caught independently and logged rather than
-// thrown — ADYEN_LEM_API_KEY/HUBSPOT_PRIVATE_APP_TOKEN aren't configured yet,
-// and a missing-credential error there shouldn't block the customer's save
-// or surface a 500 to them.
+// Saves the customer's self-serve business/owner/processing/agreement details,
+// then syncs the HubSpot deal. The sync is caught and logged rather than
+// thrown — HUBSPOT_PRIVATE_APP_TOKEN may not be configured, and a
+// missing-credential error shouldn't block the customer's save or surface a
+// 500 to them.
 //
-// Adyen is validated against BEFORE it's called: this is the real gate, since
-// the client-side copy of the same rules is bypassable. That includes the
-// merchant's consent — the checkboxes were enforced in the browser only, so a
-// bypassed client could reach Adyen's KYC pages having agreed to nothing.
+// Nothing here reaches Adyen any more. EasyOB stopped creating Adyen objects
+// on 2026-09-23 (they came out misnamed and unlinked from AIO's tenant graph);
+// AIO's platform provisions them once billing is paid, in lib/aio/provision.ts.
+//
+// The validation below is still the REAL gate, because the client-side copy of
+// the same rules is bypassable, and it still carries the merchant's consent —
+// the checkboxes were enforced in the browser only, so a bypassed client could
+// once have reached Adyen's KYC pages having agreed to nothing. The gate now
+// guards what we record and hand on rather than an immediate KYC handoff, but
+// a submission that never passed it must still never become a provisioned
+// account.
 // Missing consent is a validation failure, not an outage: it's the customer's
 // to fix, and lib/consent.ts decides what counts (a legacy agreement with no
 // recorded author is not the merchant's consent, and is refused here too).
 //
 // The customer's input is still saved when validation fails — losing what they
 // typed would be worse than the rejection — but the stage doesn't advance,
-// because onboarding hasn't started. `fieldErrors` (validation, the customer can
-// fix it) and `adyenFailed` (our side broke) are separate outcomes and the form
-// renders them differently.
+// because onboarding hasn't started.
 // The deal sync both customer-side saves make, best-effort as it always was
 // — the merchant is mid-form and a HubSpot outage must not cost them the save.
 //

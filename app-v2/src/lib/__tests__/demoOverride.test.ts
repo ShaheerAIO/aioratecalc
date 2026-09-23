@@ -15,7 +15,6 @@ vi.mock("@/lib/storage/postgresAdapter", () => ({
   postgresStorage: { getApplication, saveApplication, getSettings: vi.fn(), saveSettings: vi.fn() },
 }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail: vi.fn() }));
-vi.mock("@/lib/adapters/adyen", () => ({ applyTenantNumber: vi.fn() }));
 vi.mock("@/lib/db/schema", () => ({ customerLoginTokens: {}, users: {} }));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({

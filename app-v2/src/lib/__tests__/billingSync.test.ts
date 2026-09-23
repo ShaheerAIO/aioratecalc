@@ -18,11 +18,6 @@ vi.mock("@/lib/storage/postgresAdapter", () => ({
   postgresStorage: { getApplicationForCustomer, updateApplicationAsCustomer },
 }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail: vi.fn() }));
-vi.mock("@/lib/adapters/adyen", () => ({
-  createAdyenLegalEntity: vi.fn(), createAdyenAccountHolder: vi.fn(),
-  createAdyenBusinessLine: vi.fn(), createAdyenBalanceAccount: vi.fn(),
-  createOnboardingLink: vi.fn(), updateLegalEntity: vi.fn(),
-}));
 vi.mock("@/lib/adapters/check", () => ({
   checkEnvironment: vi.fn(), createCheckCompany: vi.fn(),
   createCheckOnboardLink: vi.fn(), getCheckOnboardStatus,

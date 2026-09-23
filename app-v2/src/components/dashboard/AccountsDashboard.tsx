@@ -8,7 +8,6 @@ import {
   listRepsAction,
   sendMerchantOnboardingLinkAction,
   markApplicationClosedLostAction,
-  setTenantNumberAction,
   searchTenantCompaniesAction,
   linkTenantCompanyAction,
   unlinkTenantCompanyAction,
@@ -104,7 +103,6 @@ function AccountsDashboardInner({
   const [selected, setSelected] = useState<MerchantApplication | null>(null);
   const [busyId, setBusyId]     = useState<string | null>(null);
   const [search, setSearch]     = useState("");
-  const [tenantDraft, setTenantDraft] = useState("");
   // The link the staff just (re)sent, kept per-account so it can't leak onto
   // the next row they open. `kind` picks the expiry copy; `smsSent` is null
   // when no phone was on file (so we don't claim a text that was never tried).
@@ -149,11 +147,6 @@ function AccountsDashboardInner({
       listRepsAction().then(setReps).catch(() => {});
     }
   }, [isAdmin]);
-
-  // Keep the tenant-number input in sync with whichever account is open.
-  useEffect(() => {
-    setTenantDraft(selected?.adyenIds?.tenantNumber || "");
-  }, [selected?.id]);
 
   const repMap = new Map(reps.map(r => [r.id, r]));
 
@@ -234,17 +227,6 @@ function AccountsDashboardInner({
       updateOne(updated);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to update stage");
-    }
-    setBusyId(null);
-  };
-
-  const handleSetTenant = async (app: MerchantApplication) => {
-    setBusyId(app.id);
-    try {
-      const updated = await setTenantNumberAction(app.id, tenantDraft);
-      updateOne(updated);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to set tenant number");
     }
     setBusyId(null);
   };
@@ -866,27 +848,6 @@ function AccountsDashboardInner({
                     </div>
                   )}
 
-                  {isAdmin && selected.adyenIds?.legalEntityId && (
-                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-                      <div style={{ flex: 1, minWidth: 220 }}>
-                        <div className={styles.detailFieldLabel}>AIO tenant number</div>
-                        <input
-                          className={styles.tableSearchInput}
-                          style={{ width: "100%" }}
-                          placeholder="e.g. 1024 — stamps the account holder and creates store prod-1024"
-                          value={tenantDraft}
-                          onChange={e => setTenantDraft(e.target.value)}
-                        />
-                      </div>
-                      <button
-                        className={styles.btnPrimary}
-                        disabled={busyId === selected.id || !tenantDraft.trim()}
-                        onClick={() => handleSetTenant(selected)}
-                      >
-                        Save tenant number
-                      </button>
-                    </div>
-                  )}
                   {/* Rework the quote at any time up to acceptance — "things change
                       after the demo". Owner rep or any admin, same gate as the
                       tenant link above. saveQuoteConfigurationAction (which this

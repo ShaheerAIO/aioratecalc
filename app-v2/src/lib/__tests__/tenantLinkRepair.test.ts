@@ -27,7 +27,6 @@ const buildAndPublishBillingQuote = vi.fn();
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { getApplication, saveApplication } }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail: vi.fn() }));
-vi.mock("@/lib/adapters/adyen", () => ({ applyTenantNumber: vi.fn() }));
 vi.mock("@/lib/db/schema", () => ({ customerLoginTokens: {}, users: {} }));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
 // Partial mock: keep the real pure helpers (buildDealAssociations, etc.),

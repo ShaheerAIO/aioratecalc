@@ -24,7 +24,6 @@ const listSubmissionsAction = vi.fn();
 const listRepsAction = vi.fn();
 const sendMerchantOnboardingLinkAction = vi.fn();
 const markApplicationClosedLostAction = vi.fn();
-const setTenantNumberAction = vi.fn();
 const searchTenantCompaniesAction = vi.fn();
 const linkTenantCompanyAction = vi.fn();
 const unlinkTenantCompanyAction = vi.fn();
@@ -37,7 +36,6 @@ vi.mock("@/lib/actions/applications", () => ({
   listRepsAction,
   sendMerchantOnboardingLinkAction,
   markApplicationClosedLostAction,
-  setTenantNumberAction,
   searchTenantCompaniesAction,
   linkTenantCompanyAction,
   unlinkTenantCompanyAction,

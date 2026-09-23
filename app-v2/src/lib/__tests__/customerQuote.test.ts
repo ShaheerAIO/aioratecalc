@@ -14,11 +14,6 @@ vi.mock("next-auth", () => ({ AuthError: class AuthError extends Error {} }));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { getApplicationForCustomer } }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail: vi.fn() }));
-vi.mock("@/lib/adapters/adyen", () => ({
-  createAdyenLegalEntity: vi.fn(), createAdyenAccountHolder: vi.fn(),
-  createAdyenBusinessLine: vi.fn(), createAdyenBalanceAccount: vi.fn(),
-  createOnboardingLink: vi.fn(), updateLegalEntity: vi.fn(),
-}));
 vi.mock("@/lib/adapters/check", () => ({
   checkEnvironment: vi.fn(), createCheckCompany: vi.fn(),
   createCheckOnboardLink: vi.fn(), getCheckOnboardStatus: vi.fn(),

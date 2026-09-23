@@ -7,7 +7,6 @@ import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { db } from "@/lib/db/client";
 import { customerLoginTokens, users } from "@/lib/db/schema";
 import { sendMagicLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
-import { applyTenantNumber } from "@/lib/adapters/adyen";
 import {
   searchTenantCompanies, getTenantCompany, createDeal, buildDealProperties,
   listDealsForCompany, searchDealsByName, getDealById, associateDealToCompany,
@@ -464,37 +463,6 @@ export async function markApplicationClosedLostAction(id: string): Promise<Merch
   const app = await postgresStorage.getApplication(scope, id);
   if (!app) throw new Error("Application not found");
   const updated: MerchantApplication = { ...app, stage: "closed_lost", updatedAt: new Date().toISOString() };
-  await postgresStorage.saveApplication(scope, updated);
-  return updated;
-}
-
-// Admin-only: records the AIO tenant number for an onboarded account and applies
-// it to Adyen — stamps the account-holder reference, and (if the POS config is
-// set) creates the prod-{tenant} store so terminals can be assigned. Without the
-// POS config it degrades to handoff mode: the number is saved and exported, but no
-// store is made. Pushes to Adyen first so we don't persist a number that failed.
-export async function setTenantNumberAction(id: string, tenantNumber: string): Promise<MerchantApplication> {
-  const scope = await requireScope();
-  if (scope.role !== "admin") throw new Error("Admin only");
-  const trimmed = tenantNumber.trim();
-  if (!trimmed) throw new Error("A tenant number is required");
-
-  const app = await postgresStorage.getApplication(scope, id);
-  if (!app) throw new Error("Application not found");
-  if (!app.adyenIds?.legalEntityId) throw new Error("This account has no Adyen objects yet");
-
-  const result = await applyTenantNumber(app.adyenIds, trimmed, app);
-
-  const updated: MerchantApplication = {
-    ...app,
-    adyenIds: {
-      ...app.adyenIds,
-      tenantNumber: trimmed,
-      storeId: result.storeId ?? app.adyenIds.storeId,
-      merchantAccountId: result.merchantAccountId ?? app.adyenIds.merchantAccountId,
-    },
-    updatedAt: new Date().toISOString(),
-  };
   await postgresStorage.saveApplication(scope, updated);
   return updated;
 }

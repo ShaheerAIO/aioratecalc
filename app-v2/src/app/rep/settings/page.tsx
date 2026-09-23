@@ -174,7 +174,8 @@ export default function SettingsPage() {
         </div>
         <div className={styles.callout}>
           <p className={styles.calloutText}>
-            For production: set <code>ADYEN_LEM_API_KEY</code>, <code>ADYEN_MANAGEMENT_API_KEY</code>, <code>ADYEN_WEBHOOK_HMAC_KEY</code> as Vercel env vars — never store API keys in localStorage.
+            Vestigial: nothing server-side reads these. EasyOB no longer creates Adyen
+            accounts — AIO&apos;s platform does, configured via the <code>AIO_DASHBOARD_*</code> env vars.
           </p>
         </div>
       </div>
