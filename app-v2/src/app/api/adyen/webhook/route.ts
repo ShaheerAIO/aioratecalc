@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
-import {
-  verifyBalancePlatformHmac,
-  stageFromEvent,
-  shouldAdvance,
-} from "@/lib/adapters/adyenWebhook";
+import { verifyBalancePlatformHmac, stageFromEvent } from "@/lib/adapters/adyenWebhook";
+import { shouldAdvance } from "@/lib/stages";
 
 // Public — Adyen calls this from the internet (no user session). Security is the
 // HMAC signature over the raw body; we verify BEFORE parsing. Balance Platform

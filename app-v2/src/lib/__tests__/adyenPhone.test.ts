@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toE164Phone } from "@/lib/adapters/adyen";
+import { toE164Phone } from "@/lib/utils";
 
 describe("toE164Phone", () => {
   it("converts a plain 10-digit number to E.164", () => {

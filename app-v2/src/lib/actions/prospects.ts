@@ -19,7 +19,7 @@ import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import { analysisFromQuoteConfig, getMarginFloor, getPaddedFloorRate } from "@/lib/pricing";
 import { getActivePaddingPolicy } from "@/lib/actions/pricing";
 import { buildQuote, isAllowedForQuoteType, isProcessingQuote, toQuoteLine } from "@/lib/quoting";
-import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
+import { shouldAdvance } from "@/lib/stages";
 import { fmtBps } from "@/lib/utils";
 import type {
   BusinessInfo, DealLink, MerchantApplication, OrderPoints, OwnerContact, PricingModel, ProcessingInfo,

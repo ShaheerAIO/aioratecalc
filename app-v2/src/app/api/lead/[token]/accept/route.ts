@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
-import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
+import { shouldAdvance } from "@/lib/stages";
 import { syncDealFromApplication } from "@/lib/adapters/hubspot";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import { hasQuoteBasis } from "@/lib/leadQuote";

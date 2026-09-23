@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { analyzeStatement } from "@/lib/claude";
-import { shouldAdvance } from "@/lib/adapters/adyenWebhook";
+import { shouldAdvance } from "@/lib/stages";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
 import { isDemoHeld } from "@/lib/demo";
 import { isProcessingQuote, quoteTypeOf } from "@/lib/quoting";

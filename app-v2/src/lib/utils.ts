@@ -95,3 +95,25 @@ export function parseJSON(text: string): Record<string, unknown> | null {
   } catch {}
   return null;
 }
+
+// E.164 phone numbers (e.g. "+15106680242"). Reps hand-type free text
+// ("555-000-0000", "(714) 833-5760") and the HubSpot prefill deliberately
+// renders phones in that same display format. This is the counterpart to
+// hubspotPrefill.ts's normalizePhone(), which formats for DISPLAY in the
+// opposite direction — the two target different formats and must not be
+// conflated.
+// Anything that can't be confidently mapped to a 10-digit US number (or is
+// already E.164) is returned trimmed but otherwise UNCHANGED — a wrong number
+// silently sent to a payments platform is worse than leaving the value alone.
+// Lived in adapters/adyen.ts while that adapter was its only consumer; moved
+// here when tenant provisioning moved to the AIO dashboard API, which needs
+// the same normalization for contactNo/phoneNo.
+export function toE164Phone(phone: string | undefined): string | undefined {
+  const raw = (phone ?? "").trim();
+  if (!raw) return undefined;
+  if (raw.startsWith("+")) return raw;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return raw;
+}

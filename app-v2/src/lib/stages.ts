@@ -41,6 +41,14 @@ export const STAGE_RANK = {
   closed_lost: 14,
 } satisfies Record<DealStage, number>;
 
+/** True if `next` is strictly further along than `current` (forward-only guard).
+ *  Lives here rather than beside any one caller: it started out in the Adyen
+ *  webhook adapter, but four of its five consumers were never Adyen (the two
+ *  /lead/[token] routes and prospects.ts), and it outlived that adapter. */
+export function shouldAdvance(current: string, next: DealStage): boolean {
+  return (STAGE_RANK[next] ?? -1) > (STAGE_RANK[current as DealStage] ?? -1);
+}
+
 export const STAGE_ORDER = (Object.keys(STAGE_RANK) as DealStage[]).sort(
   (a, b) => STAGE_RANK[a] - STAGE_RANK[b]
 );
