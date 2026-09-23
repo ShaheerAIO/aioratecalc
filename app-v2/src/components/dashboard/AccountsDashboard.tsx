@@ -13,6 +13,7 @@ import {
   unlinkTenantCompanyAction,
   adoptDealAction,
   markDemoHeldAction,
+  markAdyenKycCompleteAction,
   clearDemoHeldAction,
   type RepSummary,
 } from "@/lib/actions/applications";
@@ -336,6 +337,17 @@ function AccountsDashboardInner({
   // markDemoHeldAction's comment. Not a hidden admin escape hatch: only 125 of
   // 8,018 portal meetings carry the Demo tag, so this manual mark is the
   // normal path most demos take, not a fallback.
+  const handleMarkKyc = async (app: MerchantApplication) => {
+    setBusyId(app.id);
+    try {
+      const updated = await markAdyenKycCompleteAction(app.id, "adyen_approved");
+      updateOne(updated);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to mark KYC complete");
+    }
+    setBusyId(null);
+  };
+
   const handleMarkDemo = async (app: MerchantApplication) => {
     setBusyId(app.id);
     try {
@@ -847,6 +859,36 @@ function AccountsDashboardInner({
                       )}
                     </div>
                   )}
+
+                  {/* Adyen KYC has no automatic completion signal any more. The
+                      Balance Platform webhook went when EasyOB stopped creating
+                      Adyen objects, and AIO's API exposes no onboarding status we
+                      can read. The nightly settlement backstop catches merchants
+                      who actually transact (see lib/aio/approvedFromSettlement.ts);
+                      this is for everyone else. Forward-only server-side, so it
+                      can't drag a further-along deal backwards. */}
+                  {selected.aioTenant?.provisionedAt &&
+                    selected.stage !== "adyen_approved" &&
+                    selected.stage !== "closed_lost" && (
+                      <div style={{ marginTop: 8 }}>
+                        <div className={styles.detailFieldLabel}>Adyen verification</div>
+                        <div className={styles.detailMeta} style={{ marginBottom: 8 }}>
+                          AIO tenant {selected.aioTenant.businessId}
+                          {selected.aioTenant.locationId ? ` · location ${selected.aioTenant.locationId}` : ""}
+                          {" · "}
+                          {selected.stage === "adyen_kyc_complete"
+                            ? "KYC submitted, awaiting approval"
+                            : "awaiting the merchant"}
+                        </div>
+                        <button
+                          className={styles.btnPrimary}
+                          disabled={busyId === selected.id}
+                          onClick={() => handleMarkKyc(selected)}
+                        >
+                          Mark Adyen Approved
+                        </button>
+                      </div>
+                    )}
 
                   {/* Rework the quote at any time up to acceptance — "things change
                       after the demo". Owner rep or any admin, same gate as the

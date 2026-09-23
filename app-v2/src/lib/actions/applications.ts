@@ -2,6 +2,7 @@
 
 import { randomUUID } from "crypto";
 import { inArray } from "drizzle-orm";
+import { shouldAdvance } from "@/lib/stages";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { db } from "@/lib/db/client";
@@ -463,6 +464,35 @@ export async function markApplicationClosedLostAction(id: string): Promise<Merch
   const app = await postgresStorage.getApplication(scope, id);
   if (!app) throw new Error("Application not found");
   const updated: MerchantApplication = { ...app, stage: "closed_lost", updatedAt: new Date().toISOString() };
+  await postgresStorage.saveApplication(scope, updated);
+  return updated;
+}
+
+// Marks a merchant's Adyen KYC as complete (or approved) by hand.
+//
+// This exists because retiring EasyOB's Adyen integration also retired the
+// Balance Platform webhook, which was the only thing that advanced a deal to
+// adyen_kyc_complete/adyen_approved on its own. AIO's API exposes no onboarding
+// status we can read (verified 2026-09-23: restaurant.accountId stays null and
+// accountDetails comes back empty), so until it does, a human closes the loop.
+//
+// Same posture as markDemoHeldAction: a person who can see the merchant is
+// live beats a system that cannot see it at all. Forward-only via
+// shouldAdvance, so marking can never drag a further-along deal backwards, and
+// re-marking an already-approved account is a no-op rather than a regression.
+export async function markAdyenKycCompleteAction(
+  appId: string,
+  stage: "adyen_kyc_complete" | "adyen_approved" = "adyen_kyc_complete"
+): Promise<MerchantApplication> {
+  const scope = await requireScope();
+  const app = await postgresStorage.getApplication(scope, appId);
+  if (!app) throw new Error("Application not found");
+  if (!app.aioTenant?.provisionedAt) {
+    throw new Error("This account has not been provisioned into the AIO platform yet");
+  }
+  if (!shouldAdvance(app.stage, stage)) return app;
+
+  const updated: MerchantApplication = { ...app, stage, updatedAt: new Date().toISOString() };
   await postgresStorage.saveApplication(scope, updated);
   return updated;
 }

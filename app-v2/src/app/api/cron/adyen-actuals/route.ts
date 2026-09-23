@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { advanceApprovedFromSettlement } from "@/lib/aio/approvedFromSettlement";
 import { downloadReport, AdyenReportError } from "@/lib/adapters/adyenReports";
 import { parsePaymentsAccountingReport } from "@/lib/adyen/paymentsAccountingParser";
 import { ingestPaymentsAccountingReport, getProcessedFilenames } from "@/lib/adyen/actualsIngest";
@@ -35,6 +36,7 @@ export async function GET(req: NextRequest) {
   const notYetAvailable: string[] = [];
   const failed: { filename: string; error: string }[] = [];
   let skippedAlreadyProcessed = 0;
+  const settledTenants: string[] = [];
 
   for (const filename of filenames) {
     if (alreadyProcessed.has(filename)) {
@@ -47,6 +49,7 @@ export async function GET(req: NextRequest) {
       const parsed = parsePaymentsAccountingReport(csv);
       await ingestPaymentsAccountingReport(filename, parsed);
       ingested.push(filename);
+      settledTenants.push(...parsed.actuals.map(a => a.tenantNumber));
     } catch (err) {
       if (err instanceof AdyenReportError && err.kind === "not_found") {
         notYetAvailable.push(filename);
@@ -56,12 +59,24 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Backstop for the KYC signal the retired Adyen webhook used to give us: a
+  // tenant that settled money is demonstrably approved. Deliberately AFTER the
+  // ingest loop and in its own try — the ingest is what this cron exists for,
+  // and a stage-write failure must never cost us the actuals.
+  let stagesAdvanced = 0;
+  try {
+    stagesAdvanced = await advanceApprovedFromSettlement(settledTenants);
+  } catch (err) {
+    console.error("[cron adyen-actuals] settlement stage backstop failed", err instanceof Error ? err.message : err);
+  }
+
   const summary = {
     checked: filenames.length,
     ingested,
     notYetAvailable,
     failed,
     skippedAlreadyProcessed,
+    stagesAdvanced,
   };
 
   return NextResponse.json(summary, { status: failed.length > 0 ? 500 : 200 });
