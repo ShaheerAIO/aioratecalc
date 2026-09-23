@@ -420,6 +420,7 @@ export async function createProspectAction(input: {
     tenantLink,
     adyenIds: null,
     adyenOnboardingUrl: null,
+    aioTenant: null,
     checkIds: null,
     foodbuyIds: null,
     hubspotIds: null,

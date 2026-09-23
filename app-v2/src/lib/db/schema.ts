@@ -95,6 +95,10 @@ export const merchantApplications = pgTable("merchant_applications", {
   tenantLink: jsonb("tenant_link").$type<MerchantApplication["tenantLink"]>(),
   adyenIds: jsonb("adyen_ids").$type<MerchantApplication["adyenIds"]>(),
   adyenOnboardingUrl: text("adyen_onboarding_url"),
+  // The AIO platform tenant this merchant was provisioned into, and the cron's
+  // lease/retry bookkeeping. See AioTenantIds — everything in it is
+  // irreversible on AIO's side, so the provisioner leans on it for idempotency.
+  aioTenant: jsonb("aio_tenant").$type<MerchantApplication["aioTenant"]>(),
   // Check payroll onboarding. No matching *_onboarding_url column on purpose —
   // Check's onboard links are one-time use / 24h, so they're minted per click
   // and never stored (see src/lib/adapters/check.ts).

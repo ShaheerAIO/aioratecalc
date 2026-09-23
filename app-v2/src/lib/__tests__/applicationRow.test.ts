@@ -39,6 +39,7 @@ const APP: MerchantApplication = {
   tenantLink: null,
   adyenIds: null,
   adyenOnboardingUrl: null,
+  aioTenant: null,
   checkIds: null,
   foodbuyIds: null,
   hubspotIds: null,

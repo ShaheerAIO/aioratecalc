@@ -401,6 +401,43 @@ export type AppSettings = {
   demoBookingUrl?: string | null;
 };
 
+// The AIO platform tenant graph this merchant was provisioned into, and the
+// bookkeeping the provisioning cron needs to be safely re-runnable.
+//
+// EasyOB used to create its own Adyen legal entity, which produced accounts
+// that were misnamed and unlinked from the AIO platform. Since 2026-09-23 the
+// AIO dashboard API is the ONLY way we obtain an Adyen account: it creates the
+// tenant ("business"), the location ("restaurant"), and mints a KYC link
+// already wired to the right tenant.
+//
+// Everything here is IRREVERSIBLE on AIO's side. A business alias is globally
+// unique and a delete is soft — it never frees the alias — so a duplicate
+// create is permanent debris in a database shared with other AIO teams. That
+// is why `alias` is deterministic (easyob_{app.id}), why `claimedAt` exists,
+// and why the provisioner reconciles by alias before it ever creates.
+export type AioTenantIds = {
+  // AIO "business" id — ALSO the AIO tenant number, which is what
+  // adyenIds.tenantNumber and therefore the prod-{n} settlement attribution in
+  // src/lib/adyen/paymentsAccountingParser.ts is built from.
+  businessId: number;
+  locationId: number | null;     // AIO "restaurant" — the physical site
+  companyId: string | null;      // Check company the PLATFORM auto-creates ("com_…")
+  workplaceId: string | null;    // Check workplace the platform auto-creates ("wrk_…")
+  alias: string;                 // globally unique and permanently burned
+  businessName: string;          // what we actually named it (may carry a dedupe suffix)
+  environment: string;           // which AIO deployment holds it, e.g. "internal-dev"
+  createdAt: string;             // the business landed
+  provisionedAt: string | null;  // all three steps landed — the gate the UI reads
+  claimedAt: string | null;      // cron lease; stale after 15 minutes
+  attempts: number;
+  lastAttemptAt: string | null;
+  // Persisted, not merely logged. Provisioning is a cron with no human in the
+  // loop, and the repo has already been bitten once by a failure that lived
+  // only in a Vercel log (see HubspotIds.lastSyncError).
+  lastError: string | null;
+  lastErrorAt: string | null;
+};
+
 // Check's own read of how far a company got through payroll onboarding.
 // "needs_attention" still allows payroll to run; "blocking" does not.
 export type CheckOnboardStatus = "completed" | "needs_attention" | "blocking";
@@ -504,6 +541,9 @@ export type MerchantApplication = {
     environment: "test" | "live";
   } | null;
   adyenOnboardingUrl: string | null;
+  // The AIO platform tenant this merchant was provisioned into. Null until
+  // billing is paid and the provisioning cron runs. See AioTenantIds.
+  aioTenant: AioTenantIds | null;
   checkIds: CheckIds | null; // Check payroll onboarding — null until the customer opts in
   foodbuyIds: FoodbuyIds | null; // Foodbuy enrollment — null until the customer opts in
   hubspotIds: HubspotIds | null; // HubSpot deal/quote/subscription — null until a quote is built

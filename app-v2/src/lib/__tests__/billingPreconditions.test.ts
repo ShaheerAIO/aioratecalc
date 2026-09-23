@@ -84,6 +84,7 @@ function app(extra: Partial<MerchantApplication> = {}): MerchantApplication {
     },
     adyenIds: null,
     adyenOnboardingUrl: null,
+    aioTenant: null,
     checkIds: null,
     foodbuyIds: null,
     hubspotIds: null,
