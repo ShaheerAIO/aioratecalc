@@ -1,4 +1,10 @@
 import type { HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/merchant";
+// The ONLY value import in this file, and deliberately a narrow one. The
+// "types only" rule below exists to keep pricing.ts — and therefore AIO's true
+// margin floors — out of the browser bundle. quoting.ts imports nothing but
+// `monthlyEquivalent` from utils and a few types, so it carries no margin data.
+// Don't widen this to anything that reaches pricing.ts.
+import { isProcessingQuote, quoteTypeOf } from "@/lib/quoting";
 
 export type ModuleStatus = "not_started" | "in_progress" | "complete";
 
@@ -388,46 +394,65 @@ function billingModule(app: MerchantApplication, basePath: string): OnboardingMo
   };
 }
 
-function adyenModule(app: MerchantApplication, basePath: string): OnboardingModule {
+function adyenModule(app: MerchantApplication, basePath: string): OnboardingModule | null {
+  const key = "adyen";
+  const label = "Payment Processing (Adyen)";
   const editHref = `${basePath}/edit`;
 
+  // A marketing-only merchant pays us but sells nothing through us, so they
+  // never need an Adyen account and this row would sit permanently
+  // incomplete. OMIT it rather than show a promise that will never be kept —
+  // same reasoning as billingModule's rate-only branch, and it keeps the
+  // dashboard's "N of M complete" count honest. Uses the same predicate the
+  // quote itself was built under.
+  if (!isProcessingQuote(quoteTypeOf(app.quoteType))) return null;
+
   if (app.stage === "adyen_kyc_complete" || app.stage === "adyen_approved") {
-    return {
-      key: "adyen",
-      label: "Payment Processing (Adyen)",
-      status: "complete",
-      description: "Verification complete.",
-    };
+    return { key, label, status: "complete", description: "Verification complete." };
   }
 
-  if (app.adyenOnboardingUrl) {
+  // Provisioned: AIO holds the tenant and the location, so a link can be
+  // minted. NOT the stored adyenOnboardingUrl — those are single-use and
+  // expire in minutes; the route mints a fresh one per click.
+  if (app.aioTenant?.provisionedAt && app.aioTenant.locationId) {
     return {
-      key: "adyen",
-      label: "Payment Processing (Adyen)",
+      key,
+      label,
       status: "in_progress",
       description: "Finish identity verification with our processing partner.",
-      // NOT the stored adyenOnboardingUrl — Adyen links are single-use and
-      // expire in minutes, so reusing a stored one fails at startup. This
-      // route mints a fresh link on each click, then redirects to Adyen.
       href: `${basePath}/continue`,
       ctaLabel: "Continue Verification",
     };
   }
 
+  // Claimed but not finished. Nothing for the customer to do, and no href —
+  // the provisioning cron is mid-flight or retrying.
+  if (app.aioTenant) {
+    return {
+      key,
+      label,
+      status: "in_progress",
+      description: "We're setting up your account — no action needed.",
+    };
+  }
+
+  // Details are in, but provisioning waits for billing to be paid. This is the
+  // ordering inversion the move to AIO's API introduced: the merchant submits
+  // their details well before an Adyen account can exist for them.
   if (app.business && app.ownerContact && app.processing && app.agreement) {
     return {
-      key: "adyen",
-      label: "Payment Processing (Adyen)",
+      key,
+      label,
       status: "in_progress",
-      description: "Your details were saved — onboarding link is being generated.",
+      description: "Your details are saved. Verification starts once your billing is set up.",
       href: editHref,
       ctaLabel: "Review Details",
     };
   }
 
   return {
-    key: "adyen",
-    label: "Payment Processing (Adyen)",
+    key,
+    label,
     status: "not_started",
     description: "Tell us about your business to start verification.",
     href: editHref,

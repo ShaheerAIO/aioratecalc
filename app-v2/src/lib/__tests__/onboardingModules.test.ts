@@ -413,14 +413,39 @@ describe("adyenModule (regression net)", () => {
     expect(adyen({ ...BASE_APP, stage: "adyen_approved" }).status).toBe("complete");
   });
 
-  it("is in_progress with a Continue Verification CTA once an onboarding URL exists", () => {
-    const m = adyen({ ...BASE_APP, adyenOnboardingUrl: "https://onboarding.adyen.com/xyz" });
+  it("is in_progress with a Continue Verification CTA once AIO has provisioned the tenant", () => {
+    const m = adyen({
+      ...BASE_APP,
+      aioTenant: { provisionedAt: "2026-09-23T00:00:00.000Z", locationId: 4690 } as never,
+    });
     expect(m.status).toBe("in_progress");
+    // The route, never the stored URL — AIO's links are single-use.
     expect(m.href).toBe("/customer/applications/app-1/continue");
     expect(m.ctaLabel).toBe("Continue Verification");
   });
 
-  it("is in_progress ('Review Details') once business/owner/processing/agreement are all saved but no URL yet", () => {
+  it("says we're setting up, with no CTA, while provisioning is mid-flight", () => {
+    const m = adyen({
+      ...BASE_APP,
+      aioTenant: { provisionedAt: null, locationId: null, attempts: 1 } as never,
+    });
+    expect(m.status).toBe("in_progress");
+    expect(m.href).toBeUndefined();
+    expect(m.description).toMatch(/setting up your account/i);
+  });
+
+  it("is OMITTED entirely for a marketing-only quote — they pay us but never need Adyen", () => {
+    const modules = getOnboardingModules({ ...BASE_APP, quoteType: "marketing_only" });
+    expect(modules.find(m => m.key === "adyen")).toBeUndefined();
+  });
+
+  it("still appears for a quote type that carries a processing rate", () => {
+    expect(getOnboardingModules({ ...BASE_APP, quoteType: "food_truck" }).find(m => m.key === "adyen")).toBeTruthy();
+    // Null means full_pos on pre-quote-type rows.
+    expect(getOnboardingModules({ ...BASE_APP, quoteType: null }).find(m => m.key === "adyen")).toBeTruthy();
+  });
+
+  it("tells the customer verification waits on billing once their details are saved", () => {
     const m = adyen({
       ...BASE_APP,
       business: BASE_APP.business, ownerContact: BASE_APP.ownerContact,
@@ -432,6 +457,7 @@ describe("adyenModule (regression net)", () => {
     });
     expect(m.status).toBe("in_progress");
     expect(m.ctaLabel).toBe("Review Details");
+    expect(m.description).toMatch(/once your billing is set up/i);
   });
 
   it("is not_started with a Get Started CTA before any details are saved", () => {

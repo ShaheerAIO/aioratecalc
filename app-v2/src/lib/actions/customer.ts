@@ -10,14 +10,6 @@ import { customerLoginTokens, users } from "@/lib/db/schema";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { sendMagicLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import {
-  createAdyenAccountHolder,
-  createAdyenBalanceAccount,
-  createAdyenBusinessLine,
-  createAdyenLegalEntity,
-  createOnboardingLink,
-  updateLegalEntity,
-} from "@/lib/adapters/adyen";
-import {
   checkEnvironment,
   createCheckCompany,
   createCheckOnboardLink,
@@ -135,84 +127,6 @@ export async function getMyQuoteAction(id: string): Promise<CustomerSafeQuote | 
   });
 }
 
-type AdyenIds = NonNullable<MerchantApplication["adyenIds"]>;
-
-type AdyenAdvance =
-  | { ok: true; app: MerchantApplication; onboardingUrl: string }
-  | { ok: false; app: MerchantApplication; error: unknown };
-
-// Adyen's onboarding graph is four remote objects plus a link, and a failure
-// part-way through used to be unrecoverable: nothing was persisted until the
-// whole chain returned, so the customer's "Try Again" started from step one and
-// created a SECOND legal entity for the same merchant — real orphans in a live
-// account-holder graph, with the first attempt's ids lost for good.
-//
-// Each id is now written the moment its step returns, and a step whose id is
-// already on the record is skipped, so a retry resumes at the break instead of
-// duplicating everything before it. The sequencing and the persistence live
-// here rather than in the adapter: adapters/adyen.ts has no storage and no
-// callback into one, exactly like adapters/check.ts.
-//
-// The onboarding link is the one thing never resumed. It's single-use with a
-// ~4-minute expiry, so it's minted fresh on every pass — the same rule the
-// /customer/applications/[id]/continue route follows — even when all four ids
-// were already on file and no object had to be created at all.
-//
-// Returns the latest persisted row either way, so a caller reporting a failure
-// is still reporting the ids that were actually earned.
-async function advanceAdyenOnboarding(
-  userId: string,
-  id: string,
-  app: MerchantApplication
-): Promise<AdyenAdvance> {
-  let current = app;
-  const ids: AdyenIds = {
-    legalEntityId: null,
-    accountHolderId: null,
-    balanceAccountId: null,
-    merchantAccountId: null, // set to the shared POS merchant account when the store is created (tenant number known)
-    storeId: null,
-    businessLineId: null,
-    tenantNumber: null,
-    // Which Adyen environment holds these objects. On a record that already has
-    // one this is a fact about objects Adyen is holding, so the spread below
-    // carries it forward rather than re-deriving it from the current env.
-    environment: process.env.ADYEN_ENVIRONMENT === "live" ? "live" : "test",
-    ...(current.adyenIds ?? {}),
-  };
-
-  // One write per object created — the whole point of the exercise.
-  const persist = async (step: Partial<AdyenIds>) => {
-    Object.assign(ids, step);
-    current = await postgresStorage.updateApplicationAsCustomer(userId, id, { adyenIds: { ...ids } });
-  };
-
-  try {
-    let legalEntityId = ids.legalEntityId;
-    if (!legalEntityId) {
-      legalEntityId = await createAdyenLegalEntity(current);
-      await persist({ legalEntityId });
-    }
-
-    let accountHolderId = ids.accountHolderId;
-    if (!accountHolderId) {
-      accountHolderId = await createAdyenAccountHolder(current, legalEntityId);
-      await persist({ accountHolderId });
-    }
-
-    if (!ids.businessLineId) {
-      await persist({ businessLineId: await createAdyenBusinessLine(current, legalEntityId) });
-    }
-
-    if (!ids.balanceAccountId) {
-      await persist({ balanceAccountId: await createAdyenBalanceAccount(current, accountHolderId) });
-    }
-
-    return { ok: true, app: current, onboardingUrl: await createOnboardingLink(legalEntityId, id) };
-  } catch (error) {
-    return { ok: false, app: current, error };
-  }
-}
 
 // Saves the customer's self-serve business/owner/processing/agreement
 // details, then chains into Adyen (legal entity + hosted onboarding URL) and
@@ -261,9 +175,7 @@ export async function saveMyApplicationOnboardingAction(
   fields: { business: BusinessInfo; ownerContact: OwnerContact; processing: ProcessingInfo; agreement: AgreementInfo }
 ): Promise<{
   app: MerchantApplication;
-  adyenReady: boolean;
   fieldErrors: OnboardingFieldErrors | null;
-  adyenFailed: boolean;
 }> {
   const { userId } = await requireCustomer();
   const existing = await postgresStorage.getApplicationForCustomer(userId, id);
@@ -284,28 +196,14 @@ export async function saveMyApplicationOnboardingAction(
     ...(hasFieldErrors ? {} : { stage: "merchant_filling" as const }),
   });
 
-  let adyenReady = false;
-  let adyenFailed = false;
-  if (!hasFieldErrors) {
-    const advanced = await advanceAdyenOnboarding(userId, id, app);
-    app = advanced.app; // whatever the chain got through, failed or not
-    if (advanced.ok) {
-      app = await postgresStorage.updateApplicationAsCustomer(userId, id, {
-        adyenOnboardingUrl: advanced.onboardingUrl,
-        stage: "adyen_kyc_pending",
-      });
-      adyenReady = Boolean(advanced.onboardingUrl);
-      adyenFailed = !adyenReady;
-    } else {
-      const err = advanced.error;
-      console.error("Adyen onboarding failed:", err instanceof Error ? err.message : err);
-      adyenFailed = true;
-    }
-  }
-
+  // Nothing reaches Adyen here any more. EasyOB no longer creates Adyen
+  // objects at all: AIO's platform does, and only once billing has been paid
+  // (see lib/aio/provision.ts). So this action now just records the merchant's
+  // details — the ordering is inverted from the old flow, where submitting
+  // details redirected straight to Adyen.
   app = await syncDealBestEffort(app);
 
-  return { app, adyenReady, fieldErrors: hasFieldErrors ? errors : null, adyenFailed };
+  return { app, fieldErrors: hasFieldErrors ? errors : null };
 }
 
 // Edits after the first submission — e.g. after Adyen onboarding has already
@@ -320,18 +218,18 @@ export async function saveMyApplicationOnboardingAction(
 // path can't reach the KYC handoff, and the agreement already on the record
 // stands — so only the field rules run.
 //
-// Same three outcomes as the first submission, reported the same way: saved
-// either way, `fieldErrors` is the customer's to fix, `adyenFailed` is ours.
-// `adyenSynced` false with `adyenFailed` false just means there was no legal
-// entity to update — the common case for an edit before onboarding started.
+// Two outcomes now: saved either way, and `fieldErrors` is the customer's to
+// fix. There is no longer anything to push: EasyOB does not own the merchant's
+// Adyen legal entity, AIO does, and AIO exposes no update endpoint we know of
+// (open question for their team). So an edit after provisioning changes our
+// record and NOT the record Adyen holds — worth knowing before a merchant is
+// told an address change took effect everywhere.
 export async function updateMyApplicationDetailsAction(
   id: string,
   fields: { business: BusinessInfo; ownerContact: OwnerContact; processing: ProcessingInfo; agreement: AgreementInfo }
 ): Promise<{
   app: MerchantApplication;
-  adyenSynced: boolean;
   fieldErrors: OnboardingFieldErrors | null;
-  adyenFailed: boolean;
 }> {
   const { userId } = await requireCustomer();
   const existing = await postgresStorage.getApplicationForCustomer(userId, id);
@@ -347,21 +245,9 @@ export async function updateMyApplicationDetailsAction(
     agreement: fields.agreement,
   });
 
-  let adyenSynced = false;
-  let adyenFailed = false;
-  if (!hasFieldErrors && app.adyenIds?.legalEntityId) {
-    try {
-      await updateLegalEntity(app.adyenIds.legalEntityId, app);
-      adyenSynced = true;
-    } catch (err) {
-      console.error("Adyen legal entity update failed:", err instanceof Error ? err.message : err);
-      adyenFailed = true;
-    }
-  }
-
   app = await syncDealBestEffort(app);
 
-  return { app, adyenSynced, fieldErrors: hasFieldErrors ? errors : null, adyenFailed };
+  return { app, fieldErrors: hasFieldErrors ? errors : null };
 }
 
 // ── Payroll (Check) ─────────────────────────────────────────────────────────

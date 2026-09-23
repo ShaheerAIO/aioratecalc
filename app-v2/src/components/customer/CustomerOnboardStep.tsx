@@ -13,10 +13,17 @@ type Props = { app: MerchantApplication };
 // Mirrors src/components/rep/ApplyStep.tsx's field groups/layout, but
 // customer-facing: saves via saveMyApplicationOnboardingAction (session +
 // ownership scoped) instead of the rep/admin-only saveApplicationAction, and
-// chains into Adyen onboarding on submit.
+// records the merchant's details. It no longer chains into Adyen: EasyOB does
+// not create Adyen accounts any more (that produced accounts misnamed and
+// unlinked from the AIO tenant graph). AIO's platform provisions the tenant
+// and mints the KYC link, and only once billing has been paid — so submitting
+// details and starting verification are now separate moments.
 export default function CustomerOnboardStep({ app }: Props) {
   const router = useRouter();
-  const isEditingAfterAdyen = Boolean(app.adyenOnboardingUrl);
+  // "Have they submitted before", which is all this ever meant. Keyed off the
+  // submitted details rather than an Adyen URL, since that URL now arrives
+  // much later in the flow (after billing) or not at all.
+  const isEditing = Boolean(app.business && app.agreement);
   // Whatever the rep entered, HubSpot supplied at prospect creation, or the
   // statement revealed — so the customer confirms instead of retyping. The
   // merge rules (blank ≠ prefilled, form defaults aren't prefills) live in
@@ -43,12 +50,8 @@ export default function CustomerOnboardStep({ app }: Props) {
   const [saving, setSaving] = useState(false);
   // Adyen wouldn't hand back an onboarding link. Its own rejection of the data
   // is a different thing (fieldErrors) — this is only ever "our side broke".
-  const [failed, setFailed] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [savedEdit, setSavedEdit] = useState(false);
-  // An edit that saved here but couldn't be pushed to Adyen. Saying "sent to our
-  // processing partner" in that case would be the same lie the failed-handoff
-  // screen below exists to stop telling.
-  const [editSyncFailed, setEditSyncFailed] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Same validator the Server Action gates on, so the customer sees exactly
   // what would have been rejected — before any round trip. Live after the first
@@ -89,7 +92,7 @@ export default function CustomerOnboardStep({ app }: Props) {
     setAttempted(true);
     // Cleared first so a retry from the failed screen always lands back on the
     // form, where any message it produces is actually visible.
-    setFailed(false);
+    setSubmitted(false);
     // Adyen rejects the legal entity without a complete, well-formed registered
     // address, and AIO won't hand a merchant over without their own consent, so
     // block here rather than sending it and swallowing the 422. The Server
@@ -113,7 +116,7 @@ export default function CustomerOnboardStep({ app }: Props) {
         agreement: submittedAgreement,
       };
 
-      if (isEditingAfterAdyen) {
+      if (isEditing) {
         const edited = await updateMyApplicationDetailsAction(app.id, fields);
         setSaving(false);
         if (edited.fieldErrors) {
@@ -121,23 +124,19 @@ export default function CustomerOnboardStep({ app }: Props) {
           setErr("Please correct the highlighted fields above before submitting.");
           return;
         }
-        setEditSyncFailed(edited.adyenFailed);
         setSavedEdit(true);
         return;
       }
 
       const result = await saveMyApplicationOnboardingAction(app.id, fields);
-      if (result.adyenReady && result.app.adyenOnboardingUrl) {
-        window.location.href = result.app.adyenOnboardingUrl;
-        return;
-      }
-      // Saved either way. The two remaining outcomes are not the same thing:
-      // the customer can fix a field error themselves; an Adyen failure is ours.
+      // Saved either way, and there is nothing to redirect to: verification
+      // starts after billing, not here. A field error is the customer's to
+      // fix; everything else lands on the "details received" screen.
       if (result.fieldErrors) {
         setServerErrors(result.fieldErrors);
         setErr("Please correct the highlighted fields above before submitting.");
       } else {
-        setFailed(true);
+        setSubmitted(true);
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed");
@@ -179,20 +178,10 @@ export default function CustomerOnboardStep({ app }: Props) {
   if (savedEdit) {
     return (
       <div className={styles.successWrap}>
-        {editSyncFailed
-          ? <div className={styles.failIcon}>!</div>
-          : <div className={styles.successIcon}>✓</div>}
-        <h1 className={editSyncFailed ? styles.failTitle : styles.successTitle}>Changes Saved</h1>
+        <div className={styles.successIcon}>✓</div>
+        <h1 className={styles.successTitle}>Changes Saved</h1>
         <p className={styles.successBody}>
-          {editSyncFailed ? (
-            <>
-              <strong>Your changes are saved</strong> — but we couldn&apos;t send them on to our
-              processing partner, so the details they hold are still the previous ones. Your AIO
-              representative can push the update through.
-            </>
-          ) : (
-            "Your updated info has been saved and sent to our processing partner."
-          )}
+          Your updated information has been saved.
         </p>
         <button
           onClick={() => router.push(`/customer/applications/${app.id}`)}
@@ -204,26 +193,24 @@ export default function CustomerOnboardStep({ app }: Props) {
     );
   }
 
-  // Adyen didn't give us a link. Said plainly: this is not a submitted
-  // application, and telling the customer it was — the old behaviour — left them
-  // on a success screen with nothing to click.
-  if (failed) {
+  // First submission. There is deliberately nothing to click through to:
+  // identity verification can't start until billing is paid, because the Adyen
+  // account is created by AIO's platform at that point. Saying so plainly beats
+  // a success screen that implies the next step is available now.
+  if (submitted) {
     return (
       <div className={styles.successWrap}>
-        <div className={styles.failIcon}>!</div>
-        <h1 className={styles.failTitle}>We Couldn&apos;t Start Your Verification</h1>
+        <div className={styles.successIcon}>✓</div>
+        <h1 className={styles.successTitle}>Details Received</h1>
         <p className={styles.successBody}>
-          <strong>Your information is saved</strong> — nothing you entered was lost. Something went wrong on
-          our end while creating your secure verification link. Please try again; if it keeps failing, your
-          AIO representative can finish this with you.
+          <strong>Thanks — we have everything we need for now.</strong> Once your billing is set up,
+          we&apos;ll create your payment processing account and send you on to identity verification.
+          There&apos;s nothing else for you to do right now.
         </p>
         <div className={styles.actionsCentered}>
-          <button onClick={handleSubmit} disabled={saving} className={styles.btnPrimary}>
-            {saving ? "Trying again…" : "Try Again"}
-          </button>
           <button
             onClick={() => router.push(`/customer/applications/${app.id}`)}
-            className={styles.btnSecondary}
+            className={styles.btnPrimary}
           >
             Back to My Application
           </button>
@@ -235,7 +222,7 @@ export default function CustomerOnboardStep({ app }: Props) {
   return (
     <div className={styles.page}>
       <h1 className={styles.pageTitle}>
-        {isEditingAfterAdyen ? "Edit Your Application" : "Complete Your Application"}
+        {isEditing ? "Edit Your Application" : "Complete Your Application"}
       </h1>
       <p className={styles.pageSubtitle}>
         Fill in the details below to continue onboarding. SSN, bank account, and EIN are collected securely by Adyen directly — AIO never touches that data.
@@ -392,7 +379,7 @@ export default function CustomerOnboardStep({ app }: Props) {
         disabled={saving}
         onClick={handleSubmit}
       >
-        {saving ? "Saving…" : isEditingAfterAdyen ? "Save Changes" : "Submit & Continue →"}
+        {saving ? "Saving…" : isEditing ? "Save Changes" : "Submit →"}
       </button>
     </div>
   );
