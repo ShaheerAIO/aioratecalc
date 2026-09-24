@@ -17,7 +17,7 @@ import type { QuoteLine } from "@/types/merchant";
 const syncDealFromApplication = vi.fn();
 const sendMagicLinkEmail = vi.fn();
 // The Phase E billing build is stubbed here and exercised for real in
-// leadAcceptBilling.test.ts — this file is about the acceptance wiring, and a
+// publishBillingQuote.test.ts — this file is about the acceptance wiring, and a
 // real orchestrator would drag the whole HubSpot quote graph into every case.
 const buildAndPublishBillingQuote = vi.fn();
 
@@ -71,17 +71,6 @@ const MARKETING_LINES: QuoteLine[] = [
   { name: "AIO Marketing Platform", hubspotProductId: "223152695997", qty: 1, unitPrice: 49, billingFrequency: "weekly", productType: "Software" },
 ];
 
-// Every acceptance test in this file is about what happens AFTER the demo
-// gate, so the row defaults to a held demo — the same posture as a customer
-// who reached the accept route for real, through the checklist. The
-// `demo_not_held` describe block below overrides this back to null.
-const HELD_DEMO = {
-  bookedAt: null, heldAt: "2026-08-10T18:00:00.000Z", source: "manual" as const,
-  meetingId: null, meetingTitle: null, outcome: null,
-  markedByUserId: "rep-1", checkedAt: "2026-08-10T18:00:00.000Z",
-  lastSyncError: null, lastSyncErrorAt: null,
-};
-
 function baseRow(extra: Partial<Row> = {}): Row {
   return {
     id: "prospect-1",
@@ -97,7 +86,6 @@ function baseRow(extra: Partial<Row> = {}): Row {
     // existed.
     hubspotDealId: "deal-99",
     dealLink: null,
-    demo: HELD_DEMO,
     tenantLink: { hubspotCompanyId: "334295287484", companyName: "Torta Palace", tenantRef: null, adyenAccountHolderId: null, linkedAt: NOW.toISOString(), linkedByUserId: "rep-1" },
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -173,14 +161,21 @@ describe("accepting a quote", () => {
     expect(sendMagicLinkEmail).toHaveBeenCalled();
   });
 
-  it("accepts a marketing-only quote, whose basis is its priced lines", async () => {
+  // THE gate this route now exists behind. A quote with billable lines is
+  // signed and paid on HubSpot's hosted page — that IS the acceptance — so
+  // accepting it here would record one the merchant never made.
+  it("refuses a quote that has billable lines — those are accepted on HubSpot", async () => {
     row = baseRow({ quoteType: "marketing_only", quoteConfig: null, quoteLines: MARKETING_LINES });
     const res = await post();
-    expect(res.status).toBe(200);
-    expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("billed_quote");
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
+    expect(loginTokens).toHaveLength(0);
   });
 
   it("refuses a marketing-only quote with no lines on it yet", async () => {
+    // Refused earlier, by hasQuoteBasis — a marketing-only quote's basis IS
+    // its lines, so an empty one is "no quote yet", not a rate-only quote.
     row = baseRow({ quoteType: "marketing_only", quoteConfig: null, quoteLines: [] });
     const res = await post();
     expect(res.status).toBe(409);
@@ -224,20 +219,13 @@ describe("accepting a quote", () => {
     expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
   });
 
-  it("hands the billing build the row's existing deal id", async () => {
+  // The publish moved OFF this route entirely. It is the rep's deliberate
+  // "Send Quote" click now (sendQuoteAction), which has to happen before the
+  // merchant can accept at all — so a rate-only acceptance, the only kind this
+  // route still handles, must never touch the billing graph.
+  it("never builds or publishes a billing quote — a rate-only quote has nothing to bill", async () => {
     await post();
-    expect(buildAndPublishBillingQuote.mock.calls[0][0].hubspotDealId).toBe("deal-99");
-    expect(buildAndPublishBillingQuote.mock.calls[0][1]).toEqual({ acceptedByEmail: "ana@tortapalace.com" });
-  });
-
-  it("still logs the customer in when the billing build blows up", async () => {
-    buildAndPublishBillingQuote.mockRejectedValue(new Error("HubSpot 500"));
-    const res = await post();
-    // The acceptance is already recorded and the email already sent — a billing
-    // failure must never cost the customer their login.
-    expect(res.status).toBe(200);
-    expect(sendMagicLinkEmail).toHaveBeenCalled();
-    expect(loginTokens).toHaveLength(1);
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
   });
 
   it("refuses a link with no quote basis at all", async () => {
@@ -248,20 +236,3 @@ describe("accepting a quote", () => {
   });
 });
 
-describe("the demo gate", () => {
-  it("refuses acceptance before the demo is held, even with a quote basis on the row", async () => {
-    row = baseRow({ demo: null });
-    const res = await post();
-    expect(res.status).toBe(409);
-    const body = await res.json();
-    expect(body.error).toBe("demo_not_held");
-    expect(syncDealFromApplication).not.toHaveBeenCalled();
-    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
-  });
-
-  it("accepts once the demo is held", async () => {
-    row = baseRow({ demo: { ...HELD_DEMO } });
-    const res = await post();
-    expect(res.status).toBe(200);
-  });
-});

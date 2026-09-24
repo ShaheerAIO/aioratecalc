@@ -6,18 +6,27 @@ import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { shouldAdvance } from "@/lib/stages";
 import { syncDealFromApplication } from "@/lib/adapters/hubspot";
-import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import { hasQuoteBasis } from "@/lib/leadQuote";
-import { isDemoHeld } from "@/lib/demo";
 import { rowToApp } from "@/lib/storage/applicationRow";
 
 const TOKEN_TTL_MINUTES = 30;
 
 // Public, unauthenticated by design — same token-is-the-auth model as
-// /api/lead/[token]/analyze. The customer's explicit acceptance of the quote:
-// records it on the application, advances the deal stage, and issues the
-// short-lived magic-link login token that carries them into the existing
-// account-creation flow (verify → set-password → checklist).
+// /api/lead/[token]/analyze.
+//
+// ⚠️ RATE-ONLY QUOTES ONLY. This used to be how EVERY merchant accepted, and
+// that was one acceptance too many: a merchant with products on their quote
+// accepted here and then accepted AGAIN on HubSpot's hosted page, which is
+// where the e-signature and the ACH mandate are actually collected. Entering
+// billing details IS accepting the quote, so for those merchants acceptance is
+// now DETECTED from HubSpot (lib/billing/acceptance.ts) and this route refuses
+// them.
+//
+// A rate-only quote (empty `quoteLines` — processing margin comes out of Adyen
+// settlement, and the catalog's processing products are $0 placeholders)
+// creates no HubSpot quote at all. There is no document to sign, no checkout,
+// and no subscription that could ever signal acceptance. So those merchants
+// keep this button, and it is not redundant for them: it is their only one.
 //
 // Returns only { sent, devUrl } — no application data crosses back.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
@@ -35,15 +44,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     if (row.customerLinkExpiresAt && row.customerLinkExpiresAt.getTime() < Date.now()) {
       return NextResponse.json({ error: "This link has expired" }, { status: 410 });
     }
-    // The quote is withheld until the demo is held — same rule as the
-    // checklist page and /lead/[token]/quote, and enforced here too because
-    // acceptance is itself a disclosure: accepting freezes (and later
-    // publishes) a quote the customer isn't supposed to have seen yet. A
-    // customer who never got past the checklist gate has no legitimate way to
-    // reach this route pre-demo, so this is a backstop, not the primary gate.
-    if (!isDemoHeld(row.demo)) {
-      return NextResponse.json({ error: "demo_not_held" }, { status: 409 });
-    }
     // Nothing to accept until a quote exists on the application. The whole row
     // goes in, not a hand-picked subset: a marketing-only quote's basis is its
     // priced lines, so omitting quoteType/quoteLines here read every such quote
@@ -51,6 +51,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     const app = rowToApp(row);
     if (!hasQuoteBasis(app)) {
       return NextResponse.json({ error: "There is no quote on this link yet" }, { status: 409 });
+    }
+
+    // The rate-only gate. A quote with billable lines is signed and paid on
+    // HubSpot's hosted page; accepting it here would record an acceptance the
+    // merchant never made against a mandate they never authorized.
+    if ((app.quoteLines?.length ?? 0) > 0) {
+      return NextResponse.json({ error: "billed_quote" }, { status: 409 });
     }
 
     // Acceptance is recorded once. Re-opening an accepted link to get another
@@ -64,9 +71,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     // LeadQuoteView), and that click means "I lost my login", nothing more. On
     // a row whose first deal push was skipped or failed it used to mint a
     // SECOND, unasked-for deal, leaving the row pointing away from whichever
-    // one a rep had since curated. Recovery from a failed first push is
-    // `retryBillingQuoteAction`, which says what it does; a merchant asking for
-    // a login link is not it.
+    // one a rep had since curated. A merchant asking for a login link is not
+    // a reason to touch the CRM.
     const firstAcceptance = !row.quoteAcceptedAt;
 
     const advance = shouldAdvance(row.stage, "quote_accepted");
@@ -118,39 +124,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
     const result = await sendMagicLinkEmail(email, `${base}/api/customer/verify?token=${loginToken}`);
-
-    // Phase E — build AND publish the HubSpot billing quote, so the checkout
-    // link is waiting on the merchant's checklist by the time they log in.
-    //
-    // AFTER the magic-link send, deliberately: the customer is sitting on a
-    // spinner waiting for that email, and this is ~8-12 HubSpot calls plus a
-    // ~3s read-after-write for hs_quote_link. Nothing here may delay it.
-    //
-    // In its own try/catch, equally deliberately: a billing failure must never
-    // fail the acceptance. The acceptance is already recorded and the email
-    // already sent, the customer sees "check your inbox" either way, and the
-    // rep picks the stuck account up from hubspotIds.lastSyncError — which the
-    // orchestrator persists rather than only logging.
-    //
-    // First acceptance only, like the deal push above: a re-opened link is a
-    // login-link resend, and the build is idempotent but not free (it claims a
-    // build lease and can leave a spurious refusal on the row).
-    if (firstAcceptance) {
-      try {
-        const outcome = await buildAndPublishBillingQuote(rowToApp(accepted), { acceptedByEmail: email });
-        if (outcome.status === "published") {
-          console.log(`[billing] ${accepted.id}: quote ${outcome.quoteId} published${outcome.alreadyPublished ? " (was already published)" : ""}`);
-        } else if (outcome.status === "refused") {
-          console.warn(`[billing] ${accepted.id}: refused — ${outcome.reasons.map(r => r.code).join(", ")}`);
-        } else if (outcome.status === "failed") {
-          console.error(`[billing] ${accepted.id}: ${outcome.step} failed — ${outcome.error}`);
-        } else {
-          console.log(`[billing] ${accepted.id}: skipped (${outcome.reason})`);
-        }
-      } catch (err) {
-        console.error("HubSpot billing quote on acceptance failed:", err instanceof Error ? err.message : err);
-      }
-    }
 
     return NextResponse.json(result);
   } catch (err) {

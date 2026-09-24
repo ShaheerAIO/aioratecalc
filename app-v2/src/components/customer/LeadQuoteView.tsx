@@ -12,14 +12,34 @@ import styles from "./LeadQuoteView.module.css";
 // margin, no cost, no floor, nothing derived from them.
 //
 // The quote itself renders through QuoteSummary, shared with the authenticated
-// "Your Quote" tab; this component owns the public page chrome and the accept
-// flow, which only exist on the lead link.
+// "Your Quote" tab; this component owns the public page chrome and whatever
+// the merchant's next step is.
+//
+// THERE IS ONE ACCEPTANCE, and for almost everyone it does not happen here.
+// A quote with products on it is signed and paid on HubSpot's hosted page —
+// e-signature and ACH mandate in one — so `checkoutUrl` is the whole panel:
+// one button, straight out to it. EasyOB used to ask the merchant to accept
+// first and THEN send them there to accept again, which is one acceptance too
+// many. Entering billing details IS accepting the quote.
+//
+// The in-app accept form below survives for exactly one case, `canAcceptHere`:
+// a rate-only quote, which creates no HubSpot document at all (see the header
+// on /api/lead/[token]/accept). For those merchants there is nothing to sign
+// and nothing to pay, so this is their only acceptance, not a duplicate one.
 
 type Props = {
   token: string;
   quote: CustomerSafeQuote;
   businessName: string | null;
   contactEmail: string | null;
+  /**
+   * HubSpot's hosted quote — sign + pay in one. Present once the rep has sent
+   * the quote (`sendQuoteAction` publishes it); null while it is still a draft
+   * or the link hasn't populated yet.
+   */
+  checkoutUrl?: string | null;
+  /** Rate-only: no HubSpot document exists, so the merchant accepts right here. */
+  canAcceptHere?: boolean;
   /** True when this quote has already been accepted (re-opened link). */
   alreadyAccepted?: boolean;
   /** Offered only on a rep-prepared quote — lets the customer supersede it with their own statement. */
@@ -27,7 +47,8 @@ type Props = {
 };
 
 export default function LeadQuoteView({
-  token, quote, businessName, contactEmail, alreadyAccepted = false, onUploadStatement,
+  token, quote, businessName, contactEmail,
+  checkoutUrl = null, canAcceptHere = false, alreadyAccepted = false, onUploadStatement,
 }: Props) {
   const [email, setEmail]         = useState(contactEmail || "");
   const [accepting, setAccepting] = useState(false);
@@ -36,10 +57,10 @@ export default function LeadQuoteView({
   const [devUrl, setDevUrl]       = useState<string | null>(null);
   const [error, setError]         = useState<string | null>(null);
 
-  // Accepting and re-requesting the sign-in email are the same call: the accept
-  // route records acceptance once and issues a fresh 30-minute login token
-  // every time. That matters — the magic link outlives the quote link by a long
-  // way, so a customer who let it expire needs a way back in from this page.
+  // Rate-only only. Accepting and re-requesting the sign-in email are the same
+  // call: that route records acceptance once and issues a fresh
+  // 30-minute login token every time, so a customer who let theirs expire has
+  // a way back in from this page.
   const accept = async () => {
     if (!email) return;
     const wasAccepted = accepted;
@@ -85,37 +106,67 @@ export default function LeadQuoteView({
 
         <div className={styles.panel}>
           {accepted ? (
-            <div>
-              <p className={styles.acceptSuccess}>
-                {resent
-                  ? "New link sent. Check your email to finish setting up your account."
-                  : "Quote accepted. Check your email for a link to finish setting up your account."}
-              </p>
-              {devUrl && (
-                <div className={styles.devUrl}>
-                  Dev mode (no email configured): <a href={devUrl}>{devUrl}</a>
+            // Two quite different "done" states share this branch. A rate-only
+            // merchant accepted with the form below and needs their login link
+            // (and a way to re-request it). Everyone else signed on HubSpot,
+            // and their link was emailed the moment we saw the payment.
+            canAcceptHere ? (
+              <div>
+                <p className={styles.acceptSuccess}>
+                  {resent
+                    ? "New link sent. Check your email to finish setting up your account."
+                    : "Quote accepted. Check your email for a link to finish setting up your account."}
+                </p>
+                {devUrl && (
+                  <div className={styles.devUrl}>
+                    Dev mode (no email configured): <a href={devUrl}>{devUrl}</a>
+                  </div>
+                )}
+                <p className={styles.panelText}>
+                  That link is good for 30 minutes. If it expired or never arrived, we&apos;ll send another.
+                </p>
+                <div className={styles.acceptRow}>
+                  <input
+                    type="email" value={email} onChange={e => setEmail(e.target.value)}
+                    placeholder="you@business.com"
+                    className={styles.acceptInput}
+                  />
+                  <button
+                    onClick={accept}
+                    disabled={!email || accepting}
+                    className={styles.acceptBtn}
+                  >
+                    {accepting ? "Sending…" : "Email Me a New Link"}
+                  </button>
                 </div>
-              )}
+                {error && <div className={styles.acceptError}>{error}</div>}
+              </div>
+            ) : (
+              <div>
+                <p className={styles.acceptSuccess}>
+                  You&apos;re all set — this quote is signed and your billing is in.
+                </p>
+                <p className={styles.panelText}>
+                  We&apos;ve emailed you a link to set up your account and finish onboarding. If it
+                  expired, you can request a new one from the sign-in page.
+                </p>
+                <div className={styles.acceptRow}>
+                  <a href="/customer/login" className={styles.acceptBtn}>Sign In →</a>
+                </div>
+              </div>
+            )
+          ) : checkoutUrl ? (
+            <>
+              <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
-                That link is good for 30 minutes. If it expired or never arrived, we&apos;ll send another.
+                Review the full quote, sign it, and enter your billing details — all on one
+                secure page. That&apos;s everything; we&apos;ll set your account up from there.
               </p>
               <div className={styles.acceptRow}>
-                <input
-                  type="email" value={email} onChange={e => setEmail(e.target.value)}
-                  placeholder="you@business.com"
-                  className={styles.acceptInput}
-                />
-                <button
-                  onClick={accept}
-                  disabled={!email || accepting}
-                  className={styles.acceptBtn}
-                >
-                  {accepting ? "Sending…" : "Email Me a New Link"}
-                </button>
+                <a href={checkoutUrl} className={styles.acceptBtn}>Review &amp; Sign →</a>
               </div>
-              {error && <div className={styles.acceptError}>{error}</div>}
-            </div>
-          ) : (
+            </>
+          ) : canAcceptHere ? (
             <>
               <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
@@ -137,6 +188,16 @@ export default function LeadQuoteView({
                 </button>
               </div>
               {error && <div className={styles.acceptError}>{error}</div>}
+            </>
+          ) : (
+            // Configured but not sent yet — the rep hasn't published it, so
+            // there is no document to sign and nothing for the merchant to do.
+            <>
+              <h2 className={styles.panelTitle}>Your quote is being finalised</h2>
+              <p className={styles.panelText}>
+                Your AIO representative is putting the finishing touches on this. We&apos;ll email
+                it to you to review and sign as soon as it&apos;s ready.
+              </p>
             </>
           )}
         </div>

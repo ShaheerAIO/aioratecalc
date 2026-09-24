@@ -154,18 +154,29 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
     setSaving(false);
   };
 
-  // Frozen — this is the same rule saveQuoteConfigurationAction enforces
-  // server-side. Shown here so a rep never fills out a form the save call is
-  // just going to refuse.
-  if (app.quoteAcceptedAt) {
+  // Frozen — the same two rules saveQuoteConfigurationAction enforces
+  // server-side, shown here so a rep never fills out a form the save call is
+  // just going to refuse. PUBLISHED is checked first and is the earlier of the
+  // two: the rep sends the quote before the merchant signs it, so there is a
+  // window where the document is live and unamendable but nothing is accepted
+  // yet, and "accepted" copy would be wrong for it.
+  const frozen = app.hubspotIds?.publishedAt
+    ? {
+        title: `Quote sent ${new Date(app.hubspotIds.publishedAt).toLocaleDateString()} — locked.`,
+        body: "A published HubSpot quote can't be edited, replaced or voided through the API, so our copy has to keep matching the document the merchant is signing. Start a new quote instead of editing this one.",
+      }
+    : app.quoteAcceptedAt
+      ? {
+          title: `Quote accepted ${new Date(app.quoteAcceptedAt).toLocaleDateString()} — locked.`,
+          body: "The accepted quote is frozen: it records what the merchant was actually quoted, and a published HubSpot billing quote can't be edited or voided through the API. Start a new quote instead of editing this one.",
+        }
+      : null;
+
+  if (frozen) {
     return (
       <div style={{ padding: 16, background: "var(--warning-bg, rgba(255,193,7,0.08))", borderRadius: 8 }}>
-        <strong>Quote accepted {new Date(app.quoteAcceptedAt).toLocaleDateString()} — locked.</strong>
-        <p style={{ margin: "8px 0 0", opacity: 0.85 }}>
-          The accepted quote is frozen: it records what the merchant was actually quoted, and a
-          published HubSpot billing quote can&apos;t be edited or voided through the API. Start a
-          new quote instead of editing this one.
-        </p>
+        <strong>{frozen.title}</strong>
+        <p style={{ margin: "8px 0 0", opacity: 0.85 }}>{frozen.body}</p>
       </div>
     );
   }

@@ -1,11 +1,14 @@
-// Phase E — auto-publish orchestration.
+// Phase E — publish orchestration.
 //
-// Turns an accepted EasyOB quote into a PUBLISHED HubSpot quote with a hosted
-// checkout link, in one server-side pass triggered by the merchant's acceptance.
-// PHASE-E-SPEC.md §5.4 had a rep drive this in three clicks (save → re-save →
-// publish, behind the §6.2 typed-DBA gate); that is cancelled. The whole graph is
-// built and published here, with no human checkpoint — so the compensating
-// control is `canPublishBillingQuote`, applied strictly, before the first write.
+// Turns a configured EasyOB quote into a PUBLISHED HubSpot quote with a hosted
+// checkout link, in one server-side pass.
+//
+// The trigger is the rep's Send Quote click (`sendQuoteAction`), BEFORE the
+// merchant has accepted anything — because signing and paying that hosted
+// quote is now how they accept (lib/billing/acceptance.ts). It briefly ran
+// inside the merchant's own acceptance POST instead, with no human in the
+// loop at all; `canPublishBillingQuote` still applies strictly before the
+// first write, and is now belt as well as braces.
 //
 // Graph (PHASE-E-SPEC.md §3.1):
 //   Contact ──69/702──▶ Quote ──67──▶ line items
@@ -78,16 +81,6 @@ export type PublishBillingQuoteResult =
   | { status: "refused"; reasons: PublishRefusal[] }
   | { status: "failed"; step: BillingStep; error: string };
 
-export type PublishBillingQuoteOptions = {
-  /**
-   * The address the customer typed when they accepted. The signer of last
-   * resort — `ownerContact.email` normally wins (see `resolveSigner`). Reached
-   * only when the application carries no contact email at all, which happens on
-   * a row whose prospect form was never given one.
-   */
-  acceptedByEmail?: string | null;
-};
-
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -102,8 +95,7 @@ function quoteTitle(app: MerchantApplication): string {
 }
 
 /**
- * Who signs. `ownerContact.email` when it exists, otherwise the person who
- * actually clicked accept.
+ * Who signs: `ownerContact.email`, the business contact of record.
  *
  * Association 702 makes this contact the LEGAL SIGNER — HubSpot mails them the
  * e-signature request and takes their signature as acceptance of the quote, and
@@ -115,28 +107,27 @@ function quoteTitle(app: MerchantApplication): string {
  * person; when they differ — a manager opens a link addressed to the owner —
  * this sends the mandate to the owner on purpose.
  *
- * The name only travels WITH the email it belongs to. Using ownerContact's name
- * alongside a different person's address would label the contact as the wrong
- * human; HubSpot dedupes on email anyway, so no name is the safe default.
+ * There used to be a fallback to "whatever address the customer typed into the
+ * accept form", because the publish ran inside that POST. It is gone with the
+ * form: the rep sends the quote BEFORE anyone accepts, so there is no such
+ * address to fall back to. A row with no contact email now refuses
+ * `no_signer_email`, which names the fix — `createProspectAction` writes this
+ * field on every prospect, so a missing one is a data problem to correct, not
+ * a gap to paper over with whoever happened to open the link.
  */
 function resolveSigner(
-  app: MerchantApplication,
-  acceptedByEmail: string | null | undefined
+  app: MerchantApplication
 ): { email: string; firstName: string; lastName: string; phone?: string } | null {
   const ownerEmail = app.ownerContact?.email?.trim();
-  if (ownerEmail) {
-    return {
-      email: ownerEmail,
-      // Blank strings are dropped by ensureQuoteContact rather than written as
-      // empty properties.
-      firstName: app.ownerContact?.firstName?.trim() ?? "",
-      lastName: app.ownerContact?.lastName?.trim() ?? "",
-      phone: app.ownerContact?.phone?.trim() || undefined,
-    };
-  }
-  const accepted = acceptedByEmail?.trim();
-  if (accepted) return { email: accepted, firstName: "", lastName: "" };
-  return null;
+  if (!ownerEmail) return null;
+  return {
+    email: ownerEmail,
+    // Blank strings are dropped by ensureQuoteContact rather than written as
+    // empty properties.
+    firstName: app.ownerContact?.firstName?.trim() ?? "",
+    lastName: app.ownerContact?.lastName?.trim() ?? "",
+    phone: app.ownerContact?.phone?.trim() || undefined,
+  };
 }
 
 /**
@@ -204,12 +195,13 @@ function stepFailure(ids: HubspotIds, step: BillingStep, detail: string): string
 /**
  * Build and publish this application's HubSpot billing quote.
  *
- * Not a `"use server"` action — the trigger is a route handler
- * (`/api/lead/[token]/accept`). `retryBillingQuoteAction` wraps it for the rep.
+ * Not a `"use server"` action of its own. Its callers are `sendQuoteAction`
+ * (the rep's Send Quote button — the normal trigger) and
+ * `linkTenantCompanyAction`, which resumes a build that was held back waiting
+ * for the HubSpot company.
  */
 export async function buildAndPublishBillingQuote(
-  app: MerchantApplication,
-  opts: PublishBillingQuoteOptions = {}
+  app: MerchantApplication
 ): Promise<PublishBillingQuoteResult> {
   const lines = app.quoteLines ?? [];
 
@@ -301,7 +293,7 @@ export async function buildAndPublishBillingQuote(
     return { status: "failed", step: "contact", error: detail };
   }
 
-  const signer = resolveSigner(app, opts.acceptedByEmail);
+  const signer = resolveSigner(app);
   const decision = canPublishBillingQuote({
     app: { ...app, hubspotIds: ids },
     catalog,

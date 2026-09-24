@@ -19,7 +19,7 @@ import {
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import { ORDER_POINT_CHANNELS, isProcessingQuote } from "@/lib/quoting";
 import { fmtPct2 } from "@/lib/utils";
-import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteType, StatementAnalysis } from "@/types/merchant";
+import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import type { TenantCompany } from "@/lib/adapters/hubspot";
 import styles from "./prospects-new.module.css";
@@ -60,6 +60,7 @@ function NewProspectFlow() {
   // prefill seeds `channels`.
   const [quoteType, setQuoteType] = useState<QuoteType>("full_pos");
   const [picks, setPicks]       = useState<ProductPick[]>([]);
+  const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
   const [channels, setChannels] = useState<string[]>([]);
   const [channelsApplied, setChannelsApplied] = useState<string[]>([]);
   const [quote, setQuote]       = useState<ConfiguredQuote | null>(null);
@@ -295,6 +296,7 @@ function NewProspectFlow() {
         // server-side against the live catalog.
         picks,
         channels,
+        adjustments,
         hubspotCompanyId: hubspotCompany!.id,
         deal: dealResolved!.choice,
       });
@@ -311,6 +313,7 @@ function NewProspectFlow() {
     setTargetMargin(0.008); setPricingModel("2-tier");
     setAvgTicket(""); setMonthlyVolume(""); setFile(null); setAnalysis(null);
     setQuoteType("full_pos"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
+    setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
     setHubspotCompany(null); setHubspotNotice(null); setDealResolved(null);
     setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
@@ -552,6 +555,8 @@ function NewProspectFlow() {
         onPicksChange={setPicks}
         onChannelsChange={setChannels}
         onDerivedChange={setQuote}
+        adjustments={adjustments}
+        onAdjustmentsChange={setAdjustments}
       />
       {prefilledChannels.length > 0 && (
         <p className={styles.prefillNote}>

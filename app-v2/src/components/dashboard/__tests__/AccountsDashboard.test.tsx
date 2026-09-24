@@ -1,13 +1,9 @@
 // @vitest-environment jsdom
 //
-// Component-level coverage for the two outcomes this task made visible that
-// were previously computed correctly and shown to nobody:
-//   1. linkTenantCompanyAction's dealCompanyRepaired / dealCompanyMismatch —
-//      the mismatch in particular needs a human, so it must render as a
-//      persistent banner, not a dismissable alert().
-//   2. The rep's manual demo-held override (markDemoHeldAction /
-//      clearDemoHeldAction) — the primary path, since HubSpot only tags
-//      ~1.5% of portal meetings "Demo".
+// Component-level coverage for linkTenantCompanyAction's
+// dealCompanyRepaired / dealCompanyMismatch — outcomes that were previously
+// computed correctly and shown to nobody. The mismatch in particular needs a
+// human, so it must render as a persistent banner, not a dismissable alert().
 //
 // This is the first component-render test in this codebase (everything else
 // under src/lib/__tests__ tests pure functions or Server Actions with mocked
@@ -27,8 +23,6 @@ const markApplicationClosedLostAction = vi.fn();
 const searchTenantCompaniesAction = vi.fn();
 const linkTenantCompanyAction = vi.fn();
 const unlinkTenantCompanyAction = vi.fn();
-const markDemoHeldAction = vi.fn();
-const clearDemoHeldAction = vi.fn();
 
 vi.mock("@/lib/actions/applications", () => ({
   listApplicationsAction,
@@ -39,8 +33,6 @@ vi.mock("@/lib/actions/applications", () => ({
   searchTenantCompaniesAction,
   linkTenantCompanyAction,
   unlinkTenantCompanyAction,
-  markDemoHeldAction,
-  clearDemoHeldAction,
 }));
 
 const resendLeadLinkAction = vi.fn();
@@ -75,7 +67,6 @@ const baseApp = (over: Partial<MerchantApplication> = {}): MerchantApplication =
     stage: "proposal_sent",
     hubspotDealId: "deal-1",
     dealLink: null,
-    demo: null,
     tenantLink: null,
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -165,63 +156,5 @@ describe("tenant-link repair outcomes", () => {
 
     await waitFor(() => expect(window.alert).toHaveBeenCalledWith(expect.stringMatching(/attached/i)));
     expect(screen.queryByRole("alert")).toBeNull();
-  });
-});
-
-describe("demo-held override", () => {
-  it("shows the unlock consequence, marks the demo held, and reflects the result", async () => {
-    markDemoHeldAction.mockResolvedValue(
-      baseApp({ demo: {
-        bookedAt: null, heldAt: "2026-09-21T10:00:00.000Z", source: "manual",
-        meetingId: null, meetingTitle: null, outcome: null, markedByUserId: REP_ID,
-        checkedAt: "2026-09-21T10:00:00.000Z", lastSyncError: null, lastSyncErrorAt: null,
-      } })
-    );
-
-    await openDetail();
-    expect(screen.getByText(/unlocks the customer/i)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /mark demo held/i }));
-
-    expect(markDemoHeldAction).toHaveBeenCalledWith("app-1");
-    await screen.findByText(/^Held/);
-    expect(screen.getByText(/marked manually/i)).toBeTruthy();
-  });
-
-  it("confirms before undoing a held demo, and skips the call if declined", async () => {
-    listApplicationsAction.mockResolvedValue([baseApp({ demo: {
-      bookedAt: null, heldAt: "2026-09-21T10:00:00.000Z", source: "hubspot_meeting",
-      meetingId: "m-1", meetingTitle: "Demo with Torta Palace", outcome: "COMPLETED",
-      markedByUserId: null, checkedAt: "2026-09-21T10:00:00.000Z", lastSyncError: null, lastSyncErrorAt: null,
-    } })]);
-    (window.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
-
-    await openDetail();
-    await screen.findByText(/^Held/);
-    fireEvent.click(screen.getByRole("button", { name: /undo/i }));
-
-    expect(window.confirm).toHaveBeenCalled();
-    expect(clearDemoHeldAction).not.toHaveBeenCalled();
-  });
-
-  it("undoes the held mark once confirmed, re-locking the view", async () => {
-    listApplicationsAction.mockResolvedValue([baseApp({ demo: {
-      bookedAt: null, heldAt: "2026-09-21T10:00:00.000Z", source: "manual",
-      meetingId: null, meetingTitle: null, outcome: null, markedByUserId: REP_ID,
-      checkedAt: "2026-09-21T10:00:00.000Z", lastSyncError: null, lastSyncErrorAt: null,
-    } })]);
-    clearDemoHeldAction.mockResolvedValue(baseApp({ demo: {
-      bookedAt: null, heldAt: null, source: null,
-      meetingId: null, meetingTitle: null, outcome: null,
-      markedByUserId: null, checkedAt: "2026-09-21T11:00:00.000Z", lastSyncError: null, lastSyncErrorAt: null,
-    } }));
-
-    await openDetail();
-    await screen.findByText(/^Held/);
-    fireEvent.click(screen.getByRole("button", { name: /undo/i }));
-
-    expect(clearDemoHeldAction).toHaveBeenCalledWith("app-1");
-    await screen.findByRole("button", { name: /mark demo held/i });
-    expect(screen.getByText(/unlocks the customer/i)).toBeTruthy();
   });
 });

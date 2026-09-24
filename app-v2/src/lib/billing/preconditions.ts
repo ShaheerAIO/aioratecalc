@@ -101,7 +101,7 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   if (!app.hubspotDealId) {
     add(
       "no_deal",
-      "This deal isn't in HubSpot yet, so there's nothing to attach the quote to. The deal sync runs on acceptance — check the sync error on the account, fix it, and retry."
+      "This deal isn't in HubSpot yet, so there's nothing to attach the quote to. Check the sync error on the account, fix it, and send again."
     );
   }
 
@@ -182,10 +182,10 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   }
 
   // 6. No unreviewed order points. REFUSED, not acknowledged: §6.1 item 9 let a
-  //    rep tick these off, and under auto-publish there is no rep in the loop
-  //    at acceptance time. A tablet counted on the wrong side of the 1–5 / 6+
-  //    boundary is a ~$433/mo error on a document nobody can amend, so stalling
-  //    billing until a human looks is strictly the better failure.
+  //    rep tick these off. Refusing is better: a tablet counted on the wrong
+  //    side of the 1–5 / 6+ boundary is a ~$433/mo error on a document nobody
+  //    can amend, and the rep sending the quote is not necessarily the person
+  //    who can answer what the device does.
   for (const item of breakdown.needsReview) {
     add(
       "order_points_need_review",
@@ -233,11 +233,10 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   if (reasons.length > 0) return { ok: false, alreadyPublished: false, reasons };
 
   // 11. What was quoted is what publishes. §6.1 item 10 had the CLIENT submit
-  //     the totals it rendered so the server could refuse on a mismatch —
-  //     that check is NOT APPLICABLE under auto-publish: the trigger is the
-  //     customer's acceptance POST, there is no rendered rep screen and no
-  //     client-submitted total to cross-check against. What replaces it is
-  //     recomputing here and handing the figures back, so the caller logs the
-  //     exact amounts that went onto the unamendable document.
+  //     the totals it rendered so the server could refuse on a mismatch. Not
+  //     applicable: the trigger is a bare `sendQuoteAction(applicationId)`,
+  //     with no client-submitted total to cross-check against. What replaces
+  //     it is recomputing here and handing the figures back, so the caller
+  //     logs the exact amounts that went onto the unamendable document.
   return { ok: true, totals: quoteTotals(lines), lineCount: lines.length };
 }

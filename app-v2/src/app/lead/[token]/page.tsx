@@ -1,25 +1,15 @@
-import { eq } from "drizzle-orm";
-import { db } from "@/lib/db/client";
-import { merchantApplications } from "@/lib/db/schema";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
-import { refreshDemoStatus } from "@/lib/demoSync";
-import { getDealById, listMeetingsForDeal, listDemoMeetingsForCompany } from "@/lib/adapters/hubspot";
 import { getOnboardingModules } from "@/lib/onboardingModules";
-import { buildCustomerSafeQuote } from "@/lib/leadQuote";
-import { isDemoHeld } from "@/lib/demo";
-import { getSettingsAction } from "@/lib/actions/applications";
+import { hasQuoteBasis } from "@/lib/leadQuote";
+import { refreshLeadBilling } from "@/lib/billing/leadRefresh";
 import OnboardingChecklistPanel from "@/components/customer/OnboardingChecklistPanel";
-import type { DemoState, MerchantApplication } from "@/types/merchant";
 import styles from "./lead.module.css";
 import shellStyles from "../../customer/customer.module.css";
 
 // Public route — not matched by middleware.ts, no auth. The token itself
-// (validated here, server-side) is the only gate. This is now the checklist
-// host: the statement upload/quote it used to open on moved down to
-// /lead/[token]/quote. Demo booking has no route of its own here — the demo
-// module's CTA is always the raw external booking URL (or none), same as
-// the authenticated host.
+// (validated here, server-side) is the only gate. This is the checklist host:
+// the statement upload/quote it used to open on lives at /lead/[token]/quote.
 export default async function LeadPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const lookup = await getLeadApplicationByToken(token);
@@ -35,58 +25,12 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
     );
   }
 
-  const { row } = lookup;
-  let app = rowToApp(row);
-
-  // Same TTL/terminal-heldAt/swallow-failures rules as the authenticated
-  // dashboard (lib/demoSync.ts) — only the persistence differs: there's no
-  // customer session to scope a write to, so this writes the row directly by
-  // id, the same way the accept/analyze routes already do.
-  app = await refreshDemoStatus(app, {
-    // Thunked so a mocked-in-test hubspot module that doesn't stub these
-    // isn't forced to, when the early-returns inside refreshDemoStatus mean
-    // they're never actually invoked — see the identical note in
-    // lib/actions/customer.ts.
-    getDeal: dealId => getDealById(dealId),
-    listDealMeetings: dealId => listMeetingsForDeal(dealId),
-    listCompanyMeetings: companyId => listDemoMeetingsForCompany(companyId),
-    persist: async (demo: DemoState): Promise<MerchantApplication> => {
-      const [updated] = await db
-        .update(merchantApplications)
-        .set({ demo, updatedAt: new Date() })
-        .where(eq(merchantApplications.id, row.id))
-        .returning();
-      return rowToApp(updated ?? { ...row, demo });
-    },
-  });
-
-  const settings = await getSettingsAction();
+  // The merchant signs and pays on HubSpot, which never sends them back here
+  // — so viewing this page is one of only two moments we can notice they did.
+  // Records the acceptance and emails their account link when it fires; a
+  // no-op otherwise. See lib/billing/leadRefresh.ts.
+  const app = await refreshLeadBilling(rowToApp(lookup.row));
   const businessName = app.business?.dba || app.business?.legalName || null;
-  const demoHeld = isDemoHeld(app.demo);
-
-  // THE DATA-LEAK BOUNDARY: buildCustomerSafeQuote (which pulls in
-  // pricing.ts) is never even called before the demo is held — not called-
-  // and-discarded, simply never called. A value that was computed and merely
-  // not rendered would still sit in scope for a later edit to accidentally
-  // forward to the client; not calling the function at all is what makes
-  // that impossible rather than just avoided. Same rule enforced again,
-  // independently, in /lead/[token]/quote (redirect) and both API routes
-  // (409 demo_not_held).
-  //
-  // The quote object built here, when present, is used ONLY to derive the
-  // `hasQuote` boolean below — it is never passed to a component or returned
-  // from this function, so it never crosses to the client either way.
-  const quote = demoHeld
-    ? buildCustomerSafeQuote({
-        quoteType: app.quoteType,
-        analysis: app.analysis,
-        quoteConfig: app.quoteConfig,
-        targetMargin: app.targetMargin,
-        pricingModel: app.pricingModel,
-        quoteLines: app.quoteLines,
-        orderPoints: app.orderPoints,
-      })
-    : null;
 
   // basePath is THIS checklist route — every other module's href
   // (billing/adyen/payroll/foodbuy/edit) is irrelevant regardless of what it
@@ -101,8 +45,7 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
   const modules = getOnboardingModules(app, {
     basePath,
     quoteHref: `${basePath}/quote`,
-    hasQuote: quote !== null,
-    demoBookingUrl: settings.demoBookingUrl,
+    hasQuote: hasQuoteBasis(app),
   });
 
   return (

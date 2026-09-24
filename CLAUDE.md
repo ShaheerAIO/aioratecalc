@@ -104,14 +104,31 @@ by a colliding address — never silently upgraded), `disabled`, `oid_conflict` 
 claiming a linked row; recovery is "Unlink Microsoft account" at `/admin/users`), `wrong_tenant`,
 `no_email`, `no_identity`. Copy for each lives in `entraDenial.ts`.
 
-**Why the lookup is inside the provider's `profile()`** and not the `signIn` callback: `@auth/core`
-seeds the session token's `sub` from whatever `profile()` returns as `id`, and `sub` becomes
-`session.user.id`, which is written to `merchant_applications.owner_user_id` — a strict FK. So the
-AIO user id has to be the id `profile()` returns. A refusal can't throw from there without becoming an
-opaque OAuth error, so it's carried on the user object as `denied` and turned into a message by the
-`signIn` callback in `auth.config.ts` (edge-safe: it only reads the marker, never the DB). A refused
-identity is returned with **no `role`**, so even a session that escaped the gate fails every check in
-`authorized`.
+**Why the lookup is inside the provider's `profile()`** and not the `signIn` callback: it is the only
+hook that gets the raw claims, and it is what decides which AIO row becomes the session. A refusal
+can't throw from there without becoming an opaque OAuth error, so it's carried on the user object as
+`denied` and turned into a message by the `signIn` callback in `auth.config.ts` (edge-safe: it only
+reads the marker, never the DB). A refused identity is returned with **no `role`**, so even a session
+that escaped the gate fails every check in `authorized`.
+
+**`profile()` returns the AIO user id TWICE, as `id` and as `aioUserId`, and that is not
+redundancy.** `@auth/core` (0.41.2, under `next-auth` 5.0.0-beta.31) **discards** an OAuth provider's
+returned `id` and substitutes `crypto.randomUUID()` — deliberately, so the user stays independent of
+the provider (`lib/actions/callback/oauth/callback.js`). That random id then seeds the token's `sub`,
+and `sub` becomes `session.user.id`, which is written to `merchant_applications.owner_user_id`, a
+strict FK. So the `jwt` callback in `auth.config.ts` restores `token.sub = user.aioUserId`; everything
+`profile()` returns other than `id` survives, because the clobber spreads it first. **Delete
+`aioUserId` and every staff session silently names a user that does not exist** — reads come back
+empty and the first write dies on the foreign key. This is not hypothetical: it shipped that way, and
+between the Entra cutover and 2026-09-23 no rep could create a prospect at all. An earlier version of
+this document asserted the opposite (that `sub` came from `profile()`'s `id`) as the *reason* the
+lookup lives there; it was true of some older `@auth/core` and is not true now. The credentials
+provider is unaffected — it keeps `authorize()`'s `id` (`callback/index.js:238`), which is why
+customer magic-link and admin breakglass sessions were always correct.
+
+Regression cover is `sessionValidation.test.ts`, and it works by **modelling the clobber**
+(`{ ...profileResult, id: randomUUID() }`) rather than asserting on `profile()`'s return — an
+assertion on `profile()` alone passes happily while every session is broken.
 
 **The `email` claim is not reliable.** Entra emits it only when the user has a `mail` attribute or the
 app registration requests it as an optional claim, so `readEntraIdentity` falls back to
@@ -193,7 +210,11 @@ app-v2/src/
                                  (customer magic link / password, admin breakglass), DB-backed
   lib/auth.config.ts         ← edge-safe NextAuth config (no DB imports) — used by middleware.ts
   lib/auth/
-    getEffectiveRole.ts      ← the one place that resolves "who's asking" (real session or debug role)
+    getEffectiveRole.ts      ← the one place that resolves "who's asking" (real session or debug
+                                 role). Re-reads the users row every request — see the note below
+                                 on why the JWT alone can't be trusted. cache()d, so once per request
+    getCustomerSession.ts    ← the customer-side twin. Its own module because actions/customer.ts is
+                                 "use server", where every export becomes a callable endpoint
     entra.ts                 ← server-only. Entra claims → the AIO staff row they own, linking the
                                  two on first sign-in. The provider's profile() calls this.
     entraDenial.ts           ← edge/client-safe half: provider id, refusal vocabulary, refusal copy
@@ -205,7 +226,9 @@ app-v2/src/
     pricing.ts                ← getActivePaddingPolicy, updatePaddingPolicyAction (admin-only), getPricingPreviewAction
                                  (NB: named Padding*, not Pillow* — this doc's older "pillow" wording is drift)
     prospects.ts              ← createProspectAction — rep creates a prospect + tokenized customer link
-    billing.ts                ← retryBillingQuoteAction — rep/admin retry for a failed or refused auto-publish.
+    billing.ts                ← sendQuoteAction — the rep's "Send Quote to Customer" button, and
+                                 THE one-way door. Publishes the quote to HubSpot, which then emails
+                                 the merchant the e-signature request.
                                  Backfills a MISSING hubspotDealId via pushToHubSpot first (rows accepted
                                  before 511e019 have no deal, and assoc 64 is a hard publish requirement,
                                  so they'd refuse `no_deal` forever). Only ever fills a missing id — never
@@ -320,12 +343,27 @@ secret stays valid but you no longer have it).
 | 2 | Adyen onboarding | **REPLACED 2026-09-23 — EasyOB no longer creates Adyen accounts.** Product-owner decision: our own integration was "harmful and redundant", producing balance accounts that were misnamed and unlinked from the AIO tenant graph. `adapters/adyen.ts`, `adapters/adyenWebhook.ts` and `/api/adyen/webhook` are DELETED. A merchant now gets a tenant + location + KYC link from **AIO's dashboard API**, triggered when their **billing is paid** (the HubSpot subscription appears), by `/api/cron/aio-provisioning` → `lib/aio/provision.ts`. Behind `AIO_DASHBOARD_ENABLED`, **default OFF** — the API exists only on internal dev and its own developer calls it proof-of-concept. See "The AIO dashboard provisioning path" below. |
 | 2.5 | Check payroll onboarding (the `payroll` module on the customer checklist) | **BUILT / sandbox** — opt-in, not auto-chained like Adyen: nothing reaches Check until the customer clicks "Set Up Payroll" at `/customer/applications/[id]/payroll`, which collects the two things AIO can't derive (first payday + authorized signer) and calls `startPayrollOnboardingAction`. Onboard links are one-time use / 24h, so `/customer/applications/[id]/payroll/continue` mints a fresh one per click — never store and re-serve one. Check has **no redirect-back URL**, so completion is detected by re-reading `company.onboard.status` when the customer views the application (`getMyApplicationWithPayrollSyncAction`), cached on `checkIds.onboardStatus` so list/dashboard views don't fan out one API call per app. Production base URL is a go-live TODO (`CHECK_API_BASE_URL`; Check doesn't publish it). |
 | 3 | HubSpot bidirectional sync (wire `hubspot.ts` stub) | **SUPERSEDED / partly done.** There is no bidirectional sync and there must not be: authority **hands off at quote publish** — EasyOB → HubSpot while the quote is a draft, HubSpot → EasyOB (read-only) forever after. Deal sync is repaired and live (it had never once succeeded before commit `9aafa5d`). Billing is E2E-PLAN **Phase E**, below. `getMyApplicationWithPayrollSyncAction` was folded into `getMyApplicationWithSyncAction` (refreshes Check + HubSpot independently). |
-| E (E2E-PLAN) | **Billing through HubSpot** — quote → hosted checkout → subscription read-back, plus the `schedule_demo` checklist shell | **PUBLISH PATH LIVE-VERIFIED 2026-08-24** — the one human-run publish `PHASE-E-SPEC.md`:777 called for is DONE; see "The Phase E gate run" below. Checkout → subscription read-back remains unverified **on purpose** (`PAYMENT-TEST-PLAN.md` §2.1 recommends against a live payment test; §1's 46 live paid quotes cover it instead). **Auto-publishes on merchant acceptance** — no rep confirmation gate (user's decision, 2026-08-21), so `canPublishBillingQuote` is the *only* thing between a bad quote and a live ACH mandate. Migration `0008` (`quote_template_policy`) **IS applied** — the policy table is empty, which is harmless: `getQuoteTemplatePolicy()` falls back to `DEFAULT_TEMPLATE_IDS`, so an unseeded table can never block a publish. Wants `NEXT_PUBLIC_HUBSPOT_PORTAL_ID=244508708` (cosmetic: CRM record links). **⚠️ One go-live blocker remains: `hs_sender_email` — see the constraint below.** |
-| 4 | Merchant magic link email + SMS delivery on prospect creation (Resend + Twilio) | **BUILT / awaiting Resend domain + Twilio account** — `createProspectAction` now auto-sends the lead link via `sendLeadLinkEmail` (always attempted) and `sendLeadLinkSms` (only if the rep entered a phone), right after the prospect row is saved; a send failure never blocks prospect creation, and the rep always sees the raw link with a copy button as fallback (same pattern as the existing `sendMerchantOnboardingLinkAction`/"Send Onboarding Link" KYC-handoff button, which is unchanged). Both degrade gracefully — with `RESEND_API_KEY`/`TWILIO_*` unset, sends just no-op and the UI shows "delivery isn't configured yet." Still needed before this reaches a real merchant: a verified Resend sending domain (`RESEND_FROM_EMAIL`, e.g. a `send.aioapp.com` subdomain — needs SPF/DKIM/DMARC DNS records) and a Twilio account + number (`TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER`). Phone is optional on the prospect form — no phone means no SMS attempt. |
-| 5 | Entra ID (Microsoft 365) staff sign-in, replacing staff passwords | **LIVE-VERIFIED 2026-09-18** — `microsoft-entra-id` provider wired, old logins merge to their Entra identity lazily on first sign-in (`lib/auth/entra.ts`, migration `0010` adds `users.entra_oid`/`entra_linked_at`). Roles stay in `users.role`; nothing is auto-provisioned; admin breakglass at `/login/breakglass`. App registration done 2026-09-17 (see "Entra ID staff sign-in"); the three env vars are in `.env.local` **and** the Vercel project (Production, type Sensitive). A real staff sign-in has now run end to end: `shaheer.hasnain@aioapp.com` (admin, created at `/admin/users`) signed in with Microsoft and `resolveEntraStaffUser` stamped its `entra_oid`/`entra_linked_at`. `joe@aioapp.com` is still unlinked and will link on his own first sign-in; `admin@aioapp.com`/`rep@aioapp.com` are fake and will never link. **Not yet deployed** — the whole change is still uncommitted. Optional DB session strategy still NOT STARTED. |
+| E (E2E-PLAN) | **Billing through HubSpot** — quote → hosted checkout → subscription read-back | **PUBLISH PATH LIVE-VERIFIED 2026-08-24** — the one human-run publish `PHASE-E-SPEC.md`:777 called for is DONE; see "The Phase E gate run" below. Checkout → subscription read-back remains unverified **on purpose** (`PAYMENT-TEST-PLAN.md` §2.1 recommends against a live payment test; §1's 46 live paid quotes cover it instead). **The rep sends the quote (`sendQuoteAction`); acceptance is then DETECTED, not asserted** — see the constraint below. `canPublishBillingQuote` still applies strictly before the first write. Migration `0008` (`quote_template_policy`) **IS applied** — the policy table is empty, which is harmless: `getQuoteTemplatePolicy()` falls back to `DEFAULT_TEMPLATE_IDS`, so an unseeded table can never block a publish. Wants `NEXT_PUBLIC_HUBSPOT_PORTAL_ID=244508708` (cosmetic: CRM record links). **⚠️ One go-live blocker remains: `hs_sender_email` — see the constraint below.** |
+| 4 | Merchant magic link email + SMS delivery on prospect creation (Graph/Resend + Twilio) | **EMAIL LIVE-VERIFIED 2026-09-24 locally; env pushed to Vercel Production, awaiting a deploy to take effect. SMS still awaiting a Twilio account.** Email prefers **Microsoft Graph** over Resend — see "Transactional email" below, which also records why the Resend-domain blocker is moot. Original Resend note follows: — `createProspectAction` now auto-sends the lead link via `sendLeadLinkEmail` (always attempted) and `sendLeadLinkSms` (only if the rep entered a phone), right after the prospect row is saved; a send failure never blocks prospect creation, and the rep always sees the raw link with a copy button as fallback (same pattern as the existing `sendMerchantOnboardingLinkAction`/"Send Onboarding Link" KYC-handoff button, which is unchanged). Both degrade gracefully — with `RESEND_API_KEY`/`TWILIO_*` unset, sends just no-op and the UI shows "delivery isn't configured yet." Still needed before this reaches a real merchant: a verified Resend sending domain (`RESEND_FROM_EMAIL`, e.g. a `send.aioapp.com` subdomain — needs SPF/DKIM/DMARC DNS records) and a Twilio account + number (`TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER`). Phone is optional on the prospect form — no phone means no SMS attempt. |
+| 5 | Entra ID (Microsoft 365) staff sign-in, replacing staff passwords | **SIGN-IN LIVE-VERIFIED 2026-09-18; THE SESSION IT ISSUED WAS BROKEN UNTIL 2026-09-23.** `@auth/core` replaced the AIO user id with a random uuid on every sign-in, so `session.user.id` named a user that did not exist and every rep write died on the `owner_user_id` FK — see "`profile()` returns the AIO user id TWICE" above. The 2026-09-18 check only proved the *link* (`entra_oid` is stamped inside `profile()`, before the id is discarded), which is exactly why it looked green. Fixed by `user.aioUserId` + the `jwt` callback, and `getEffectiveRole`/`getCustomerSession` now resolve the session against `users` on every request so the next mismatch of any kind is "sign in again", not a foreign-key violation. `microsoft-entra-id` provider wired, old logins merge to their Entra identity lazily on first sign-in (`lib/auth/entra.ts`, migration `0010` adds `users.entra_oid`/`entra_linked_at`). Roles stay in `users.role`; nothing is auto-provisioned; admin breakglass at `/login/breakglass`. App registration done 2026-09-17 (see "Entra ID staff sign-in"); the three env vars are in `.env.local` **and** the Vercel project (Production, type Sensitive). A real staff sign-in has now run end to end: `shaheer.hasnain@aioapp.com` (admin, created at `/admin/users`) signed in with Microsoft and `resolveEntraStaffUser` stamped its `entra_oid`/`entra_linked_at`. `joe@aioapp.com` is still unlinked and will link on his own first sign-in; `admin@aioapp.com`/`rep@aioapp.com` are fake and will never link. **Not yet deployed** — the whole change is still uncommitted. Optional DB session strategy still NOT STARTED. |
 | F | Foodbuy enrollment (the `foodbuy` checklist module — graduated off the `coming_soon` shell) | **DONE** — Foodbuy turned out to have **no API at all**: enrollment is a paper "Foodbuy Foodservice Enrollment" participation agreement (source form: `AIO_Foodbuy_Enrollment_Form_V1`) that asks for the Federal ID # (EIN), a wet/e-signature, GPO-affiliation disclosure, and per-location distributor account numbers — none of which AIO collects, matching the no-EIN/no-bank-details posture already enforced for Adyen/Check. So the Phase 2/2.5-style hosted-onboarding-API scaffold built for this module first was wrong and was torn out. What's built instead: `lib/foodbuyForm.ts` renders a pre-filled copy of the real form as printable HTML (business identity/address + main contact only — everything requiring a legal attestation or Foodbuy-side data stays a blank line), exported client-side via the same `html2pdf`-in-a-new-window pattern `ProposalStep.tsx` already uses for proposal PDFs — no new dependency, no server-side PDF lib. `foodbuyModule()` just tracks `foodbuyIds.generatedAt` (has the customer downloaded their copy yet) since there's no remote status to poll; the CTA stays available even once "complete" so they can re-download. The customer signs the printed/downloaded copy and hands it to their AIO rep or a Foodbuy account executive themselves — AIO's system never transmits or receives it. |
 
 ### Critical constraints (do not reverse)
+- **The session is resolved against `users` on every request, and that is load-bearing.** Auth.js
+  never revalidates a JWT, so `sub` and `role` in the cookie are just claims: an account deleted,
+  disabled or demoted after sign-in keeps satisfying `middleware.ts` (edge-side, no DB) and fails
+  only at the first write, as an FK violation on `owner_user_id`. `getEffectiveRole` and
+  `getCustomerSession` load the row, refuse a missing/disabled one, and take **`role` from the
+  database, not the token** — so `/admin/users` disable and demote take effect immediately instead
+  of at JWT expiry. Both are `cache()`d (one indexed PK read per request) and both reject a
+  non-uuid `sub` before querying, because a refused Entra identity carries `entra:denied:<reason>`
+  and a uuid column throws on it. The rep/admin layouts turn a null into
+  `/login?error=session_stale`; middleware can't, because it can't reach Postgres.
+- **A storage write failure must never be handed to the caller verbatim.** Drizzle's
+  `DrizzleQueryError` puts the whole statement AND every bound parameter in `message`, and the rep
+  and customer UIs render a caught `err.message` directly — so one FK violation printed a merchant's
+  legal name, address, phone and email onto a rep's screen. `postgresAdapter`'s `dbWrite` keeps the
+  driver's `cause` (which names the constraint and carries no data) and logs the rest server-side.
 - **EasyOB must NEVER create an Adyen object directly.** No legal entity, no account holder, no
   business line, no balance account, no onboarding link. That was deleted on 2026-09-23 because it
   produced accounts misnamed and unlinked from AIO's tenant graph. Everything goes through
@@ -350,6 +388,16 @@ secret stays valid but you no longer have it).
   the integration and AIO exposes no status we can read. A deal reaches `adyen_approved` via a human
   (`markAdyenKycCompleteAction`) or via the settlement backstop (a tenant that settles money is
   demonstrably approved). Don't assume `stage` advances on its own.
+- **There is NO demo gate, and there must not be one.** Removed 2026-09-24 (product-owner
+  decision): the customer gets their link, sees and accepts their quote, and billing is what
+  unlocks everything downstream. Nothing is withheld pending a demo. Deleted with it:
+  `lib/demo.ts`, `lib/demoSync.ts`, `/api/cron/hubspot-demo-sync`, `/admin/settings/demo`,
+  `markDemoHeldAction`/`clearDemoHeldAction`/`updateDemoBookingUrlAction`, the
+  `merchant_applications.demo` and `app_settings.demo_booking_url` columns (migration `0015`),
+  and HubSpot's `listMeetingsForDeal`/`listDemoMeetingsForCompany`/`advanceDealStage`.
+  `stage_0` ("Demo Meeting") stays in `SALES_PIPELINE_STAGES` because it is a real live stage
+  `dealStageRank` must be able to rank — nothing writes it. `onboardingModules.ts`'s single lock
+  rule is now "everything except `quote` is locked until `quoteAcceptedAt`".
 - **Marketing-only merchants never get an Adyen module.** They pay us but sell nothing, so KYC would
   sit permanently incomplete. Gated on the existing `isProcessingQuote` — don't invent a second notion.
 - `MerchantApplication` has **no SSN, bank account, routing number, or EIN fields** — Adyen collects those on their hosted page
@@ -380,7 +428,7 @@ secret stays valid but you no longer have it).
 - `buildQuote()` in `quoting.ts` is the **one** derivation — the configurator's live preview and the server's authoritative write both call it. Don't reintroduce a second copy in the client. Its `blockers[]` gates both the submit button and the server action.
 - A `marketing_only` quote has **no processing rate at all** — `CustomerSafeQuote` is a discriminated union whose `basis: "products"` variant carries no volume/rate/savings fields. Don't flatten that back to nullable numbers; zeros there render as a real 0.00% quote.
 - `ENABLE_DEBUG_ROLE_SWITCH` must never be set in a Vercel project environment — local `.env.local` only
-- **Publishing a HubSpot quote is a one-way door.** No API edit (400 `LOCKED`), no delete (`PUBLISHED_QUOTE_CANNOT_BE_DELETED`), and no void — setting `hs_status: VOID` is itself an edit, so voiding is HubSpot-UI-only. Never build an "unpublish", "edit published quote", or "re-publish" affordance; `retryBillingQuoteAction` refuses once `publishedAt` is set. A `400 LOCKED` from `publishQuote` means **already published** and must be treated as success, or a crash between HubSpot's ack and the DB write wedges the account forever.
+- **Publishing a HubSpot quote is a one-way door.** No API edit (400 `LOCKED`), no delete (`PUBLISHED_QUOTE_CANNOT_BE_DELETED`), and no void — setting `hs_status: VOID` is itself an edit, so voiding is HubSpot-UI-only. Never build an "unpublish", "edit published quote", or "re-publish" affordance; `sendQuoteAction` refuses once `publishedAt` is set, and BOTH `saveQuoteConfigurationAction` and `EditQuotePanel` freeze on `publishedAt` as well as on `quoteAcceptedAt` — publishing now happens first, so there is a window where the document is live and unamendable but nothing is accepted yet. A `400 LOCKED` from `publishQuote` means **already published** and must be treated as success, or a crash between HubSpot's ack and the DB write wedges the account forever.
 - **`hs_recurring_billing_period` is DELIBERATELY never written.** It is a contract *term*, not the billing cycle — HubSpot derives `hs_recurring_billing_number_of_payments` from it, so `P7D` on a weekly line takes one $99 charge and then silently stops collecting. 935 of AIO's 1,200 live weekly line items leave it NULL. `PHASE-E-SPEC.md` §3.3 says to send `P7D`; the spec is wrong. Product-owner decision, 2026-08-21. **LIVE-VERIFIED 2026-08-24** on quote `323970722493`: the weekly platform line came back `hs_recurring_billing_period: NULL` / `hs_recurring_billing_number_of_payments: NULL`, while all eight one-time lines got `nPayments: 1`. That is HubSpot deriving the payment count from the period, observed directly — the mechanism is no longer inferred.
 - **`hs_sender_email` is NOT validated by HubSpot — STILL A GO-LIVE BLOCKER.** It is written from the owning rep's `users.email` (`resolveSender`, `publishBillingQuote.ts:147`). The 2026-08-24 gate run published with `rep@aioapp.com`, a seeded dev user that is not a portal owner, and HubSpot **accepted it silently** — no 400, no warning. So nothing anywhere will catch a wrong sender, and a real merchant would receive their quote "from" whatever junk address sits on the owning `users` row. Entra sign-in (Phase 5) **narrows but does not close this**: a rep who signed in through Entra necessarily has a real tenant address, and `resolveEntraStaffUser` deliberately keeps the email on file rather than overwriting it from the claim. But `rep@aioapp.com` is still a valid `owner_user_id` — the debug role switcher writes as that row — so a fake sender remains reachable. Before the first real customer: `resolveSender` needs to resolve a HubSpot owner and refuse when it can't. O-1 (`PAYMENT-TEST-PLAN.md`:249) is explicit that all 46 live paid quotes use a real rep address.
 - **A published quote carries `app.quoteLines` VERBATIM — `publishBillingQuote.ts:211` never calls `buildQuote()`.** Derivation happens at *save* time in the configurator. So a row saved before a change to the derivation rules publishes under the OLD rules, silently. Two rows accepted 2026-08-18 are $1,498 short each (no Onsite Installation, no System Onboarding and Training) because they predate `272f58b`/`c65b4b1`, and `canPublishBillingQuote` does not catch it — it verifies the *platform* line resolves, never that the included services are present. Any backfill of pre-existing accepted rows must re-derive through `buildQuote()` first, or it publishes an under-priced quote onto a document nobody can amend.
@@ -388,10 +436,85 @@ secret stays valid but you no longer have it).
 - One quote yields **one subscription per distinct billing frequency**, so AIO's weekly-platform + monthly-add-on mix routinely produces two. Hence `hubspotIds.subscriptions[]` and `findSubscriptionsForQuote` (association **304**), never a single id, and never a deal-keyed lookup — a reused deal carries subscriptions from earlier quotes.
 - `hs_quote_link` is **not** a one-time-use link, unlike the Adyen and Check ones — the slug exists at create, the URL is predictable, and auth is `public_access`. `/customer/applications/[id]/billing` is **read-or-refresh, not mint-per-click**. Don't "fix" it to match its two `/continue` siblings.
 - A **rate-only quote** (empty `quoteLines`) creates no HubSpot billing objects at all and its checklist module is **omitted**, not shown pending — processing margin comes out of Adyen settlement and the catalog's processing products are $0 placeholders. Discriminate on `quoteAcceptedAt`: empty lines *before* acceptance just means the rep hasn't configured it yet.
-- **No HubSpot Company linked → no deal, no billing quote, nothing.** A deal's company association (341) is only settable on the deal CREATE — the v3 PATCH takes properties only — so a deal pushed before `tenantLink.hubspotCompanyId` exists is orphaned off the Company record permanently. Every push site gates on `canPushToHubSpot()` (accept route, both customer-side saves, `retryBillingQuoteAction`), `pushToHubSpot` itself throws as the backstop, and `buildAndPublishBillingQuote` short-circuits `awaiting_tenant_link` **before the build claim** so waiting leaves no `lastSyncError` — an unlinked account is normal, not a failure, and counting it as one floods the admin sync-error tripwire. `canPublishBillingQuote` restates it as `no_tenant_company` because that reason names the fix. The resume is `linkTenantCompanyAction`, which creates the held-back deal and, if the merchant already accepted, publishes the quote right there — **so linking a company can open the one-way door**. That is intended (user's decision, 2026-09-10), same posture as auto-publish-on-acceptance.
-- **Re-opening an accepted lead link creates nothing.** "Email Me a New Link" POSTs the same `/api/lead/[token]/accept` route as the first acceptance; only `firstAcceptance` (`!row.quoteAcceptedAt`) runs the deal push and the billing build. It used to run both every time, which minted a second deal on any row whose first push was deferred or failed. Recovery from a failed first push is `retryBillingQuoteAction`, never a merchant asking for a login link.
+- **No HubSpot Company linked → no deal, no billing quote, nothing.** A deal's company association (341) is only settable on the deal CREATE — the v3 PATCH takes properties only — so a deal pushed before `tenantLink.hubspotCompanyId` exists is orphaned off the Company record permanently. Every push site gates on `canPushToHubSpot()` (accept route, both customer-side saves, `sendQuoteAction`), `pushToHubSpot` itself throws as the backstop, and `buildAndPublishBillingQuote` short-circuits `awaiting_tenant_link` **before the build claim** so waiting leaves no `lastSyncError` — an unlinked account is normal, not a failure, and counting it as one floods the admin sync-error tripwire. `canPublishBillingQuote` restates it as `no_tenant_company` because that reason names the fix. The resume is `linkTenantCompanyAction`, which creates the held-back deal and publishes the quote right there — **so linking a company can open the one-way door**. That is intended (user's decision, 2026-09-10).
+- **THERE IS EXACTLY ONE ACCEPTANCE, and EasyOB does not own it.** Changed 2026-09-24 (product-owner decision). The merchant used to accept in EasyOB ("Accept & Create Account") and then accept *again* on HubSpot's hosted quote, which is where the e-signature and the ACH mandate are actually collected. Entering billing details IS accepting the quote, so:
+  - the rep publishes first, deliberately, with **"Send Quote to Customer"** (`sendQuoteAction`, the renamed `retryBillingQuoteAction`). HubSpot then emails the signer the e-signature request itself (association 702), so that one click is what puts the quote in front of the merchant.
+  - `/lead/[token]/quote` links **straight to `hs_quote_link`**. It never surfaces a draft's link — `publishedAt` is the gate, same rule as the authenticated billing route.
+  - acceptance is **detected** in `lib/billing/acceptance.ts` from `hasBillingCompleted()` — the SAME predicate the checklist and AIO provisioning use, deliberately reused so they can never disagree. It sets `quoteAcceptedAt`, advances the deal, and emails the account-creation link. Idempotent on `quoteAcceptedAt` and it **never throws** (it runs inside a billing refresh whose try/catch means "the HubSpot read failed").
+  - three observers call it: the nightly cron, `/lead/[token]` (via `lib/billing/leadRefresh.ts` — the only way a merchant with no account yet gets noticed promptly), and the authenticated dashboard refresh.
+  - **`/api/lead/[token]/accept` survives for RATE-ONLY quotes only** and refuses everything else with `409 billed_quote`. A rate-only quote builds no HubSpot document, so there is nothing to sign, no checkout and no subscription that could ever signal acceptance — that button is those merchants' only one, not a duplicate. "Email Me a New Link" still POSTs the same route and still creates no CRM state (`firstAcceptance`).
+  - `PublishBillingQuoteOptions.acceptedByEmail` is **GONE**. The signer is `ownerContact.email` only; a row without one refuses `no_signer_email`, which names the fix. There is no "whoever opened the link" fallback any more, because the publish happens before anyone opens anything.
 - `hubspotDealId` (the flat column) is the canonical deal id. `HubspotIds` deliberately has **no** `dealId` — two homes would create a second deal per application.
 - **Foodbuy has no API — don't reintroduce an `adapters/foodbuy.ts`, an onboarding-status enum, or a mint-fresh-link `/continue` route for it.** Enrollment is a signed paper agreement (`AIO_Foodbuy_Enrollment_Form_V1`) that the customer completes and hands off themselves; `lib/foodbuyForm.ts` only pre-fills what AIO already knows into a printable document. It asks for the Federal ID # (EIN) — never collect that field on AIO's side, same rule as Adyen/Check's EIN/bank/SSN prohibition.
+
+### Transactional email (2026-09-24)
+
+Merchant email goes through **Microsoft Graph, app-only, from AIO's own M365 tenant** — not Resend.
+Resend stays wired as the fallback and is what a local checkout without tenant credentials uses.
+**LIVE-VERIFIED 2026-09-24** via `scripts/send-test-email.ts`.
+
+This sidesteps the Phase 4 Resend blocker entirely: a fresh `send.aioapp.com` subdomain would need
+SPF/DKIM/DMARC records and would start with zero sending reputation, whereas
+`aiodocuments@aioapp.com` already has both.
+
+**EasyOB reuses the EXISTING `AIO Document Send` app registration**
+(`747446ca-b3c9-4537-b2b5-066de0264e70` — the one behind "mockusign"), because it already has
+everything the hard way costs:
+
+| | |
+|---|---|
+| `Mail.Send` | already admin-consented |
+| Exchange fence | already `RestrictAccess` to `AIO App Senders` → `aiodocuments@aioapp.com` |
+| EasyOB's credential | a **separate second client secret** on that same app, minted 2026-09-24, 24 months |
+
+**Rights live on the app registration, not on the secret.** So EasyOB's secret carries the same
+authority as mockusign's, and the separation is of *rotation*, not of *permission*: deleting or
+rotating EasyOB's secret leaves mockusign running, but revoking the app's `Mail.Send` — or deleting
+the app — takes down both. The real cost of sharing is that both products are one identity in
+sign-in and audit logs.
+
+**Don't "improve" this into a separate registration.** That was tried first and was a mistake:
+creating the app, its service principal and a secret only needs Application Administrator, but
+**granting a Graph APPLICATION permission needs Global Administrator or Privileged Role
+Administrator** — Application/Cloud Application Administrator is blocked by Microsoft, since an app
+admin who could grant app permissions could grant themselves `Directory.ReadWrite.All`. Verified
+live: `403 Authorization_RequestDenied`. A separate identity therefore costs a Global Admin and a
+second Exchange fence, and buys only cleaner audit attribution.
+
+`scripts/entra-mail-app.ps1` still exists as the escape hatch if that trade is ever worth making;
+its header states the privilege cost. It is NOT the live setup.
+
+**`Mail.Send` as an application permission is TENANT-WIDE** — without an Exchange
+`ApplicationAccessPolicy` an app can send as *any* mailbox. Anything sending mail here must be
+fenced. Tenant audit from the same session, unrelated to EasyOB but worth someone's attention:
+**`QA-Automatic Email App` and `Logsign Mail Integration` hold UNFENCED tenant-wide `Mail.Send`.**
+`AIO Nexus - Mail` IS fenced, but via the newer RBAC-for-Applications mechanism rather than
+`ApplicationAccessPolicy`, so a check reading only the latter misreports it as unfenced.
+
+**`documentsend@aioapp.com` does not exist** in the tenant — not a mailbox, not an alias, not a
+proxy address. The real shared mailbox is `aiodocuments@aioapp.com`, and Graph's `sendMail` is
+addressed to `/users/{mailbox}`, so it must be a real mailbox rather than an alias.
+
+**It is load-bearing.** `sendMagicLinkEmail` is what creates a merchant's account after they sign
+and pay (see the acceptance constraint above). Acceptance is recorded once, so there is no second
+attempt — which is why a Graph failure falls through to Resend rather than giving up, accepting a
+possible duplicate email as the cheaper failure.
+
+Verify with `npx tsx scripts/send-test-email.ts <address>`, which goes through the shipping
+`sendMagicLinkEmail` rather than curling Graph — and loads env with `@next/env`, so the `\$`-escaped
+secret takes the same dotenv-expand path it does under `next dev`.
+
+**In Vercel Production since 2026-09-24** (all five, and the project forces type `Sensitive` on
+every variable, not just the secret). Two consequences:
+
+- `vercel env pull` can neither read these back nor preserve them — it overwrites `.env.local`
+  wholesale, so back it up first. Same hazard already documented for the Entra vars.
+- **A production deploy is required for them to take effect** — env changes don't reach existing
+  deployments.
+
+On rotation, push the secret with the **raw `$`**, not the `\$` form that goes in `.env.local`:
+Vercel stores literally and does not run dotenv-expand. (The 2026-09-24 secret happens to contain
+no `$` at all, so this was moot that time — check each new one rather than assuming.)
 
 ### The Phase E gate run (2026-08-24) — the reference evidence
 
@@ -402,7 +525,7 @@ the record to compare against when the publish path next changes:
 | | |
 |---|---|
 | quote | `323970722493`, `hs_status: APPROVAL_NOT_NEEDED` (the published state, spec §181) |
-| deal | `343689933538` — **created by the retry itself**, see `retryBillingQuoteAction` below |
+| deal | `343689933538` — **created by the send itself**, see `sendQuoteAction` below |
 | contact | `540176122579` |
 | `hs_quote_amount` | `3811.00` = $3,712 one-time + $99 first weekly |
 | `hs_quote_link` | `https://customers.aioapp.com/0f2hv0e1fjzk9q` (voided by hand afterwards, per `PAYMENT-TEST-PLAN.md` §2.2) |

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   billingPanelState,
-  canRetryBillingSync,
+  canSendQuote,
   countHubspotSyncErrors,
   hasBillingSyncError,
   hubspotDealUrl,
@@ -11,7 +11,7 @@ import {
 } from "@/lib/billingView";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds, type MerchantApplication, type QuoteLine } from "@/types/merchant";
 
-// Only the fields billingPanelState/canRetryBillingSync read are set —
+// Only the fields billingPanelState/canSendQuote read are set —
 // everything else on a real MerchantApplication is deliberately absent so a
 // stray dependency on another field shows up as `undefined` instead of
 // quietly passing.
@@ -79,9 +79,17 @@ describe("subscriptionMoney", () => {
 });
 
 describe("billingPanelState", () => {
-  it("is not_accepted before the merchant accepts, regardless of lines", () => {
-    expect(billingPanelState(app())).toBe("not_accepted");
-    expect(billingPanelState(app({ quoteLines: [line()] }))).toBe("not_accepted");
+  it("is not_configured when the rep hasn't built a quote yet", () => {
+    expect(billingPanelState(app())).toBe("not_configured");
+  });
+
+  // The rep sends the quote BEFORE the merchant signs it, so acceptance can no
+  // longer be the first thing this reads — that would hide every quote that
+  // still needs sending behind a "not started" label.
+  it("reports a sendable state for billable lines that nobody has accepted yet", () => {
+    expect(
+      billingPanelState({ quoteAcceptedAt: null, quoteLines: [line()], hubspotIds: null, tenantLink: linked })
+    ).toBe("pending");
   });
 
   it("is rate_only for an accepted quote with no billable lines, forever", () => {
@@ -139,24 +147,32 @@ describe("billingPanelState", () => {
   });
 });
 
-describe("canRetryBillingSync", () => {
-  it("is false before acceptance", () => {
-    expect(canRetryBillingSync(app())).toBe(false);
+describe("canSendQuote", () => {
+  it("is false with no quote configured — there is nothing to send", () => {
+    expect(canSendQuote(app())).toBe(false);
   });
 
-  it("is false for a rate-only quote — there is nothing to retry", () => {
-    expect(canRetryBillingSync(app({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [] }))).toBe(false);
-  });
-
-  it("is true when pending (accepted, billable, no quote id yet)", () => {
+  // The whole point of the button: it is offered BEFORE acceptance, because
+  // sending is what lets the merchant accept.
+  it("is true for an unaccepted quote with billable lines", () => {
     expect(
-      canRetryBillingSync({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [line()], hubspotIds: null, tenantLink: linked })
+      canSendQuote({ quoteAcceptedAt: null, quoteLines: [line()], hubspotIds: null, tenantLink: linked })
+    ).toBe(true);
+  });
+
+  it("is false for a rate-only quote — there is no HubSpot document to send", () => {
+    expect(canSendQuote(app({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [] }))).toBe(false);
+  });
+
+  it("is true when pending (billable, no quote id yet)", () => {
+    expect(
+      canSendQuote({ quoteAcceptedAt: "2026-08-01T00:00:00Z", quoteLines: [line()], hubspotIds: null, tenantLink: linked })
     ).toBe(true);
   });
 
   it("is true when a draft quote exists but is not yet published", () => {
     expect(
-      canRetryBillingSync({
+      canSendQuote({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
         tenantLink: linked,
@@ -167,7 +183,7 @@ describe("canRetryBillingSync", () => {
 
   it("is false once published — the one-way door is shut", () => {
     expect(
-      canRetryBillingSync({
+      canSendQuote({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
         tenantLink: linked,
@@ -176,9 +192,9 @@ describe("canRetryBillingSync", () => {
     ).toBe(false);
   });
 
-  it("is false while waiting on the company link — linking is the fix, not retrying", () => {
+  it("is false while waiting on the company link — linking is the fix, not sending", () => {
     expect(
-      canRetryBillingSync({
+      canSendQuote({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
         hubspotIds: null,
@@ -187,9 +203,9 @@ describe("canRetryBillingSync", () => {
     ).toBe(false);
   });
 
-  it("is true even with no recorded lastSyncError — a stuck precondition is still retryable", () => {
+  it("is true even with no recorded lastSyncError — a never-sent quote is still sendable", () => {
     expect(
-      canRetryBillingSync({
+      canSendQuote({
         quoteAcceptedAt: "2026-08-01T00:00:00Z",
         quoteLines: [line()],
         tenantLink: linked,

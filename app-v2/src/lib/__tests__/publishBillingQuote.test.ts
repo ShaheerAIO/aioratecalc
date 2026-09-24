@@ -4,15 +4,17 @@ import { ORDER_POINT_RULES } from "@/lib/quoting";
 import { EMPTY_HUBSPOT_IDS } from "@/types/merchant";
 import type { CatalogProduct, HubspotIds, QuoteLine } from "@/types/merchant";
 
-// The REAL orchestrator, driven through the real accept route. Only the network
-// edges are stubbed — the pure HubSpot builders (toLineItemProperties,
-// draftQuoteProperties, planLineItemReconciliation), the preconditions and the
-// quoting derivations are all the shipped ones, because what's under test is
-// exactly the wiring between them: what gets persisted, in what order, and what
-// a rerun does with what it finds.
+// The REAL orchestrator, driven the way the rep's Send Quote button drives it.
+// Only the network edges are stubbed — the pure HubSpot builders
+// (toLineItemProperties, draftQuoteProperties, planLineItemReconciliation), the
+// preconditions and the quoting derivations are all the shipped ones, because
+// what's under test is exactly the wiring between them: what gets persisted, in
+// what order, and what a rerun does with what it finds.
 //
-// leadAccept.test.ts stubs this whole module out and covers the acceptance
-// wiring instead. The two files are deliberately separate.
+// It used to run through the accept route, because publishing happened inside
+// the merchant's acceptance POST. That is reversed now: the rep publishes
+// first, and the merchant accepts by signing and paying the published quote.
+// So this calls the orchestrator directly, as sendQuoteAction does.
 
 const syncDealFromApplication = vi.fn();
 const sendMagicLinkEmail = vi.fn();
@@ -103,21 +105,12 @@ const { rowToApp } = await import("@/lib/storage/applicationRow");
 const TOKEN = "tok-1";
 const NOW = new Date("2026-08-21T19:49:38.000Z");
 
-// Every case here is post-demo — the demo gate itself is covered in
-// leadAccept.test.ts, not re-tested against the full billing graph.
-const HELD_DEMO = {
-  bookedAt: null, heldAt: "2026-08-10T18:00:00.000Z", source: "manual" as const,
-  meetingId: null, meetingTitle: null, outcome: null,
-  markedByUserId: "rep-1", checkedAt: "2026-08-10T18:00:00.000Z",
-  lastSyncError: null, lastSyncErrorAt: null,
-};
-
 // The clock is pinned: the fixture row carries a fixed customerLinkExpiresAt,
 // and against a real clock every case in this file silently turned into a 410
 // the day that date passed. Only Date is faked — the billing build waits on a
 // real setTimeout for hs_quote_link.
 vi.useFakeTimers({ toFake: ["Date"], now: NOW });
-const ACCEPT_EMAIL = "ana@tortapalace.com";
+const SIGNER_EMAIL = "ana@tortapalace.com";
 
 const PLATFORM: CatalogProduct = {
   hubspotProductId: "217526517443",
@@ -175,7 +168,6 @@ function baseRow(extra: Partial<Row> = {}): Row {
     updatedAt: NOW,
     stage: "quote_sent",
     hubspotDealId: "deal-99",
-    demo: HELD_DEMO,
     // Linked: nothing is built for an account without a HubSpot company, so
     // every graph case below would otherwise short-circuit before the first
     // call. The unlinked case is asserted on its own.
@@ -205,30 +197,22 @@ function baseRow(extra: Partial<Row> = {}): Row {
     analysis: null,
     proposal: null,
     business: { legalName: "Torta Palace LLC", dba: "Torta Palace" },
-    ownerContact: null,
+    ownerContact: { email: SIGNER_EMAIL },
     processing: null,
     agreement: null,
     ...extra,
   };
 }
 
-const post = () =>
-  POST(
-    { json: async () => ({ email: ACCEPT_EMAIL }) } as never,
-    { params: Promise.resolve({ token: TOKEN }) }
-  );
+/** The rep hitting Send Quote — `sendQuoteAction` calls exactly this. */
+const send = () => buildAndPublishBillingQuote(rowToApp(row as never));
 
 /**
- * The resume path, as a rep reaches it — `retryBillingQuoteAction` calling the
- * orchestrator again on the row as it now stands. NOT a second `post()`:
- * re-opening an accepted link is a login-link resend and deliberately runs no
- * billing at all, so driving a retry through the route would test nothing.
- *
- * `acceptedByEmail` is carried because this fixture has no `ownerContact` —
- * the accepting address is the only signer it has.
+ * A second attempt on the row as it now stands — what a rep reaches by fixing
+ * the blocker and sending again, and what `linkTenantCompanyAction` does once
+ * the company arrives. Same call; named separately for what it means.
  */
-const resume = () =>
-  buildAndPublishBillingQuote(rowToApp(row as never), { acceptedByEmail: ACCEPT_EMAIL });
+const resume = send;
 
 /** The last hubspotIds written, i.e. what a rep or the checklist would read. */
 function storedIds(): HubspotIds | null {
@@ -292,15 +276,16 @@ afterEach(() => {
   errorSpy.mockRestore();
 });
 
-describe("auto-publishing the billing quote on acceptance", () => {
+describe("publishing the billing quote", () => {
   it("builds the whole graph and publishes it", async () => {
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
 
-    // The signer is the person who actually clicked accept — ownerContact is
-    // null here, which is the normal state of a prospect-created row.
+    // The signer is ownerContact — the business contact of record, which
+    // createProspectAction writes on every prospect row. There is no
+    // "whoever clicked accept" fallback any more: the rep sends the quote
+    // before anyone has accepted anything.
     expect(ensureQuoteContact).toHaveBeenCalledWith(
-      expect.objectContaining({ email: ACCEPT_EMAIL, firstName: "", lastName: "" })
+      expect.objectContaining({ email: SIGNER_EMAIL, firstName: "", lastName: "" })
     );
     expect(createQuoteLineItems).toHaveBeenCalledWith(LINES);
     expect(createDraftQuote.mock.calls[0][0]).toMatchObject({
@@ -339,7 +324,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
   });
 
   it("persists after every step that yields an id, before attempting the next", async () => {
-    await post();
+    await send();
     // A duplicated published quote is unrecoverable, so ids never accumulate
     // in memory waiting on one final write (which is what the Adyen adapter
     // does). Each of the four id-yielding steps has its own row write.
@@ -359,8 +344,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
     // the margin comes out of Adyen settlement — so this is a supported deal
     // shape, not a failure, and it must not even claim the row.
     row = baseRow({ quoteLines: [] });
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
     expect(billingCallCount()).toBe(0);
     expect(patches.some(p => "hubspotIds" in p)).toBe(false);
     expect(storedIds()).toBeNull();
@@ -368,11 +352,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
 
   it("names the failed step in lastSyncError and keeps what it already built", async () => {
     createQuoteLineItems.mockRejectedValue(new Error("HubSpot line item create failed (403): missing scope"));
-    const res = await post();
-    // The acceptance still succeeds — it is already recorded and the login
-    // email already sent.
-    expect(res.status).toBe(200);
-    expect(loginTokens).toHaveLength(1);
+    await send();
 
     const ids = storedIds()!;
     expect(ids.contactId).toBe("contact-7");   // survived on disk
@@ -391,7 +371,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
 
   it("resumes a failed build without duplicating the contact it already made", async () => {
     createQuoteLineItems.mockRejectedValueOnce(new Error("HubSpot 500"));
-    await post();
+    await send();
     expect(ensureQuoteContact).toHaveBeenCalledTimes(1);
 
     // The retry path. The row now carries a hubspotIds, so the conditional
@@ -409,7 +389,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
   it("tops up a partial line-item create instead of duplicating the whole set", async () => {
     // Only the first of two line items landed before the failure.
     createQuoteLineItems.mockRejectedValueOnce(new Error("HubSpot 500"));
-    await post();
+    await send();
     row = { ...row!, hubspotIds: { ...storedIds()!, lineItemIds: ["li-1"] } };
 
     createQuoteLineItems.mockImplementation(async (lines: QuoteLine[]) => lines.map(() => "li-2"));
@@ -431,8 +411,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
       paymentStatus: "PENDING",
       alreadyPublished: true,
     });
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
     const ids = storedIds()!;
     expect(ids.publishedAt).not.toBeNull();
     expect(ids.quoteLink).toBe("https://customers.aioapp.com/abc123");
@@ -453,8 +432,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
       quoteAcceptedAt: NOW,
       stage: "quote_accepted",
     });
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
     expect(billingCallCount()).toBe(0);
     expect(storedIds()!.publishedAt).toBe("2026-08-20T10:00:00.000Z");
   });
@@ -463,8 +441,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
     // A freshly claimed row: hubspotIds written, nothing built yet, no recorded
     // failure. A second concurrent acceptance must not start its own graph.
     row = baseRow({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, syncedAt: new Date().toISOString() } });
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
     expect(billingCallCount()).toBe(0);
   });
 
@@ -474,15 +451,14 @@ describe("auto-publishing the billing quote on acceptance", () => {
     row = baseRow({
       hubspotIds: { ...EMPTY_HUBSPOT_IDS, syncedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() },
     });
-    await post();
+    await send();
     expect(publishQuote).toHaveBeenCalledTimes(1);
     expect(storedIds()!.publishedAt).not.toBeNull();
   });
 
   it("refuses an unreviewed order-point line and persists the reason without touching HubSpot", async () => {
     row = baseRow({ quoteLines: [line(PLATFORM), line(POS), line(REVIEWABLE)] });
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
     expect(billingCallCount()).toBe(0);
     const ids = storedIds()!;
     expect(ids.quoteId).toBeNull();
@@ -496,8 +472,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
     // CREATE branch any more, so a null hubspotDealId is never an attempted-
     // and-failed push, it's simply nothing to sync at all.
     row = baseRow({ hubspotDealId: null });
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
     expect(syncDealFromApplication).not.toHaveBeenCalled();
     expect(billingCallCount()).toBe(0);
     expect(storedIds()!.lastSyncError).toContain("refused before any HubSpot write");
@@ -506,8 +481,7 @@ describe("auto-publishing the billing quote on acceptance", () => {
 
   it("builds nothing, and records nothing, until a HubSpot company is linked", async () => {
     row = baseRow({ tenantLink: null, hubspotDealId: null });
-    const res = await post();
-    expect(res.status).toBe(200);
+    await send();
     expect(syncDealFromApplication).not.toHaveBeenCalled();
     expect(billingCallCount()).toBe(0);
     // Crucially NOT a persisted sync error: waiting on a rep to link the
@@ -515,12 +489,21 @@ describe("auto-publishing the billing quote on acceptance", () => {
     // failure would fill the admin dashboard's error tripwire with accounts
     // that are fine.
     expect(storedIds()).toBeNull();
-    expect(loginTokens).toHaveLength(1); // the customer still gets logged in
   });
 
-  it("builds the whole graph once the link arrives, without a second acceptance", async () => {
+  it("refuses no_signer_email when the row carries no contact email", async () => {
+    // The old accept-form fallback is gone, so this is now a hard refusal that
+    // names the fix rather than mailing the mandate to whoever opened the link.
+    row = baseRow({ ownerContact: null });
+    const outcome = await send();
+    expect(outcome.status).toBe("refused");
+    expect(outcome.status === "refused" && outcome.reasons.map(r => r.code)).toContain("no_signer_email");
+    expect(billingCallCount()).toBe(0);
+  });
+
+  it("builds the whole graph once the link arrives, without a second send", async () => {
     row = baseRow({ tenantLink: null, hubspotDealId: null });
-    await post();
+    await send();
     expect(billingCallCount()).toBe(0);
 
     // What linkTenantCompanyAction does: stamp the link, create the held-back

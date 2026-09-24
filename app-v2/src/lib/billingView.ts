@@ -53,14 +53,14 @@ export function subscriptionMoney(
   };
 }
 
-// ── Empty states and retry eligibility ──────────────────────────────────────
+// ── Empty states and send eligibility ───────────────────────────────────────
 
 export type BillingPanelState =
-  | "not_accepted"         // the merchant hasn't accepted a quote yet — nothing to show
+  | "not_configured"       // no billable lines and nothing accepted — the rep hasn't built the quote yet
   | "rate_only"            // accepted, but no billable lines — no HubSpot quote will ever exist
-  | "awaiting_tenant_link" // accepted and billable, but no HubSpot company linked — nothing may be created yet
-  | "pending"              // accepted with billable lines, but no HubSpot quote yet (building, or failed before creating one)
-  | "draft"                // a HubSpot quote exists but auto-publish hasn't completed
+  | "awaiting_tenant_link" // billable, but no HubSpot company linked — nothing may be created yet
+  | "pending"              // billable lines, ready to send, but no HubSpot quote yet
+  | "draft"                // a HubSpot quote exists but was never published
   | "published";           // publishedAt is set — the one-way door has been gone through
 
 type BillingStateInput = Pick<MerchantApplication, "quoteAcceptedAt" | "quoteLines" | "hubspotIds" | "tenantLink">;
@@ -77,10 +77,10 @@ type BillingStateInput = Pick<MerchantApplication, "quoteAcceptedAt" | "quoteLin
 // and detail grids — the full picture (ids, links, subscriptions, sync
 // error, retry) lives in BillingPanel; this is just enough to scan a table.
 export const BILLING_STATE_LABELS: Record<BillingPanelState, string> = {
-  not_accepted: "Not started",
+  not_configured: "Not started",
   rate_only: "Rate-only (no quote)",
   awaiting_tenant_link: "Waiting on company link",
-  pending: "Building…",
+  pending: "Ready to send",
   draft: "Draft",
   published: "Published",
 };
@@ -89,8 +89,13 @@ export function billingPanelState(app: BillingStateInput): BillingPanelState {
   const hubspotIds = app.hubspotIds;
   const hasBillableLines = !!app.quoteLines && app.quoteLines.length > 0;
 
-  if (!app.quoteAcceptedAt) return "not_accepted";
-  if (!hasBillableLines) return "rate_only";
+  // Acceptance no longer leads this. It used to be the first check, because
+  // the quote was built and published INSIDE the merchant's acceptance, so
+  // nothing existed in HubSpot before it. Now the rep sends the quote first
+  // and acceptance is what comes back (the merchant signing and paying it), so
+  // gating on `quoteAcceptedAt` here would hide the send button from every
+  // quote that still needs sending.
+  if (!hasBillableLines) return app.quoteAcceptedAt ? "rate_only" : "not_configured";
   if (hubspotIds?.publishedAt) return "published";
   if (hubspotIds?.quoteId) return "draft";
   // Checked after the two id-bearing states, not before: a row built before
@@ -101,17 +106,19 @@ export function billingPanelState(app: BillingStateInput): BillingPanelState {
 }
 
 /**
- * Whether the rep/admin billing panel should offer a Retry button at all.
- * Mirrors retryBillingQuoteAction's own refusal (already published) plus the
- * states that are working-as-intended rather than broken — nothing accepted
- * yet, a rate-only quote that will never produce a HubSpot quote, and an
- * account still waiting on its company link, where the fix is to link the
- * company (which resumes billing itself) and a Retry button would only ever
- * answer with the same refusal. Deliberately NOT gated on lastSyncError being
- * set: an auto-publish can be stuck on an unmet precondition (§6.1) without
- * ever having recorded an error.
+ * Whether the rep/admin billing panel should offer the Send Quote button.
+ *
+ * Mirrors `sendQuoteAction`'s own refusal (already published — there is no
+ * re-publish, no edit and no void) plus the states where sending is not the
+ * move: a quote with no lines to bill, and an account still waiting on its
+ * HubSpot company link, where the fix is to link the company (which builds
+ * and publishes by itself) and this button would only answer with the same
+ * refusal.
+ *
+ * `draft` stays sendable: a quote object that exists but was never published
+ * is a send that died mid-graph, and this is what resumes it.
  */
-export function canRetryBillingSync(app: BillingStateInput): boolean {
+export function canSendQuote(app: BillingStateInput): boolean {
   const state = billingPanelState(app);
   return state === "pending" || state === "draft";
 }

@@ -16,9 +16,8 @@ type Props = {
    * close — so instead, any such module's CTA is swapped for a plain
    * "Sign in to continue" pointing here.
    *
-   * demo and quote are exempt: demo's CTA is always the external booking URL
-   * (or none), and quote's CTA is a route this same public host actually
-   * serves (see basePath in the lead pages) — neither needs a session.
+   * quote is exempt: its CTA is a route this same public host actually
+   * serves (see basePath in the lead pages), so it needs no session.
    * Locked modules are also exempt (they already show a lock message instead
    * of a CTA), so this only ever touches an unlocked, otherwise-actionable
    * row.
@@ -32,7 +31,7 @@ type Props = {
 export function withSignInOverride(modules: OnboardingModule[], signInHref?: string): OnboardingModule[] {
   if (!signInHref) return modules;
   return modules.map(m =>
-    !m.locked && m.href && m.key !== "demo" && m.key !== "quote"
+    !m.locked && m.href && m.key !== "quote"
       ? { ...m, href: signInHref, ctaLabel: "Sign in to continue" }
       : m
   );

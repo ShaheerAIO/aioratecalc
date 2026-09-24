@@ -4,13 +4,13 @@ import type { OnboardingModule } from "@/lib/onboardingModules";
 
 // The one piece of host-aware logic the shared checklist renderer adds on top
 // of the dumb ModuleChecklist row renderer: on the public /lead/[token] host,
-// any unlocked module other than demo/quote can't use its own href (billing,
+// any unlocked module other than quote can't use its own href (billing,
 // Adyen, payroll, and Foodbuy are all session-only), so it's swapped for a
-// "Sign in to continue" CTA instead. demo/quote/locked rows are untouched.
+// "Sign in to continue" CTA instead. quote/locked rows are untouched.
 
 const mod = (over: Partial<OnboardingModule> = {}): OnboardingModule => ({
   key: "billing", label: "Billing", status: "in_progress", description: "…",
-  href: "/customer/applications/app-1/billing", ctaLabel: "Review & Pay",
+  href: "/customer/applications/app-1/billing", ctaLabel: "Finish Signing",
   ...over,
 });
 
@@ -20,17 +20,10 @@ describe("withSignInOverride", () => {
     expect(withSignInOverride(modules)).toBe(modules);
   });
 
-  it("swaps an unlocked non-demo/quote module's href for the sign-in link", () => {
+  it("swaps an unlocked non-quote module's href for the sign-in link", () => {
     const [result] = withSignInOverride([mod()], "/customer/login");
     expect(result.href).toBe("/customer/login");
     expect(result.ctaLabel).toBe("Sign in to continue");
-  });
-
-  it("leaves the demo module's href alone", () => {
-    const demo = mod({ key: "demo", label: "Schedule a Demo", href: "https://meetings.hubspot.com/x", ctaLabel: "Book Your Demo" });
-    const [result] = withSignInOverride([demo], "/customer/login");
-    expect(result.href).toBe("https://meetings.hubspot.com/x");
-    expect(result.ctaLabel).toBe("Book Your Demo");
   });
 
   it("leaves the quote module's href alone — it's a route the token host itself serves", () => {

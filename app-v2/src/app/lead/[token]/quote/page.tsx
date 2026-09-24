@@ -1,23 +1,14 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
-import { isDemoHeld } from "@/lib/demo";
 import LeadUploadStep from "@/components/customer/LeadUploadStep";
 import styles from "./quote.module.css";
 import leadStyles from "../lead.module.css";
 
-// The upload/quote step, reached only once the demo is held — same content
-// LeadUploadStep/LeadQuoteView rendered directly at /lead/[token] before this
-// task, moved down one level now that /lead/[token] is the checklist.
-//
-// The redirect below is the SECOND of three independent enforcement points for
-// the demo gate (the checklist page never calls buildCustomerSafeQuote at all
-// pre-demo; the two API routes refuse with 409 demo_not_held). This route is
-// the one a customer could otherwise reach directly by URL even with a locked
-// checklist row, so it re-checks rather than trusting that nobody linked here
-// early.
+// The upload/quote step — the same content LeadUploadStep/LeadQuoteView once
+// rendered directly at /lead/[token], one level down now that /lead/[token] is
+// the checklist.
 export default async function LeadQuotePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const lookup = await getLeadApplicationByToken(token);
@@ -35,16 +26,22 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
 
   const { row } = lookup;
 
-  if (!isDemoHeld(row.demo)) {
-    redirect(`/lead/${token}`);
-  }
-
   const app = rowToApp(row);
   const businessName = app.business?.dba || app.business?.legalName || null;
   const contactEmail = app.ownerContact?.email || null;
 
-  // Reachable now that the demo gate above has cleared — the same projection
-  // used on the checklist page and by /api/lead/[token]/analyze.
+  // Where the merchant actually accepts. `publishedAt` is the one-way-door
+  // marker — a DRAFT quote's link is never surfaced, because the rep hasn't
+  // sent it and it is still editable from EasyOB. Same rule as the
+  // authenticated /customer/applications/[id]/billing route.
+  const checkoutUrl = app.hubspotIds?.publishedAt ? app.hubspotIds.quoteLink ?? null : null;
+  // A rate-only quote builds no HubSpot quote at all, so there is no document
+  // to sign — those merchants accept on this page instead. Everyone else must
+  // not, or they'd be accepting twice. See /api/lead/[token]/accept.
+  const canAcceptHere = (app.quoteLines?.length ?? 0) === 0;
+
+  // The same projection used on the checklist page and by
+  // /api/lead/[token]/analyze.
   const preparedQuote = buildCustomerSafeQuote({
     quoteType: app.quoteType,
     analysis: app.analysis,
@@ -79,6 +76,8 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
           businessName={businessName}
           contactEmail={contactEmail}
           preparedQuote={preparedQuote}
+          checkoutUrl={checkoutUrl}
+          canAcceptHere={canAcceptHere}
           alreadyAccepted={!!app.quoteAcceptedAt}
         />
       </div>

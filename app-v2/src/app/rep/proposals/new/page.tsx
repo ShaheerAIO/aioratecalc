@@ -16,8 +16,8 @@ import ApplyStep      from "@/components/rep/ApplyStep";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
 import { picksFromQuoteLines, quoteTypeOf } from "@/lib/quoting";
 import type {
-  MerchantApplication, StatementAnalysis, Processor, ProcessorTier, AppSettings, QuoteConfig,
-  QuoteType,
+  MerchantApplication, StatementAnalysis, Processor, ProcessorTier, AppSettings, QuoteAdjustments,
+  QuoteConfig, QuoteType,
 } from "@/types/merchant";
 import styles from "./proposals-new.module.css";
 
@@ -38,7 +38,6 @@ function newApp(): MerchantApplication {
     stage: "analysis",
     hubspotDealId: null,
     dealLink: null,
-    demo: null,
     tenantLink: null,
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -94,6 +93,7 @@ function NewProposalFlow() {
   // statement analysis, and a marketing quote has no processing behind it.
   const [quoteType, setQuoteType] = useState<QuoteType>("full_pos");
   const [picks, setPicks]         = useState<ProductPick[]>([]);
+  const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
   const [channels, setChannels]   = useState<string[]>([]);
   const [quote, setQuote]         = useState<ConfiguredQuote | null>(null);
 
@@ -185,6 +185,7 @@ function NewProposalFlow() {
         quoteType,
         picks,
         channels,
+        adjustments,
         targetMargin,
         pricingModel,
         quoteConfig: app.quoteConfig,
@@ -350,6 +351,8 @@ function NewProposalFlow() {
             onPicksChange={setPicks}
             onChannelsChange={setChannels}
             onDerivedChange={setQuote}
+            adjustments={adjustments}
+            onAdjustmentsChange={setAdjustments}
           />
           {error && <div className={styles.error}>{error}</div>}
           <div className={styles.stepActions}>

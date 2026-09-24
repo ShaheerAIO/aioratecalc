@@ -446,13 +446,6 @@ export type AppSettings = {
     balancePlatformApiKey: string;
     corsProxy?: string;
   };
-  // The org-wide demo-booking calendar link every merchant's checklist points
-  // at. A runtime-editable admin setting rather than an env var — AIO's
-  // booking calendar is moving into HubSpot but isn't live yet, so a human
-  // needs to be able to paste the link in later without a redeploy.
-  // Admin-only to write (see updateDemoBookingUrlAction in actions/applications.ts);
-  // optional/undefined for a settings object built before this field existed.
-  demoBookingUrl?: string | null;
 };
 
 // The AIO platform tenant graph this merchant was provisioned into, and the
@@ -552,25 +545,6 @@ export type DealLink = {
   linkedByUserId: string;
 };
 
-// The demo gate: whether a merchant's demo has happened, derived from
-// HubSpot meetings and/or a rep's manual mark. Lives on `src/lib/demo.ts`'s
-// pure `deriveDemoState`/`isDemoHeld` — this is just the shape, defined here
-// (not there) so it can sit on MerchantApplication; `demo.ts` re-exports it.
-export type DemoSource = "hubspot_meeting" | "manual";
-
-export type DemoState = {
-  bookedAt: string | null; // start of the next scheduled Demo meeting
-  heldAt: string | null;   // terminal once set — see deriveDemoState's rule 1
-  source: DemoSource | null;
-  meetingId: string | null;
-  meetingTitle: string | null;
-  outcome: string | null;
-  markedByUserId: string | null; // set only when source === "manual"
-  checkedAt: string | null;      // last time this state was (re)computed — the TTL
-  lastSyncError: string | null;
-  lastSyncErrorAt: string | null;
-};
-
 export type MerchantApplication = {
   id: string;
   ownerUserId: string; // the rep who owns this deal — distinct from ownerContact (merchant's contact)
@@ -581,8 +555,6 @@ export type MerchantApplication = {
   hubspotDealId: string | null;
   // See DealLink above. Null (every pre-adoption row) reads as "adopted".
   dealLink: DealLink | null;
-  // See DemoState above. Null until the first demo-status read/mark.
-  demo: DemoState | null;
   tenantLink: TenantLink | null; // Phase 3 — HubSpot Company (AIO tenant) this ezacc is linked to
   adyenIds: {
     legalEntityId: string | null;

@@ -20,13 +20,18 @@ type Props = {
   businessName: string | null;
   contactEmail: string | null;
   preparedQuote?: CustomerSafeQuote | null;
+  /** HubSpot's hosted sign-and-pay page, once the rep has sent the quote. */
+  checkoutUrl?: string | null;
+  /** Rate-only quote — no HubSpot document, so acceptance happens in-app. */
+  canAcceptHere?: boolean;
   alreadyAccepted?: boolean;
 };
 
 type Phase = "idle" | "preparing" | "uploading" | "analyzing";
 
 export default function LeadUploadStep({
-  token, businessName, contactEmail, preparedQuote = null, alreadyAccepted = false,
+  token, businessName, contactEmail, preparedQuote = null,
+  checkoutUrl = null, canAcceptHere = false, alreadyAccepted = false,
 }: Props) {
   const [file, setFile]         = useState<File | null>(null);
   const [prepared, setPrepared] = useState<PreparedStatement | null>(null);
@@ -89,6 +94,8 @@ export default function LeadUploadStep({
         quote={quote}
         businessName={businessName}
         contactEmail={contactEmail}
+        checkoutUrl={checkoutUrl}
+        canAcceptHere={canAcceptHere}
         alreadyAccepted={alreadyAccepted}
         // Offered only when the quote came prepared — a customer who just
         // uploaded a statement has nothing better to replace it with — and

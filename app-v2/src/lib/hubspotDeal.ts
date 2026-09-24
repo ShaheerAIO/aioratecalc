@@ -7,7 +7,7 @@
 //
 // Wired into `createProspectAction` (`lib/actions/prospects.ts`), which
 // resolves a deal through this service before a row ever exists, and into
-// `retryBillingQuoteAction` (`lib/actions/billing.ts`) for a legacy row
+// `sendQuoteAction` (`lib/actions/billing.ts`) for a legacy row
 // missing one. The create-on-accept path this replaced is gone —
 // `syncDealFromApplication` (adapters/hubspot.ts) is PATCH-only now.
 

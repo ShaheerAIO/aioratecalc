@@ -3,34 +3,24 @@ import type { ReactNode } from "react";
 import type { OnboardingModule } from "@/lib/onboardingModules";
 import { EMPTY_HUBSPOT_IDS } from "@/types/merchant";
 
-// The token checklist host (/lead/[token]/page.tsx) — the data-leak boundary
-// this whole task exists to enforce. Exercised as a plain async Server
-// Component: called directly, its return value inspected as a React element
-// tree (props), never rendered to HTML/DOM — matching this suite's
-// module-boundary-mock idiom (leadAccept.test.ts et al.), not a DOM-render one.
+// The token checklist host (/lead/[token]/page.tsx). Exercised as a plain
+// async Server Component: called directly, its return value inspected as a
+// React element tree (props), never rendered to HTML/DOM — matching this
+// suite's module-boundary-mock idiom (leadAccept.test.ts et al.), not a
+// DOM-render one.
 
-const buildCustomerSafeQuote = vi.fn();
-const getSettingsAction = vi.fn();
+const hasQuoteBasis = vi.fn();
 
 type Row = Record<string, unknown> & { id: string };
 let row: Row | null = null;
 
-// Same minimal chainable drizzle stand-in as leadAccept.test.ts. Every fixture
-// below has hubspotDealId: null, so lib/demoSync's own first guard short-
-// circuits before ever touching HubSpot or writing back through `update` —
-// the demo-refresh mechanics themselves are demoSync.test.ts's job, not this
-// file's.
+// Same minimal chainable drizzle stand-in as leadAccept.test.ts.
 const db = {
   select: () => ({ from: () => ({ where: () => ({ limit: async () => (row ? [row] : []) }) }) }),
-  update: () => ({ set: () => ({ where: () => ({ returning: async () => (row ? [{ ...row }] : []) }) }) }),
 };
 
 vi.mock("@/lib/db/client", () => ({ db }));
-vi.mock("@/lib/leadQuote", () => ({ buildCustomerSafeQuote }));
-vi.mock("@/lib/adapters/hubspot", () => ({
-  getDealById: vi.fn(), listMeetingsForDeal: vi.fn(), listDemoMeetingsForCompany: vi.fn(),
-}));
-vi.mock("@/lib/actions/applications", () => ({ getSettingsAction }));
+vi.mock("@/lib/leadQuote", () => ({ hasQuoteBasis }));
 
 const { default: LeadPage } = await import("@/app/lead/[token]/page");
 
@@ -42,13 +32,6 @@ const NOW = new Date("2026-08-21T19:49:38.000Z");
 // silently read as expired once that date passes.
 vi.useFakeTimers({ toFake: ["Date"], now: NOW });
 
-const HELD_DEMO = {
-  bookedAt: null, heldAt: "2026-08-10T18:00:00.000Z", source: "manual" as const,
-  meetingId: null, meetingTitle: null, outcome: null,
-  markedByUserId: "rep-1", checkedAt: "2026-08-10T18:00:00.000Z",
-  lastSyncError: null, lastSyncErrorAt: null,
-};
-
 function baseRow(extra: Partial<Row> = {}): Row {
   return {
     id: "app-1",
@@ -59,7 +42,6 @@ function baseRow(extra: Partial<Row> = {}): Row {
     stage: "quote_sent",
     hubspotDealId: null,
     dealLink: null,
-    demo: null,
     tenantLink: null,
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -114,44 +96,24 @@ function moduleFor(modules: OnboardingModule[], key: string): OnboardingModule {
 const page = (token = TOKEN) => LeadPage({ params: Promise.resolve({ token }) });
 
 beforeEach(() => {
-  buildCustomerSafeQuote.mockReset();
-  getSettingsAction.mockReset();
-  getSettingsAction.mockResolvedValue({ demoBookingUrl: null });
+  hasQuoteBasis.mockReset();
+  hasQuoteBasis.mockReturnValue(true);
   row = baseRow();
 });
 
-describe("the pre-demo withholding", () => {
-  it("never calls buildCustomerSafeQuote before the demo is held", async () => {
-    row = baseRow({ demo: null });
-    await page();
-    expect(buildCustomerSafeQuote).not.toHaveBeenCalled();
-  });
-
-  it("shows the quote row as not-ready, never leaking that a quote is actually prepared", async () => {
-    // Even though quoteConfig alone would be a real basis (buildCustomerSafeQuote
-    // would return non-null if it were ever called), the caller must not learn
-    // that — hasQuote is forced false without the function ever running.
-    row = baseRow({ demo: null });
+describe("the quote row", () => {
+  it("is not-ready, with no CTA, while the rep hasn't configured a quote", async () => {
+    hasQuoteBasis.mockReturnValue(false);
     const el = await page();
     const modules = findModules(el);
     expect(modules).not.toBeNull();
     const quote = moduleFor(modules!, "quote");
-    expect(quote.locked).toEqual({ reason: "demo", message: "Available after your demo" });
+    expect(quote.locked).toBeUndefined();
+    expect(quote.ctaLabel).toBeUndefined();
     expect(quote.description).toBe("Your rep is preparing your quote.");
   });
-});
 
-describe("once the demo is held", () => {
-  it("calls buildCustomerSafeQuote exactly once", async () => {
-    row = baseRow({ demo: HELD_DEMO });
-    buildCustomerSafeQuote.mockReturnValue({ basis: "config", monthlyVolume: 1000 });
-    await page();
-    expect(buildCustomerSafeQuote).toHaveBeenCalledTimes(1);
-  });
-
-  it("unlocks the quote row and offers Review & Sign when a quote exists", async () => {
-    row = baseRow({ demo: HELD_DEMO });
-    buildCustomerSafeQuote.mockReturnValue({ basis: "config", monthlyVolume: 1000 });
+  it("offers Review & Sign as soon as a quote exists — there is no gate ahead of it", async () => {
     const el = await page();
     const quote = moduleFor(findModules(el)!, "quote");
     expect(quote.locked).toBeUndefined();
@@ -161,19 +123,9 @@ describe("once the demo is held", () => {
 
 describe("basePath", () => {
   it("resolves the quote module's href under /lead/{token}/quote, not the checklist route itself", async () => {
-    row = baseRow({ demo: HELD_DEMO });
-    buildCustomerSafeQuote.mockReturnValue({ basis: "config", monthlyVolume: 1000 });
     const el = await page("tok-xyz");
     const quote = moduleFor(findModules(el)!, "quote");
     expect(quote.href).toBe("/lead/tok-xyz/quote");
-  });
-
-  it("links the demo module's CTA straight to the external booking URL, same as the authenticated host", async () => {
-    getSettingsAction.mockResolvedValue({ demoBookingUrl: "https://meetings.hubspot.com/aio" });
-    row = baseRow({ demo: null });
-    const el = await page("tok-xyz");
-    const demo = moduleFor(findModules(el)!, "demo");
-    expect(demo.href).toBe("https://meetings.hubspot.com/aio");
   });
 
   it("never produces a module href that nests under the quote route", async () => {
@@ -181,11 +133,10 @@ describe("basePath", () => {
     // (`/lead/{token}/quote`) so quoteModule's href would resolve, which made
     // every OTHER module's `${basePath}/...` href nest under it —
     // `/lead/{token}/quote/billing`, `/lead/{token}/quote/continue`, none of
-    // which are real routes. Demo held + quote accepted + a real HubSpot
-    // quote unlocks every module so none of their hrefs are hidden behind a
-    // lock message, which is what actually exercises this.
+    // which are real routes. An accepted quote plus a real HubSpot quote
+    // unlocks every module so none of their hrefs are hidden behind a lock
+    // message, which is what actually exercises this.
     row = baseRow({
-      demo: HELD_DEMO,
       quoteAcceptedAt: new Date("2026-08-10T00:00:00.000Z"),
       hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: "2026-08-01T00:00:00.000Z", subscriptionStatus: "active" },
       business: { legalName: "Torta Palace LLC", dba: "Torta Palace" },
@@ -193,7 +144,6 @@ describe("basePath", () => {
       processing: {},
       agreement: {},
     });
-    buildCustomerSafeQuote.mockReturnValue({ basis: "config", monthlyVolume: 1000 });
     const el = await page("tok-xyz");
     const modules = findModules(el)!;
     const quoteRoute = "/lead/tok-xyz/quote";

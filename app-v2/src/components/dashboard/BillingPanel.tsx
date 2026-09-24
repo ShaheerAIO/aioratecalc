@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { getApplicationAction } from "@/lib/actions/applications";
-import { retryBillingQuoteAction, type RetryBillingQuoteResult } from "@/lib/actions/billing";
+import { sendQuoteAction, type SendQuoteResult } from "@/lib/actions/billing";
+import type { PublishRefusal } from "@/lib/billing/preconditions";
 import {
   billingPanelState,
-  canRetryBillingSync,
+  canSendQuote,
   hasBillingSyncError,
   hubspotDealUrl,
   hubspotQuoteUrl,
@@ -36,26 +37,29 @@ type Props = {
 
 /**
  * The rep/admin HubSpot billing surface (PHASE-E-SPEC.md §5.7 / this task's
- * Deliverable 1). Read-only plus one retry — auto-publish happens
- * server-side on merchant acceptance, so there is no "Save quote to
- * HubSpot" or "Publish" button here, and once `publishedAt` is set nothing
- * below offers edit, unpublish, or void: a published quote can't be changed
- * through the API at all (voiding is HubSpot-UI-only). A rep who needs to
- * change a published quote is told to do it in HubSpot, not offered a button
- * that implies otherwise.
+ * Deliverable 1). Read-only plus ONE write: Send Quote, which publishes to
+ * HubSpot and is how the merchant ever sees a quote to sign.
+ *
+ * That button is the one-way door. Once `publishedAt` is set nothing below
+ * offers edit, unpublish, or void — a published quote can't be changed
+ * through the API at all (voiding is HubSpot-UI-only) — and the button itself
+ * disappears. A rep who needs to change a published quote is told to do it in
+ * HubSpot, not offered a button that implies otherwise.
  */
 export function BillingPanel({ app, canManage, onUpdated }: Props) {
-  const [retrying, setRetrying] = useState(false);
-  const [result, setResult] = useState<RetryBillingQuoteResult | null>(null);
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<SendQuoteResult | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
 
   const state = billingPanelState(app);
 
-  if (state === "not_accepted") {
+  if (state === "not_configured") {
     return (
       <div className={styles.section}>
         <div className={styles.sectionLabel}>Billing</div>
-        <div className={styles.emptyNote}>No quote accepted yet — nothing has been sent to HubSpot.</div>
+        <div className={styles.emptyNote}>
+          No quote configured yet — add the products this merchant is buying, then send it.
+        </div>
       </div>
     );
   }
@@ -92,7 +96,7 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
   const subscriptions = hubspotIds?.subscriptions ?? [];
   const errored = hasBillingSyncError(hubspotIds);
   const totals = quoteTotals(app.quoteLines ?? []);
-  const showRetry = canManage && canRetryBillingSync(app);
+  const showSend = canManage && canSendQuote(app);
 
   const copyLink = () => {
     if (!hubspotIds?.quoteLink) return;
@@ -101,11 +105,11 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
     setTimeout(() => setLinkCopied(false), 2000);
   };
 
-  const handleRetry = async () => {
-    setRetrying(true);
+  const handleSend = async () => {
+    setSending(true);
     setResult(null);
     try {
-      const outcome = await retryBillingQuoteAction(app.id);
+      const outcome = await sendQuoteAction(app.id);
       setResult(outcome);
       // Whatever happened, the row on disk may have changed (a new deal id, a
       // partial line-item set, a persisted lastSyncError) — re-load the full
@@ -114,9 +118,9 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
       const refreshed = await getApplicationAction(app.id);
       if (refreshed) onUpdated(refreshed);
     } catch (e) {
-      setResult({ ok: false, error: e instanceof Error ? e.message : "Retry failed" });
+      setResult({ ok: false, error: e instanceof Error ? e.message : "Could not send the quote" });
     }
-    setRetrying(false);
+    setSending(false);
   };
 
   return (
@@ -262,21 +266,28 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
         )}
       </div>
 
-      {showRetry && (
+      {showSend && (
         <div className={styles.retryRow}>
-          <button className={shared.btnPrimary} disabled={retrying} onClick={handleRetry}>
-            {retrying ? "Retrying…" : "Retry HubSpot sync"}
+          {/* The irreversible act, stated before the click rather than behind a
+              modal: a published quote can't be edited, replaced or voided
+              through the API, and the merchant signs an ACH mandate against it. */}
+          <div className={styles.emptyNote}>
+            Sending publishes this quote to HubSpot and emails the merchant the e-signature
+            request. It can&rsquo;t be edited, replaced or voided afterwards — check the lines first.
+          </div>
+          <button className={shared.btnPrimary} disabled={sending} onClick={handleSend}>
+            {sending ? "Sending…" : "Send Quote to Customer"}
           </button>
           {result && !result.ok && result.reasons && result.reasons.length > 0 && (
             <ul className={styles.reasonList}>
-              {result.reasons.map(r => <li key={r.code}>{r.message}</li>)}
+              {result.reasons.map((r: PublishRefusal) => <li key={r.code}>{r.message}</li>)}
             </ul>
           )}
           {result && !result.ok && result.error && (
             <div className={styles.errorBannerMessage}>{result.error}</div>
           )}
           {result && result.ok && (
-            <div className={styles.emptyNote}>Sync succeeded.</div>
+            <div className={styles.emptyNote}>Quote sent — the merchant can now sign and pay it.</div>
           )}
         </div>
       )}

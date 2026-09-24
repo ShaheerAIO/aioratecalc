@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MerchantApplication } from "@/types/merchant";
 import type { HubspotDeal } from "@/lib/adapters/hubspot";
 
-// adoptDealAction — the other half of the dead end retryBillingQuoteAction's
+// adoptDealAction — the other half of the dead end sendQuoteAction's
 // `ambiguous` refusal points reps at: attaching an EXISTING HubSpot deal to a
 // row that has none at all (hubspotDealId: null), most commonly a legacy
 // account from before deal adoption existed. resolveDealForCompany itself

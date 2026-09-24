@@ -11,14 +11,13 @@ import { sendMagicLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/ema
 import {
   searchTenantCompanies, getTenantCompany, createDeal, buildDealProperties,
   listDealsForCompany, searchDealsByName, getDealById, associateDealToCompany,
-  advanceDealStage,
   type TenantCompany, type HubspotDeal,
 } from "@/lib/adapters/hubspot";
 import { resolveDealForCompany } from "@/lib/hubspotDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
 import type { StorageScope } from "@/lib/storage/storageInterface";
-import type { MerchantApplication, AppSettings, CustomerSubmission, DemoState, DealLink } from "@/types/merchant";
+import type { MerchantApplication, AppSettings, CustomerSubmission, DealLink } from "@/types/merchant";
 
 export type RepSummary = { id: string; name: string; email: string };
 
@@ -57,14 +56,7 @@ export async function getSettingsAction(): Promise<AppSettings> {
 }
 
 export async function saveSettingsAction(s: AppSettings): Promise<void> {
-  const scope = await requireScope();
-  // demoBookingUrl is the one org-wide link every merchant's checklist sees;
-  // only updateDemoBookingUrlAction (admin-gated, below) may move it.
-  // /rep/settings posts this same AppSettings shape to save processors/
-  // adyenConfig, so a rep's payload is never trusted for that one field here —
-  // whatever is currently stored is preserved regardless of what the client sent.
-  const current = await postgresStorage.getSettings();
-  await postgresStorage.saveSettings(scope, { ...s, demoBookingUrl: current.demoBookingUrl });
+  await postgresStorage.saveSettings(await requireScope(), s);
 }
 
 export async function listSubmissionsAction(): Promise<CustomerSubmission[]> {
@@ -357,7 +349,7 @@ export async function unlinkTenantCompanyAction(appId: string): Promise<Merchant
 }
 
 // ── Deal adoption (closing the other half of the dead end) ─────────────────
-// `retryBillingQuoteAction` (billing.ts) already refuses `ambiguous` when a
+// `sendQuoteAction` (billing.ts) already refuses `ambiguous` when a
 // company has deals and tells the rep to "open the deal picker on the
 // account and adopt the right one instead" — until now there was nowhere to
 // go do that for a row that already exists (`hubspotDealId: null`, most
@@ -369,7 +361,7 @@ export async function unlinkTenantCompanyAction(appId: string): Promise<Merchant
 // deal at all.
 //
 // Existing-deal only, deliberately: minting a brand-new deal for a company
-// that has none is retryBillingQuoteAction's job (mode: "create"), which
+// that has none is sendQuoteAction's job (mode: "create"), which
 // already refuses `ambiguous` and points here instead of creating a second
 // deal on a company that already has one.
 export type AdoptDealResult =
@@ -476,8 +468,8 @@ export async function markApplicationClosedLostAction(id: string): Promise<Merch
 // status we can read (verified 2026-09-23: restaurant.accountId stays null and
 // accountDetails comes back empty), so until it does, a human closes the loop.
 //
-// Same posture as markDemoHeldAction: a person who can see the merchant is
-// live beats a system that cannot see it at all. Forward-only via
+// A person who can see the merchant is live beats a system that cannot see it
+// at all. Forward-only via
 // shouldAdvance, so marking can never drag a further-along deal backwards, and
 // re-marking an already-approved account is a no-op rather than a regression.
 export async function markAdyenKycCompleteAction(
@@ -494,95 +486,5 @@ export async function markAdyenKycCompleteAction(
 
   const updated: MerchantApplication = { ...app, stage, updatedAt: new Date().toISOString() };
   await postgresStorage.saveApplication(scope, updated);
-  return updated;
-}
-
-const EMPTY_DEMO_STATE: DemoState = {
-  bookedAt: null, heldAt: null, source: null,
-  meetingId: null, meetingTitle: null, outcome: null,
-  markedByUserId: null, checkedAt: null,
-  lastSyncError: null, lastSyncErrorAt: null,
-};
-
-// Rep/admin override for a demo AIO can't see in HubSpot (a phone call, an
-// in-person visit, a meeting logged without hs_activity_type = "Demo"). NOT
-// admin-only — a rep who mis-clicks needs to be able to undo their own mark
-// via clearDemoHeldAction below, and it's their deal either way.
-//
-// This is the one thing that makes a manual mark stick against a later poll:
-// deriveDemoState's rule 1 treats `heldAt` as terminal, so a HubSpot read that
-// disagrees (a CANCELED meeting, or none at all) can never revert it — a
-// human beat the CRM, and that's the correct tiebreak. Don't add a precedence
-// table elsewhere; that one rule already does it.
-export async function markDemoHeldAction(appId: string, heldAt?: string): Promise<MerchantApplication> {
-  const scope = await requireScope();
-  const app = await postgresStorage.getApplication(scope, appId);
-  if (!app) throw new Error("Application not found");
-
-  const now = new Date().toISOString();
-  const base = app.demo ?? EMPTY_DEMO_STATE;
-  const updated: MerchantApplication = {
-    ...app,
-    demo: {
-      ...base,
-      heldAt: heldAt ?? now,
-      source: "manual",
-      markedByUserId: scope.userId,
-      checkedAt: now,
-      lastSyncError: null,
-      lastSyncErrorAt: null,
-    },
-    updatedAt: now,
-  };
-  await postgresStorage.saveApplication(scope, updated);
-
-  // Best-effort: advanceDealStage is already forward-only (a no-op once the
-  // deal is further along than Demo Meeting), so a failure here must never
-  // fail the mark itself — the demo state above is already saved.
-  if (updated.hubspotDealId) {
-    try {
-      await advanceDealStage(updated.hubspotDealId, "stage_0"); // Demo Meeting
-    } catch (err) {
-      console.error("advanceDealStage on demo mark failed:", err instanceof Error ? err.message : err);
-    }
-  }
-
-  return updated;
-}
-
-// Clears a mark (manual or HubSpot-sourced) so the on-view/nightly poller
-// resumes reading HubSpot for this account. Not admin-only, same reasoning as
-// markDemoHeldAction above.
-export async function clearDemoHeldAction(appId: string): Promise<MerchantApplication> {
-  const scope = await requireScope();
-  const app = await postgresStorage.getApplication(scope, appId);
-  if (!app) throw new Error("Application not found");
-
-  const base = app.demo ?? EMPTY_DEMO_STATE;
-  const updated: MerchantApplication = {
-    ...app,
-    demo: { ...base, heldAt: null, source: null, markedByUserId: null },
-    updatedAt: new Date().toISOString(),
-  };
-  await postgresStorage.saveApplication(scope, updated);
-  return updated;
-}
-
-// Admin-only: the org-wide demo-booking calendar link (see
-// AppSettings.demoBookingUrl). Kept out of saveSettingsAction, which
-// /rep/settings uses for the same AppSettings shape — a rep must never be
-// able to repoint the one link every merchant's checklist sees.
-export async function updateDemoBookingUrlAction(url: string | null): Promise<AppSettings> {
-  const scope = await requireScope();
-  if (scope.role !== "admin") throw new Error("Admin only");
-
-  const trimmed = url?.trim() || null;
-  if (trimmed && !/^https?:\/\//i.test(trimmed)) {
-    throw new Error("Demo booking URL must be an absolute http(s) URL");
-  }
-
-  const current = await postgresStorage.getSettings();
-  const updated: AppSettings = { ...current, demoBookingUrl: trimmed };
-  await postgresStorage.saveSettings(scope, updated);
   return updated;
 }

@@ -84,7 +84,6 @@ export function AppNav({ role, userName }: { role: NavRole; userName?: string })
               <MenuLink href="/rep/settings" pathname={pathname}>Processors &amp; tiers</MenuLink>
               <MenuLink href="/admin/settings/pillow" pathname={pathname}>Margin padding</MenuLink>
               <MenuLink href="/admin/settings/quote-templates" pathname={pathname}>Quote templates</MenuLink>
-              <MenuLink href="/admin/settings/demo" pathname={pathname}>Demo booking link</MenuLink>
               <MenuLink href="/admin/users" pathname={pathname}>Users</MenuLink>
             </NavDropdown>
             <NavDropdown

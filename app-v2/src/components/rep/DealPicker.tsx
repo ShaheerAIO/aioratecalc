@@ -20,7 +20,7 @@ type Props = {
   onResolved: (resolved: ResolvedDeal | null) => void;
   /**
    * Hides the "create a new deal" affordance. Minting a deal for a company
-   * that has none at all is `retryBillingQuoteAction`'s job (mode: "create"),
+   * that has none at all is `sendQuoteAction`'s job (mode: "create"),
    * which already does its own ambiguity check before creating — a second
    * "create" entry point here (the account-detail host, where this component
    * exists specifically to ADOPT an existing deal) would just be a second way

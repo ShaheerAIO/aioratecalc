@@ -8,27 +8,62 @@ import type { HubspotIds, HubspotSubscriptionSnapshot } from "@/types/merchant";
 
 const listQuotesModifiedSince = vi.fn();
 const findSubscriptionsForQuote = vi.fn();
+const syncDealFromApplication = vi.fn();
+const sendMagicLinkEmail = vi.fn();
 
-type Row = { id: string; hubspotIds: HubspotIds | null };
+type Row = { id: string; hubspotIds: HubspotIds | null } & Record<string, unknown>;
+
+// The cron now also DETECTS ACCEPTANCE (lib/billing/acceptance.ts), which
+// fires on any matched row that has a paying subscription and no
+// quoteAcceptedAt. Every pre-existing case here is about the snapshot sync, so
+// rows default to already-accepted and stay out of that path; the acceptance
+// cases below opt in explicitly with `quoteAcceptedAt: null`.
+const ACCEPTED_AT = new Date("2026-08-11T00:00:00.000Z");
+const rowDefaults = {
+  // rowToApp calls .toISOString() on both of these unconditionally.
+  createdAt: new Date("2026-08-01T00:00:00.000Z"),
+  updatedAt: new Date("2026-08-10T00:00:00.000Z"),
+  quoteAcceptedAt: ACCEPTED_AT,
+  stage: "quote_accepted",
+  hubspotDealId: null,
+  ownerContact: null,
+  quoteLines: null,
+};
 
 let selectRows: Row[] = [];
 const updates: Array<Record<string, unknown>> = [];
 let updateThrows = false;
 
 const db = {
-  select: () => ({ from: () => ({ where: async () => selectRows }) }),
+  select: () => ({ from: () => ({ where: async () => selectRows.map(r => ({ ...rowDefaults, ...r })) }) }),
   update: () => ({
+    // `where` has to be BOTH awaitable and chainable: the snapshot writes do
+    // `await …set().where()`, while the acceptance write does
+    // `…set().where().returning()`. So it returns a promise with `returning`
+    // hung off it, and both paths resolve the same single execution.
     set: (patch: Record<string, unknown>) => ({
-      where: async () => {
-        if (updateThrows) throw new Error("db down");
-        updates.push(patch);
+      where: () => {
+        const ran = Promise.resolve().then(() => {
+          if (updateThrows) throw new Error("db down");
+          updates.push(patch);
+        });
+        return Object.assign(ran, {
+          returning: async () => {
+            await ran;
+            return [{ ...rowDefaults, ...(selectRows[0] ?? {}), ...patch }];
+          },
+        });
       },
     }),
   }),
+  insert: () => ({ values: async () => undefined }),
 };
 
 vi.mock("@/lib/db/client", () => ({ db }));
-vi.mock("@/lib/adapters/hubspot", () => ({ listQuotesModifiedSince, findSubscriptionsForQuote }));
+vi.mock("@/lib/adapters/hubspot", () => ({
+  listQuotesModifiedSince, findSubscriptionsForQuote, syncDealFromApplication,
+}));
+vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 
 const { GET } = await import("@/app/api/cron/hubspot-billing-sync/route");
 
@@ -81,6 +116,10 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   listQuotesModifiedSince.mockReset();
   findSubscriptionsForQuote.mockReset();
+  syncDealFromApplication.mockReset();
+  sendMagicLinkEmail.mockReset();
+  syncDealFromApplication.mockResolvedValue("deal-1");
+  sendMagicLinkEmail.mockResolvedValue({ sent: true });
   updates.length = 0;
   selectRows = [];
   updateThrows = false;
@@ -129,7 +168,7 @@ describe("the billing cron's window", () => {
     const res = await get();
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      quotesChecked: 0, applicationsUpdated: 0, subscriptionsMatched: 0, unmatched: [], failed: [],
+      quotesChecked: 0, applicationsUpdated: 0, accepted: 0, subscriptionsMatched: 0, unmatched: [], failed: [],
     });
     expect(updates).toHaveLength(0);
   });
@@ -233,6 +272,91 @@ describe("the billing cron writes only what changed", () => {
 
     expect((await (await get()).json()).applicationsUpdated).toBe(1);
     expect((updates[0].hubspotIds as HubspotIds).subscriptions).toEqual([]);
+  });
+});
+
+describe("the billing cron detects acceptance", () => {
+  // The merchant signs and pays on HubSpot's hosted quote and is never sent
+  // back to EasyOB. Before they have an account there is no on-view refresh of
+  // their own, so this sweep is the thing that notices — and the thing that
+  // emails them the link that creates the account.
+  const unaccepted = (hubspotIds: HubspotIds = HUBSPOT_IDS) => [{
+    id: "app-1",
+    hubspotIds,
+    quoteAcceptedAt: null,
+    stage: "quote_sent",
+    hubspotDealId: "deal-9",
+    ownerContact: { email: "ana@tortapalace.com" },
+    quoteLines: [{ name: "POS Unit", hubspotProductId: "p1", qty: 1, unitPrice: 1200, billingFrequency: "one_time", productType: "inventory" }],
+  }];
+
+  it("records the acceptance and emails the account link once a subscription is paying", async () => {
+    listQuotesModifiedSince.mockResolvedValue([quote()]);
+    selectRows = unaccepted();
+    findSubscriptionsForQuote.mockResolvedValue([sub()]);
+
+    const body = await (await get()).json();
+    expect(body.accepted).toBe(1);
+
+    const acceptWrite = updates.find(u => "quoteAcceptedAt" in u)!;
+    expect(acceptWrite.quoteAcceptedAt).toBeTruthy();
+    expect(acceptWrite.stage).toBe("quote_accepted");
+    expect(sendMagicLinkEmail).toHaveBeenCalledWith("ana@tortapalace.com", expect.stringContaining("/api/customer/verify?token="));
+    expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT accept a published quote nobody has paid yet", async () => {
+    listQuotesModifiedSince.mockResolvedValue([quote()]);
+    selectRows = unaccepted();
+    findSubscriptionsForQuote.mockResolvedValue([]);
+
+    const body = await (await get()).json();
+    expect(body.accepted).toBe(0);
+    expect(updates.some(u => "quoteAcceptedAt" in u)).toBe(false);
+    expect(sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+
+  // A canceled subscription can still carry the paymentMethod it was
+  // authorized with, so "has a payment method" alone must never read as paid.
+  it("does NOT accept on a canceled subscription", async () => {
+    listQuotesModifiedSince.mockResolvedValue([quote()]);
+    selectRows = unaccepted();
+    findSubscriptionsForQuote.mockResolvedValue([sub({ status: "canceled" })]);
+
+    expect((await (await get()).json()).accepted).toBe(0);
+    expect(sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op on a row that was already accepted — the email never goes twice", async () => {
+    listQuotesModifiedSince.mockResolvedValue([quote()]);
+    selectRows = [{ id: "app-1", hubspotIds: HUBSPOT_IDS }]; // defaults to accepted
+    findSubscriptionsForQuote.mockResolvedValue([sub()]);
+
+    expect((await (await get()).json()).accepted).toBe(0);
+    expect(sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+
+  it("records the acceptance even when the snapshot itself didn't move", async () => {
+    // An earlier run wrote the subscription but died before recording the
+    // acceptance. Nothing in the snapshot changes on this pass, so the write
+    // is skipped — the acceptance must still be picked up.
+    listQuotesModifiedSince.mockResolvedValue([quote()]);
+    selectRows = unaccepted({ ...HUBSPOT_IDS, subscriptions: [sub()], subscriptionStatus: "active" });
+    findSubscriptionsForQuote.mockResolvedValue([sub()]);
+
+    const body = await (await get()).json();
+    expect(body.applicationsUpdated).toBe(0);
+    expect(body.accepted).toBe(1);
+  });
+
+  it("still records the acceptance when the deal sync fails", async () => {
+    listQuotesModifiedSince.mockResolvedValue([quote()]);
+    selectRows = unaccepted();
+    findSubscriptionsForQuote.mockResolvedValue([sub()]);
+    syncDealFromApplication.mockRejectedValue(new Error("HubSpot 500"));
+
+    expect((await (await get()).json()).accepted).toBe(1);
+    expect(sendMagicLinkEmail).toHaveBeenCalledTimes(1);
   });
 });
 

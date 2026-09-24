@@ -33,18 +33,10 @@ const TOKEN = "tok-1";
 const NOW = new Date("2026-08-21T19:49:38.000Z");
 vi.useFakeTimers({ toFake: ["Date"], now: NOW });
 
-const HELD_DEMO = {
-  bookedAt: null, heldAt: "2026-08-10T18:00:00.000Z", source: "manual" as const,
-  meetingId: null, meetingTitle: null, outcome: null,
-  markedByUserId: "rep-1", checkedAt: "2026-08-10T18:00:00.000Z",
-  lastSyncError: null, lastSyncErrorAt: null,
-};
-
 function baseRow(extra: Partial<Row> = {}): Row {
   return {
     id: "prospect-1",
     stage: "quote_sent",
-    demo: HELD_DEMO,
     quoteType: "full_pos",
     quoteConfig: { monthlyVolume: 1000, avgTicket: 100 },
     quoteLines: null,
@@ -77,18 +69,8 @@ beforeEach(() => {
   });
 });
 
-describe("the demo gate", () => {
-  it("refuses analysis before the demo is held", async () => {
-    row = baseRow({ demo: null });
-    const res = await post();
-    expect(res.status).toBe(409);
-    const body = await res.json();
-    expect(body.error).toBe("demo_not_held");
-    expect(analyzeStatement).not.toHaveBeenCalled();
-    expect(patches).toHaveLength(0);
-  });
-
-  it("analyzes once the demo is held", async () => {
+describe("the happy path", () => {
+  it("analyzes a statement and returns a quote", async () => {
     const res = await post();
     expect(res.status).toBe(200);
     expect(analyzeStatement).toHaveBeenCalledTimes(1);

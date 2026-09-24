@@ -81,17 +81,16 @@ export function classifyDealStage(stageId: string | null): { label: string | nul
 // analysis, pricing, proposal_ready — none of them anything a merchant or
 // HubSpot ever sees) had to be jammed onto "Discovery Meeting" anyway. That's
 // exactly the kind of unconditional write that could drag a deal a rep had
-// since moved forward back down again — the failure mode `advanceDealStage`
-// and the forward-only PATCH guard below now exist to prevent. `satisfies
+// since moved forward back down again — the failure mode the forward-only
+// PATCH guard below now exists to prevent. `satisfies
 // Partial<Record<DealStage, string>>` still makes a renamed/removed DealStage
 // a compile error; it just no longer demands every stage name a target.
 //
 // `stage_0` (Demo Meeting) is deliberately absent even though it's a real,
-// current stage: nothing here writes it. It's written later, directly, by
-// `advanceDealStage`, at the moment a demo is confirmed held (read back from
-// HubSpot, or marked by a rep) — see the demo-tracking work this pipeline
-// data was built for. `3634617027` (Quote Sent) is absent for a related
-// reason: the HubSpot billing quote only ever publishes at acceptance, so a
+// current stage: EasyOB never observes a demo, so nothing here (or anywhere
+// else) writes it — it stays listed in SALES_PIPELINE_STAGES only so
+// `dealStageRank` can rank a deal a rep parked there by hand.
+// `3634617027` (Quote Sent) is absent for a related reason: the HubSpot billing quote only ever publishes at acceptance, so a
 // `quote_sent`/`proposal_sent` write landing on "Quote Sent" here would be
 // superseded by "Signed/Awaiting Payment Info" in the same breath the
 // customer accepts — a stage that would flash for zero observable time.
@@ -339,7 +338,7 @@ async function dropBackwardStage(dealId: string, props: Record<string, string>):
     currentStageId = await getDealStage(dealId);
   } catch (err) {
     // getDealStage throws on a failed read, and syncDealFromApplication's PATCH
-    // branch is a hard error (not fire-and-log) in retryBillingQuoteAction — so a
+    // branch is a hard error (not fire-and-log) in sendQuoteAction — so a
     // transient HubSpot read failure must not break a retry that would
     // otherwise have succeeded. Degrade instead: never move a deal we
     // couldn't inspect, and let name/amount still go through.
@@ -347,35 +346,6 @@ async function dropBackwardStage(dealId: string, props: Record<string, string>):
     return omitStageOnUnreadableDeal(props);
   }
   return guardDealStageProps(currentStageId, props);
-}
-
-/**
- * Move a deal to `targetStageId`, but only if that's strictly ahead of where
- * it currently sits — read the live stage first rather than trust whatever
- * this app last wrote, since a rep can drag a deal forward in HubSpot itself.
- * `"unknown_stage"` guards the caller, not the deal: a targetStageId this
- * build doesn't recognize (a typo, or a stage retired since this shipped)
- * can't be ranked against anything, so nothing is read or written.
- */
-export async function advanceDealStage(
-  dealId: string,
-  targetStageId: string
-): Promise<"advanced" | "already_ahead" | "unknown_stage"> {
-  const targetRank = dealStageRank(targetStageId);
-  if (targetRank === -1) return "unknown_stage";
-
-  const currentStageId = await getDealStage(dealId);
-  if (targetRank <= dealStageRank(currentStageId)) return "already_ahead";
-
-  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/${dealId}`, {
-    method: "PATCH",
-    headers: billingHeaders(),
-    body: JSON.stringify({ properties: { pipeline: HUBSPOT_DEAL_PIPELINE_ID, dealstage: targetStageId } }),
-  });
-  if (!res.ok) {
-    throw hubspotErr(`HubSpot deal ${dealId} advance to ${targetStageId} failed`, res.status, await res.text());
-  }
-  return "advanced";
 }
 
 /**
@@ -1957,106 +1927,4 @@ export async function listQuotesModifiedSince(sinceIso: string): Promise<QuoteSn
   } while (after);
 
   return snapshots;
-}
-
-// ── Demo tracking: meeting reads ────────────────────────────────────────────
-// Feeds src/lib/demo.ts's pure derivation — this file only fetches and shapes
-// meetings; which ones count as "the demo" is decided over there, not here.
-// Both verified live against portal 244508708 (2026-09-21, don't re-probe):
-//   - GET /crm/v4/objects/deals/{id}/associations/meetings → 200 on the
-//     billing token (deal→meeting is typeId 211), same v4 shape as
-//     getCompanyOwnerContact's associations read (`{results: [{toObjectId,
-//     associationTypes}]}`).
-//   - POST /crm/v3/objects/meetings/search filtered on `associations.company`
-//     → 200, same posture as `listDealsForCompany`'s `associations.company`
-//     filter on deals/search.
-// No new scope needed — billingHeaders() already reads both.
-
-export type MeetingSnapshot = {
-  id: string;
-  title: string | null;
-  startTime: string | null;
-  endTime: string | null;
-  activityType: string | null;
-  outcome: string | null;
-};
-
-const MEETING_PROPS = [
-  "hs_activity_type", "hs_meeting_outcome", "hs_meeting_start_time", "hs_meeting_end_time", "hs_meeting_title",
-];
-
-function toMeetingSnapshot(id: string, props: Record<string, string | null> | undefined): MeetingSnapshot {
-  return {
-    id,
-    title: clean(props?.hs_meeting_title),
-    startTime: clean(props?.hs_meeting_start_time),
-    endTime: clean(props?.hs_meeting_end_time),
-    activityType: clean(props?.hs_activity_type),
-    outcome: clean(props?.hs_meeting_outcome),
-  };
-}
-
-/**
- * Every meeting associated to a deal, of any `hs_activity_type` — filtering to
- * `Demo` is `deriveDemoState`'s job, not this read's. The association read
- * (v4) is not index-backed, so a meeting logged moments ago shows up
- * immediately; the batch/read that follows is mapped back BY ID, not
- * position, since a batch read's ordering isn't contractual.
- */
-export async function listMeetingsForDeal(dealId: string): Promise<MeetingSnapshot[]> {
-  const assocRes = await fetchWithRetry(
-    `${BASE}/crm/v4/objects/deals/${dealId}/associations/meetings`,
-    { headers: billingHeaders() }
-  );
-  if (assocRes.status === 404) return [];
-  if (!assocRes.ok) {
-    throw hubspotErr(`HubSpot deal ${dealId} meeting associations read failed`, assocRes.status, await assocRes.text());
-  }
-  const assocData = await assocRes.json() as { results?: Array<{ toObjectId?: number | string }> };
-  const ids = (assocData.results ?? [])
-    .map(r => clean(r.toObjectId === undefined || r.toObjectId === null ? null : String(r.toObjectId)))
-    .filter((id): id is string => id !== null);
-  if (ids.length === 0) return [];
-
-  const readRes = await fetchWithRetry(`${BASE}/crm/v3/objects/meetings/batch/read`, {
-    method: "POST",
-    headers: billingHeaders(),
-    body: JSON.stringify({ properties: MEETING_PROPS, inputs: ids.map(id => ({ id })) }),
-  });
-  if (!readRes.ok) {
-    throw hubspotErr(`HubSpot meeting batch read failed for deal ${dealId}`, readRes.status, await readRes.text());
-  }
-  const readData = await readRes.json() as {
-    results?: Array<{ id: string; properties?: Record<string, string | null> }>;
-  };
-  const byId = new Map((readData.results ?? []).map(r => [r.id, r.properties]));
-  return ids.map(id => toMeetingSnapshot(id, byId.get(id)));
-}
-
-/**
- * `Demo`-typed meetings associated to a company — the fallback source when a
- * deal carries none of its own (see `deriveDemoState`'s candidate-set rule;
- * ~30% of real `Demo` meetings carry no deal edge at all, but 95%+ carry a
- * company edge). Filtered server-side to `hs_activity_type = "Demo"` rather
- * than reading everything and filtering client-side, since a company can
- * carry hundreds of unrelated meetings.
- */
-export async function listDemoMeetingsForCompany(companyId: string): Promise<MeetingSnapshot[]> {
-  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/meetings/search`, {
-    method: "POST",
-    headers: billingHeaders(),
-    body: JSON.stringify({
-      filterGroups: [{
-        filters: [
-          { propertyName: "associations.company", operator: "EQ", value: companyId },
-          { propertyName: "hs_activity_type", operator: "EQ", value: "Demo" },
-        ],
-      }],
-      properties: MEETING_PROPS,
-      limit: 100,
-    }),
-  });
-  if (!res.ok) throw hubspotErr(`HubSpot demo meeting search for company ${companyId} failed`, res.status, await res.text());
-  const data = await res.json() as { results?: Array<{ id: string; properties?: Record<string, string | null> }> };
-  return (data.results ?? []).map(row => toMeetingSnapshot(row.id, row.properties));
 }

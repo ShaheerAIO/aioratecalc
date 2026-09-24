@@ -1,5 +1,5 @@
-// The token→row lookup shared by the /lead/[token] pages (the checklist, the
-// quote step, the demo step). Kept out of applicationRow.ts (which is
+// The token→row lookup shared by the /lead/[token] pages (the checklist and
+// the quote step). Kept out of applicationRow.ts (which is
 // deliberately DB-handle-free) because this one holds the query.
 //
 // The two API routes (accept, analyze) do NOT use this — they were already

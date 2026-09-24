@@ -426,7 +426,6 @@ export async function createProspectAction(input: {
     stage: hasQuote ? "quote_sent" : "lead_link_sent",
     hubspotDealId: dealResolution.deal.id,
     dealLink,
-    demo: null,
     tenantLink,
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -539,6 +538,21 @@ export async function saveQuoteConfigurationAction(input: {
       "This quote was accepted on " + new Date(app.quoteAcceptedAt).toLocaleDateString() +
       " and is frozen — it records what the merchant was actually quoted, and a published " +
       "HubSpot billing quote can't be edited or voided through the API. Start a new quote " +
+      "instead of editing this one."
+    );
+  }
+
+  // Published beats accepted as the freeze point now. The rep sends the quote
+  // BEFORE the merchant accepts it (acceptance is them signing and paying it
+  // on HubSpot), so there is a window — sometimes days long — where the
+  // document is live and unamendable but `quoteAcceptedAt` is still null.
+  // Editing our copy in that window would silently desynchronize it from the
+  // one the merchant is actually looking at.
+  if (app.hubspotIds?.publishedAt) {
+    throw new Error(
+      "This quote was sent to the merchant on " + new Date(app.hubspotIds.publishedAt).toLocaleDateString() +
+      " and is frozen — a published HubSpot quote can't be edited, replaced or voided through " +
+      "the API, so our copy has to keep matching the document they're signing. Start a new quote " +
       "instead of editing this one."
     );
   }

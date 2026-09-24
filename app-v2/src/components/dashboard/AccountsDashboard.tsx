@@ -12,9 +12,7 @@ import {
   linkTenantCompanyAction,
   unlinkTenantCompanyAction,
   adoptDealAction,
-  markDemoHeldAction,
   markAdyenKycCompleteAction,
-  clearDemoHeldAction,
   type RepSummary,
 } from "@/lib/actions/applications";
 import { resendLeadLinkAction } from "@/lib/actions/prospects";
@@ -333,10 +331,6 @@ function AccountsDashboardInner({
     }
   };
 
-  // The rep/admin override for a demo AIO can't see in HubSpot — see
-  // markDemoHeldAction's comment. Not a hidden admin escape hatch: only 125 of
-  // 8,018 portal meetings carry the Demo tag, so this manual mark is the
-  // normal path most demos take, not a fallback.
   const handleMarkKyc = async (app: MerchantApplication) => {
     setBusyId(app.id);
     try {
@@ -344,32 +338,6 @@ function AccountsDashboardInner({
       updateOne(updated);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to mark KYC complete");
-    }
-    setBusyId(null);
-  };
-
-  const handleMarkDemo = async (app: MerchantApplication) => {
-    setBusyId(app.id);
-    try {
-      const updated = await markDemoHeldAction(app.id);
-      updateOne(updated);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to mark demo held");
-    }
-    setBusyId(null);
-  };
-
-  // Undo is not admin-only — a rep who mis-clicked needs to fix it themselves
-  // — but it re-locks a quote the customer may already be looking at, so it
-  // confirms first.
-  const handleUndoDemo = async (app: MerchantApplication) => {
-    if (!window.confirm("Undo the demo-held mark? This re-locks the customer's quote until a demo is confirmed again.")) return;
-    setBusyId(app.id);
-    try {
-      const updated = await clearDemoHeldAction(app.id);
-      updateOne(updated);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to undo demo mark");
     }
     setBusyId(null);
   };
@@ -760,12 +728,12 @@ function AccountsDashboardInner({
                   {/* HubSpot deal adoption — the account has NO deal at all (a
                       legacy row from before deal adoption existed, or a
                       company whose deal was never attached). This is the
-                      "go pick one" destination retryBillingQuoteAction's
+                      "go pick one" destination sendQuoteAction's
                       `ambiguous` refusal points reps at; it disappears the
                       moment a deal is attached, in favor of the "HubSpot
                       Deal ID" field above. Existing-deal only — creating a
                       brand-new deal for a company with none is
-                      retryBillingQuoteAction's job (mode: "create"). */}
+                      sendQuoteAction's job (mode: "create"). */}
                   {(isAdmin || selected.ownerUserId === userId) && !selected.hubspotDealId && (
                     <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
                       <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>HubSpot Deal</div>
@@ -815,51 +783,6 @@ function AccountsDashboardInner({
                     </div>
                   )}
 
-                  {/* Demo gate — HubSpot only tags ~1.5% of portal meetings as
-                      "Demo", so this manual mark is the normal way a demo gets
-                      recorded, not a fallback. Same owner/admin gate as the
-                      tenant link above. */}
-                  {(isAdmin || selected.ownerUserId === userId) && (
-                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
-                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>Demo</div>
-                      {selected.demo?.heldAt ? (
-                        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-                          <div style={{ flex: 1, minWidth: 240 }}>
-                            <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
-                              Held {new Date(selected.demo.heldAt).toLocaleString()}
-                            </div>
-                            <div className={styles.detailMeta} style={{ marginTop: 4 }}>
-                              {selected.demo.source === "manual" ? "Marked manually" : "From HubSpot"}
-                              {" · checked "}
-                              {selected.demo.checkedAt ? new Date(selected.demo.checkedAt).toLocaleString() : "never"}
-                            </div>
-                          </div>
-                          <button className={styles.btnGhost} disabled={busyId === selected.id} onClick={() => handleUndoDemo(selected)}>
-                            Undo
-                          </button>
-                        </div>
-                      ) : (
-                        <div>
-                          <div className={styles.detailMeta} style={{ marginBottom: 4 }}>
-                            {selected.demo?.bookedAt
-                              ? `Booked for ${new Date(selected.demo.bookedAt).toLocaleString()}.`
-                              : "No demo on file yet."}
-                            {" "}
-                            {selected.demo?.source === "manual" ? "Marked manually" : selected.demo?.source === "hubspot_meeting" ? "From HubSpot" : "Never checked"}
-                            {" · checked "}
-                            {selected.demo?.checkedAt ? new Date(selected.demo.checkedAt).toLocaleString() : "never"}
-                          </div>
-                          <div className={styles.detailMeta} style={{ marginBottom: 8, fontWeight: 600 }}>
-                            Marking it held is what unlocks the customer&apos;s quote.
-                          </div>
-                          <button className={styles.btnPrimary} disabled={busyId === selected.id} onClick={() => handleMarkDemo(selected)}>
-                            Mark Demo Held
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
                   {/* Adyen KYC has no automatic completion signal any more. The
                       Balance Platform webhook went when EasyOB stopped creating
                       Adyen objects, and AIO's API exposes no onboarding status we
@@ -890,8 +813,8 @@ function AccountsDashboardInner({
                       </div>
                     )}
 
-                  {/* Rework the quote at any time up to acceptance — "things change
-                      after the demo". Owner rep or any admin, same gate as the
+                  {/* Rework the quote at any time up to acceptance — things change.
+                      Owner rep or any admin, same gate as the
                       tenant link above. saveQuoteConfigurationAction (which this
                       calls) refuses once quoteAcceptedAt is set; EditQuotePanel
                       shows the frozen notice instead of the form in that case. */}

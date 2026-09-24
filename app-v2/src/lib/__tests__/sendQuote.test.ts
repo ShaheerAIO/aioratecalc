@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MerchantApplication } from "@/types/merchant";
 import type { HubspotDeal } from "@/lib/adapters/hubspot";
 
-// retryBillingQuoteAction — the rep's only billing affordance. The orchestrator
-// itself is covered by leadAcceptBilling.test.ts against the real thing; what's
+// sendQuoteAction — the rep's only billing write, and THE one-way door.
+// The orchestrator
+// itself is covered by publishBillingQuote.test.ts against the real thing; what's
 // under test here is only what the action adds around it: the role/ownership
 // hand-off, the already-published refusal, and the missing-deal backfill —
 // which now goes through resolveDealForCompany (mode: "create") rather than
@@ -41,7 +42,7 @@ vi.mock("@/lib/db/client", () => ({
   },
 }));
 
-const { retryBillingQuoteAction } = await import("@/lib/actions/billing");
+const { sendQuoteAction } = await import("@/lib/actions/billing");
 
 // Linked by default — an unlinked account can't create a deal at all, which
 // is its own case below.
@@ -79,11 +80,11 @@ beforeEach(() => {
   buildAndPublishBillingQuote.mockResolvedValue({ status: "published", quoteLink: "https://customers.aioapp.com/abc" });
 });
 
-describe("retryBillingQuoteAction", () => {
+describe("sendQuoteAction", () => {
   it("refuses once the quote is published, without touching HubSpot at all", async () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: "d-1", hubspotIds: { publishedAt: "2026-08-22T00:00:00Z" } as never }));
 
-    const result = await retryBillingQuoteAction("app-1");
+    const result = await sendQuoteAction("app-1");
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("already published");
@@ -95,7 +96,7 @@ describe("retryBillingQuoteAction", () => {
     getApplication.mockResolvedValue(app());
     resolveDealForCompany.mockResolvedValue({ ok: true, deal: NEW_DEAL, created: true });
 
-    const result = await retryBillingQuoteAction("app-1");
+    const result = await sendQuoteAction("app-1");
 
     expect(resolveDealForCompany).toHaveBeenCalledWith({
       companyId: "334295287484",
@@ -113,7 +114,7 @@ describe("retryBillingQuoteAction", () => {
     getApplication.mockResolvedValue(app());
     resolveDealForCompany.mockResolvedValue({ ok: true, deal: NEW_DEAL, created: true });
 
-    await retryBillingQuoteAction("app-1");
+    await sendQuoteAction("app-1");
 
     expect(patches[0].dealLink).toEqual(expect.objectContaining({ origin: "created", dealName: NEW_DEAL.name }));
   });
@@ -121,7 +122,7 @@ describe("retryBillingQuoteAction", () => {
   it("refuses to create the deal while no HubSpot company is linked", async () => {
     getApplication.mockResolvedValue(app({ tenantLink: null }));
 
-    const result = await retryBillingQuoteAction("app-1");
+    const result = await sendQuoteAction("app-1");
 
     expect(result.ok).toBe(false);
     expect(result.reasons?.map(r => r.code)).toEqual(["no_tenant_company"]);
@@ -139,7 +140,7 @@ describe("retryBillingQuoteAction", () => {
       candidates: [NEW_DEAL, { ...NEW_DEAL, id: "deal-other" }],
     });
 
-    const result = await retryBillingQuoteAction("app-1");
+    const result = await sendQuoteAction("app-1");
 
     expect(result.ok).toBe(false);
     expect(result.reasons?.map(r => r.code)).toEqual(["deal_ambiguous"]);
@@ -150,7 +151,7 @@ describe("retryBillingQuoteAction", () => {
   it("never re-resolves a deal that already exists", async () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: "d-1" }));
 
-    await retryBillingQuoteAction("app-1");
+    await sendQuoteAction("app-1");
 
     expect(resolveDealForCompany).not.toHaveBeenCalled();
     expect(patches).toEqual([]);
@@ -161,7 +162,7 @@ describe("retryBillingQuoteAction", () => {
     getApplication.mockResolvedValue(app());
     resolveDealForCompany.mockResolvedValue({ ok: false, code: "hubspot_error", message: "403 Forbidden" });
 
-    const result = await retryBillingQuoteAction("app-1");
+    const result = await sendQuoteAction("app-1");
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("403 Forbidden");
@@ -176,7 +177,7 @@ describe("retryBillingQuoteAction", () => {
       reasons: [{ code: "order_points_need_review", message: "Tablet (×2) needs a human decision" }],
     });
 
-    const result = await retryBillingQuoteAction("app-1");
+    const result = await sendQuoteAction("app-1");
 
     expect(result.ok).toBe(false);
     expect(result.reasons?.[0].code).toBe("order_points_need_review");

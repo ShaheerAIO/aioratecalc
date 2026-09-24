@@ -7,6 +7,8 @@ import {
   listQuotesModifiedSince,
   type QuoteSnapshot,
 } from "@/lib/adapters/hubspot";
+import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
+import { rowToApp, type ApplicationRow as FullApplicationRow } from "@/lib/storage/applicationRow";
 import { rollUpSubscriptionStatus, type HubspotIds, type HubspotSubscriptionSnapshot } from "@/types/merchant";
 
 // Phase E nightly billing reconciliation: the backstop behind the on-view
@@ -18,6 +20,12 @@ import { rollUpSubscriptionStatus, type HubspotIds, type HubspotSubscriptionSnap
 // same process-isolation argument that route documents at its lines 5-11
 // applies here: separate Vercel Functions mean one job's HubSpot failure or
 // duration can't affect the other's schedule.
+//
+// It is ALSO the backstop that detects acceptance. Since the merchant no
+// longer accepts inside EasyOB — they sign and pay on HubSpot's hosted quote —
+// the subscription this job reads is the only record that it happened, for a
+// merchant who has no EasyOB account yet and therefore no on-view refresh of
+// their own. See lib/billing/acceptance.ts.
 export const maxDuration = 300;
 
 // The window is STATELESS — `now - LOOKBACK_DAYS`, recomputed every run, no
@@ -34,7 +42,9 @@ export const maxDuration = 300;
 // is still one or two pages of search results.
 const LOOKBACK_DAYS = 10;
 
-type ApplicationRow = { id: string; hubspotIds: HubspotIds | null };
+// The whole row, not a two-column projection: `applyDetectedAcceptance` needs
+// the deal id, the stage and the contact email to record an acceptance.
+type ApplicationRow = FullApplicationRow;
 
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
@@ -61,6 +71,7 @@ export async function GET(req: NextRequest) {
   const summary = {
     quotesChecked: quotes.length,
     applicationsUpdated: 0,
+    accepted: 0,
     subscriptionsMatched: 0,
     unmatched: [] as string[],
     failed: [] as { applicationId: string; error: string }[],
@@ -71,7 +82,7 @@ export async function GET(req: NextRequest) {
   // portal belong to deals EasyOB never built, so unmatched is the normal case,
   // not an error.
   const rows: ApplicationRow[] = await db
-    .select({ id: merchantApplications.id, hubspotIds: merchantApplications.hubspotIds })
+    .select()
     .from(merchantApplications)
     .where(inArray(sql`${merchantApplications.hubspotIds}->>'quoteId'`, [...byQuoteId.keys()]));
 
@@ -106,13 +117,22 @@ export async function GET(req: NextRequest) {
       // nothing here depends on syncedAt advancing, so an unchanged row is left
       // completely alone rather than churning updatedAt across the whole table
       // every night.
-      if (!snapshotChanged(hubspotIds, next)) continue;
+      if (snapshotChanged(hubspotIds, next)) {
+        await db
+          .update(merchantApplications)
+          .set({ hubspotIds: { ...next, syncedAt: new Date().toISOString() }, updatedAt: new Date() })
+          .where(eq(merchantApplications.id, row.id));
+        summary.applicationsUpdated++;
+      }
 
-      await db
-        .update(merchantApplications)
-        .set({ hubspotIds: { ...next, syncedAt: new Date().toISOString() }, updatedAt: new Date() })
-        .where(eq(merchantApplications.id, row.id));
-      summary.applicationsUpdated++;
+      // AFTER the snapshot write, and outside the changed-check: a run that
+      // finds nothing new in the snapshot can still be the first run to look at
+      // a row whose acceptance was never recorded (an earlier run that crashed
+      // between the two writes, or a row whose subscription was already cached
+      // by the on-view refresh). Idempotent either way — see acceptance.ts.
+      const before = rowToApp({ ...row, hubspotIds: next });
+      const after = await applyDetectedAcceptance(before);
+      if (!before.quoteAcceptedAt && after.quoteAcceptedAt) summary.accepted++;
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       console.error(`[cron hubspot-billing-sync] application ${row.id} failed`, error);

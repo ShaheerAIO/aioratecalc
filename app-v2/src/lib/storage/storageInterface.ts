@@ -17,10 +17,9 @@ export type CustomerApplicationPatch = Partial<
     // the quote/subscription snapshot back, exactly as the Check refresh does
     // for checkIds. Only the snapshot fields are ever touched there — the
     // quote/line-item ids themselves are written by the rep's build action.
-    // demo: same posture — the on-view demo-status refresh also runs as the
-    // customer. dealLink is deliberately NOT here — a customer must never be
-    // able to write which deal an application is backed by.
-    "business" | "ownerContact" | "processing" | "agreement" | "stage" | "adyenIds" | "adyenOnboardingUrl" | "checkIds" | "foodbuyIds" | "hubspotDealId" | "hubspotIds" | "demo"
+    // dealLink is deliberately NOT here — a customer must never be able to
+    // write which deal an application is backed by.
+    "business" | "ownerContact" | "processing" | "agreement" | "stage" | "adyenIds" | "adyenOnboardingUrl" | "checkIds" | "foodbuyIds" | "hubspotDealId" | "hubspotIds"
   >
 >;
 

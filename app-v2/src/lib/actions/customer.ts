@@ -19,10 +19,9 @@ import {
 } from "@/lib/adapters/check";
 import {
   findSubscriptionsForQuote, getQuoteSnapshot, syncDealFromApplication,
-  getDealById, listMeetingsForDeal, listDemoMeetingsForCompany,
 } from "@/lib/adapters/hubspot";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
-import { refreshDemoStatus as syncDemoStatus } from "@/lib/demoSync";
+import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
 import {
   validateOnboardingFields,
   validateOnboardingSubmission,
@@ -345,29 +344,6 @@ export async function markFoodbuyFormGeneratedAction(id: string): Promise<Mercha
   });
 }
 
-// ── Demo tracking ────────────────────────────────────────────────────────────
-
-// The TTL/terminal-heldAt/always-write/swallow-failures rules live in
-// lib/demoSync.ts — shared with the public /lead/[token] checklist host,
-// which injects a token-scoped persist instead of this customer-session-
-// scoped one. Don't re-derive the rules here; see that file's comment.
-async function refreshDemoStatus(
-  userId: string,
-  id: string,
-  app: MerchantApplication
-): Promise<MerchantApplication> {
-  return syncDemoStatus(app, {
-    // Thunked, not passed directly: demoSync's own early-returns (no deal yet,
-    // already held, within the TTL) mean these are often never invoked at
-    // all, and a direct reference here would still touch the import binding
-    // eagerly on every call regardless of whether demoSync ends up using it.
-    getDeal: dealId => getDealById(dealId),
-    listDealMeetings: dealId => listMeetingsForDeal(dealId),
-    listCompanyMeetings: companyId => listDemoMeetingsForCompany(companyId),
-    persist: demo => postgresStorage.updateApplicationAsCustomer(userId, id, { demo }),
-  });
-}
-
 // ── Billing (HubSpot quote + subscriptions) ─────────────────────────────────
 
 // Skip a re-read within a minute of the last one. The Check refresh above has
@@ -422,7 +398,7 @@ async function refreshHubspotBilling(
     // which returns early on an unchanged status. syncedAt IS the TTL above, so
     // skipping the write would mean the TTL never engages and every page view
     // re-reads HubSpot twice.
-    return await postgresStorage.updateApplicationAsCustomer(userId, id, {
+    const refreshed = await postgresStorage.updateApplicationAsCustomer(userId, id, {
       hubspotIds: {
         ...hubspotIds,
         // Never null out a link that works on a read that came back empty.
@@ -436,6 +412,13 @@ async function refreshHubspotBilling(
         lastSyncErrorAt: null,
       },
     });
+
+    // The subscription we just read IS the merchant's acceptance — they signed
+    // and authorized the mandate on HubSpot's hosted quote. A customer who
+    // already has an account normally got here BECAUSE acceptance was detected,
+    // so this is usually a no-op; it matters for the one who set a password
+    // from an earlier link and then paid.
+    return await applyDetectedAcceptance(refreshed);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("HubSpot billing refresh failed:", message);
@@ -466,31 +449,26 @@ export async function getMyApplicationWithBillingSyncAction(id: string): Promise
   return refreshHubspotBilling(userId, id, app);
 }
 
-// What the application detail page calls: one load, all three on-view refreshes.
+// What the application detail page calls: one load, both on-view refreshes.
 //
 // They run INDEPENDENTLY — each swallows its own failures internally — so a
-// HubSpot/Check outage can't suppress either of the others.
+// HubSpot/Check outage can't suppress the other.
 //
 // They run SEQUENTIALLY and the row is threaded from one into the next, which is
 // what keeps updates on the same row from clobbering each other.
-// updateApplicationAsCustomer SETs only the columns in its patch, so check_ids,
-// demo, and hubspot_ids can't collide in SQL — but each refresh builds its patch
+// updateApplicationAsCustomer SETs only the columns in its patch, so check_ids
+// and hubspot_ids can't collide in SQL — but each refresh builds its patch
 // by spreading the snapshot it was handed, and returns the row from its own
 // RETURNING. Handing the next refresh a pre-previous-write row would make the
 // value this function returns to the page miss whatever the earlier one wrote.
 // Do not "optimise" this into a Promise.all over independent loads.
 //
-// Demo runs BEFORE billing, deliberately: the demo gate decides whether
-// billing is even shown to the merchant, so a page render that skipped this
-// ordering could flash a billing module the demo hasn't cleared yet.
-//
-// No fourth Foodbuy refresh here — there's nothing to poll (see markFoodbuy-
+// No third Foodbuy refresh here — there's nothing to poll (see markFoodbuy-
 // FormGeneratedAction above).
 export async function getMyApplicationWithSyncAction(id: string): Promise<MerchantApplication | null> {
   const { userId } = await requireCustomer();
   const app = await postgresStorage.getApplicationForCustomer(userId, id);
   if (!app) return null;
   const afterPayroll = await refreshCheckOnboardStatus(userId, id, app);
-  const afterDemo = await refreshDemoStatus(userId, id, afterPayroll);
-  return refreshHubspotBilling(userId, id, afterDemo);
+  return refreshHubspotBilling(userId, id, afterPayroll);
 }

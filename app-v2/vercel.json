@@ -1,10 +1,6 @@
 {
   "crons": [
     {
-      "path": "/api/cron/hubspot-demo-sync",
-      "schedule": "0 7 * * *"
-    },
-    {
       "path": "/api/cron/hubspot-billing-sync",
       "schedule": "0 8 * * *"
     },
