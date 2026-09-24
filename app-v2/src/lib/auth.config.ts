@@ -51,7 +51,14 @@ export const authConfig: NextAuthConfig = {
       return true;
     },
     jwt({ token, user }) {
-      if (user) token.role = user.role;
+      if (user) {
+        token.role = user.role;
+        // `sub` arrives as a random uuid on an OAuth sign-in — @auth/core
+        // discards the id the provider's profile() returned. session.user.id is
+        // written to merchant_applications.owner_user_id, a strict FK, so it
+        // has to be the AIO users.id. See the profile() comment in auth.ts.
+        if (user.aioUserId) token.sub = user.aioUserId;
+      }
       return token;
     },
     session({ session, token }) {

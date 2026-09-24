@@ -12,6 +12,16 @@ const updateApplicationAsCustomer = vi.fn();
 const getQuoteSnapshot = vi.fn();
 
 vi.mock("@/lib/auth", () => ({ auth, signIn: vi.fn() }));
+// The customer session is resolved against the DB now (lib/auth/
+// getCustomerSession) rather than read straight off auth(). Stubbed onto the
+// same `auth` fixture these tests already drive, so the subject stays the
+// route rather than the session lookup — which has its own suite.
+vi.mock("@/lib/auth/getCustomerSession", () => ({
+  getCustomerSession: async () => {
+    const session = await auth();
+    return session?.user?.role === "customer" ? { userId: session.user.id } : null;
+  },
+}));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({
   postgresStorage: { getApplicationForCustomer, updateApplicationAsCustomer },

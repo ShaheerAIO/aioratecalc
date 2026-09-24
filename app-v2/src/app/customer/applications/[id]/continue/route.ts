@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { getCustomerSession } from "@/lib/auth/getCustomerSession";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import {
   aioDashboardEnabled,
@@ -18,12 +18,12 @@ import {
 // per-click behaviour, different source.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await auth();
-  if (!session?.user || session.user.role !== "customer") {
+  const session = await getCustomerSession();
+  if (!session) {
     return NextResponse.redirect(new URL("/customer/login", req.url));
   }
 
-  const app = await postgresStorage.getApplicationForCustomer(session.user.id, id);
+  const app = await postgresStorage.getApplicationForCustomer(session.userId, id);
   if (!app) {
     return NextResponse.redirect(new URL("/customer", req.url));
   }
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // Keep the stored URL current for admin visibility; the click always
     // regenerates regardless of what's persisted. Also backfills the legal
     // entity id, which is only obtainable by parsing it out of this URL.
-    await postgresStorage.updateApplicationAsCustomer(session.user.id, id, {
+    await postgresStorage.updateApplicationAsCustomer(session.userId, id, {
       adyenOnboardingUrl: link.url,
       adyenIds: {
         ...(app.adyenIds ?? {}),

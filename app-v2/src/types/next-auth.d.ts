@@ -9,6 +9,13 @@ declare module "next-auth" {
     role?: "rep" | "admin" | "customer";
     /** Set instead of `role` when an Entra identity was refused. */
     denied?: EntraDenial;
+    /**
+     * The AIO `users.id`, carried separately because @auth/core replaces `id`
+     * with a random uuid on every OAuth sign-in. The jwt callback reads this
+     * back into `sub`. Only the Entra provider sets it — credentials sign-ins
+     * keep their own `id`. See the profile() comment in lib/auth.ts.
+     */
+    aioUserId?: string;
   }
   interface Session {
     user: {

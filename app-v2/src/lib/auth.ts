@@ -23,11 +23,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       authorization: { params: { scope: "openid profile email" } },
       // This runs in the /api/auth route handler (Node), so the DB is reachable.
       //
-      // The lookup has to happen HERE rather than in the signIn callback:
-      // @auth/core seeds the session token's `sub` from whatever this returns as
-      // `id` (lib/actions/callback/index.js), and `sub` becomes session.user.id
-      // — which is written to merchant_applications.owner_user_id, a strict FK.
-      // So the AIO user id must be the id this returns.
+      // The lookup has to happen HERE rather than in the signIn callback: it is
+      // the only hook that gets the raw claims, and it is what decides which AIO
+      // row becomes the session.
+      //
+      // `aioUserId` is NOT redundant with `id`. @auth/core overwrites `id` with
+      // a fresh crypto.randomUUID() for every OAuth sign-in, on purpose, so that
+      // the user stays independent of the provider (see
+      // lib/actions/callback/oauth/callback.js). That random id then seeds the
+      // token's `sub`, and `sub` becomes session.user.id — which is written to
+      // merchant_applications.owner_user_id, a strict FK. Left alone, every
+      // staff sign-in produces a session naming a user that does not exist, and
+      // the first save fails on the foreign key. Everything else this returns
+      // survives the clobber (it's spread first), so the real id rides on its
+      // own key and the jwt callback in auth.config.ts puts it back into `sub`.
       //
       // A refusal can't throw from here without surfacing as an opaque OAuth
       // error, so it's carried out on the user object and turned into a real
@@ -41,6 +50,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
         return {
           id: resolved.userId,
+          aioUserId: resolved.userId,
           email: resolved.email,
           name: resolved.name,
           role: resolved.role,

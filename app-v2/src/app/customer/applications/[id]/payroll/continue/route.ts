@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { getCustomerSession } from "@/lib/auth/getCustomerSession";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { createCheckOnboardLink } from "@/lib/adapters/check";
 
@@ -9,12 +9,12 @@ import { createCheckOnboardLink } from "@/lib/adapters/check";
 // the Adyen continue route one directory up.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await auth();
-  if (!session?.user || session.user.role !== "customer") {
+  const session = await getCustomerSession();
+  if (!session) {
     return NextResponse.redirect(new URL("/customer/login", req.url));
   }
 
-  const app = await postgresStorage.getApplicationForCustomer(session.user.id, id);
+  const app = await postgresStorage.getApplicationForCustomer(session.userId, id);
   if (!app) {
     return NextResponse.redirect(new URL("/customer", req.url));
   }

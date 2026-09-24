@@ -8,6 +8,14 @@ const auth = vi.fn();
 const getApplicationForCustomer = vi.fn();
 
 vi.mock("@/lib/auth", () => ({ auth, signIn: vi.fn() }));
+// See the note in billingRoute.test.ts — requireCustomer resolves the session
+// against the DB now, stubbed onto the same `auth` fixture.
+vi.mock("@/lib/auth/getCustomerSession", () => ({
+  getCustomerSession: async () => {
+    const session = await auth();
+    return session?.user?.role === "customer" ? { userId: session.user.id } : null;
+  },
+}));
 // next-auth's entrypoint reaches for next/server, which doesn't resolve outside
 // the Next build. Only AuthError is used from it, and only by the login action.
 vi.mock("next-auth", () => ({ AuthError: class AuthError extends Error {} }));

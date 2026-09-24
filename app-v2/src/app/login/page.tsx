@@ -12,6 +12,12 @@ import {
 import styles from "@/styles/auth.module.css";
 
 const POPUP_NAME = "aioEntraSignIn";
+/**
+ * Sent by the rep/admin layouts when a session's `users` row no longer resolves
+ * (deleted, disabled, demoted). Not an Entra refusal — nothing was refused, the
+ * token simply outlived its account — so it stays out of ENTRA_DENIAL_MESSAGES.
+ */
+const SESSION_STALE = "session_stale";
 /** Where a successful popup sign-in lands, so /rep never renders in the popup. */
 const POPUP_DONE = "/login/popup-complete";
 const POPUP_WIDTH = 520;
@@ -183,9 +189,11 @@ function LoginCard() {
   const denial = parseEntraDenial(raw);
   const error = denial
     ? ENTRA_DENIAL_MESSAGES[denial]
-    : raw
-      ? "Sign-in didn't complete. Please try again."
-      : null;
+    : raw === SESSION_STALE
+      ? "Your sign-in is out of date — your AIO account changed since you last signed in. Sign in again to continue."
+      : raw
+        ? "Sign-in didn't complete. Please try again."
+        : null;
 
   return (
     <div className={styles.page}>

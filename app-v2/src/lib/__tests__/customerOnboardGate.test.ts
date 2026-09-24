@@ -30,6 +30,14 @@ const provisionAioTenant = vi.fn();
 const createAioBusiness = vi.fn();
 
 vi.mock("@/lib/auth", () => ({ auth, signIn: vi.fn() }));
+// See the note in billingRoute.test.ts — requireCustomer resolves the session
+// against the DB now, stubbed onto the same `auth` fixture.
+vi.mock("@/lib/auth/getCustomerSession", () => ({
+  getCustomerSession: async () => {
+    const session = await auth();
+    return session?.user?.role === "customer" ? { userId: session.user.id } : null;
+  },
+}));
 vi.mock("next-auth", () => ({ AuthError: class AuthError extends Error {} }));
 vi.mock("@/lib/db/client", () => ({ db: {} }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({

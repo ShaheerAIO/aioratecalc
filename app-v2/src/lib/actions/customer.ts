@@ -4,7 +4,8 @@ import { randomUUID } from "crypto";
 import { hash } from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { AuthError } from "next-auth";
-import { auth, signIn } from "@/lib/auth";
+import { signIn } from "@/lib/auth";
+import { getCustomerSession } from "@/lib/auth/getCustomerSession";
 import { db } from "@/lib/db/client";
 import { customerLoginTokens, users } from "@/lib/db/schema";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
@@ -44,9 +45,9 @@ function withStateCode(business: BusinessInfo): BusinessInfo {
 }
 
 async function requireCustomer(): Promise<{ userId: string }> {
-  const session = await auth();
-  if (!session?.user || session.user.role !== "customer") throw new Error("Not authenticated");
-  return { userId: session.user.id };
+  const session = await getCustomerSession();
+  if (!session) throw new Error("Not authenticated");
+  return session;
 }
 
 // Returning-visitor login (no specific application context). Deliberately

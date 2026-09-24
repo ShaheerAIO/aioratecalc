@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { getCustomerSession } from "@/lib/auth/getCustomerSession";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { getQuoteSnapshot } from "@/lib/adapters/hubspot";
 import type { HubspotIds } from "@/types/merchant";
 
-// "Review & Pay" target — the customer's route to the HubSpot hosted checkout.
+// The checklist billing row's target — the customer's route to the HubSpot
+// hosted quote, where signing it and entering billing details IS accepting it.
 //
 // ⚠️ THIS ROUTE DELIBERATELY DOES NOT MINT A FRESH LINK PER CLICK, unlike its
 // two siblings (../continue for Adyen, ../payroll/continue for Check). Do not
@@ -26,12 +27,12 @@ import type { HubspotIds } from "@/types/merchant";
 // self-heals within a day, and a null link self-heals immediately below.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await auth();
-  if (!session?.user || session.user.role !== "customer") {
+  const session = await getCustomerSession();
+  if (!session) {
     return NextResponse.redirect(new URL("/customer/login", req.url));
   }
 
-  const app = await postgresStorage.getApplicationForCustomer(session.user.id, id);
+  const app = await postgresStorage.getApplicationForCustomer(session.userId, id);
   if (!app) {
     return NextResponse.redirect(new URL("/customer", req.url));
   }
@@ -64,7 +65,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       );
     }
 
-    await postgresStorage.updateApplicationAsCustomer(session.user.id, id, {
+    await postgresStorage.updateApplicationAsCustomer(session.userId, id, {
       hubspotIds: {
         ...hubspotIds,
         quoteLink: snapshot.quoteLink,
@@ -83,7 +84,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // failure is also PERSISTED so a rep can see the account is stuck. The deal
     // sync failed silently for the whole life of that feature precisely because
     // a console.error was the only record it left.
-    await persistSyncError(session.user.id, id, hubspotIds, message);
+    await persistSyncError(session.userId, id, hubspotIds, message);
     return back("billing_link");
   }
 }
