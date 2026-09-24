@@ -251,9 +251,12 @@ app-v2/src/
                                  createDraftQuote, associateQuote, publishQuote, getQuoteSnapshot,
                                  findSubscriptionsForQuote, listQuotesModifiedSince, listQuoteTemplates.
                                  pullFromHubSpot() was DELETED — dead, and wrote phantom properties
-    email.ts                  ← sendMagicLinkEmail() (KYC-handoff resend) + sendLeadLinkEmail() (Phase 4,
-                                 prospect creation) via Resend's HTTP API — no SDK. Degrades gracefully
-                                 (returns sent:false) when RESEND_API_KEY is unset, unlike aioDashboard.ts/hubspot.ts
+    email.ts                  ← sendMagicLinkEmail() + sendLeadLinkEmail(). TWO transports: Microsoft
+                                 Graph (app-only, AIO's own M365 tenant) preferred, Resend as fallback.
+                                 Degrades gracefully (returns sent:false + the raw link) when neither is
+                                 configured, unlike aioDashboard.ts/hubspot.ts. A Graph FAILURE also falls
+                                 through to Resend — a duplicate email beats a merchant who paid and never
+                                 got the link that creates their account.
     sms.ts                     ← sendLeadLinkSms() — Phase 4, Twilio HTTP API, no SDK. Same
                                  degrade-gracefully posture as email.ts; only called when a phone is given
   lib/foodbuyForm.ts            ← buildFoodbuyFormHtml() — Foodbuy has NO API (it's a paper participation
@@ -603,7 +606,14 @@ HUBSPOT_BILLING_PRIVATE_APP_TOKEN  # separate "EasyOB Billing" app: products (ne
                             # `e-commerce` scope), quotes, line items, contacts, subscriptions
                             # + invoices read. Deliberately a second token so billing write
                             # scopes don't widen what the sync path can reach.
-RESEND_API_KEY              # Phase 4
+MAIL_GRAPH_TENANT_ID        # Phase 4 — transactional email via Microsoft Graph, PREFERRED over Resend:
+MAIL_GRAPH_CLIENT_ID        #   sends from AIO's own M365 tenant, so it inherits the tenant's
+MAIL_GRAPH_CLIENT_SECRET    #   SPF/DKIM/DMARC and sending reputation instead of warming a new subdomain.
+MAIL_FROM_ADDRESS           #   The mailbox to send AS — a REAL mailbox, not an alias (Graph addresses
+MAIL_FROM_NAME              #   /users/{this}). aiodocuments@aioapp.com. Name overrides the mailbox's
+                            #   own Exchange display name. CLIENT_ID is the EXISTING "AIO Document
+                            #   Send" app (747446ca-...) — see "Transactional email" below.
+RESEND_API_KEY              # Phase 4 — fallback transport
 RESEND_FROM_EMAIL           # Phase 4 — "Name <local@subdomain>"; requires that subdomain verified in Resend
                             # (SPF/DKIM/DMARC DNS records). Unset falls back to the shared resend.dev test
                             # domain, which only delivers to the API key's own account owner — not real merchants.
