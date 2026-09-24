@@ -1,0 +1,1 @@
+ALTER TABLE "margin_policy" ADD COLUMN "max_discount_percent" integer DEFAULT 50 NOT NULL;

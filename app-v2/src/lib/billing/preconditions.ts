@@ -18,7 +18,7 @@
 // resolved by the caller and passed in, so every branch is unit-testable.
 
 import { toLineItemProperties } from "@/lib/adapters/hubspot";
-import { deriveOrderPoints, quoteTotals, resolvePlatformLine, quoteTypeOf } from "@/lib/quoting";
+import { adjustmentBlockers, deriveOrderPoints, quoteTotals, resolvePlatformLine, quoteTypeOf } from "@/lib/quoting";
 import type { CatalogProduct, MerchantApplication, QuoteTotals } from "@/types/merchant";
 
 /** One thing that has to be fixed, in the language of the person who has to fix it. */
@@ -53,18 +53,28 @@ export type CanPublishInput = {
   signerEmail: string | null;
   /** The HubSpot quote_template id for this quote's type (association 286). */
   templateId: string | null;
+  /**
+   * The admin discount cap in force NOW, not when the quote was configured.
+   *
+   * Re-checked here on purpose. `publishBillingQuote` sends `app.quoteLines`
+   * VERBATIM — it never re-derives — so a line discounted under an older,
+   * looser cap would otherwise publish unchallenged onto a document nobody can
+   * amend. Same class of hazard as the stale derivation rules already
+   * documented in CLAUDE.md, and this is the only place left to catch it.
+   */
+  maxDiscountPercent: number;
 };
 
 /**
  * Whether this application may be built into a HubSpot quote and published.
  *
  * Bias: refusing is cheap and recoverable (a rep retries from
- * `retryBillingQuoteAction` once the data is fixed); publishing the wrong
+ * `sendQuoteAction` once the data is fixed); publishing the wrong
  * numbers is neither. Every check below is therefore a hard refusal, not a
  * warning.
  */
 export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult {
-  const { app, catalog, senderEmail, signerEmail, templateId } = input;
+  const { app, catalog, senderEmail, signerEmail, templateId, maxDiscountPercent } = input;
 
   // 1. Already published — short-circuit before anything else. This is the
   //    one-way-door marker, and once it is set no other precondition matters:
@@ -144,6 +154,15 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
         err instanceof Error ? err.message : `Line '${line.name}' has a billing frequency HubSpot quoting doesn't support.`
       );
     }
+  }
+
+  // 4b. Discounts and delayed starts are within policy. `adjustmentBlockers`
+  //     is the same function the configurator's live preview and the save path
+  //     run, so a rep cannot be shown a sendable quote that refuses here — but
+  //     the cap it is measured against is today's, which is what makes this a
+  //     real check rather than a restatement.
+  for (const message of adjustmentBlockers(lines, maxDiscountPercent)) {
+    add("discount_over_policy", message);
   }
 
   // 5. The platform tier resolved. Order points are recomputed from the lines

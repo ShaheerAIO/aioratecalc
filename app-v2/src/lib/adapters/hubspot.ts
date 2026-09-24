@@ -1243,6 +1243,37 @@ export function toLineItemProperties(line: QuoteLine): Record<string, string> {
   if (line.billingFrequency !== "one_time") {
     props.recurringbillingfrequency = line.billingFrequency;
   }
+
+  // The LIST price stays in `price` and the discount rides alongside it, which
+  // is how the portal's own 4,997 discounted lines are shaped. `amount`,
+  // `hs_total_discount` and `hs_pre_discount_amount` are CALCULATED by HubSpot
+  // from these — writing them is both rejected and pointless.
+  //
+  // Only the percentage lever is emitted. The flat `discount` ("Unit discount")
+  // property exists and is used on ~105 lines portal-wide, but a quote carrying
+  // both is a document where nobody can say what was given away, and the
+  // percentage covers every case a rep has needed.
+  if (line.discountPercent) {
+    props.hs_discount_percentage = String(line.discountPercent);
+  }
+
+  // Delayed billing start. `hs_billing_start_delay_type` is the DISCRIMINATOR —
+  // it names which of the sibling properties HubSpot reads, so the value and
+  // the type must be written together or the delay is silently ignored.
+  //
+  // Guarded on frequency as well as presence: a one-time charge has no billing
+  // schedule, and `applyLineAdjustment` already strips the field. This is the
+  // backstop, on the side of the boundary that talks to HubSpot.
+  if (line.billingStart && line.billingFrequency !== "one_time") {
+    if (line.billingStart.mode === "date") {
+      props.hs_billing_start_delay_type = "hs_recurring_billing_start_date";
+      props.hs_recurring_billing_start_date = line.billingStart.date;
+    } else {
+      props.hs_billing_start_delay_type = "hs_billing_start_delay_days";
+      props.hs_billing_start_delay_days = String(line.billingStart.days);
+    }
+  }
+
   return props;
 }
 
@@ -1322,8 +1353,20 @@ export type LineItemReconciliation = {
 // part of it deliberately: there is no line-item PATCH in this adapter, so a
 // qty or price change is a delete-and-recreate rather than an in-place edit.
 // That is only ever done while the quote is a DRAFT.
+//
+// The discount and the billing start are part of it for the same reason, and
+// leaving them out would be worse than leaving out the price: both are
+// invisible in the line's name and quantity, so a rep who comped an install on
+// a re-save would see the right preview while the DRAFT quietly kept the
+// original full-price line item.
 function lineItemKey(line: QuoteLine): string {
-  return [line.hubspotProductId, line.qty, line.unitPrice, line.billingFrequency].join("|");
+  const start = line.billingStart
+    ? line.billingStart.mode === "date" ? `d:${line.billingStart.date}` : `n:${line.billingStart.days}`
+    : "";
+  return [
+    line.hubspotProductId, line.qty, line.unitPrice, line.billingFrequency,
+    line.discountPercent ?? 0, start,
+  ].join("|");
 }
 
 /**

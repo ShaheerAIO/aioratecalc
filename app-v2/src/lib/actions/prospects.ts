@@ -17,13 +17,13 @@ import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import { analysisFromQuoteConfig, getMarginFloor, getPaddedFloorRate } from "@/lib/pricing";
-import { getActivePaddingPolicy } from "@/lib/actions/pricing";
+import { getActivePaddingPolicy, getMaxDiscountPercent } from "@/lib/actions/pricing";
 import { buildQuote, isAllowedForQuoteType, isProcessingQuote, toQuoteLine } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
 import { fmtBps } from "@/lib/utils";
 import type {
   BusinessInfo, DealLink, MerchantApplication, OrderPoints, OwnerContact, PricingModel, ProcessingInfo,
-  QuoteConfig, QuoteLine, QuoteType, StatementAnalysis, TenantLink,
+  QuoteAdjustments, QuoteConfig, QuoteLine, QuoteType, StatementAnalysis, TenantLink,
 } from "@/types/merchant";
 
 const LINK_TTL_DAYS = 14;
@@ -243,7 +243,8 @@ async function assertMarginAboveFloor(
 async function deriveQuoteLines(
   quoteType: QuoteType,
   picks: QuotePick[],
-  channels: string[]
+  channels: string[],
+  adjustments: QuoteAdjustments
 ): Promise<{ quoteLines: QuoteLine[] | null; orderPoints: OrderPoints | null }> {
   const wanted = picks.filter(p => p.hubspotProductId && p.qty > 0);
   // Nothing picked and nothing declared still falls through for a rated quote:
@@ -276,7 +277,9 @@ async function deriveQuoteLines(
     return toQuoteLine(product, Math.floor(pick.qty));
   });
 
-  const built = buildQuote(quoteType, lines, channels, catalog.all);
+  // The cap is read server-side, never taken from the browser: it is the only
+  // thing standing between a rep's discount and an ACH mandate nobody can amend.
+  const built = buildQuote(quoteType, lines, channels, catalog.all, adjustments, await getMaxDiscountPercent());
   if (built.blockers.length) throw new Error(built.blockers.join(" "));
 
   return {
@@ -321,6 +324,13 @@ export async function createProspectAction(input: {
   // these (see deriveQuoteLines); the client's own copy is preview only.
   picks?: QuotePick[] | null;
   channels?: string[] | null;
+  /**
+   * Per-line discounts and delayed billing starts, keyed by product id. Keyed
+   * separately from the picks because the lines reps discount most — the
+   * derived install services — are never picked. Validated server-side against
+   * the admin cap; the browser's copy of it is advisory only.
+   */
+  adjustments?: QuoteAdjustments | null;
   // Required — the Company & Deal section makes both mandatory before submit
   // is enabled. Re-fetched here (not trusted from whatever the client last
   // showed) so the persisted tenant-link snapshot reflects the Company at
@@ -396,7 +406,7 @@ export async function createProspectAction(input: {
   // defence-in-depth backstop saveQuoteConfigurationAction has.
   await assertMarginAboveFloor(quoteType, input.targetMargin, analysis, quoteConfig, effective.role);
 
-  const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? []);
+  const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {});
 
   // The same predicate the customer-facing render uses, so a quote can't be
   // marked "sent" when it would draw as nothing. On a marketing-only quote the
@@ -501,6 +511,13 @@ export async function saveQuoteConfigurationAction(input: {
   applicationId: string;
   picks: QuotePick[];
   channels: string[];
+  /**
+   * Per-line discounts and delayed billing starts, keyed by product id. Keyed
+   * separately from the picks because the lines reps discount most — the
+   * derived install services — are never picked. Validated server-side against
+   * the admin cap; the browser's copy of it is advisory only.
+   */
+  adjustments?: QuoteAdjustments | null;
   targetMargin: number;
   pricingModel: PricingModel;
   quoteConfig?: QuoteConfig | null;
@@ -527,7 +544,7 @@ export async function saveQuoteConfigurationAction(input: {
   }
 
   const quoteType: QuoteType = input.quoteType ?? "full_pos";
-  const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? []);
+  const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {});
 
   const quoteConfig =
     input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0

@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { getActivePaddingPolicy, updatePaddingPolicyAction } from "@/lib/actions/pricing";
+import {
+  getActivePaddingPolicy, getMaxDiscountPercent, updateMaxDiscountPercentAction, updatePaddingPolicyAction,
+} from "@/lib/actions/pricing";
 import type { PaddingConfig } from "@/lib/pricing";
 import styles from "./pillow.module.css";
 
@@ -11,9 +13,33 @@ export default function PaddingSettingsPage() {
   const [saving, setSaving]   = useState(false);
   const [saved, setSaved]     = useState(false);
 
+  // Saved separately from the padding: they share a row but not a concern, and
+  // one Save button for two unrelated policies is how an admin changes a thing
+  // they only meant to read.
+  const [maxDiscount, setMaxDiscount] = useState<number | null>(null);
+  const [savingDiscount, setSavingDiscount] = useState(false);
+  const [savedDiscount, setSavedDiscount] = useState(false);
+  const [discountError, setDiscountError] = useState<string | null>(null);
+
   useEffect(() => {
     getActivePaddingPolicy().then(setPolicy).catch(() => {});
+    getMaxDiscountPercent().then(setMaxDiscount).catch(() => {});
   }, []);
+
+  const saveDiscount = async () => {
+    if (maxDiscount === null) return;
+    setSavingDiscount(true);
+    setDiscountError(null);
+    try {
+      await updateMaxDiscountPercentAction(maxDiscount);
+      setSavedDiscount(true);
+      setTimeout(() => setSavedDiscount(false), 2500);
+    } catch (err) {
+      setDiscountError(err instanceof Error ? err.message : "Could not save the discount cap");
+    } finally {
+      setSavingDiscount(false);
+    }
+  };
 
   const save = async () => {
     if (!policy) return;
@@ -74,6 +100,37 @@ export default function PaddingSettingsPage() {
           className={styles.saveButton}
         >
           {saved ? "✓ Saved" : saving ? "Saving…" : "Save Padding"}
+        </button>
+
+        <div className={styles.header}>
+          <h1 className={styles.headerTitle}>Quote Discount Cap</h1>
+          <p className={styles.headerSubtitle}>
+            The most a rep may discount a single quote line. Over it, the quote refuses to save and
+            refuses to send — which matters because sending it puts it onto a HubSpot document
+            that cannot afterwards be edited, deleted or voided, and that the merchant signs an
+            ACH mandate against. Set 0 to turn discounting off entirely.
+          </p>
+        </div>
+
+        <div className={styles.panel}>
+          <div className={styles.field}>
+            <label className={styles.label}>Maximum discount per line (%)</label>
+            <input
+              type="number" step="1" min="0" max="100"
+              value={maxDiscount ?? ""}
+              onChange={e => setMaxDiscount(Math.max(0, Math.min(100, Math.round(parseFloat(e.target.value) || 0))))}
+              className={styles.input}
+            />
+          </div>
+          {discountError && <p className={styles.headerSubtitle}>{discountError}</p>}
+        </div>
+
+        <button
+          onClick={saveDiscount} disabled={savingDiscount || maxDiscount === null}
+          data-saved={savedDiscount}
+          className={styles.saveButton}
+        >
+          {savedDiscount ? "✓ Saved" : savingDiscount ? "Saving…" : "Save Discount Cap"}
         </button>
       </div>
     </div>

@@ -116,6 +116,7 @@ function check(extra: Partial<MerchantApplication> = {}, overrides: Partial<Para
     senderEmail: "rita@aioapp.com",
     signerEmail: "ana@tortapalace.com",
     templateId: "817263673055",
+    maxDiscountPercent: 50,
     ...overrides,
   });
 }
@@ -256,6 +257,41 @@ describe("canPublishBillingQuote", () => {
     expect(codes(check({ tenantLink: null }))).toEqual(["no_tenant_company"]);
     expect(codes(check({ tenantLink: { ...app().tenantLink!, hubspotCompanyId: "  " } })))
       .toEqual(["no_tenant_company"]);
+  });
+
+  // Rule 4b. The publish path sends app.quoteLines VERBATIM, so this is the
+  // only place a discount is measured against the cap that is in force NOW
+  // rather than the one the rep configured under.
+  it("allows a discount within the cap", () => {
+    const discounted = [{ ...LINES[0], discountPercent: 50 }, LINES[1]];
+    expect(codes(check({ quoteLines: discounted }))).toEqual([]);
+  });
+
+  it("refuses a line discounted past today's cap, even though it saved under an older one", () => {
+    const discounted = [{ ...LINES[0], discountPercent: 90 }, LINES[1]];
+    // Saved when the cap was 90 …
+    expect(codes(check({ quoteLines: discounted }, { maxDiscountPercent: 90 }))).toEqual([]);
+    // … and refused now that an admin has lowered it to 50.
+    const result = check({ quoteLines: discounted }, { maxDiscountPercent: 50 });
+    expect(codes(result)).toContain("discount_over_policy");
+  });
+
+  it("nets discounts into the totals it hands back for logging", () => {
+    // POS at $1,200 comped entirely; the weekly platform line is untouched.
+    // Needs a cap that permits it — the default fixture cap is 50.
+    const result = check(
+      { quoteLines: [LINES[0], { ...LINES[1], discountPercent: 100 }] },
+      { maxDiscountPercent: 100 }
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.totals.oneTime).toBe(0);
+    expect(result.totals.recurring).toEqual([{ frequency: "weekly", amount: 99 }]);
+  });
+
+  it("refuses a malformed billing start rather than publishing a delay HubSpot will reject", () => {
+    const bad = [{ ...LINES[0], billingStart: { mode: "date" as const, date: "next month" } }, LINES[1]];
+    expect(codes(check({ quoteLines: bad }))).toContain("discount_over_policy");
   });
 
   it("returns every problem at once, not the first one", () => {

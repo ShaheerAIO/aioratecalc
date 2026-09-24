@@ -34,7 +34,8 @@ import {
   type QuoteAssociation,
 } from "@/lib/adapters/hubspot";
 import { getQuoteTemplatePolicy } from "@/lib/actions/quoteTemplates";
-import { quoteTypeOf } from "@/lib/quoting";
+import { getMaxDiscountPercent } from "@/lib/actions/pricing";
+import { DEFAULT_MAX_DISCOUNT_PERCENT, quoteTypeOf } from "@/lib/quoting";
 import { canPublishBillingQuote, type PublishRefusal } from "@/lib/billing/preconditions";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds, type MerchantApplication } from "@/types/merchant";
 
@@ -282,15 +283,17 @@ export async function buildAndPublishBillingQuote(
   let senderResolved: Awaited<ReturnType<typeof resolveSender>> = null;
   let templateId: string | null = null;
   let catalog: Awaited<ReturnType<typeof listProducts>> = [];
+  let maxDiscountPercent = DEFAULT_MAX_DISCOUNT_PERCENT;
   try {
     // listProducts() rather than listQuotableProductsAction(): that action
     // requires a rep/admin session and the trigger here is an unauthenticated
     // acceptance POST. The catalog is needed unfiltered anyway — the derived
     // platform product is one the picker hides.
-    [senderResolved, templateId, catalog] = await Promise.all([
+    [senderResolved, templateId, catalog, maxDiscountPercent] = await Promise.all([
       resolveSender(app.ownerUserId),
       getQuoteTemplatePolicy().then(policy => policy[quoteTypeOf(app.quoteType)]),
       listProducts(),
+      getMaxDiscountPercent(),
     ]);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -305,6 +308,7 @@ export async function buildAndPublishBillingQuote(
     senderEmail: senderResolved?.email ?? null,
     signerEmail: signer?.email ?? null,
     templateId,
+    maxDiscountPercent,
   });
   if (!decision.ok) {
     if (decision.alreadyPublished) return { status: "skipped", reason: "already_published" };

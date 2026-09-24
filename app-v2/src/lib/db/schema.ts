@@ -41,6 +41,11 @@ export const marginPolicy = pgTable("margin_policy", {
   paddingBps: integer("padding_bps").notNull().default(20),
   paddingMinMrrAdd: numeric("padding_min_mrr_add", { precision: 10, scale: 2 }).notNull().default("0"),
   paddingAdyenCostHide: boolean("padding_adyen_cost_hide").notNull().default(true),
+  // The most a rep may discount a single quote line. Lives here rather than in
+  // its own table because margin_policy is already "the global, admin-owned
+  // policy limiting what a rep can do with AIO's margin" — concealing the floor
+  // and capping the giveaway are two halves of the same guardrail.
+  maxDiscountPercent: integer("max_discount_percent").notNull().default(50),
   updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   isActive: boolean("is_active").notNull().default(true),

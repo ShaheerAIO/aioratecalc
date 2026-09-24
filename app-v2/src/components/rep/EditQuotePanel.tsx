@@ -5,9 +5,9 @@ import { analysisFromQuoteConfigAction, saveQuoteConfigurationAction } from "@/l
 import { getSettingsAction } from "@/lib/actions/applications";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
-import { isProcessingQuote, picksFromQuoteLines, quoteTypeOf } from "@/lib/quoting";
+import { adjustmentsFromQuoteLines, isProcessingQuote, picksFromQuoteLines, quoteTypeOf } from "@/lib/quoting";
 import { fmt$, fmtPct2 } from "@/lib/utils";
-import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteType, StatementAnalysis } from "@/types/merchant";
+import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 
 type Props = {
@@ -53,6 +53,9 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   const [quoteType, setQuoteType] = useState<QuoteType>(quoteTypeOf(app.quoteType));
   const [picks, setPicks] = useState<ProductPick[]>(picksFromQuoteLines(app.quoteLines));
   const [channels, setChannels] = useState<string[]>(app.orderPoints?.channels ?? []);
+  // Read off the SAVED lines, derived ones included — a comped install lives
+  // on a derived line, and picksFromQuoteLines drops those by design.
+  const [adjustments, setAdjustments] = useState<QuoteAdjustments>(adjustmentsFromQuoteLines(app.quoteLines));
   const [quote, setQuote] = useState<ConfiguredQuote | null>(null);
 
   const [targetMargin, setTargetMargin] = useState<number>(app.targetMargin ?? 0.008);
@@ -177,6 +180,8 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         onPicksChange={setPicks}
         onChannelsChange={setChannels}
         onDerivedChange={setQuote}
+        adjustments={adjustments}
+        onAdjustmentsChange={setAdjustments}
       />
 
       {rated && (

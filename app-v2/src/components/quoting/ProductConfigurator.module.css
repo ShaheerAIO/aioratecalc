@@ -290,3 +290,86 @@
 @media (max-width: 30rem) {
   .channelGrid { grid-template-columns: 1fr; }
 }
+
+/* ── Discounts & billing start ─────────────────────────────────────────────
+   One row per quote line, controls wrapping below the name on a phone rather
+   than squeezing a date input into a 78px column the way .productRow's
+   stepper had to be protected from. */
+.adjustRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+  padding: var(--space-xs) var(--space-2xs);
+  border-radius: var(--radius-sm);
+}
+
+.adjustRow + .adjustRow { border-top: 1px solid var(--rule); }
+
+.adjustControls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.adjustField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.adjustLabel {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.pctWrap,
+.startWrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pctSign {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+.adjustInput,
+.adjustSelect {
+  padding: 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.adjustInput { width: 5.5rem; }
+
+.adjustInput:focus-visible,
+.adjustSelect:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The list price a discount replaced. Kept visible rather than overwritten —
+   a quote that can't show what was given away is one nobody can review. */
+.strike {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.savedTag {
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.totalValue[data-tone="discount"] { color: var(--accent-text); }

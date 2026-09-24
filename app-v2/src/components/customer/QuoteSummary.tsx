@@ -1,7 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { CHANNEL_LABELS, isPlatformTierProduct } from "@/lib/quoting";
+import {
+  CHANNEL_LABELS, describeBillingStart, isPlatformTierProduct, lineListAmount, lineNetAmount,
+} from "@/lib/quoting";
 import { fmt$, fmt$0, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafeQuote, QuoteLine } from "@/types/merchant";
 import styles from "./QuoteSummary.module.css";
@@ -33,7 +35,10 @@ export default function QuoteSummary({ quote, basisAction }: Props) {
   const recurringLines = quote.lines.filter(l => l.billingFrequency !== "one_time");
   const points = quote.orderPoints;
 
-  const lineTotal = (l: QuoteLine) => l.unitPrice * l.qty;
+  // NET of any discount — this is what the merchant is actually charged, and
+  // it is the same figure `quoteTotals` sums into the totals below.
+  const lineTotal = (l: QuoteLine) => lineNetAmount(l);
+  const isDiscounted = (l: QuoteLine) => (l.discountPercent ?? 0) > 0;
   const isPlatformLine = (l: QuoteLine) => isPlatformTierProduct(l.name);
 
   return (
@@ -118,12 +123,23 @@ export default function QuoteSummary({ quote, basisAction }: Props) {
                         )}
                       </div>
                     )}
+                    {/* When the first charge lands. Stated on the line rather than
+                        in the totals: it changes the timing, not the amount. */}
+                    {l.billingStart && (
+                      <div className={styles.lineNote} data-tone="good">
+                        {describeBillingStart(l.billingStart)}
+                      </div>
+                    )}
                   </div>
                   <div className={styles.linePrice}>
                     <div className={styles.linePriceMain}>
+                      {isDiscounted(l) && (
+                        <span className={styles.lineStrike}>{fmt$(lineListAmount(l))}</span>
+                      )}
                       {fmt$(lineTotal(l))}/{fmtFrequency(l.billingFrequency)}
                     </div>
                     <div className={styles.linePriceAlt}>
+                      {isDiscounted(l) && <span className={styles.lineSaved}>{l.discountPercent}% off · </span>}
                       ~{fmt$(monthlyEquivalent(lineTotal(l), l.billingFrequency))}/mo
                     </div>
                   </div>
@@ -151,7 +167,19 @@ export default function QuoteSummary({ quote, basisAction }: Props) {
                     {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
                   </div>
                   <div className={styles.linePrice}>
-                    <div className={styles.linePriceMain}>{fmt$(lineTotal(l))}</div>
+                    <div className={styles.linePriceMain}>
+                      {isDiscounted(l) && (
+                        <span className={styles.lineStrike}>{fmt$(lineListAmount(l))}</span>
+                      )}
+                      {fmt$(lineTotal(l))}
+                    </div>
+                    {isDiscounted(l) && (
+                      <div className={styles.linePriceAlt}>
+                        <span className={styles.lineSaved}>
+                          {l.discountPercent === 100 ? "Included" : `${l.discountPercent}% off`}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

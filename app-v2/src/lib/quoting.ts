@@ -7,7 +7,8 @@
 
 import { monthlyEquivalent } from "@/lib/utils";
 import type {
-  BillingFrequency, CatalogProduct, OrderPoints, QuoteLine, QuoteTotals, QuoteType,
+  BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
+  QuoteAdjustments, QuoteLine, QuoteTotals, QuoteType,
 } from "@/types/merchant";
 
 // ── Quote types ─────────────────────────────────────────────────────────────
@@ -221,11 +222,39 @@ const FREQUENCY_SORT: BillingFrequency[] = [
   "annually", "per_two_years", "per_three_years", "per_four_years", "per_five_years",
 ];
 
+/** List price before any discount: `price × quantity`. HubSpot's `hs_pre_discount_amount`. */
+export function lineListAmount(line: QuoteLine): number {
+  return line.unitPrice * line.qty;
+}
+
+/**
+ * What the line is actually worth per cycle, net of its discount — HubSpot's
+ * calculated `amount`. This, not the list amount, is what bills.
+ *
+ * Rounded to cents because a percentage discount routinely produces fractions
+ * of one (33.3% of $99) and an unrounded float would make our totals disagree
+ * with the document HubSpot renders.
+ */
+export function lineNetAmount(line: QuoteLine): number {
+  const pct = line.discountPercent ?? 0;
+  if (!pct) return lineListAmount(line);
+  return Math.round(lineListAmount(line) * (1 - pct / 100) * 100) / 100;
+}
+
+/** What the discount takes off this line. HubSpot's calculated `hs_total_discount`. */
+export function lineDiscountAmount(line: QuoteLine): number {
+  return Math.round((lineListAmount(line) - lineNetAmount(line)) * 100) / 100;
+}
+
 /**
  * Three totals that must never be added together: what's due once, what's due
  * per recurring cycle (grouped BY cycle, because a weekly $99 and a monthly $39
  * are not the same unit), and the monthly-equivalent normalization that makes
  * the recurring side comparable to a statement's monthly figures.
+ *
+ * Every figure is NET of discounts, so these agree with what HubSpot bills. A
+ * delayed `billingStart` deliberately does NOT move them: it changes when the
+ * first charge lands, not what the quote is worth per cycle.
  */
 export function quoteTotals(lines: QuoteLine[]): QuoteTotals {
   let oneTime = 0;
@@ -233,7 +262,7 @@ export function quoteTotals(lines: QuoteLine[]): QuoteTotals {
   let monthly = 0;
 
   for (const line of lines) {
-    const amount = line.unitPrice * line.qty;
+    const amount = lineNetAmount(line);
     if (line.billingFrequency === "one_time") {
       oneTime += amount;
       continue;
@@ -502,6 +531,114 @@ export function picksFromQuoteLines(
     .map(l => ({ hubspotProductId: l.hubspotProductId, qty: l.qty }));
 }
 
+// ── Discounts and delayed billing starts ────────────────────────────────────
+
+/**
+ * The cap used when no admin policy row exists yet. Not 100: an unseeded
+ * settings table must not silently authorize giving the whole quote away, and
+ * a published quote can never be amended. An admin can
+ * raise it (up to 100) at Admin → Margin policy.
+ */
+export const DEFAULT_MAX_DISCOUNT_PERCENT = 50;
+
+/** yyyy-MM-dd, and a real date — `2026-02-31` parses as March 3 if you let it. */
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+/** HubSpot's own ceiling on `hs_billing_start_delay_days`; also just a sane upper bound. */
+export const MAX_BILLING_DELAY_DAYS = 365;
+
+/**
+ * Put a rep's edits onto a derived line.
+ *
+ * `billingStart` is STRIPPED from a one-time line rather than rejected: a
+ * one-time charge has no billing schedule, HubSpot would ignore the property,
+ * and the rep is never offered the control in the first place — so a value
+ * arriving here is a shape artifact (a rep delayed a line, then swapped it for
+ * a one-time product), not a decision worth stalling a quote over. A bad
+ * discount is the opposite and is reported by `adjustmentBlockers`.
+ */
+export function applyLineAdjustment(line: QuoteLine, adjustment: LineAdjustment | undefined): QuoteLine {
+  if (!adjustment) return line;
+  const next = { ...line };
+
+  const pct = adjustment.discountPercent;
+  if (pct !== undefined && pct !== null && pct > 0) next.discountPercent = pct;
+  else delete next.discountPercent;
+
+  const start = adjustment.billingStart;
+  if (start && line.billingFrequency !== "one_time") next.billingStart = start;
+  else delete next.billingStart;
+
+  return next;
+}
+
+/**
+ * Everything wrong with the rep's edits, in the language of the person who has
+ * to fix it. Hard refusals, not warnings — these ride onto a document that
+ * cannot be edited, deleted or voided once the merchant accepts it.
+ */
+export function adjustmentBlockers(lines: QuoteLine[], maxDiscountPercent: number): string[] {
+  const blockers: string[] = [];
+  const cap = Math.min(100, Math.max(0, maxDiscountPercent));
+
+  for (const line of lines) {
+    const pct = line.discountPercent;
+    if (pct !== undefined && pct !== null) {
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
+      } else if (pct > cap) {
+        blockers.push(
+          `"${line.name}" is discounted ${pct}%, over the ${cap}% limit AIO allows on a quote. ` +
+          `Lower it, or ask an admin to raise the limit in Admin → Margin policy.`
+        );
+      }
+    }
+
+    const start = line.billingStart;
+    if (!start) continue;
+    if (start.mode === "date" && !isCalendarDate(start.date)) {
+      blockers.push(`"${line.name}" has a billing start date of "${start.date}", which isn't a real yyyy-MM-dd date.`);
+    }
+    if (start.mode === "days" && (!Number.isInteger(start.days) || start.days < 1 || start.days > MAX_BILLING_DELAY_DAYS)) {
+      blockers.push(
+        `"${line.name}" delays billing by ${start.days} days — it has to be a whole number of days between 1 and ${MAX_BILLING_DELAY_DAYS}.`
+      );
+    }
+  }
+
+  return blockers;
+}
+
+/**
+ * Reopen a saved quote's edits in the configurator, the discount/delay twin of
+ * `picksFromQuoteLines`.
+ *
+ * Unlike the picks, DERIVED lines are kept: the platform fee and the three
+ * install services are re-derived on the way back out, so a comped install
+ * would silently return to full price if its adjustment weren't carried over.
+ */
+export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined): QuoteAdjustments {
+  const out: QuoteAdjustments = {};
+  for (const line of lines ?? []) {
+    const adjustment: LineAdjustment = {};
+    if (line.discountPercent) adjustment.discountPercent = line.discountPercent;
+    if (line.billingStart) adjustment.billingStart = line.billingStart;
+    if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
+  }
+  return out;
+}
+
+/** A one-line, rep- and customer-readable rendering of a delayed start. */
+export function describeBillingStart(start: BillingStart): string {
+  return start.mode === "date"
+    ? `Billing starts ${start.date}`
+    : `Billing starts ${start.days} days after checkout`;
+}
+
 // ── The one derivation ──────────────────────────────────────────────────────
 
 export type BuiltQuote = {
@@ -535,7 +672,15 @@ export function buildQuote(
   quoteType: QuoteType,
   pickedLines: QuoteLine[],
   channels: string[],
-  catalog: CatalogProduct[]
+  catalog: CatalogProduct[],
+  /**
+   * Per-line discounts and delayed billing starts, keyed by product id. Applied
+   * AFTER derivation so they can land on the derived platform and install lines
+   * too — which is where most of AIO's discounting actually happens.
+   */
+  adjustments: QuoteAdjustments = {},
+  /** The admin discount cap. Defaults low on purpose; see DEFAULT_MAX_DISCOUNT_PERCENT. */
+  maxDiscountPercent: number = DEFAULT_MAX_DISCOUNT_PERCENT
 ): BuiltQuote {
   // Marketing-only quotes have no ordering points, so declared channels are
   // dropped rather than trusted: a rep who ticks "website / online ordering"
@@ -550,9 +695,9 @@ export function buildQuote(
     ...(platform.line ? [platform.line] : []),
     ...includedServices.lines,
     ...pickedLines,
-  ];
+  ].map(line => applyLineAdjustment(line, adjustments[line.hubspotProductId]));
 
-  const blockers: string[] = [];
+  const blockers: string[] = [...adjustmentBlockers(quoteLines, maxDiscountPercent)];
   if (platform.status === "unresolved") {
     blockers.push(
       `This quote needs the "${platform.productName}" platform product, which isn't in the HubSpot ` +

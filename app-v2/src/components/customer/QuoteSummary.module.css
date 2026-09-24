@@ -121,7 +121,28 @@
   margin-top: var(--space-3xs);
 }
 
+/* "Billing starts 2026-11-01" — good news, so it reads as an inclusion rather
+   than the grey footnote treatment the ordering-point note gets. */
+.lineNote[data-tone="good"] {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
 .linePrice { text-align: right; flex-shrink: 0; }
+
+/* The list price a discount replaced. Shown, not hidden — a merchant reading a
+   quote should be able to see what they were given. */
+.lineStrike {
+  text-decoration: line-through;
+  font-weight: 500;
+  color: var(--ink-3);
+  margin-right: var(--space-2xs);
+}
+
+.lineSaved {
+  color: var(--accent-text);
+  font-weight: 700;
+}
 
 .linePriceMain {
   font-size: 0.9rem;

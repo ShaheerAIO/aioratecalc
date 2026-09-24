@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
+import { getMaxDiscountPercent } from "@/lib/actions/pricing";
 import {
+  DEFAULT_MAX_DISCOUNT_PERCENT,
+  MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
   PLATFORM_TIER_BOUNDARY,
   QUOTE_TYPES,
@@ -10,15 +13,26 @@ import {
   groupProducts,
   isAllowedForQuoteType,
   isProcessingQuote,
+  lineDiscountAmount,
+  lineListAmount,
+  lineNetAmount,
   toQuoteLine,
   type BuiltQuote,
 } from "@/lib/quoting";
 import { fmt$, fmtFrequency, monthlyEquivalent } from "@/lib/utils";
-import type { CatalogProduct, QuoteLine, QuoteType } from "@/types/merchant";
+import type {
+  BillingStart, CatalogProduct, LineAdjustment, QuoteAdjustments, QuoteLine, QuoteType,
+} from "@/types/merchant";
 import styles from "./ProductConfigurator.module.css";
 
 /** What the rep picked. Prices and the derived lines are the server's business. */
 export type ProductPick = { hubspotProductId: string; qty: number };
+
+// Frozen and module-level on purpose. It is the default for the `adjustments`
+// prop and therefore a dependency of the buildQuote memo — an inline `= {}`
+// would be a new reference every render, rebuilding the quote and pushing
+// fresh derived state up to the parent on each one.
+const NO_ADJUSTMENTS: QuoteAdjustments = Object.freeze({});
 
 /**
  * Everything downstream of the picks, recomputed here for the live preview.
@@ -37,6 +51,13 @@ type Props = {
   onChannelsChange: (channels: string[]) => void;
   onDerivedChange: (quote: ConfiguredQuote) => void;
   /**
+   * Per-line discounts and delayed billing starts, keyed by product id. Held by
+   * the caller like the picks are, and sent to the server as-is — the server
+   * re-derives the lines and re-applies these against its own copy of the cap.
+   */
+  adjustments?: QuoteAdjustments;
+  onAdjustmentsChange?: (adjustments: QuoteAdjustments) => void;
+  /**
    * Which types this caller offers. Defaults to all of them; the proposal
    * wizard passes only the rated ones because it starts from a statement, and a
    * marketing-only quote has no statement behind it.
@@ -52,9 +73,16 @@ function priceLabel(unitPrice: number, frequency: QuoteLine["billingFrequency"])
   return `${fmt$(unitPrice)}/${fmtFrequency(frequency)} (~${fmt$(monthlyEquivalent(unitPrice, frequency))}/mo)`;
 }
 
+/** The default a rep is offered for a custom billing start — what the portal's own delayed lines use. */
+function firstOfNextMonth(): string {
+  const d = new Date();
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth() + 1, 1)).toISOString().slice(0, 10);
+}
+
 export default function ProductConfigurator({
   quoteType, picks, channels,
   onQuoteTypeChange, onPicksChange, onChannelsChange, onDerivedChange,
+  adjustments = NO_ADJUSTMENTS, onAdjustmentsChange,
   selectableTypes,
 }: Props) {
   // The catalog is read from HubSpot server-side and cached there, so this is
@@ -66,12 +94,17 @@ export default function ProductConfigurator({
   const [fullCatalog, setFullCatalog] = useState<CatalogProduct[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(true);
+  // The discount cap, for the live preview only. The server reads its own copy
+  // on every save and publish, so a stale or tampered value here can widen
+  // nothing — the worst it does is show a blocker a beat late.
+  const [maxDiscountPercent, setMaxDiscountPercent] = useState(DEFAULT_MAX_DISCOUNT_PERCENT);
 
   useEffect(() => {
     listQuotableProductsAction()
       .then(res => { setCatalog(res.products); setFullCatalog(res.all); setCatalogError(res.error); })
       .catch(e => setCatalogError(e instanceof Error ? e.message : "Could not load the product catalog"))
       .finally(() => setCatalogLoading(false));
+    getMaxDiscountPercent().then(setMaxDiscountPercent).catch(() => {});
   }, []);
 
   const types = QUOTE_TYPES.filter(t => !selectableTypes || selectableTypes.includes(t.id));
@@ -101,10 +134,15 @@ export default function ProductConfigurator({
   }, [selectable, picks]);
 
   const built = useMemo(
-    () => buildQuote(quoteType, pickedLines, channels, fullCatalog),
-    [quoteType, pickedLines, channels, fullCatalog]
+    () => buildQuote(quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent),
+    [quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent]
   );
   const { orderPoints, breakdown, platform, includedServices, totals, quoteLines } = built;
+
+  // Summed across billing cycles ON PURPOSE, unlike the totals themselves: this
+  // is "what was given away on this quote", a single headline for the rep, not
+  // a figure that bills. It is never shown to the customer.
+  const totalDiscount = quoteLines.reduce((sum, l) => sum + lineDiscountAmount(l), 0);
 
   // Held in a ref so a caller passing an inline arrow can't turn the push of
   // derived state back up into a render loop.
@@ -146,6 +184,35 @@ export default function ProductConfigurator({
 
   const toggleChannel = (id: string) =>
     onChannelsChange(channels.includes(id) ? channels.filter(c => c !== id) : [...channels, id]);
+
+  // An adjustment with nothing left in it is DELETED rather than kept as an
+  // empty object, so a rep who sets a discount and clears it again leaves no
+  // trace on the saved quote.
+  const setAdjustment = (id: string, patch: LineAdjustment) => {
+    if (!onAdjustmentsChange) return;
+    const next: QuoteAdjustments = { ...adjustments };
+    const merged: LineAdjustment = { ...next[id], ...patch };
+    if (!merged.discountPercent) delete merged.discountPercent;
+    if (!merged.billingStart) delete merged.billingStart;
+    if (Object.keys(merged).length) next[id] = merged;
+    else delete next[id];
+    onAdjustmentsChange(next);
+  };
+
+  const setDiscount = (id: string, raw: string) => {
+    const pct = raw.trim() === "" ? null : Number(raw);
+    setAdjustment(id, { discountPercent: pct === null || Number.isNaN(pct) ? null : pct });
+  };
+
+  const setStartMode = (id: string, mode: "now" | "date" | "days") => {
+    if (mode === "now") return setAdjustment(id, { billingStart: null });
+    // Seeded with the values the portal actually uses — the 1st of next month
+    // for a date, 60 days for a delay (52 of the 72 day-delayed lines).
+    const seed: BillingStart = mode === "date"
+      ? { mode: "date", date: firstOfNextMonth() }
+      : { mode: "days", days: 60 };
+    setAdjustment(id, { billingStart: seed });
+  };
 
   return (
     <>
@@ -338,6 +405,110 @@ export default function ProductConfigurator({
         </div>
       )}
 
+      {/* Discounts and delayed starts apply to EVERY line, derived ones included
+          — comping the install and the onboarding is AIO's single most common
+          discount, and both of those are lines the picker deliberately hides. */}
+      {onAdjustmentsChange && quoteLines.length > 0 && (
+        <div className={styles.panel}>
+          <div className={styles.sectionHead}>
+            <h2 className={styles.sectionTitle}>Discounts &amp; Billing Start</h2>
+            <p className={styles.sectionNote}>
+              A discount on a recurring line is permanent — 50% off a $99/week platform fee is
+              $49.50 every week, for good. To give something away temporarily, delay when billing
+              starts instead. Discounts are capped at {maxDiscountPercent}%.
+            </p>
+          </div>
+
+          {quoteLines.map(l => {
+            const start = l.billingStart;
+            const mode = start?.mode ?? "now";
+            const discounted = (l.discountPercent ?? 0) > 0;
+            return (
+              <div key={l.hubspotProductId} className={styles.adjustRow}>
+                <div className={styles.productMain}>
+                  <div className={styles.productName}>
+                    {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
+                  </div>
+                  <div className={styles.productPrice}>
+                    {discounted ? (
+                      <>
+                        <span className={styles.strike}>{fmt$(lineListAmount(l))}</span>{" "}
+                        <strong>{fmt$(lineNetAmount(l))}</strong>
+                        {l.billingFrequency !== "one_time" && `/${fmtFrequency(l.billingFrequency)}`}
+                        {" "}<span className={styles.savedTag}>−{fmt$(lineDiscountAmount(l))}</span>
+                      </>
+                    ) : (
+                      priceLabel(l.unitPrice, l.billingFrequency)
+                    )}
+                  </div>
+                </div>
+
+                <div className={styles.adjustControls}>
+                  <label className={styles.adjustField}>
+                    <span className={styles.adjustLabel}>Discount</span>
+                    <span className={styles.pctWrap}>
+                      <input
+                        type="number" min={0} max={100} step={1}
+                        className={styles.adjustInput}
+                        value={l.discountPercent ?? ""}
+                        placeholder="0"
+                        onChange={e => setDiscount(l.hubspotProductId, e.target.value)}
+                        aria-label={`Discount percent for ${l.name}`}
+                      />
+                      <span className={styles.pctSign}>%</span>
+                    </span>
+                  </label>
+
+                  {/* One-time charges have no billing schedule to delay. */}
+                  {l.billingFrequency !== "one_time" && (
+                    <label className={styles.adjustField}>
+                      <span className={styles.adjustLabel}>Billing starts</span>
+                      <span className={styles.startWrap}>
+                        <select
+                          className={styles.adjustSelect}
+                          value={mode}
+                          onChange={e => setStartMode(l.hubspotProductId, e.target.value as "now" | "date" | "days")}
+                          aria-label={`When billing starts for ${l.name}`}
+                        >
+                          <option value="now">At checkout</option>
+                          <option value="date">On a date</option>
+                          <option value="days">After N days</option>
+                        </select>
+                        {start?.mode === "date" && (
+                          <input
+                            type="date"
+                            className={styles.adjustInput}
+                            value={start.date}
+                            onChange={e => setAdjustment(l.hubspotProductId, {
+                              billingStart: { mode: "date", date: e.target.value },
+                            })}
+                            aria-label={`Billing start date for ${l.name}`}
+                          />
+                        )}
+                        {start?.mode === "days" && (
+                          <span className={styles.pctWrap}>
+                            <input
+                              type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
+                              className={styles.adjustInput}
+                              value={start.days}
+                              onChange={e => setAdjustment(l.hubspotProductId, {
+                                billingStart: { mode: "days", days: Number(e.target.value) },
+                              })}
+                              aria-label={`Billing start delay in days for ${l.name}`}
+                            />
+                            <span className={styles.pctSign}>days</span>
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {quoteLines.length > 0 && (
         <div className={styles.panel}>
           <div className={styles.sectionHead}>
@@ -347,6 +518,12 @@ export default function ProductConfigurator({
               never added together.
             </p>
           </div>
+          {totalDiscount > 0 && (
+            <div className={styles.totalRow}>
+              <span className={styles.totalLabel}>Discounts applied</span>
+              <span className={styles.totalValue} data-tone="discount">−{fmt$(totalDiscount)}</span>
+            </div>
+          )}
           <div className={styles.totalRow}>
             <span className={styles.totalLabel}>Due once (hardware &amp; setup)</span>
             <span className={styles.totalValue}>{fmt$(totals.oneTime)}</span>

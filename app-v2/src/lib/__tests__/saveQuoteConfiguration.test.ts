@@ -37,6 +37,7 @@ vi.mock("@/lib/actions/pricing", () => ({
   getActivePaddingPolicy: vi.fn().mockResolvedValue({
     paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
   }),
+  getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
 }));
 
 const { saveQuoteConfigurationAction } = await import("@/lib/actions/prospects");
@@ -169,6 +170,43 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     ].sort());
     // One ordering point (one POS Unit) → the 1–5 tier, not the 6+ tier.
     expect(updated.orderPoints?.total).toBe(1);
+  });
+
+  it("applies a rep's discount to a DERIVED line the picks never carry", async () => {
+    const updated = await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [{ hubspotProductId: "217445755632", qty: 1 }],
+      channels: [],
+      adjustments: {
+        // Onsite Installation — derived, hidden from the picker, and the line
+        // AIO comps more than any other.
+        "223452690133": { discountPercent: 50 },
+        "217526517443": { billingStart: { mode: "days", days: 60 } },
+      },
+      targetMargin: 0.02,
+      pricingModel: "2-tier",
+    });
+
+    const install = updated.quoteLines!.find(l => l.name === "Onsite Installation")!;
+    expect(install.discountPercent).toBe(50);
+    const platform = updated.quoteLines!.find(l => l.name === PLATFORM_TIER_PRODUCT_NAMES.small)!;
+    expect(platform.billingStart).toEqual({ mode: "days", days: 60 });
+  });
+
+  it("refuses a discount over the SERVER's cap, whatever the browser believed", async () => {
+    await expect(
+      saveQuoteConfigurationAction({
+        applicationId: "app-1",
+        picks: [{ hubspotProductId: "217445755632", qty: 1 }],
+        channels: [],
+        // The mocked getMaxDiscountPercent above says 50. A client that shipped
+        // a 100% comp anyway gets refused here, not quietly saved.
+        adjustments: { "217445755632": { discountPercent: 100 } },
+        targetMargin: 0.02,
+        pricingModel: "2-tier",
+      })
+    ).rejects.toThrow(/100%.*50% limit/);
+    expect(saveApplication).not.toHaveBeenCalled();
   });
 
   it("reopening a saved quote and re-saving it unchanged does not duplicate the platform line or the included services", async () => {

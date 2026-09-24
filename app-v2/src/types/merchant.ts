@@ -137,7 +137,61 @@ export type QuoteLine = {
   unitPrice: number;
   billingFrequency: BillingFrequency;
   productType: string;
+  /**
+   * Percent off this line, 0–100 → HubSpot's `hs_discount_percentage`.
+   * Absent/null is the overwhelming majority of lines and means full price.
+   *
+   * On a RECURRING line this is permanent, not a promo: 50% off a $99/wk
+   * platform fee is $49.50 every week for the life of the subscription. The
+   * "free for a while, then full price" lever is `billingStart`, not this —
+   * they are different things and AIO's portal uses both.
+   *
+   * `unitPrice` stays the LIST price and the discount rides alongside it,
+   * matching HubSpot (`price` + `hs_discount_percentage`, with `amount` and
+   * `hs_total_discount` derived). Baking it into unitPrice instead would make
+   * the quote unable to show what was given away.
+   */
+  discountPercent?: number | null;
+  /**
+   * When the recurring charges start, if not at checkout. Only ever set on a
+   * recurring line — a one-time charge has no billing schedule to delay, and
+   * `applyLineAdjustment` strips it rather than emitting a property HubSpot
+   * would ignore.
+   */
+  billingStart?: BillingStart | null;
 };
+
+/**
+ * A delayed billing start. Mirrors the two `hs_billing_start_delay_type` modes
+ * AIO actually uses — 286 lines on a custom date, 72 on a day delay (60 days on
+ * most of them). The other two modes HubSpot offers are deliberately absent:
+ * `hs_billing_start_delay_months` is used on 2 lines portal-wide and
+ * `milestone_based` on none, so neither earns a third code path through an
+ * irreversible publish.
+ */
+export type BillingStart =
+  /** A fixed calendar date, `yyyy-MM-dd` → `hs_recurring_billing_start_date`. */
+  | { mode: "date"; date: string }
+  /** N days after checkout → `hs_billing_start_delay_days`. */
+  | { mode: "days"; days: number };
+
+/**
+ * The rep's per-line commercial edits, keyed by HubSpot product id.
+ *
+ * Kept OUT of the picks and applied to the built quote instead, because the
+ * lines reps most often discount — Onsite Installation and System Onboarding
+ * and Training, the two most-discounted line names in the portal — are DERIVED
+ * lines that are never picked at all. Keying by product id works because a
+ * product appears at most once on a quote: picks are already keyed that way and
+ * each derived line is a single unit.
+ */
+export type LineAdjustment = {
+  discountPercent?: number | null;
+  billingStart?: BillingStart | null;
+};
+
+/** hubspotProductId → the rep's edits to that line. */
+export type QuoteAdjustments = Record<string, LineAdjustment>;
 
 // Quote arithmetic, kept apart by billing cycle on purpose. `oneTime` and
 // `recurring` are different units and must never be added together; the
