@@ -25,6 +25,7 @@ const createDraftQuote = vi.fn();
 const associateQuote = vi.fn();
 const associateDealToContact = vi.fn();
 const publishQuote = vi.fn();
+const findOwnerByEmail = vi.fn();
 const listProducts = vi.fn();
 const getQuoteTemplatePolicy = vi.fn();
 
@@ -95,6 +96,7 @@ vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   associateQuote,
   associateDealToContact,
   publishQuote,
+  findOwnerByEmail,
   listProducts,
 }));
 
@@ -235,7 +237,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   for (const fn of [
-    syncDealFromApplication, sendMagicLinkEmail, ensureQuoteContact, createQuoteLineItems,
+    syncDealFromApplication, sendMagicLinkEmail, ensureQuoteContact, createQuoteLineItems, findOwnerByEmail,
     deleteQuoteLineItem, createDraftQuote, associateQuote, associateDealToContact,
     publishQuote, listProducts, getQuoteTemplatePolicy,
   ]) fn.mockReset();
@@ -246,6 +248,10 @@ beforeEach(() => {
 
   syncDealFromApplication.mockResolvedValue("deal-99");
   sendMagicLinkEmail.mockResolvedValue({ sent: true, devUrl: null });
+  // The owning rep IS a HubSpot portal user. hs_sender_email is checked
+  // against the portal before the one-way door opens — see the not-a-portal-
+  // user test below for the case that check exists for.
+  findOwnerByEmail.mockResolvedValue({ id: "71234567", email: "rita@aioapp.com", firstName: "Rita", lastName: "Rep" });
   listProducts.mockResolvedValue([PLATFORM, POS, REVIEWABLE]);
   getQuoteTemplatePolicy.mockResolvedValue({
     full_pos: "817263673055", food_truck: "817263673055", marketing_only: "817697352408",
@@ -498,6 +504,27 @@ describe("publishing the billing quote", () => {
     const outcome = await send();
     expect(outcome.status).toBe("refused");
     expect(outcome.status === "refused" && outcome.reasons.map(r => r.code)).toContain("no_signer_email");
+    expect(billingCallCount()).toBe(0);
+  });
+
+  // The go-live blocker this check closes. HubSpot silently accepted
+  // `rep@aioapp.com` on the 2026-08-24 gate run, so nothing downstream would
+  // ever have caught a sender that isn't a real portal user.
+  it("refuses a sender who isn't a HubSpot portal user, before touching HubSpot", async () => {
+    findOwnerByEmail.mockResolvedValue(null);
+    const outcome = await send();
+    expect(outcome.status).toBe("refused");
+    expect(outcome.status === "refused" && outcome.reasons.map(r => r.code)).toContain("sender_not_hubspot_user");
+    expect(billingCallCount()).toBe(0);
+  });
+
+  it("refuses rather than publishing unverified when the owner lookup fails", async () => {
+    // A missing `crm.objects.owners.read` scope looks exactly like this. The
+    // door is one-way, so "couldn't check" has to be as final as "wrong".
+    findOwnerByEmail.mockRejectedValue(new Error("HubSpot owner lookup failed: 403 — the private app is missing a required scope"));
+    const outcome = await send();
+    expect(outcome.status).toBe("refused");
+    expect(outcome.status === "refused" && outcome.reasons.map(r => r.code)).toContain("sender_unverified");
     expect(billingCallCount()).toBe(0);
   });
 

@@ -1432,6 +1432,62 @@ export async function listQuoteTemplates(): Promise<QuoteTemplate[]> {
   return templates.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// ── Owners ──────────────────────────────────────────────────────────────────
+//
+// `hs_sender_email` is the only reason this exists.
+//
+// HubSpot does not validate that property. The 2026-08-24 gate run published a
+// live quote with `rep@aioapp.com` — a seeded dev row that is not a portal
+// user, not a mailbox, not anything — and HubSpot accepted it in silence: no
+// 400, no warning, nothing to find afterwards. Which means a typo, a personal
+// address, or a fake seed row sends a real merchant their quote "from" an
+// address nobody owns and nobody can reply to, on a document that cannot be
+// edited, voided or re-sent. Checking the address against the portal's own
+// user list before the door opens is the only thing that can catch it.
+
+export type HubspotOwner = {
+  id: string;
+  /** HubSpot's own spelling of the address — this is what goes on the quote. */
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+};
+
+/**
+ * The ACTIVE portal owner with this email, or null if the portal has none.
+ *
+ * Archived owners are excluded, which is HubSpot's own default for this
+ * endpoint and the behaviour we want: a deactivated user is exactly the wrong
+ * sender, because their address may no longer receive the merchant's reply.
+ *
+ * THROWS on any non-2xx, including the 403 a private app without
+ * `crm.objects.owners.read` gets. "We could not check" is not "it is fine" —
+ * the caller turns the throw into a refusal that names the missing scope,
+ * rather than opening the one-way door on an unverified sender.
+ */
+export async function findOwnerByEmail(email: string): Promise<HubspotOwner | null> {
+  const address = email.trim().toLowerCase();
+  if (!address) return null;
+
+  // The `email` query param is an exact-match filter, not a search — no
+  // fuzzy matching to second-guess, which is what makes this a real check.
+  const params = new URLSearchParams({ email: address, limit: "1" });
+  const res = await fetchWithRetry(`${BASE}/crm/v3/owners/?${params}`, { headers: billingHeaders() });
+  if (!res.ok) throw hubspotErr(`HubSpot owner lookup for ${address} failed`, res.status, await res.text());
+
+  const data = await res.json() as {
+    results?: Array<{ id: string; email?: string | null; firstName?: string | null; lastName?: string | null }>;
+  };
+  const owner = data.results?.[0];
+  if (!owner) return null;
+  return {
+    id: owner.id,
+    email: clean(owner.email) ?? address,
+    firstName: clean(owner.firstName),
+    lastName: clean(owner.lastName),
+  };
+}
+
 // ── Contact ─────────────────────────────────────────────────────────────────
 
 export type QuoteContactInput = { firstName: string; lastName: string; email: string; phone?: string };

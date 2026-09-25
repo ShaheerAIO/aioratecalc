@@ -30,6 +30,7 @@ import {
   deleteQuoteLineItem,
   draftQuoteProperties,
   ensureQuoteContact,
+  findOwnerByEmail,
   listProducts,
   planLineItemReconciliation,
   publishQuote,
@@ -39,7 +40,7 @@ import {
 import { getQuoteTemplatePolicy } from "@/lib/actions/quoteTemplates";
 import { getMaxDiscountPercent } from "@/lib/actions/pricing";
 import { DEFAULT_MAX_DISCOUNT_PERCENT, quoteTypeOf } from "@/lib/quoting";
-import { canPublishBillingQuote, type PublishRefusal } from "@/lib/billing/preconditions";
+import { canPublishBillingQuote, type PublishRefusal, type SenderResolution } from "@/lib/billing/preconditions";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds, type MerchantApplication } from "@/types/merchant";
 
 // Association type ids from the quote (PHASE-E-SPEC.md §3.2, all verified live).
@@ -134,19 +135,54 @@ function resolveSigner(
  * Who it comes from: the owning rep. `hs_sender_email` is the deal's own rep on
  * all 46 live paid quotes in the portal, never a shared mailbox
  * (PAYMENT-TEST-PLAN.md §1.8, O-1).
+ *
+ * TWO steps, and the second one is the point. Our `users` row supplies a
+ * candidate address; HubSpot's own user list decides whether it is real.
+ * HubSpot accepts whatever `hs_sender_email` it is handed without validating
+ * it — the gate run proved that with a seeded dev address — so an unchecked
+ * `users.email` is a merchant receiving their quote from an address nobody
+ * owns, on a document nobody can amend afterwards.
+ *
+ * On a match, HubSpot's spelling of the address and the name WINS over ours.
+ * Its record is the thing the property is supposed to agree with, and taking
+ * it removes the only remaining way the two can disagree (a rep whose EasyOB
+ * row says `R.Rep@…` and whose portal user says `rita@…`). The `users.name`
+ * split survives only as the fallback for an owner with no name on file.
  */
-async function resolveSender(
-  ownerUserId: string
-): Promise<{ email: string; firstName?: string; lastName?: string } | null> {
+async function resolveSender(ownerUserId: string): Promise<SenderResolution> {
   const [rep] = await db
     .select({ email: users.email, name: users.name })
     .from(users)
     .where(eq(users.id, ownerUserId))
     .limit(1);
-  const email = rep?.email?.trim();
-  if (!email) return null;
+  const repEmail = rep?.email?.trim();
+  if (!repEmail) return { ok: false, code: "no_rep_email" };
+
+  let owner;
+  try {
+    owner = await findOwnerByEmail(repEmail);
+  } catch (err) {
+    // Caught rather than rethrown so it lands as a REFUSAL the rep can read
+    // and act on, not as the generic "preflight failed" the surrounding
+    // try/catch would produce. A missing `crm.objects.owners.read` scope is
+    // the likeliest cause and it names its own fix.
+    return {
+      ok: false,
+      code: "owner_lookup_failed",
+      repEmail,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (!owner) return { ok: false, code: "not_a_portal_owner", repEmail };
+
   const [firstName, ...rest] = (rep.name ?? "").trim().split(/\s+/);
-  return { email, firstName: firstName || undefined, lastName: rest.join(" ") || undefined };
+  return {
+    ok: true,
+    email: owner.email,
+    firstName: owner.firstName ?? (firstName || undefined),
+    lastName: owner.lastName ?? (rest.join(" ") || undefined),
+    ownerId: owner.id,
+  };
 }
 
 function progressSummary(ids: HubspotIds): string {
@@ -272,7 +308,7 @@ export async function buildAndPublishBillingQuote(
   // ── Preconditions ─────────────────────────────────────────────────────────
   // Resolved here rather than inside the pure checker so every branch of it
   // stays testable without a DB or a network.
-  let senderResolved: Awaited<ReturnType<typeof resolveSender>> = null;
+  let senderResolved: SenderResolution = { ok: false, code: "no_rep_email" };
   let templateId: string | null = null;
   let catalog: Awaited<ReturnType<typeof listProducts>> = [];
   let maxDiscountPercent = DEFAULT_MAX_DISCOUNT_PERCENT;
@@ -297,7 +333,7 @@ export async function buildAndPublishBillingQuote(
   const decision = canPublishBillingQuote({
     app: { ...app, hubspotIds: ids },
     catalog,
-    senderEmail: senderResolved?.email ?? null,
+    sender: senderResolved,
     signerEmail: signer?.email ?? null,
     templateId,
     maxDiscountPercent,
@@ -313,8 +349,13 @@ export async function buildAndPublishBillingQuote(
     return { status: "refused", reasons: decision.reasons };
   }
 
+  // Narrowed past the precondition gate, which refuses every sender that did
+  // not resolve to a live HubSpot user.
+  const sender = senderResolved as Extract<SenderResolution, { ok: true }>;
+
   console.log(
-    `[billing] publishing quote for ${app.id}: ${decision.lineCount} line(s), ` +
+    `[billing] publishing quote for ${app.id} from ${sender.email} (HubSpot owner ${sender.ownerId}): ` +
+    `${decision.lineCount} line(s), ` +
     `one-time $${decision.totals.oneTime.toFixed(2)}, ` +
     `recurring ${decision.totals.recurring.map(r => `$${r.amount.toFixed(2)}/${r.frequency}`).join(" + ") || "none"}, ` +
     `~$${decision.totals.monthlyEquivalent.toFixed(2)}/mo equivalent`
@@ -322,7 +363,6 @@ export async function buildAndPublishBillingQuote(
 
   // Non-null past the precondition gate.
   const dealId = app.hubspotDealId!;
-  const sender = senderResolved!;
   const template = templateId!;
 
   // ── The graph, persisting after every step that yields an id ──────────────
@@ -407,7 +447,9 @@ export async function buildAndPublishBillingQuote(
     //    a trivially better trade — and the caller has already sent the
     //    customer's login email by this point, so nobody is waiting on it.
     step = "publish";
-    const published = await publishQuote(ids.quoteId!, sender);
+    const published = await publishQuote(ids.quoteId!, {
+      email: sender.email, firstName: sender.firstName, lastName: sender.lastName,
+    });
     ids = {
       ...ids,
       publishedAt: new Date().toISOString(),

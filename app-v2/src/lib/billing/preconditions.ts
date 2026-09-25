@@ -43,12 +43,31 @@ export type CanPublishResult =
       reasons: PublishRefusal[];
     };
 
+/**
+ * Who the published quote comes FROM, resolved against HubSpot's own user list.
+ *
+ * Three ways it can fail, and they need three different people to fix them —
+ * hence three codes rather than one nullable address:
+ *  - `no_rep_email`: the owning rep's EasyOB `users` row has no email at all.
+ *  - `not_a_portal_owner`: it has one, and HubSpot has never heard of it.
+ *    This is the case that shipped broken — see the Owners section in
+ *    adapters/hubspot.ts.
+ *  - `owner_lookup_failed`: we could not ask. Distinct on purpose: an
+ *    unverifiable sender is refused exactly like a bad one, but the fix is a
+ *    private-app scope or a retry, not a user record.
+ */
+export type SenderResolution =
+  | { ok: true; email: string; firstName?: string; lastName?: string; ownerId: string }
+  | { ok: false; code: "no_rep_email" }
+  | { ok: false; code: "not_a_portal_owner"; repEmail: string }
+  | { ok: false; code: "owner_lookup_failed"; repEmail: string; detail: string };
+
 export type CanPublishInput = {
   app: MerchantApplication;
   /** The full active catalog (including the derived platform/service products the picker hides). */
   catalog: CatalogProduct[];
-  /** The owning rep's `users.email` → `hs_sender_email`. The publish PATCH 400s without it. */
-  senderEmail: string | null;
+  /** The outcome of resolving the owning rep to a real HubSpot portal user. */
+  sender: SenderResolution;
   /** `ownerContact.email`, else the address the customer accepted with. Becomes the e-sign signer (702). */
   signerEmail: string | null;
   /** The HubSpot quote_template id for this quote's type (association 286). */
@@ -74,7 +93,7 @@ export type CanPublishInput = {
  * warning.
  */
 export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult {
-  const { app, catalog, senderEmail, signerEmail, templateId, maxDiscountPercent } = input;
+  const { app, catalog, sender, signerEmail, templateId, maxDiscountPercent } = input;
 
   // 1. Already published — short-circuit before anything else. This is the
   //    one-way-door marker, and once it is set no other precondition matters:
@@ -203,14 +222,39 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
     );
   }
 
-  // 8. A sender. hs_sender_email is a publish-time requirement; the publish
-  //    PATCH 400s without it. It is the owning rep's own address, verified
-  //    against 46 live paid quotes — never a shared mailbox.
-  if (!senderEmail?.trim()) {
-    add(
-      "no_sender_email",
-      "The rep who owns this deal has no email address on their EasyOB user, and HubSpot sends the quote from that address. Fix the user record."
-    );
+  // 8. A sender, and a REAL one.
+  //
+  //    hs_sender_email is a publish-time requirement — the PATCH 400s with no
+  //    value at all — but HubSpot never checks WHAT the value is. The
+  //    2026-08-24 gate run published with `rep@aioapp.com`, a seeded dev row
+  //    that is not a portal user, and HubSpot took it without a murmur. So
+  //    this is the only place a wrong sender can be caught, and it is caught
+  //    by resolving the address against the portal's own user list
+  //    (`findOwnerByEmail`) rather than by trusting our `users` table.
+  //
+  //    It is the owning rep's own address, never a shared mailbox — verified
+  //    against all 46 live paid quotes in the portal.
+  if (!sender.ok) {
+    switch (sender.code) {
+      case "no_rep_email":
+        add(
+          "no_sender_email",
+          "The rep who owns this deal has no email address on their EasyOB user, and HubSpot sends the quote from that address. Fix the user record."
+        );
+        break;
+      case "not_a_portal_owner":
+        add(
+          "sender_not_hubspot_user",
+          `${sender.repEmail} isn't a user in AIO's HubSpot portal, so the merchant would receive this quote from an address nobody owns and nobody can reply to — and a published quote can't be re-sent. Either correct the rep's email on their EasyOB user, or add them to HubSpot.`
+        );
+        break;
+      case "owner_lookup_failed":
+        add(
+          "sender_unverified",
+          `HubSpot wouldn't confirm that ${sender.repEmail} is one of its users, so the sender on this quote can't be verified: ${sender.detail}. If this is a missing scope, grant "crm.objects.owners.read" to the EasyOB Billing private app; otherwise try again.`
+        );
+        break;
+    }
   }
 
   // 9. A template (association 286). A quote built without one renders as

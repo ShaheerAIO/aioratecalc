@@ -112,7 +112,7 @@ function check(extra: Partial<MerchantApplication> = {}, overrides: Partial<Para
   return canPublishBillingQuote({
     app: app(extra),
     catalog: CATALOG,
-    senderEmail: "rita@aioapp.com",
+    sender: { ok: true, email: "rita@aioapp.com", ownerId: "71234567" },
     signerEmail: "ana@tortapalace.com",
     templateId: "817263673055",
     maxDiscountPercent: 50,
@@ -241,7 +241,32 @@ describe("canPublishBillingQuote", () => {
   });
 
   it("refuses with no sender email — the publish PATCH 400s without hs_sender_email", () => {
-    expect(codes(check({}, { senderEmail: null }))).toContain("no_sender_email");
+    expect(codes(check({}, { sender: { ok: false, code: "no_rep_email" } }))).toContain("no_sender_email");
+  });
+
+  // The blocker this whole check exists for. HubSpot accepts any string in
+  // hs_sender_email without complaint — the 2026-08-24 gate run published with
+  // a seeded dev address and nothing anywhere objected — so a rep whose email
+  // is not a portal user must be stopped HERE or not at all.
+  it("refuses a sender HubSpot has never heard of, even though HubSpot would accept it", () => {
+    const result = check({}, { sender: { ok: false, code: "not_a_portal_owner", repEmail: "rep@aioapp.com" } });
+    expect(codes(result)).toContain("sender_not_hubspot_user");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // The offending address is in the message: "fix the user record" is not
+    // actionable when a rep owns several accounts.
+    expect(result.reasons.find(r => r.code === "sender_not_hubspot_user")!.message).toContain("rep@aioapp.com");
+  });
+
+  // An unverifiable sender is refused exactly like a bad one — "we couldn't
+  // check" must never fall through to publishing, because the door is one-way.
+  it("refuses when the owner lookup itself failed, and names the scope that fixes it", () => {
+    const result = check({}, {
+      sender: { ok: false, code: "owner_lookup_failed", repEmail: "rita@aioapp.com", detail: "403 missing scope" },
+    });
+    expect(codes(result)).toContain("sender_unverified");
+    if (result.ok) return;
+    expect(result.reasons.find(r => r.code === "sender_unverified")!.message).toContain("crm.objects.owners.read");
   });
 
   it("refuses with no quote template configured", () => {
@@ -296,7 +321,7 @@ describe("canPublishBillingQuote", () => {
   it("returns every problem at once, not the first one", () => {
     const result = check(
       { hubspotDealId: null, tenantLink: null, stage: "closed_lost", quoteLines: [] },
-      { senderEmail: null, signerEmail: null, templateId: null }
+      { sender: { ok: false, code: "no_rep_email" }, signerEmail: null, templateId: null }
     );
     expect(codes(result).sort()).toEqual(
       ["closed_lost", "no_deal", "no_quote_lines", "no_sender_email", "no_signer_email", "no_template", "no_tenant_company"].sort()
@@ -304,7 +329,7 @@ describe("canPublishBillingQuote", () => {
   });
 
   it("gives every refusal a message that names what to fix", () => {
-    const result = check({ hubspotDealId: null }, { senderEmail: null });
+    const result = check({ hubspotDealId: null }, { sender: { ok: false, code: "no_rep_email" } });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     for (const reason of result.reasons) {
