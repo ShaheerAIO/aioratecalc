@@ -251,7 +251,8 @@ app-v2/src/
                                  createDraftQuote, associateQuote, publishQuote, getQuoteSnapshot,
                                  findSubscriptionsForQuote, listQuotesModifiedSince, listQuoteTemplates.
                                  pullFromHubSpot() was DELETED — dead, and wrote phantom properties
-    email.ts                  ← sendMagicLinkEmail() + sendLeadLinkEmail(). TWO transports: Microsoft
+    email.ts                  ← sendMagicLinkEmail() + sendLeadLinkEmail(), both through one
+                                 branded render(). TWO transports: Microsoft
                                  Graph (app-only, AIO's own M365 tenant) preferred, Resend as fallback.
                                  Degrades gracefully (returns sent:false + the raw link) when neither is
                                  configured, unlike aioDashboard.ts/hubspot.ts. A Graph FAILURE also falls
@@ -503,6 +504,16 @@ addressed to `/users/{mailbox}`, so it must be a real mailbox rather than an ali
 and pay (see the acceptance constraint above). Acceptance is recorded once, so there is no second
 attempt — which is why a Graph failure falls through to Resend rather than giving up, accepting a
 possible duplicate email as the cheaper failure.
+
+**Both emails render through one template** (`render()` in `adapters/email.ts`): Hallmark, transcribed
+for an inbox. The design system is CSS custom properties in oklch and email is none of those, so the
+tokens are restated there as sRGB hex — **that block is the only sanctioned copy of them**; if a
+token moves in `globals.css`, move its twin. Three things are left out on purpose and each would
+look right in a browser and wrong in an inbox: no logo IMAGE (Outlook and most Gmail accounts block
+remote images, and the absolute URL is localhost in dev — a type wordmark always renders), no
+Coolvetica (self-hosted woff2; `@font-face` in mail is honoured by roughly nobody), and no gradient
+(it needs VML to survive Outlook). Every caller-supplied value — the URL, the merchant name — goes
+through `esc()`, because a merchant name is rep-entered text landing in an `href` and a heading.
 
 Verify with `npx tsx scripts/send-test-email.ts <address>`, which goes through the shipping
 `sendMagicLinkEmail` rather than curling Graph — and loads env with `@next/env`, so the `\$`-escaped

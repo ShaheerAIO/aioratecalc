@@ -25,10 +25,14 @@ export interface SendMagicLinkResult {
 }
 
 // ── Microsoft Graph (app-only, client credentials) ──────────────────────────
-// The app registration behind these is EasyOB Mail (scripts/entra-mail-app.ps1),
-// which is DELIBERATELY separate from the staff sign-in app
-// (AUTH_MICROSOFT_ENTRA_ID_*): different lifecycle, different secret, and
-// revoking mail access must never take staff sign-in down with it.
+// The app registration behind these is the EXISTING "AIO Document Send"
+// (747446ca-…, the one behind mockusign), using a second client secret minted
+// on it — NOT the staff sign-in app (AUTH_MICROSOFT_ENTRA_ID_*), and not a
+// registration of its own. Rights live on the registration rather than the
+// secret, so the second secret buys independent ROTATION, not independent
+// permission. See "Transactional email" in the root CLAUDE.md for why a
+// separate identity was tried and abandoned (granting a Graph application
+// permission needs Global Administrator).
 const GRAPH_TENANT = process.env.MAIL_GRAPH_TENANT_ID;
 const GRAPH_CLIENT = process.env.MAIL_GRAPH_CLIENT_ID;
 const GRAPH_SECRET = process.env.MAIL_GRAPH_CLIENT_SECRET;
@@ -158,11 +162,136 @@ async function send(to: string, subject: string, html: string, fallbackUrl: stri
   return { sent: false, devUrl: fallbackUrl };
 }
 
+// ── The template ────────────────────────────────────────────────────────────
+//
+// Hallmark, rendered for email. The app's design system (globals.css,
+// design.md) is CSS custom properties in oklch, and email is neither: no
+// `var()`, no oklch, no external stylesheet, no flexbox, and Outlook still
+// renders through Word. So the tokens are transcribed here as sRGB hex, and
+// they are the ONLY place in the codebase allowed to restate them — if a token
+// moves in globals.css, move its twin below.
+//
+//   --paper  #fbf5f4   --ink    #251d1c   --accent      #f26c54
+//   --paper-2 #fefbfa  --ink-2  #5f5654   --accent-text #be260b
+//   --rule   #e4dcda   --ink-3  #928a88   --accent-2    #767edc
+//
+// Deliberate omissions, each of which would look right in a browser and wrong
+// in an inbox:
+//  - No logo IMAGE. Outlook and most Gmail accounts block remote images by
+//    default, and the absolute URL would be a localhost one in dev. A type
+//    wordmark always renders, everywhere.
+//  - No Coolvetica. It is a self-hosted woff2; @font-face in mail is honoured
+//    by roughly nobody. Plus Jakarta Sans is linked for the clients that do
+//    honour a <style> block, and everything else lands on the system stack.
+//  - No gradient. The nav gradient needs VML to survive Outlook, and a header
+//    that renders as a grey slab in a third of inboxes is worse than none.
+const C = {
+  paper: "#fbf5f4",
+  card: "#ffffff",
+  ink: "#251d1c",
+  ink2: "#5f5654",
+  ink3: "#928a88",
+  rule: "#e4dcda",
+  accent: "#f26c54",
+} as const;
+
+const FONT =
+  "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+
+/** Attribute- and text-safe. `url` and `merchantName` are both caller-supplied. */
+function esc(v: string): string {
+  return v
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+type Template = {
+  /** The inbox preview line. Without one, clients scrape the first visible text. */
+  preheader: string;
+  heading: string;
+  /** Rendered as one <p> each, in order. Plain text — escaped, no markup. */
+  body: string[];
+  cta: string;
+  url: string;
+  /** Small print under the button: what the link is good for. */
+  footnote: string;
+};
+
+function render(t: Template): string {
+  const url = esc(t.url);
+  const paragraphs = t.body
+    .map(
+      line =>
+        `<p style="margin:0 0 16px;font-family:${FONT};font-size:15px;line-height:1.6;color:${C.ink2};">${esc(line)}</p>`
+    )
+    .join("");
+
+  return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only">
+<title>${esc(t.heading)}</title>
+<style>
+  @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap");
+  a { color: #be260b; }
+  @media (max-width: 600px) { .card { padding: 28px 22px !important; } }
+</style>
+</head>
+<body style="margin:0;padding:0;background:${C.paper};">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(t.preheader)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.paper};">
+<tr><td align="center" style="padding:32px 16px;">
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
+
+    <tr><td style="padding:0 4px 18px;font-family:${FONT};font-size:13px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:${C.ink};">
+      AIO <span style="color:${C.accent};">Payments</span>
+    </td></tr>
+
+    <tr><td class="card" style="background:${C.card};border:1px solid ${C.rule};border-radius:20px;padding:38px 36px;">
+      <h1 style="margin:0 0 14px;font-family:${FONT};font-size:23px;line-height:1.25;font-weight:700;color:${C.ink};">${esc(t.heading)}</h1>
+      ${paragraphs}
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 18px;"><tr>
+        <td bgcolor="${C.accent}" style="border-radius:999px;">
+          <a href="${url}" style="display:inline-block;padding:14px 30px;font-family:${FONT};font-size:15px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;border-radius:999px;">${esc(t.cta)}</a>
+        </td>
+      </tr></table>
+      <p style="margin:0 0 20px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.ink3};">${esc(t.footnote)}</p>
+      <div style="border-top:1px solid ${C.rule};padding-top:18px;">
+        <p style="margin:0 0 6px;font-family:${FONT};font-size:12px;line-height:1.5;color:${C.ink3};">Button not working? Paste this into your browser:</p>
+        <p style="margin:0;font-family:${FONT};font-size:12px;line-height:1.5;word-break:break-all;"><a href="${url}" style="color:#be260b;text-decoration:underline;">${url}</a></p>
+      </div>
+    </td></tr>
+
+    <tr><td style="padding:20px 4px 0;font-family:${FONT};font-size:12px;line-height:1.6;color:${C.ink3};">
+      Sent by AIO Payments because you&rsquo;re working with one of our representatives. Questions? Just reply to this email.
+    </td></tr>
+
+  </table>
+</td></tr>
+</table>
+</body></html>`;
+}
+
+// ── The two emails ──────────────────────────────────────────────────────────
+
 export async function sendMagicLinkEmail(to: string, url: string): Promise<SendMagicLinkResult> {
+  const subject = "Continue your AIO Payments application";
   return send(
     to,
-    "Continue your AIO Payments application",
-    `<p>Click below to continue your application:</p><p><a href="${url}">Continue your application &rarr;</a></p><p>This link expires in 30 minutes.</p>`,
+    subject,
+    render({
+      preheader: "Your secure link is inside — it expires in 30 minutes.",
+      heading: "Continue your application",
+      body: [
+        "Here's your secure link back into your AIO Payments application. It signs you straight in — no password to remember.",
+      ],
+      cta: "Continue your application",
+      url,
+      footnote: "This link expires in 30 minutes and can only be used by you. If it runs out, request a new one from the sign-in page.",
+    }),
     url
   );
 }
@@ -170,11 +299,21 @@ export async function sendMagicLinkEmail(to: string, url: string): Promise<SendM
 // Phase 4 — the prospect-creation link, a 14-day `lead_upload` token, not the
 // short-lived KYC-handoff one above. Same transport, different copy/TTL.
 export async function sendLeadLinkEmail(to: string, url: string, merchantName?: string): Promise<SendMagicLinkResult> {
-  const greeting = merchantName ? `Hi ${merchantName},` : "Hi,";
+  const name = merchantName?.trim();
   return send(
     to,
     "Your AIO Payments quote is ready",
-    `<p>${greeting}</p><p>Take a look at your AIO Payments quote — no account needed:</p><p><a href="${url}">View your quote &rarr;</a></p><p>This link is valid for 14 days.</p>`,
+    render({
+      preheader: "See your rates and what switching to AIO would save you.",
+      heading: name ? `${name}, your quote is ready` : "Your quote is ready",
+      body: [
+        "Your AIO Payments quote is ready to look at — your rates, your monthly cost, and what switching would save you against what you pay today.",
+        "No account and no password needed. The link below opens it directly.",
+      ],
+      cta: "View your quote",
+      url,
+      footnote: "This link is valid for 14 days.",
+    }),
     url
   );
 }
