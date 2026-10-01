@@ -91,70 +91,83 @@ export default function AnalysisStep({ analysis, activeProcessor, activeTier, on
         ))}
       </div>
 
-      {/* Fee structure */}
-      <div className={styles.feeSplitSection}>
-        <h2 className={styles.sectionTitle}>Fee Structure — 3-Way Split</h2>
-        <div className={styles.panel}>
-          {feeRows.map(r => (
-            <div key={r.name} className={styles.feeRow}>
-              <div>
-                <span className={`${styles.feeName} ${styles[r.cls]}`}>{r.name}</span>
-                <div className={styles.feeNote}>{r.note}</div>
-              </div>
-              <div className={styles.feeAmt}>{fmt$(r.amt)}</div>
-              <div className={styles.feeRate}>{fmtPct(r.rate)}</div>
-              <div className={styles.barTrack}>
-                <div className={styles.barFill} style={{ background: r.color, width: `${Math.min(((r.amt || 0) / (analysis.totalFees || 1)) * 100, 100)}%` }} />
-              </div>
+      {/* Two readings of one statement, side by side: what they PAY on the
+          left, what they PROCESS on the right. Collapses to one column below
+          64rem — see .columns. */}
+      <div className={styles.columns}>
+        <div className={styles.column}>
+
+          {/* Fee structure */}
+          <div className={styles.feeSplitSection}>
+            <h2 className={styles.sectionTitle}>Fee Structure — 3-Way Split</h2>
+            <div className={styles.panel}>
+              {feeRows.map(r => (
+                <div key={r.name} className={styles.feeRow}>
+                  <div>
+                    <span className={`${styles.feeName} ${styles[r.cls]}`}>{r.name}</span>
+                    <div className={styles.feeNote}>{r.note}</div>
+                  </div>
+                  <div className={styles.feeAmt}>{fmt$(r.amt)}</div>
+                  <div className={styles.feeRate}>{fmtPct(r.rate)}</div>
+                  <div className={styles.barTrack}>
+                    <div className={styles.barFill} style={{ background: r.color, width: `${Math.min(((r.amt || 0) / (analysis.totalFees || 1)) * 100, 100)}%` }} />
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
+
+        </div>
+
+        <div className={styles.column}>
+
+          {/* Highlight box */}
+          <div className={styles.highlightPanel}>
+            <div>
+              <div className={styles.highlightLabel}>Total Gross Margin Above Interchange</div>
+              <div className={styles.highlightValue}>{fmtPct2(analysis.currentMargin || 0)}</div>
+              <div className={styles.highlightSub}>Everything the merchant pays above interchange</div>
+            </div>
+            <div className={styles.highlightStats}>
+              {[
+                { val: fmt$((analysis.processorFees || 0) + (analysis.otherFees || 0)), lbl: "Monthly Gross" },
+                { val: fmt$(((analysis.processorFees || 0) + (analysis.otherFees || 0)) * 12), lbl: "Annual Gross" },
+              ].map((s, i) => (
+                <div key={i} className={styles.highlightStat}>
+                  <div className={styles.highlightStatValue}>{s.val}</div>
+                  <div className={styles.highlightStatLabel}>{s.lbl}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Volume mix */}
+          <div className={styles.volumeSection}>
+            <h2 className={styles.sectionTitle}>Volume Mix</h2>
+            <div className={styles.volumeGrid}>
+              {[
+                { label: "Card Present", pct: analysis.cardPresentPct, amt: analysis.cardPresentVolume },
+                { label: "Card Not Present", pct: analysis.cardNotPresentPct, amt: analysis.cardNotPresentVolume },
+                { label: "Reward Cards", pct: analysis.rewardCardPct, amt: vol * (analysis.rewardCardPct || 0) },
+                { label: "Corporate Cards", pct: analysis.corporateCardPct, amt: vol * (analysis.corporateCardPct || 0) },
+              ].map(m => (
+                <div key={m.label} className={styles.volumeCard}>
+                  <div className={styles.volumeLabel}>{m.label}</div>
+                  <div className={styles.volumePct}>{fmtPct2(m.pct || 0)}</div>
+                  <div className={styles.volumeAmt}>{fmt$(m.amt)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {analysis.notes && (
+            <div className={styles.notesBox}>
+              <strong>AI Notes:</strong> {analysis.notes}
+            </div>
+          )}
+
         </div>
       </div>
-
-      {/* Highlight box */}
-      <div className={styles.highlightPanel}>
-        <div>
-          <div className={styles.highlightLabel}>Total Gross Margin Above Interchange</div>
-          <div className={styles.highlightValue}>{fmtPct2(analysis.currentMargin || 0)}</div>
-          <div className={styles.highlightSub}>Everything the merchant pays above interchange</div>
-        </div>
-        <div className={styles.highlightStats}>
-          {[
-            { val: fmt$((analysis.processorFees || 0) + (analysis.otherFees || 0)), lbl: "Monthly Gross" },
-            { val: fmt$(((analysis.processorFees || 0) + (analysis.otherFees || 0)) * 12), lbl: "Annual Gross" },
-          ].map((s, i) => (
-            <div key={i} className={styles.highlightStat}>
-              <div className={styles.highlightStatValue}>{s.val}</div>
-              <div className={styles.highlightStatLabel}>{s.lbl}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Volume mix */}
-      <div className={styles.volumeSection}>
-        <h2 className={styles.sectionTitle}>Volume Mix</h2>
-        <div className={styles.volumeGrid}>
-          {[
-            { label: "Card Present", pct: analysis.cardPresentPct, amt: analysis.cardPresentVolume },
-            { label: "Card Not Present", pct: analysis.cardNotPresentPct, amt: analysis.cardNotPresentVolume },
-            { label: "Reward Cards", pct: analysis.rewardCardPct, amt: vol * (analysis.rewardCardPct || 0) },
-            { label: "Corporate Cards", pct: analysis.corporateCardPct, amt: vol * (analysis.corporateCardPct || 0) },
-          ].map(m => (
-            <div key={m.label} className={styles.volumeCard}>
-              <div className={styles.volumeLabel}>{m.label}</div>
-              <div className={styles.volumePct}>{fmtPct2(m.pct || 0)}</div>
-              <div className={styles.volumeAmt}>{fmt$(m.amt)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {analysis.notes && (
-        <div className={styles.notesBox}>
-          <strong>AI Notes:</strong> {analysis.notes}
-        </div>
-      )}
 
       <div className={styles.actions}>
         <button className={styles.btnGhost} onClick={onBack}>← Re-upload</button>

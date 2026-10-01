@@ -87,88 +87,100 @@ export default function ApplyStep({ app, onSaved, onBack, onSkip }: Props) {
         the merchant&apos;s to do on their own form, so it isn&apos;t here.
       </p>
 
-      {/* Business Info */}
-      <div className={styles.panel}>
-        <h2 className={styles.sectionTitle}>Business Information</h2>
-        <div className={styles.grid2}>
-          {input("Legal Business Name", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("DBA (Doing Business As)", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-        </div>
-        <div className={styles.row}>
-          <label className={styles.label}>Business Type</label>
-          <select value={biz.bizType || "llc"} onChange={setBizF("bizType") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={styles.input}>
-            {(["llc", "corp", "s-corp", "sole-prop", "partnership", "non-profit"] as const).map(t => (
-              <option key={t} value={t}>{t.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
-            ))}
-          </select>
-        </div>
-        <div className={styles.row}>
-          {input("Street Address", biz.address || "", setBizF("address") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-        </div>
-        <div className={`${styles.grid2} ${styles.row}`}>
-          {input("City", biz.city || "", setBizF("city") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("State", biz.state || "", setBizF("state") as (e: React.ChangeEvent<HTMLInputElement>) => void, "CA")}
-        </div>
-        <div className={`${styles.grid2} ${styles.row}`}>
-          {input("ZIP", biz.zip || "", setBizF("zip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
-          {input("Business Phone", biz.phone || "", setBizF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
-        </div>
-        <div className={`${styles.grid2} ${styles.row}`}>
-          {input("Website", biz.website || "", setBizF("website") as (e: React.ChangeEvent<HTMLInputElement>) => void, "https://")}
-          {input("Years in Business", biz.yearsInBusiness || "", setBizF("yearsInBusiness") as (e: React.ChangeEvent<HTMLInputElement>) => void, "5")}
-        </div>
-      </div>
+      {/* Two tracks: the long Business Information panel on the left, the two
+          short ones stacked beside it. One column below 64rem — see .columns. */}
+      <div className={styles.columns}>
+        <div className={styles.column}>
 
-      {/* Owner Contact */}
-      <div className={styles.panel}>
-        <h2 className={styles.sectionTitle}>Owner Contact</h2>
-        <p className={styles.hint}>Contact info only — no SSN, DOB, or ID numbers.</p>
-        <div className={styles.grid2}>
-          {input("First Name", owner.firstName || "", setOwnerF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("Last Name", owner.lastName || "", setOwnerF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-        </div>
-        <div className={`${styles.grid2} ${styles.row}`}>
-          {input("Title", owner.title || "", setOwnerF("title") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Owner")}
-          {input("Email", owner.email || "", setOwnerF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "owner@business.com", "email")}
-        </div>
-        <div className={styles.row}>
-          {input("Phone", owner.phone || "", setOwnerF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
-        </div>
-      </div>
+          {/* Business Info */}
+          <div className={styles.panel}>
+            <h2 className={styles.sectionTitle}>Business Information</h2>
+            <div className={styles.grid2}>
+              {input("Legal Business Name", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("DBA (Doing Business As)", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+            </div>
+            <div className={styles.row}>
+              <label className={styles.label}>Business Type</label>
+              <select value={biz.bizType || "llc"} onChange={setBizF("bizType") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={styles.input}>
+                {(["llc", "corp", "s-corp", "sole-prop", "partnership", "non-profit"] as const).map(t => (
+                  <option key={t} value={t}>{t.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
+                ))}
+              </select>
+            </div>
+            <div className={styles.row}>
+              {input("Street Address", biz.address || "", setBizF("address") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+            </div>
+            <div className={`${styles.grid2} ${styles.row}`}>
+              {input("City", biz.city || "", setBizF("city") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("State", biz.state || "", setBizF("state") as (e: React.ChangeEvent<HTMLInputElement>) => void, "CA")}
+            </div>
+            <div className={`${styles.grid2} ${styles.row}`}>
+              {input("ZIP", biz.zip || "", setBizF("zip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
+              {input("Business Phone", biz.phone || "", setBizF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+            </div>
+            <div className={`${styles.grid2} ${styles.row}`}>
+              {input("Website", biz.website || "", setBizF("website") as (e: React.ChangeEvent<HTMLInputElement>) => void, "https://")}
+              {input("Years in Business", biz.yearsInBusiness || "", setBizF("yearsInBusiness") as (e: React.ChangeEvent<HTMLInputElement>) => void, "5")}
+            </div>
+          </div>
 
-      {/* Processing Details */}
-      <div className={styles.panel}>
-        <h2 className={styles.sectionTitle}>Processing Details</h2>
-        <div className={styles.grid2}>
-          {input("Monthly Volume ($)", proc.monthlyVolume || "", setProcF("monthlyVolume") as (e: React.ChangeEvent<HTMLInputElement>) => void, "100000", "number")}
-          {input("Average Ticket ($)", proc.avgTicket || "", setProcF("avgTicket") as (e: React.ChangeEvent<HTMLInputElement>) => void, "45", "number")}
         </div>
-        <div className={`${styles.grid2} ${styles.row}`}>
-          {input("Card Present % (0-100)", proc.cardPresentPct || "", setProcF("cardPresentPct") as (e: React.ChangeEvent<HTMLInputElement>) => void, "80", "number")}
-          {input("MCC Code", proc.mcc || "", setProcF("mcc") as (e: React.ChangeEvent<HTMLInputElement>) => void, "5812")}
-        </div>
-        <div className={styles.row}>
-          {input("Current Processor", proc.currentProcessor || "", setProcF("currentProcessor") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Stripe")}
-        </div>
-        <div className={styles.row}>
-          <label className={styles.label}>Business Description</label>
-          <textarea value={proc.businessDescription || ""} onChange={setProcF("businessDescription") as (e: React.ChangeEvent<HTMLTextAreaElement>) => void} placeholder="Briefly describe the nature of the business..." className={`${styles.input} ${styles.textarea}`} />
-        </div>
-        <div className={`${styles.inlineRow} ${styles.row}`}>
-          <div className={styles.field}>
-            <label className={styles.label}>Previously Terminated?</label>
-            <select value={proc.previouslyTerminated || "no"} onChange={setProcF("previouslyTerminated") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={`${styles.input} ${styles.selectInline}`}>
-              <option value="no">No</option>
-              <option value="yes">Yes</option>
-            </select>
+
+        <div className={styles.column}>
+
+          {/* Owner Contact */}
+          <div className={styles.panel}>
+            <h2 className={styles.sectionTitle}>Owner Contact</h2>
+            <p className={styles.hint}>Contact info only — no SSN, DOB, or ID numbers.</p>
+            <div className={styles.grid2}>
+              {input("First Name", owner.firstName || "", setOwnerF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("Last Name", owner.lastName || "", setOwnerF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+            </div>
+            <div className={`${styles.grid2} ${styles.row}`}>
+              {input("Title", owner.title || "", setOwnerF("title") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Owner")}
+              {input("Email", owner.email || "", setOwnerF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "owner@business.com", "email")}
+            </div>
+            <div className={styles.row}>
+              {input("Phone", owner.phone || "", setOwnerF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+            </div>
           </div>
-          <div className={styles.field}>
-            <label className={styles.label}>Bankruptcy (Past 5yr)?</label>
-            <select value={proc.bankruptcy || "no"} onChange={setProcF("bankruptcy") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={`${styles.input} ${styles.selectInline}`}>
-              <option value="no">No</option>
-              <option value="yes">Yes</option>
-            </select>
+
+          {/* Processing Details */}
+          <div className={styles.panel}>
+            <h2 className={styles.sectionTitle}>Processing Details</h2>
+            <div className={styles.grid2}>
+              {input("Monthly Volume ($)", proc.monthlyVolume || "", setProcF("monthlyVolume") as (e: React.ChangeEvent<HTMLInputElement>) => void, "100000", "number")}
+              {input("Average Ticket ($)", proc.avgTicket || "", setProcF("avgTicket") as (e: React.ChangeEvent<HTMLInputElement>) => void, "45", "number")}
+            </div>
+            <div className={`${styles.grid2} ${styles.row}`}>
+              {input("Card Present % (0-100)", proc.cardPresentPct || "", setProcF("cardPresentPct") as (e: React.ChangeEvent<HTMLInputElement>) => void, "80", "number")}
+              {input("MCC Code", proc.mcc || "", setProcF("mcc") as (e: React.ChangeEvent<HTMLInputElement>) => void, "5812")}
+            </div>
+            <div className={styles.row}>
+              {input("Current Processor", proc.currentProcessor || "", setProcF("currentProcessor") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Stripe")}
+            </div>
+            <div className={styles.row}>
+              <label className={styles.label}>Business Description</label>
+              <textarea value={proc.businessDescription || ""} onChange={setProcF("businessDescription") as (e: React.ChangeEvent<HTMLTextAreaElement>) => void} placeholder="Briefly describe the nature of the business..." className={`${styles.input} ${styles.textarea}`} />
+            </div>
+            <div className={`${styles.inlineRow} ${styles.row}`}>
+              <div className={styles.field}>
+                <label className={styles.label}>Previously Terminated?</label>
+                <select value={proc.previouslyTerminated || "no"} onChange={setProcF("previouslyTerminated") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={`${styles.input} ${styles.selectInline}`}>
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.label}>Bankruptcy (Past 5yr)?</label>
+                <select value={proc.bankruptcy || "no"} onChange={setProcF("bankruptcy") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={`${styles.input} ${styles.selectInline}`}>
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </div>
+            </div>
           </div>
+
         </div>
       </div>
 

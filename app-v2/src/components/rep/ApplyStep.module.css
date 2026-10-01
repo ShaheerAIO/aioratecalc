@@ -2,9 +2,29 @@
 /* Shared form language with CustomerOnboardStep.module.css — keep the two in lockstep. */
 
 .page {
-  max-width: 50rem;
+  max-width: var(--measure-wide);
   margin-inline: auto;
   padding: var(--space-xl) var(--space-lg);
+}
+
+/* Three independent panels that used to be a single 50rem column, so a rep
+   with the merchant beside them scrolled through all of it to reach the
+   button. Business Information is the tallest by a distance, so it takes the
+   wider track on its own and the two short ones stack beside it. Each panel
+   still caps its own line length — the container is wide, the fields are not.
+   Same 64rem break as AnalysisStep/PricingStep, so the wizard reflows at one
+   width rather than three. */
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 0 var(--space-lg);
+  align-items: start;
+}
+
+.column { min-width: 0; }
+
+@media (max-width: 64rem) {
+  .columns { grid-template-columns: 1fr; }
 }
 
 .pageTitle {

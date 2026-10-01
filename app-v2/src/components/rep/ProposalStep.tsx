@@ -207,55 +207,58 @@ export default function ProposalStep({ analysis, proposal, onBack, onApply, onSe
         </div>
       </div>
 
-      {/* Proposed rates */}
-      <div className={styles.section}>
-        <h2 className={styles.sectionTitle}>Proposed Rates</h2>
-        <div className={styles.rateGrid}>
-          {rates.pricingModel === "2-tier" && (
-            <>
-              <div className={styles.rateCard}><div className={styles.rateLbl}>Card Present</div><div className={styles.rateVal}>{fmtPct2(rates.cardPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardPresentPerTxn || 0).toFixed(2)}/txn</div></div>
-              <div className={styles.rateCard}><div className={styles.rateLbl}>Card Not Present</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>{fmtPct2(rates.cardNotPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardNotPresentPerTxn || 0).toFixed(2)}/txn</div></div>
-            </>
-          )}
-          {rates.pricingModel === "interchange-plus" && (
-            <>
-              <div className={styles.rateCard}><div className={styles.rateLbl}>Markup</div><div className={styles.rateVal}>{rates.basisPoints} BPS</div><div className={styles.rateSub}>above interchange</div></div>
-              <div className={styles.rateCard}><div className={styles.rateLbl}>Per Transaction</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>${(rates.perTransaction || 0).toFixed(2)}</div><div className={styles.rateSub}>auth fee</div></div>
-            </>
-          )}
-          {rates.pricingModel === "flat-rate" && (
-            <>
-              <div className={styles.rateCard}><div className={styles.rateLbl}>All Cards</div><div className={styles.rateVal}>{fmtPct2(rates.flatRate)}</div><div className={styles.rateSub}>single flat rate</div></div>
-              <div className={styles.rateCard}><div className={styles.rateLbl}>Per Transaction</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>${(rates.perTransaction || 0).toFixed(2)}</div><div className={styles.rateSub}>auth fee</div></div>
-            </>
-          )}
-          {((rates as { monthlyFee?: number }).monthlyFee ?? 0) > 0 && (
-            <div className={styles.rateCard}><div className={styles.rateLbl}>Monthly</div><div className={`${styles.rateVal} ${styles["rateVal--muted"]}`}>{fmt$((rates as { monthlyFee: number }).monthlyFee)}</div><div className={styles.rateSub}>platform fee</div></div>
-          )}
+      {/* Rate and comparison side by side — see .sectionPair. */}
+      <div className={styles.sectionPair}>
+        {/* Proposed rates */}
+        <div className={styles.section}>
+          <h2 className={styles.sectionTitle}>Proposed Rates</h2>
+          <div className={styles.rateGrid}>
+            {rates.pricingModel === "2-tier" && (
+              <>
+                <div className={styles.rateCard}><div className={styles.rateLbl}>Card Present</div><div className={styles.rateVal}>{fmtPct2(rates.cardPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardPresentPerTxn || 0).toFixed(2)}/txn</div></div>
+                <div className={styles.rateCard}><div className={styles.rateLbl}>Card Not Present</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>{fmtPct2(rates.cardNotPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardNotPresentPerTxn || 0).toFixed(2)}/txn</div></div>
+              </>
+            )}
+            {rates.pricingModel === "interchange-plus" && (
+              <>
+                <div className={styles.rateCard}><div className={styles.rateLbl}>Markup</div><div className={styles.rateVal}>{rates.basisPoints} BPS</div><div className={styles.rateSub}>above interchange</div></div>
+                <div className={styles.rateCard}><div className={styles.rateLbl}>Per Transaction</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>${(rates.perTransaction || 0).toFixed(2)}</div><div className={styles.rateSub}>auth fee</div></div>
+              </>
+            )}
+            {rates.pricingModel === "flat-rate" && (
+              <>
+                <div className={styles.rateCard}><div className={styles.rateLbl}>All Cards</div><div className={styles.rateVal}>{fmtPct2(rates.flatRate)}</div><div className={styles.rateSub}>single flat rate</div></div>
+                <div className={styles.rateCard}><div className={styles.rateLbl}>Per Transaction</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>${(rates.perTransaction || 0).toFixed(2)}</div><div className={styles.rateSub}>auth fee</div></div>
+              </>
+            )}
+            {((rates as { monthlyFee?: number }).monthlyFee ?? 0) > 0 && (
+              <div className={styles.rateCard}><div className={styles.rateLbl}>Monthly</div><div className={`${styles.rateVal} ${styles["rateVal--muted"]}`}>{fmt$((rates as { monthlyFee: number }).monthlyFee)}</div><div className={styles.rateSub}>platform fee</div></div>
+            )}
+          </div>
         </div>
-      </div>
 
-      {/* Fee comparison — only a real comparison when a statement supplied the
-          "current" column; otherwise the AIO side stands on its own. */}
-      <div className={styles.section}>
-        <h2 className={styles.sectionTitle}>{hasCurrentCost ? "Fee Comparison" : "AIO Costs"}</h2>
-        <div className={styles.panelSurface}>
-          <div className={styles.tableHeader} data-cols={hasCurrentCost ? "4" : "2"}>
-            {(hasCurrentCost ? ["Category", "Current", "Proposed", "Savings"] : ["Category", "Proposed"]).map(h => (
-              <div key={h} className={styles.tableHeaderCell}>{h}</div>
+        {/* Fee comparison — only a real comparison when a statement supplied the
+            "current" column; otherwise the AIO side stands on its own. */}
+        <div className={styles.section}>
+          <h2 className={styles.sectionTitle}>{hasCurrentCost ? "Fee Comparison" : "AIO Costs"}</h2>
+          <div className={styles.panelSurface}>
+            <div className={styles.tableHeader} data-cols={hasCurrentCost ? "4" : "2"}>
+              {(hasCurrentCost ? ["Category", "Current", "Proposed", "Savings"] : ["Category", "Proposed"]).map(h => (
+                <div key={h} className={styles.tableHeaderCell}>{h}</div>
+              ))}
+            </div>
+            {[
+              { cat: "Monthly Processing Fees", current: analysis.totalFees, proposed: proposal.projectedFees?.monthly, savings: savingsMonthly },
+              { cat: "Annual Processing Fees", current: (analysis.totalFees || 0) * 12, proposed: (proposal.projectedFees?.monthly || 0) * 12, savings: savingsAnnual },
+            ].map((r, i) => (
+              <div key={i} className={styles.tableRow} data-cols={hasCurrentCost ? "4" : "2"}>
+                <div className={styles.tableCell}>{r.cat}</div>
+                {hasCurrentCost && <div className={`${styles.tableCell} ${styles["tableCell--danger"]}`}>{fmt$(r.current)}</div>}
+                <div className={`${styles.tableCell} ${styles["tableCell--info"]}`}>{fmt$(r.proposed)}</div>
+                {hasCurrentCost && <div className={`${styles.tableCell} ${styles["tableCell--success"]}`}>{fmt$(r.savings)}</div>}
+              </div>
             ))}
           </div>
-          {[
-            { cat: "Monthly Processing Fees", current: analysis.totalFees, proposed: proposal.projectedFees?.monthly, savings: savingsMonthly },
-            { cat: "Annual Processing Fees", current: (analysis.totalFees || 0) * 12, proposed: (proposal.projectedFees?.monthly || 0) * 12, savings: savingsAnnual },
-          ].map((r, i) => (
-            <div key={i} className={styles.tableRow} data-cols={hasCurrentCost ? "4" : "2"}>
-              <div className={styles.tableCell}>{r.cat}</div>
-              {hasCurrentCost && <div className={`${styles.tableCell} ${styles["tableCell--danger"]}`}>{fmt$(r.current)}</div>}
-              <div className={`${styles.tableCell} ${styles["tableCell--info"]}`}>{fmt$(r.proposed)}</div>
-              {hasCurrentCost && <div className={`${styles.tableCell} ${styles["tableCell--success"]}`}>{fmt$(r.savings)}</div>}
-            </div>
-          ))}
         </div>
       </div>
 

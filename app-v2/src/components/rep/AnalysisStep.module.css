@@ -1,9 +1,36 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
 
 .page {
-  max-width: 50rem;
+  max-width: var(--measure-wide);
   margin-inline: auto;
   padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
+}
+
+/* The analysis is two readings of the same statement — what they're paying
+   (the fee split) and what they're processing (the mix) — and stacking them
+   made the rep scroll past the first to reach the second on a screen with
+   thirty empty centimetres beside it. Side by side, both fit above the fold.
+   The panes cap the line length, so the wide container doesn't hurt legibility
+   (see --measure-wide in globals.css). */
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: var(--space-lg);
+  align-items: start;
+  margin-bottom: var(--space-xl);
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+  min-width: 0;
+}
+
+/* Below this the two panes would each be narrower than the fee rows need, so
+   it goes back to one column — the same breakpoint PricingStep's layout uses. */
+@media (max-width: 64rem) {
+  .columns { grid-template-columns: 1fr; }
 }
 
 .headerRow {
@@ -122,7 +149,7 @@
   margin: 0 0 var(--space-md);
 }
 
-.feeSplitSection { margin-bottom: var(--space-xl); }
+.feeSplitSection { min-width: 0; }
 
 .panel {
   background: var(--paper-2);
@@ -196,7 +223,6 @@
   gap: var(--space-xl);
   flex-wrap: wrap;
   justify-content: space-between;
-  margin-bottom: var(--space-xl);
 }
 
 .highlightLabel {
@@ -244,7 +270,7 @@
 
 /* ---------- Volume mix ---------- */
 
-.volumeSection { margin-bottom: var(--space-xl); }
+.volumeSection { min-width: 0; }
 
 .volumeGrid {
   display: grid;
@@ -273,7 +299,6 @@
   border-radius: var(--radius-md);
   font-size: 0.8rem;
   color: var(--ink-2);
-  margin-bottom: var(--space-xl);
 }
 
 .notesBox strong { color: var(--ink); }
