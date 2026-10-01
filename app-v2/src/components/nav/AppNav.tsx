@@ -151,10 +151,17 @@ function AdminViewLinksView({ pathname, view }: { pathname: string; view: AdminV
   const onAdmin = pathname === "/admin";
   return (
     <>
-      <NavLink href="/admin" pathname={pathname} active={onAdmin && view === "reps"}>
+      <NavLink href="/admin" pathname={pathname} active={onAdmin && (view === "reps" || view === "revenue")}>
         Dashboard
       </NavLink>
-      <NavLink href="/admin?view=accounts" pathname={pathname} active={onAdmin && view !== "reps"}>
+      {/* Named explicitly rather than as "anything but reps" — Revenue is a
+          fourth view on this same surface and belongs under Dashboard, not
+          under Accounts. */}
+      <NavLink
+        href="/admin?view=accounts"
+        pathname={pathname}
+        active={onAdmin && (view === "accounts" || view === "leads")}
+      >
         Accounts
       </NavLink>
     </>

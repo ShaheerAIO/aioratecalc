@@ -12,6 +12,7 @@ import {
 import { fmt$ } from "@/lib/utils";
 import { countHubspotSyncErrors } from "@/lib/billingView";
 import { AccountsDashboard } from "./AccountsDashboard";
+import RevenuePanel from "./RevenuePanel";
 import { parseAdminView, type AdminView } from "@/lib/adminView";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
 import type { MerchantApplication, CustomerSubmission } from "@/types/merchant";
@@ -41,6 +42,11 @@ const VIEW_TABS: { id: AdminView; label: string }[] = [
   { id: "reps",     label: "By Rep" },
   { id: "accounts", label: "Accounts" },
   { id: "leads",    label: "Leads" },
+  // What AIO earned, as opposed to what the merchant saves — the only money
+  // figure on this page until 2026-09-25. Reads merchant_monthly_actuals,
+  // which the settlement ingest has been filling all along with nothing
+  // looking at it. See RevenuePanel.
+  { id: "revenue",  label: "Revenue" },
 ];
 
 // useSearchParams (?view=/?rep= below) needs a Suspense boundary above it.
@@ -198,7 +204,13 @@ function AdminDashboardInner({ userId }: { userId: string }) {
         )}
       </div>
 
-      {view !== "reps" && (
+      {view === "revenue" && (
+        <div className={styles.top}>
+          <RevenuePanel />
+        </div>
+      )}
+
+      {view !== "reps" && view !== "revenue" && (
         <AccountsDashboard
           role="admin"
           userId={userId}

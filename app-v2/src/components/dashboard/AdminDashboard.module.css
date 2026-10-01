@@ -102,13 +102,14 @@
   padding: var(--space-3xs);
 }
 
-/* No gap between segments, so the thumb is exactly one third of the track and
-   translateX(100%/200%) lands dead on the 2nd/3rd segment. */
+/* No gap between segments, so the thumb is exactly one QUARTER of the track and
+   translateX(100%/200%/300%) lands dead on the 2nd/3rd/4th segment. If a fifth
+   view is ever added, this divisor moves with it. */
 .tabs::before {
   content: "";
   position: absolute;
   inset: var(--space-3xs);
-  width: calc((100% - 2 * var(--space-3xs)) / 3);
+  width: calc((100% - 2 * var(--space-3xs)) / 4);
   background: var(--paper);
   border-radius: var(--radius-pill);
   box-shadow: var(--shadow-whisper);
@@ -117,6 +118,7 @@
 
 .tabs[data-active="accounts"]::before { transform: translateX(100%); }
 .tabs[data-active="leads"]::before    { transform: translateX(200%); }
+.tabs[data-active="revenue"]::before  { transform: translateX(300%); }
 
 .tab {
   position: relative;
@@ -248,4 +250,100 @@
     letter-spacing: 0.06em;
     margin-bottom: 2px;
   }
+}
+
+/* ---------- Revenue ----------
+ * The money view. Separate classes rather than reusing the rep table's,
+ * because these rows carry a different shape (a month picker above them, an
+ * unattributed-tenant state) and folding them into one set would make both
+ * harder to change. */
+
+.revenueHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-md);
+}
+
+.revenueCaption {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  line-height: 1.6;
+  max-width: 42rem;
+  margin: 0;
+}
+
+.monthSelect {
+  flex-shrink: 0;
+  padding: var(--space-xs) var(--space-md);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.monthSelect:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.revenueCards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+
+.revenueCard {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-lg);
+}
+
+.revenueCardValue {
+  font-family: var(--font-display);
+  font-size: clamp(1.25rem, 1.4vw + 0.9rem, 1.75rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  line-height: 1.1;
+}
+
+.revenueCardLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-top: var(--space-2xs);
+}
+
+.revenueCardDelta {
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-top: var(--space-xs);
+}
+
+.deltaUp   { color: var(--success); }
+.deltaDown { color: var(--danger); }
+.deltaNone { color: var(--ink-3); font-weight: 600; }
+
+.unattributed {
+  font-style: italic;
+  color: var(--ink-3);
+}
+
+.tenantRef {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+@media (max-width: 60rem) {
+  .revenueCards { grid-template-columns: repeat(2, 1fr); }
 }
