@@ -8,23 +8,32 @@ import {
   billingPanelState,
   canSendQuote,
   hasBillingSyncError,
-  hubspotDealUrl,
   hubspotQuoteUrl,
   PAYMENT_STATUS_LAG_DAYS,
   subscriptionMoney,
   subscriptionStatusColor,
 } from "@/lib/billingView";
-import { quoteTotals } from "@/lib/quoting";
-import { fmt$, fmtFrequency } from "@/lib/utils";
+import { fmt$ } from "@/lib/utils";
 import type { MerchantApplication } from "@/types/merchant";
 import shared from "./AccountsDashboard.module.css";
 import styles from "./BillingPanel.module.css";
+import { Field, Section } from "./DetailSection";
 
 // Not documented anywhere yet (no HubSpot portal id lives in this codebase
-// today) — when unset, the Deal/Quote ids still render as plain copyable
-// text instead of a broken link. Set NEXT_PUBLIC_HUBSPOT_PORTAL_ID to turn
-// them into links to the actual HubSpot records.
+// today) — when unset, the quote id still renders as plain copyable text
+// instead of a broken link. Set NEXT_PUBLIC_HUBSPOT_PORTAL_ID to turn it
+// into a link to the actual HubSpot record.
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
+
+// hs_quote_esign_status, in rep language. Signing and paying are separate acts
+// on one HubSpot page, so SIGNED with no subscription is a real and common
+// state (observed live 2026-09-25 on quote 330655913691) — and it was visible
+// nowhere on this panel, which reported only the payment half.
+const ESIGN_LABELS: Record<string, string> = {
+  SIGNED: "Signed",
+  PENDING_SIGNATURE: "Awaiting signature",
+  NO_ESIGN_STATUS: "Not sent",
+};
 
 type Props = {
   app: MerchantApplication;
@@ -55,47 +64,42 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
 
   if (state === "not_configured") {
     return (
-      <div className={styles.section}>
-        <div className={styles.sectionLabel}>Billing</div>
+      <Section label="Billing">
         <div className={styles.emptyNote}>
           No quote configured yet — add the products this merchant is buying, then send it.
         </div>
-      </div>
+      </Section>
     );
   }
 
   if (state === "rate_only") {
     return (
-      <div className={styles.section}>
-        <div className={styles.sectionLabel}>Billing</div>
+      <Section label="Billing">
         <div className={styles.emptyNote}>
           Rate-only quote — there are no billable lines, so no HubSpot quote will ever be built for this
           account. AIO&rsquo;s margin here comes out of Adyen settlement, not HubSpot billing.
         </div>
-      </div>
+      </Section>
     );
   }
 
   if (state === "awaiting_tenant_link") {
     return (
-      <div className={styles.section}>
-        <div className={styles.sectionLabel}>Billing</div>
+      <Section label="Billing">
         <div className={styles.emptyNote}>
           Waiting on the HubSpot company link. Nothing is created in HubSpot until this account is
           linked to its company — a deal can only be attached to a company when it is created, so one
-          made now would never show up on the company record. Link the tenant company below and the
+          made now would never show up on the company record. Link the tenant company above and the
           deal and quote are built automatically.
         </div>
-      </div>
+      </Section>
     );
   }
 
   const hubspotIds = app.hubspotIds;
-  const dealUrl = app.hubspotDealId ? hubspotDealUrl(app.hubspotDealId, HUBSPOT_PORTAL_ID) : null;
   const quoteUrl = hubspotIds?.quoteId ? hubspotQuoteUrl(hubspotIds.quoteId, HUBSPOT_PORTAL_ID) : null;
   const subscriptions = hubspotIds?.subscriptions ?? [];
   const errored = hasBillingSyncError(hubspotIds);
-  const totals = quoteTotals(app.quoteLines ?? []);
   const showSend = canManage && canSendQuote(app);
 
   const copyLink = () => {
@@ -124,9 +128,7 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
   };
 
   return (
-    <div className={styles.section}>
-      <div className={styles.sectionLabel}>Billing</div>
-
+    <Section label="Billing">
       {errored && (
         <div className={styles.errorBanner}>
           <div className={styles.errorBannerTitle}>HubSpot sync failed</div>
@@ -137,34 +139,25 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
         </div>
       )}
 
+      {/* The HubSpot document only. The deal id lives once, in the HubSpot
+          section above, and what the merchant is buying lives once, in the
+          Quote section — both used to be repeated here in different words. */}
       <div className={shared.detailGrid}>
-        <div>
-          <div className={shared.detailFieldLabel}>Deal</div>
-          <div className={shared.detailFieldValue}>
-            {app.hubspotDealId
-              ? dealUrl
-                ? <a href={dealUrl} target="_blank" rel="noreferrer">{app.hubspotDealId}</a>
-                : app.hubspotDealId
-              : "Not synced"}
-          </div>
-        </div>
-        <div>
-          <div className={shared.detailFieldLabel}>Quote</div>
-          <div className={shared.detailFieldValue}>
-            {hubspotIds?.quoteId
+        <Field
+          label="Quote"
+          value={
+            hubspotIds?.quoteId
               ? quoteUrl
                 ? <a href={quoteUrl} target="_blank" rel="noreferrer">{hubspotIds.quoteId}</a>
                 : hubspotIds.quoteId
-              : "—"}
-          </div>
-          {hubspotIds?.quoteTemplateId && (
-            <div className={shared.detailMeta}>Template {hubspotIds.quoteTemplateId}</div>
-          )}
-        </div>
-        <div>
-          <div className={shared.detailFieldLabel}>Status</div>
-          <div className={shared.detailFieldValue}>
-            {hubspotIds?.publishedAt ? (
+              : "—"
+          }
+          meta={hubspotIds?.quoteTemplateId ? `Template ${hubspotIds.quoteTemplateId}` : undefined}
+        />
+        <Field
+          label="Status"
+          value={
+            hubspotIds?.publishedAt ? (
               <span className={shared.badge} style={{ background: "var(--success-bg)", color: "var(--success)" }}>
                 Published {new Date(hubspotIds.publishedAt).toLocaleDateString()}
               </span>
@@ -172,17 +165,34 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
               <span className={shared.badge} style={{ background: "var(--warning-bg)", color: "var(--warning)" }}>
                 Draft
               </span>
-            )}
-          </div>
-        </div>
-        <div>
-          <div className={shared.detailFieldLabel}>Payment</div>
-          <div className={shared.detailFieldValue}>{hubspotIds?.paymentStatus || "—"}</div>
-          {hubspotIds?.paymentDate && (
-            <div className={shared.detailMeta}>Paid {new Date(hubspotIds.paymentDate).toLocaleDateString()}</div>
-          )}
-        </div>
+            )
+          }
+        />
+        <Field
+          label="Signature"
+          value={
+            hubspotIds?.esignStatus
+              ? ESIGN_LABELS[hubspotIds.esignStatus] ?? hubspotIds.esignStatus
+              : "—"
+          }
+        />
+        <Field
+          label="Payment"
+          value={hubspotIds?.paymentStatus || "—"}
+          meta={hubspotIds?.paymentDate ? `Paid ${new Date(hubspotIds.paymentDate).toLocaleDateString()}` : undefined}
+        />
       </div>
+
+      {/* Signed but not paid. Both halves happen on one HubSpot page, so this
+          merchant believes they are done and is looking at a locked checklist —
+          it is the whole reason their onboarding has stalled, and it was
+          previously readable only by cross-referencing two fields. */}
+      {hubspotIds?.esignStatus === "SIGNED" && subscriptions.length === 0 && (
+        <div className={styles.note}>
+          Signed, but checkout was never finished — no subscription exists yet, so nothing is billing.
+          The merchant needs to return to their quote link and enter billing details.
+        </div>
+      )}
 
       {hubspotIds?.publishedAt && hubspotIds.paymentStatus && hubspotIds.paymentStatus !== "PAID" && (
         <div className={styles.note}>
@@ -194,7 +204,7 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
 
       {hubspotIds?.publishedAt && hubspotIds.quoteLink && (
         <div>
-          <div className={shared.detailFieldLabel} style={{ marginBottom: 8 }}>Customer payment page</div>
+          <div className={shared.subLabel}>Customer payment page</div>
           <div className={shared.linkRow}>
             <code className={shared.linkCode}>{hubspotIds.quoteLink}</code>
             <button
@@ -208,23 +218,8 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
         </div>
       )}
 
-      {app.quoteLines && app.quoteLines.length > 0 && (
-        <div>
-          <div className={shared.detailFieldLabel} style={{ marginBottom: 8 }}>Quoted amounts</div>
-          <div className={styles.moneyRow}>
-            {totals.oneTime > 0 && <span>{fmt$(totals.oneTime)} one-time</span>}
-            {totals.recurring.map(r => (
-              <span key={r.frequency}>{fmt$(r.amount)}/{fmtFrequency(r.frequency)}</span>
-            ))}
-            {totals.monthlyEquivalent > 0 && (
-              <span className={styles.moneyMeta}>(~{fmt$(totals.monthlyEquivalent)}/mo total)</span>
-            )}
-          </div>
-        </div>
-      )}
-
       <div>
-        <div className={shared.detailFieldLabel} style={{ marginBottom: 8 }}>
+        <div className={shared.subLabel}>
           Subscriptions{subscriptions.length > 0 ? ` (${subscriptions.length})` : ""}
         </div>
         {subscriptions.length === 0 ? (
@@ -268,15 +263,22 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
 
       {showSend && (
         <div className={styles.retryRow}>
-          {/* The irreversible act, stated before the click rather than behind a
-              modal: a published quote can't be edited, replaced or voided
-              through the API, and the merchant signs an ACH mandate against it. */}
+          {/* NOT the normal path any more. The merchant publishes this
+              themselves by continuing to billing from their own quote link
+              (/api/lead/[token]/checkout) — this is the escape hatch for a rep
+              sitting with them or finishing on the phone, and nothing waits on
+              it. The irreversibility is stated before the click rather than
+              behind a modal: a published quote can't be edited, replaced or
+              voided through the API, and the merchant signs an ACH mandate
+              against it. */}
           <div className={styles.emptyNote}>
-            Sending publishes this quote to HubSpot and emails the merchant the e-signature
-            request. It can&rsquo;t be edited, replaced or voided afterwards — check the lines first.
+            The merchant can do this themselves from their quote link — you only need this if
+            you&rsquo;re finishing the deal with them. Publishing emails them the e-signature
+            request, and it can&rsquo;t be edited, replaced or voided afterwards — check the lines
+            first.
           </div>
           <button className={shared.btnPrimary} disabled={sending} onClick={handleSend}>
-            {sending ? "Sending…" : "Send Quote to Customer"}
+            {sending ? "Publishing…" : "Publish Quote Now"}
           </button>
           {result && !result.ok && result.reasons && result.reasons.length > 0 && (
             <ul className={styles.reasonList}>
@@ -287,7 +289,7 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
             <div className={styles.errorBannerMessage}>{result.error}</div>
           )}
           {result && result.ok && (
-            <div className={styles.emptyNote}>Quote sent — the merchant can now sign and pay it.</div>
+            <div className={styles.emptyNote}>Quote published — the merchant can now sign and pay it.</div>
           )}
         </div>
       )}
@@ -298,6 +300,6 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
           possible by hand in HubSpot. To change it, do that directly in HubSpot.
         </div>
       )}
-    </div>
+    </Section>
   );
 }

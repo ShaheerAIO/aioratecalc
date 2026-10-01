@@ -18,12 +18,14 @@ import {
 import { resendLeadLinkAction } from "@/lib/actions/prospects";
 import EditQuotePanel from "@/components/rep/EditQuotePanel";
 import DealPicker, { type ResolvedDeal } from "@/components/rep/DealPicker";
-import { fmt$ } from "@/lib/utils";
+import { fmt$, fmtFrequency } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
-import { getOnboardingModules } from "@/lib/onboardingModules";
-import { BILLING_STATE_LABELS, billingPanelState, hasBillingSyncError } from "@/lib/billingView";
+import { getOnboardingModules, type ModuleStatus } from "@/lib/onboardingModules";
+import { hubspotDealUrl } from "@/lib/billingView";
+import { QUOTE_TYPES, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import { BillingPanel } from "./BillingPanel";
+import { Field, Section } from "./DetailSection";
 import type { MerchantApplication, CustomerSubmission } from "@/types/merchant";
 import type { TenantCompany } from "@/lib/adapters/hubspot";
 import styles from "./AccountsDashboard.module.css";
@@ -41,7 +43,59 @@ const RESUMABLE_STAGES = ["analysis", "pricing", "proposal_ready"];
 const REP_COLS   = "1fr 140px 110px 100px 100px 90px";
 const ADMIN_COLS = "1fr 110px 140px 110px 100px 100px 90px";
 
+// Cosmetic only — absent, the deal id renders as plain text instead of a link.
+// Same variable BillingPanel reads for the quote id.
+const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
+
+const MODULE_STATUS_LABELS: Record<ModuleStatus, string> = {
+  not_started: "Not started",
+  in_progress: "In progress",
+  complete: "Complete",
+};
+
 type Role = "rep" | "admin";
+
+function StageBadge({ stage }: { stage: string }) {
+  const color = STAGE_COLORS[stage] || FALLBACK_STAGE_COLOR;
+  return (
+    <span className={styles.badge} style={{ background: `${color}20`, color }}>
+      {stage.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+const QUOTE_TYPE_LABELS = new Map(QUOTE_TYPES.map(t => [t.id, t.label]));
+
+/**
+ * The provider ids worth showing, and ONLY the ones that exist.
+ *
+ * Since EasyOB stopped creating Adyen objects (2026-09-23) the provisioner
+ * writes just `legalEntityId`, `tenantNumber` and `environment` — every other
+ * field on `adyenIds` is permanently null on any row created since. Rendering
+ * them as fixed grid cells meant five of the panel's most prominent rows read
+ * "Not created" forever, which is what buried the fields that do carry
+ * something. Folded into a disclosure and filtered, so the section shows what
+ * is real and nothing else.
+ */
+function providerIds(app: MerchantApplication): Array<{ label: string; value: string }> {
+  const entries: Array<[string, string | number | null | undefined]> = [
+    ["AIO tenant", app.aioTenant?.businessId],
+    ["AIO location", app.aioTenant?.locationId],
+    ["AIO environment", app.aioTenant?.environment],
+    // The settlement-attribution reference the P&L joins on — see the
+    // `adyenIds.tenantNumber` constraint in CLAUDE.md.
+    ["Store ref", app.adyenIds?.tenantNumber ? `prod-${app.adyenIds.tenantNumber}` : null],
+    ["Adyen legal entity", app.adyenIds?.legalEntityId],
+    ["Adyen environment", app.adyenIds?.environment],
+    ["Adyen store", app.adyenIds?.storeId],
+    ["Adyen merchant account", app.adyenIds?.merchantAccountId],
+    ["Adyen balance account", app.adyenIds?.balanceAccountId],
+    ["Check company", app.checkIds?.companyId],
+  ];
+  return entries
+    .filter((e): e is [string, string | number] => e[1] != null && e[1] !== "")
+    .map(([label, value]) => ({ label, value: String(value) }));
+}
 
 type AccountsDashboardProps = {
   role: Role;
@@ -185,6 +239,28 @@ function AccountsDashboardInner({
     (selected.stage === "proposal_sent" && !selected.adyenOnboardingUrl) ||
     selected.stage === "merchant_link_sent"
   );
+  // Resume actually works the deal, so it stays owner-only even for an admin —
+  // unlike the two resend buttons, which are operational (an admin covering a
+  // bounced email needs them on accounts they don't own).
+  const canResume = selected != null
+    && selected.ownerUserId === userId
+    && RESUMABLE_STAGES.includes(selected.stage);
+  // Exactly one action is primary: the next thing to do. The header used to
+  // carry up to five coral buttons at once, which made none of them read as
+  // the next step.
+  const primaryAction = canResume ? "resume" : showQuoteLink ? "quote" : showOnboardingSend ? "onboarding" : null;
+
+  const selectedRep     = selected ? repMap.get(selected.ownerUserId) : undefined;
+  const selectedContact = selected?.ownerContact ?? null;
+  const contactName     = selectedContact
+    ? `${selectedContact.firstName} ${selectedContact.lastName}`.trim()
+    : "";
+  const selectedLines   = selected?.quoteLines ?? [];
+  const selectedTotals  = quoteTotals(selectedLines);
+  const selectedIds     = selected ? providerIds(selected) : [];
+  const selectedDealUrl = selected?.hubspotDealId
+    ? hubspotDealUrl(selected.hubspotDealId, HUBSPOT_PORTAL_ID)
+    : null;
 
   const handleSendLink = async (app: MerchantApplication) => {
     setBusyId(app.id);
@@ -486,9 +562,7 @@ function AccountsDashboardInner({
                       </div>
                       {isAdmin && <div className={styles.tableCell} data-label="Rep">{rep?.name || rep?.email || "—"}</div>}
                       <div className={styles.tableCell} data-label="Stage">
-                        <span className={styles.badge} style={{ background: `${STAGE_COLORS[a.stage] || FALLBACK_STAGE_COLOR}20`, color: STAGE_COLORS[a.stage] || FALLBACK_STAGE_COLOR }}>
-                          {a.stage.replace(/_/g, " ")}
-                        </span>
+                        <StageBadge stage={a.stage} />
                       </div>
                       <div className={`${styles.tableCell} ${styles["tableCell--numeric"]}`} data-label="Volume">{a.analysis ? fmt$(a.analysis.totalVolume) : "—"}</div>
                       <div className={`${styles.tableCell} ${styles["tableCell--accent"]}`} data-label="Fees">{a.analysis ? fmt$(a.analysis.totalFees) : "—"}</div>
@@ -529,9 +603,7 @@ function AccountsDashboardInner({
                       <span className={styles.splitRowName}>
                         {a.business?.dba || a.business?.legalName || a.analysis?.merchantName || "—"}
                       </span>
-                      <span className={styles.badge} style={{ background: `${STAGE_COLORS[a.stage] || FALLBACK_STAGE_COLOR}20`, color: STAGE_COLORS[a.stage] || FALLBACK_STAGE_COLOR }}>
-                        {a.stage.replace(/_/g, " ")}
-                      </span>
+                      <StageBadge stage={a.stage} />
                     </button>
                   ))}
                 </div>
@@ -542,47 +614,89 @@ function AccountsDashboardInner({
                 <div className={styles.detail}>
                   <div className={styles.detailHeader}>
                     <div>
-                      <h2 className={styles.detailTitle}>{selected.business?.legalName || selected.analysis?.merchantName || "Account Detail"}</h2>
-                      <div className={styles.detailMeta}>ID: {selected.id} · Created {new Date(selected.createdAt).toLocaleString()}</div>
+                      <div className={styles.detailTitleRow}>
+                        <h2 className={styles.detailTitle}>
+                          {selected.business?.dba || selected.business?.legalName || selected.analysis?.merchantName || "Account Detail"}
+                        </h2>
+                        <StageBadge stage={selected.stage} />
+                      </div>
+                      <div className={styles.detailMeta}>
+                        {selected.business?.legalName && selected.business.legalName !== selected.business.dba
+                          ? `${selected.business.legalName} · `
+                          : ""}
+                        Created {new Date(selected.createdAt).toLocaleDateString()} · {selected.id}
+                      </div>
                     </div>
+                    <button
+                      onClick={() => { setSelected(null); setSearch(""); }}
+                      className={styles.detailClose}
+                      aria-label="Close account detail"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {primaryAction && (
                     <div className={styles.detailActions}>
-                      {/* Resume / closed-lost stay owner-only: those actually work
-                          the deal. Resend is operational — an admin covering for a
-                          bounced email needs it on accounts they don't own. */}
-                      {selected.ownerUserId === userId && RESUMABLE_STAGES.includes(selected.stage) && (
+                      {canResume && (
                         <button onClick={() => router.push(`/rep/proposals/new?id=${selected.id}`)} className={styles.btnPrimary}>
                           {selected.stage === "analysis" ? "Continue Analysis" : "Resume Proposal"}
                         </button>
                       )}
                       {showQuoteLink && (
-                        <button onClick={() => handleResendQuoteLink(selected)} disabled={busyId === selected.id} className={styles.btnPrimary}>
+                        <button
+                          onClick={() => handleResendQuoteLink(selected)}
+                          disabled={busyId === selected.id}
+                          className={primaryAction === "quote" ? styles.btnPrimary : styles.btnGhost}
+                        >
                           {selected.customerLinkPurpose === "lead_upload" && selected.customerLinkToken
                             ? "Resend Quote Link"
                             : "Send Quote Link"}
                         </button>
                       )}
                       {showOnboardingSend && (
-                        <button onClick={() => handleSendLink(selected)} disabled={busyId === selected.id} className={styles.btnPrimary}>
+                        <button
+                          onClick={() => handleSendLink(selected)}
+                          disabled={busyId === selected.id}
+                          className={primaryAction === "onboarding" ? styles.btnPrimary : styles.btnGhost}
+                        >
                           {selected.stage === "merchant_link_sent" ? "Resend Onboarding Link" : "Send Onboarding Link"}
                         </button>
                       )}
-                      {selected.ownerUserId === userId && selected.stage !== "closed_lost" && selected.stage !== "adyen_approved" && (
-                        <button onClick={() => handleMarkClosedLost(selected)} disabled={busyId === selected.id} className={styles.btnDanger}>
-                          Mark Closed Lost
-                        </button>
-                      )}
-                      <button onClick={() => { setSelected(null); setSearch(""); }} className={styles.btnGhost}>Close</button>
                     </div>
-                  </div>
+                  )}
+
+                  {/* The three numbers the table was showing right up until the
+                      moment a row was opened — the detail panel used to drop
+                      them entirely in favour of eighteen id fields. */}
+                  {selected.analysis && (
+                    <div className={styles.snapshot}>
+                      <div className={styles.snapshotItem}>
+                        <span className={styles.snapshotValue}>{fmt$(selected.analysis.totalVolume)}</span>
+                        <span className={styles.snapshotLabel}>Monthly volume</span>
+                      </div>
+                      <div className={styles.snapshotItem}>
+                        <span className={`${styles.snapshotValue} ${styles["snapshotValue--accent"]}`}>
+                          {fmt$(selected.analysis.totalFees)}
+                        </span>
+                        <span className={styles.snapshotLabel}>Current fees/mo</span>
+                      </div>
+                      {selected.proposal && (
+                        <div className={styles.snapshotItem}>
+                          <span className={`${styles.snapshotValue} ${styles["snapshotValue--success"]}`}>
+                            {fmt$(selected.proposal.savings?.annual || 0)}
+                          </span>
+                          <span className={styles.snapshotLabel}>Savings/yr</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* The link the staff just (re)sent. Shown in full with a copy
                       affordance because email/SMS delivery is optional — without
                       this the click would surface nothing they can hand over. */}
                   {sentLink?.appId === selected.id && (
-                    <div>
-                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>
-                        {sentLink.kind === "quote" ? "Quote Link" : "Merchant Onboarding Link"}
-                      </div>
+                    <Section label={sentLink.kind === "quote" ? "Quote Link" : "Merchant Onboarding Link"}>
                       <div className={styles.linkRow}>
                         <code className={styles.linkCode}>{sentLink.url}</code>
                         <button
@@ -593,7 +707,7 @@ function AccountsDashboardInner({
                           {linkCopied ? "Copied!" : "Copy"}
                         </button>
                       </div>
-                      <div className={styles.detailMeta} style={{ marginTop: 6 }}>
+                      <div className={styles.detailMeta}>
                         {sentLink.kind === "quote" ? (
                           <>
                             {sentLink.emailSent
@@ -609,120 +723,126 @@ function AccountsDashboardInner({
                           ? `Emailed to ${selected.ownerContact?.email}. Expires in 30 minutes.`
                           : "Email delivery isn't configured yet — send this link to the merchant yourself. It expires in 30 minutes."}
                       </div>
-                    </div>
+                    </Section>
                   )}
 
-                  <div className={styles.detailGrid}>
-                    {(isAdmin
-                      ? [
-                          { label: "Stage", val: selected.stage.replace(/_/g, " ") },
-                          { label: "Rep (Commission)", val: repMap.get(selected.ownerUserId)?.name || "—" },
-                          { label: "Rep Email", val: repMap.get(selected.ownerUserId)?.email || "—" },
-                          { label: "HubSpot Deal ID", val: selected.hubspotDealId || "Not synced" },
-                          { label: "HubSpot Quote", val: BILLING_STATE_LABELS[billingPanelState(selected)] },
-                          { label: "Payment Status", val: selected.hubspotIds?.paymentStatus || "—" },
-                          { label: "Subscription Status", val: selected.hubspotIds?.subscriptionStatus || "—" },
-                          {
-                            label: "HubSpot Sync",
-                            val: hasBillingSyncError(selected.hubspotIds) ? "⚠ Error" : "OK",
-                          },
-                          { label: "Tenant Number", val: selected.adyenIds?.tenantNumber || "Not set" },
-                          { label: "Store (prod-)", val: selected.adyenIds?.tenantNumber ? `prod-${selected.adyenIds.tenantNumber}` : "Not created" },
-                          { label: "Store ID", val: selected.adyenIds?.storeId || "Not created" },
-                          { label: "Balance Account", val: selected.adyenIds?.balanceAccountId || "Not created" },
-                          { label: "Adyen Legal Entity", val: selected.adyenIds?.legalEntityId || "Not created" },
-                          { label: "Adyen Environment", val: selected.adyenIds?.environment || "—" },
-                          { label: "Onboarding URL", val: selected.adyenOnboardingUrl ? "Set" : "Not generated" },
-                          { label: "Merchant Contact", val: selected.ownerContact ? `${selected.ownerContact.firstName} ${selected.ownerContact.lastName}` : "—" },
-                          { label: "Merchant Email", val: selected.ownerContact?.email || "—" },
-                        ]
-                      : [
-                          { label: "Stage", val: selected.stage.replace(/_/g, " ") },
-                          { label: "HubSpot Deal ID", val: selected.hubspotDealId || "Not synced" },
-                          { label: "HubSpot Quote", val: BILLING_STATE_LABELS[billingPanelState(selected)] },
-                          {
-                            label: "HubSpot Sync",
-                            val: hasBillingSyncError(selected.hubspotIds) ? "⚠ Error" : "OK",
-                          },
-                          { label: "Adyen Legal Entity", val: selected.adyenIds?.legalEntityId || "Not created" },
-                          { label: "Onboarding URL", val: selected.adyenOnboardingUrl ? "Set" : "Not generated" },
-                          { label: "Owner", val: selected.ownerContact ? `${selected.ownerContact.firstName} ${selected.ownerContact.lastName}` : "—" },
-                          { label: "Email", val: selected.ownerContact?.email || "—" },
-                        ]
-                    ).map(f => (
-                      <div key={f.label}>
-                        <div className={styles.detailFieldLabel}>{f.label}</div>
-                        <div className={styles.detailFieldValue}>{f.val}</div>
-                      </div>
-                    ))}
-                  </div>
+                  {/* Who's on this deal. `Rep` is the commission owner AND the
+                      address a published HubSpot quote is sent from
+                      (resolveSender), which is why an admin sees the email and
+                      not just the name. `ownerContact` is the merchant's own
+                      contact person — a different "owner" entirely. */}
+                  <Section label="Deal">
+                    <div className={styles.detailGrid}>
+                      {isAdmin && (
+                        <Field
+                          label="Rep (commission)"
+                          value={selectedRep?.name || selectedRep?.email || "Unassigned"}
+                          meta={selectedRep?.name ? selectedRep.email : undefined}
+                        />
+                      )}
+                      {selectedContact && (contactName || selectedContact.email) && (
+                        <Field
+                          label="Merchant contact"
+                          value={contactName || selectedContact.email}
+                          meta={[contactName ? selectedContact.email : null, selectedContact.phone]
+                            .filter(Boolean)
+                            .join(" · ") || undefined}
+                        />
+                      )}
+                      {selected.analysis?.currentProcessorName && (
+                        <Field label="Current processor" value={selected.analysis.currentProcessorName} />
+                      )}
+                    </div>
+                  </Section>
 
-                  {/* HubSpot tenant link (ezacc ↔ AIO tenant). Owner rep or any
-                      admin may edit; a rep never sees another rep's accounts, so
-                      ownership is the only gate. Recording only — no Adyen call. */}
+                  {/* HubSpot linkage — the company (AIO tenant) and the deal.
+                      Owner rep or any admin may edit; a rep never sees another
+                      rep's accounts, so ownership is the only gate. Recording
+                      only — no Adyen call. */}
                   {(isAdmin || selected.ownerUserId === userId) && (
-                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
-                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>HubSpot Tenant</div>
-                      {selected.tenantLink ? (
-                        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-                          <div style={{ flex: 1, minWidth: 240 }}>
-                            <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
-                              {selected.tenantLink.companyName}
+                    <Section label="HubSpot">
+                      <div>
+                        <div className={styles.subLabel}>HubSpot Tenant</div>
+                        {selected.tenantLink ? (
+                          <div className={styles.linkedRow}>
+                            <div className={styles.linkedRowMain}>
+                              <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
+                                {selected.tenantLink.companyName}
+                              </div>
+                              <div className={styles.detailMeta}>
+                                {selected.tenantLink.tenantRef || "no tenant ref"}
+                                {selected.tenantLink.adyenAccountHolderId ? ` · ${selected.tenantLink.adyenAccountHolderId}` : ""}
+                              </div>
                             </div>
-                            <div className={styles.detailMeta} style={{ marginTop: 4 }}>
-                              {selected.tenantLink.tenantRef || "no tenant ref"}
-                              {selected.tenantLink.adyenAccountHolderId ? ` · ${selected.tenantLink.adyenAccountHolderId}` : ""}
-                            </div>
+                            <button className={styles.btnGhost} disabled={linking} onClick={() => handleUnlinkTenant(selected)}>
+                              Unlink
+                            </button>
                           </div>
-                          <button className={styles.btnGhost} disabled={linking} onClick={() => handleUnlinkTenant(selected)}>
-                            Unlink
-                          </button>
-                        </div>
-                      ) : (
+                        ) : (
+                          <div>
+                            <input
+                              type="search"
+                              className={styles.splitSearchInput}
+                              placeholder="Search HubSpot companies to link a tenant…"
+                              value={tenantQuery}
+                              onChange={e => setTenantQuery(e.target.value)}
+                            />
+                            {tenantQuery.trim().length >= 2 && (
+                              <>
+                                {tenantSearching && <div className={styles.pickerStatus}>Searching…</div>}
+                                {!tenantSearching && tenantResults.length === 0 && (
+                                  <div className={styles.pickerStatus}>No matching companies.</div>
+                                )}
+                                {tenantResults.length > 0 && (
+                                  <div className={styles.pickerResults}>
+                                    {tenantResults.map(c => (
+                                      <button
+                                        key={c.id}
+                                        className={styles.splitRow}
+                                        disabled={linking}
+                                        onClick={() => handleLinkTenant(selected, c.id)}
+                                      >
+                                        <span className={styles.splitRowName}>{c.name}</span>
+                                        <span className={styles.detailMeta}>
+                                          {c.tenantRef || "no tenant ref"}{c.adyenAccountHolderId ? ` · ${c.adyenAccountHolderId}` : ""}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {tenantMismatch?.appId === selected.id && (
+                          <div className={styles.warningBanner} role="alert">
+                            <strong>Deal attached to a different company.</strong> HubSpot deal{" "}
+                            {tenantMismatch.dealId} is still linked to{" "}
+                            {tenantMismatch.otherCompanyIds.length > 1 ? "companies" : "company"}{" "}
+                            {tenantMismatch.otherCompanyIds.join(", ")} — not this tenant. We left it
+                            alone rather than silently give one deal two companies. Resolve the
+                            deal&rsquo;s company association in HubSpot directly.
+                          </div>
+                        )}
+                      </div>
+
+                      {selected.hubspotDealId && (
                         <div>
-                          <input
-                            type="search"
-                            className={styles.tableSearchInput}
-                            style={{ width: "100%" }}
-                            placeholder="Search HubSpot companies to link a tenant…"
-                            value={tenantQuery}
-                            onChange={e => setTenantQuery(e.target.value)}
-                          />
-                          {tenantQuery.trim().length >= 2 && (
-                            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-                              {tenantSearching && <div className={styles.detailMeta}>Searching…</div>}
-                              {!tenantSearching && tenantResults.length === 0 && (
-                                <div className={styles.detailMeta}>No matching companies.</div>
-                              )}
-                              {tenantResults.map(c => (
-                                <button
-                                  key={c.id}
-                                  className={styles.splitRow}
-                                  disabled={linking}
-                                  onClick={() => handleLinkTenant(selected, c.id)}
-                                  style={{ textAlign: "left" }}
-                                >
-                                  <span className={styles.splitRowName}>{c.name}</span>
-                                  <span className={styles.detailMeta}>
-                                    {c.tenantRef || "no tenant ref"}{c.adyenAccountHolderId ? ` · ${c.adyenAccountHolderId}` : ""}
-                                  </span>
-                                </button>
-                              ))}
+                          <div className={styles.subLabel}>HubSpot Deal</div>
+                          <div className={styles.detailFieldValue}>
+                            {selectedDealUrl
+                              ? <a href={selectedDealUrl} target="_blank" rel="noreferrer">{selected.hubspotDealId}</a>
+                              : selected.hubspotDealId}
+                          </div>
+                          {selected.dealLink?.dealName && (
+                            <div className={styles.detailMeta}>
+                              {selected.dealLink.dealName}
+                              {selected.dealLink.origin === "adopted" ? " · adopted" : ""}
                             </div>
                           )}
                         </div>
                       )}
-                      {tenantMismatch?.appId === selected.id && (
-                        <div className={styles.warningBanner} role="alert">
-                          <strong>Deal attached to a different company.</strong> HubSpot deal{" "}
-                          {tenantMismatch.dealId} is still linked to{" "}
-                          {tenantMismatch.otherCompanyIds.length > 1 ? "companies" : "company"}{" "}
-                          {tenantMismatch.otherCompanyIds.join(", ")} — not this tenant. We left it
-                          alone rather than silently give one deal two companies. Resolve the
-                          deal's company association in HubSpot directly.
-                        </div>
-                      )}
-                    </div>
+                    </Section>
                   )}
 
                   {/* HubSpot deal adoption — the account has NO deal at all (a
@@ -731,24 +851,23 @@ function AccountsDashboardInner({
                       "go pick one" destination sendQuoteAction's
                       `ambiguous` refusal points reps at; it disappears the
                       moment a deal is attached, in favor of the "HubSpot
-                      Deal ID" field above. Existing-deal only — creating a
+                      Deal" field above. Existing-deal only — creating a
                       brand-new deal for a company with none is
                       sendQuoteAction's job (mode: "create"). */}
                   {(isAdmin || selected.ownerUserId === userId) && !selected.hubspotDealId && (
-                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
-                      <div className={styles.detailFieldLabel} style={{ marginBottom: 8 }}>HubSpot Deal</div>
+                    <Section label="HubSpot Deal">
                       {!selected.tenantLink ? (
-                        <div className={styles.detailMeta}>
+                        <div className={styles.sectionNote}>
                           Link the HubSpot tenant company above first — the deal picker needs to know
                           which company&apos;s deals to search.
                         </div>
                       ) : dealAdoptPreview ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div className={styles.confirmStack}>
                           <div>
                             <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
                               {dealAdoptPreview.deal.name}
                             </div>
-                            <div className={styles.detailMeta} style={{ marginTop: 4 }}>
+                            <div className={styles.detailMeta}>
                               {dealAdoptPreview.deal.stageLabel ?? "no stage"}
                             </div>
                           </div>
@@ -757,7 +876,7 @@ function AccountsDashboardInner({
                               ? "This merchant already accepted their quote. Adopting this deal will immediately build and PUBLISH a live HubSpot billing quote — a one-way door: no edit, no delete, no void through the API."
                               : "No quote has been accepted yet, so adopting this deal just attaches it — nothing publishes."}
                           </div>
-                          <div style={{ display: "flex", gap: 8 }}>
+                          <div className={styles.confirmActions}>
                             <button
                               className={styles.btnPrimary}
                               disabled={adoptingDeal}
@@ -780,59 +899,65 @@ function AccountsDashboardInner({
                           allowCreate={false}
                         />
                       )}
-                    </div>
+                    </Section>
                   )}
 
-                  {/* Adyen KYC has no automatic completion signal any more. The
-                      Balance Platform webhook went when EasyOB stopped creating
-                      Adyen objects, and AIO's API exposes no onboarding status we
-                      can read. The nightly settlement backstop catches merchants
-                      who actually transact (see lib/aio/approvedFromSettlement.ts);
-                      this is for everyone else. Forward-only server-side, so it
-                      can't drag a further-along deal backwards. */}
-                  {selected.aioTenant?.provisionedAt &&
-                    selected.stage !== "adyen_approved" &&
-                    selected.stage !== "closed_lost" && (
-                      <div style={{ marginTop: 8 }}>
-                        <div className={styles.detailFieldLabel}>Adyen verification</div>
-                        <div className={styles.detailMeta} style={{ marginBottom: 8 }}>
-                          AIO tenant {selected.aioTenant.businessId}
-                          {selected.aioTenant.locationId ? ` · location ${selected.aioTenant.locationId}` : ""}
-                          {" · "}
-                          {selected.stage === "adyen_kyc_complete"
-                            ? "KYC submitted, awaiting approval"
-                            : "awaiting the merchant"}
-                        </div>
-                        <button
-                          className={styles.btnPrimary}
-                          disabled={busyId === selected.id}
-                          onClick={() => handleMarkKyc(selected)}
-                        >
-                          Mark Adyen Approved
-                        </button>
-                      </div>
-                    )}
-
-                  {/* Rework the quote at any time up to acceptance — things change.
-                      Owner rep or any admin, same gate as the
-                      tenant link above. saveQuoteConfigurationAction (which this
+                  {/* What the merchant is buying. The HubSpot document built
+                      from it — quote id, signature, payment, subscriptions —
+                      is the Billing section below; keeping the two apart is
+                      what stopped the quote's state being reported twice in
+                      two different vocabularies.
+                      Rework is allowed at any time up to acceptance — things
+                      change. Owner rep or any admin, same gate as the tenant
+                      link above. saveQuoteConfigurationAction (which this
                       calls) refuses once quoteAcceptedAt is set; EditQuotePanel
                       shows the frozen notice instead of the form in that case. */}
                   {(isAdmin || selected.ownerUserId === userId) && (
-                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 16 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: editQuoteOpen ? 12 : 0 }}>
-                        <div className={styles.detailFieldLabel}>Quote</div>
-                        {!selected.quoteAcceptedAt && (
+                    <Section
+                      label="Quote"
+                      action={
+                        !selected.quoteAcceptedAt ? (
                           <button className={styles.btnGhost} onClick={() => setEditQuoteOpen(o => !o)}>
                             {editQuoteOpen ? "Close" : "Edit Quote"}
                           </button>
-                        )}
-                      </div>
-                      {selected.quoteAcceptedAt && !editQuoteOpen && (
-                        <div className={styles.detailMeta}>
-                          Accepted {new Date(selected.quoteAcceptedAt).toLocaleDateString()} — locked. Start a new
-                          quote to change terms.
-                        </div>
+                        ) : undefined
+                      }
+                    >
+                      {!editQuoteOpen && (
+                        <>
+                          {selectedLines.length > 0 ? (
+                            <>
+                              <div className={styles.detailFieldValue}>
+                                {QUOTE_TYPE_LABELS.get(quoteTypeOf(selected.quoteType)) ?? "Quote"}
+                                {" · "}
+                                {selectedLines.length} line{selectedLines.length === 1 ? "" : "s"}
+                              </div>
+                              <div className={styles.moneyRow}>
+                                {selectedTotals.oneTime > 0 && <span>{fmt$(selectedTotals.oneTime)} one-time</span>}
+                                {selectedTotals.recurring.map(r => (
+                                  <span key={r.frequency}>{fmt$(r.amount)}/{fmtFrequency(r.frequency)}</span>
+                                ))}
+                                {selectedTotals.monthlyEquivalent > 0 && (
+                                  <span className={styles.moneyMeta}>
+                                    (~{fmt$(selectedTotals.monthlyEquivalent)}/mo recurring)
+                                  </span>
+                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <div className={styles.sectionNote}>
+                              {selected.quoteAcceptedAt
+                                ? "Rate-only — no billable lines, so AIO's margin here comes out of Adyen settlement rather than HubSpot billing."
+                                : "No products configured yet."}
+                            </div>
+                          )}
+                          {selected.quoteAcceptedAt && (
+                            <div className={styles.detailMeta}>
+                              Accepted {new Date(selected.quoteAcceptedAt).toLocaleDateString()} — locked. Start a new
+                              quote to change terms.
+                            </div>
+                          )}
+                        </>
                       )}
                       {editQuoteOpen && (
                         <EditQuotePanel
@@ -841,7 +966,7 @@ function AccountsDashboardInner({
                           onCancel={() => setEditQuoteOpen(false)}
                         />
                       )}
-                    </div>
+                    </Section>
                   )}
 
                   <BillingPanel
@@ -850,17 +975,100 @@ function AccountsDashboardInner({
                     onUpdated={updateOne}
                   />
 
-                  <div>
-                    <div className={styles.modulesLabel}>Modules</div>
-                    <div className={styles.modules}>
+                  <Section label="Onboarding">
+                    {/* Provisioning is a cron with no human in the loop, so a
+                        failure that only ever reached a Vercel log is a failure
+                        nobody acts on — the same mistake HubspotIds.lastSyncError
+                        was added to fix. */}
+                    {selected.aioTenant?.lastError && !selected.aioTenant.provisionedAt && (
+                      <div className={styles.warningBanner} role="alert">
+                        <strong>AIO provisioning hasn&rsquo;t completed.</strong> {selected.aioTenant.lastError}
+                        {selected.aioTenant.lastErrorAt
+                          ? ` (${new Date(selected.aioTenant.lastErrorAt).toLocaleString()})`
+                          : ""}
+                      </div>
+                    )}
+
+                    <div className={styles.moduleList}>
                       {getOnboardingModules(selected).map(m => (
-                        <span key={m.key} className={styles.modulePill}>
-                          {m.label}: {m.status.replace(/_/g, " ")}
-                          {m.locked ? ` · locked (${m.locked.reason})` : ""}
-                        </span>
+                        <div
+                          key={m.key}
+                          className={styles.moduleRow}
+                          data-status={m.status}
+                          data-locked={!!m.locked}
+                        >
+                          <span className={styles.moduleDot} />
+                          <span className={styles.moduleName}>{m.label}</span>
+                          <span className={styles.moduleStatus}>
+                            {m.locked ? "Locked" : MODULE_STATUS_LABELS[m.status]}
+                          </span>
+                        </div>
                       ))}
                     </div>
-                  </div>
+
+                    {/* Adyen KYC has no automatic completion signal any more. The
+                        Balance Platform webhook went when EasyOB stopped creating
+                        Adyen objects, and AIO's API exposes no onboarding status we
+                        can read. The nightly settlement backstop catches merchants
+                        who actually transact (see lib/aio/approvedFromSettlement.ts);
+                        this is for everyone else. Forward-only server-side, so it
+                        can't drag a further-along deal backwards. */}
+                    {selected.aioTenant?.provisionedAt &&
+                      selected.stage !== "adyen_approved" &&
+                      selected.stage !== "closed_lost" && (
+                        <div className={styles.confirmStack}>
+                          <div className={styles.sectionNote}>
+                            {selected.stage === "adyen_kyc_complete"
+                              ? "KYC submitted, awaiting approval."
+                              : "Waiting on the merchant to finish identity verification."}
+                            {" "}Adyen sends us no completion signal, so mark it once you have confirmed it.
+                          </div>
+                          <button
+                            className={styles.btnGhost}
+                            disabled={busyId === selected.id}
+                            onClick={() => handleMarkKyc(selected)}
+                          >
+                            Mark Adyen Approved
+                          </button>
+                        </div>
+                      )}
+
+                    {selectedIds.length > 0 ? (
+                      <details>
+                        <summary className={styles.disclosureSummary}>
+                          Provider ids ({selectedIds.length})
+                        </summary>
+                        <div className={styles.idGrid}>
+                          {selectedIds.map(({ label, value }) => (
+                            <div key={label}>
+                              <div className={styles.detailFieldLabel}>{label}</div>
+                              <div className={styles.idValue}>{value}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ) : selected.quoteAcceptedAt ? (
+                      <div className={styles.sectionNote}>
+                        Nothing provisioned yet — the AIO tenant and the Adyen verification link are
+                        created once billing is paid.
+                      </div>
+                    ) : null}
+                  </Section>
+
+                  {/* Owner-only: this actually works the deal. */}
+                  {selected.ownerUserId === userId
+                    && selected.stage !== "closed_lost"
+                    && selected.stage !== "adyen_approved" && (
+                    <div className={styles.detailFooter}>
+                      <button
+                        onClick={() => handleMarkClosedLost(selected)}
+                        disabled={busyId === selected.id}
+                        className={styles.btnQuietDanger}
+                      >
+                        Mark Closed Lost
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

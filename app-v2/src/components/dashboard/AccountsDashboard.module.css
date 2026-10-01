@@ -400,10 +400,16 @@
   top: calc(var(--space-md) + 60px);
 }
 
-/* ---------- Detail panel ---------- */
+/* ---------- Detail panel ----------
+   One flex column of sections. Each section draws its own top rule (.section)
+   rather than the caller hand-rolling a border-top inline, which is what let
+   the panel drift into eighteen ungrouped fields under one unlabelled grid. */
 
 .detail {
-  padding: var(--space-xl);
+  padding: var(--space-lg) var(--space-xl) var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
 }
 
 .detailHeader {
@@ -411,17 +417,47 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: var(--space-md);
-  margin-bottom: var(--space-lg);
+}
+
+.detailTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2xs);
 }
 
 .detailTitle {
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 1.15rem;
-  margin: 0 0 var(--space-2xs);
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .detailMeta { font-size: 0.8rem; color: var(--ink-3); }
+
+/* Close is separated from the action cluster: it isn't a step in working the
+   deal, and sitting in the same row made five coral buttons read as a menu. */
+.detailClose {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-3);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.detailClose:hover { background: var(--rule); color: var(--ink); }
+.detailClose:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .detailActions {
   display: flex;
@@ -429,11 +465,19 @@
   flex-wrap: wrap;
 }
 
+/* Closed-lost lives here, away from the forward actions — it's the one
+   irreversible-ish thing on the panel and it was sitting next to Close. */
+.detailFooter {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-md);
+}
+
 .detailGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
+  gap: var(--space-md) var(--space-lg);
 }
 
 .detailFieldLabel {
@@ -445,33 +489,231 @@
   margin-bottom: var(--space-3xs);
 }
 
-.detailFieldValue { font-size: 0.85rem; color: var(--ink); }
+.detailFieldValue { font-size: 0.85rem; color: var(--ink); overflow-wrap: anywhere; }
 
-/* ---------- Onboarding module pills ---------- */
+/* ---------- Detail sections (shared with BillingPanel) ---------- */
 
-.modulesLabel {
+.section {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: 24px;
+}
+
+.sectionLabel {
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+.sectionNote {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.subLabel {
   font-size: 0.7rem;
   font-weight: 600;
   color: var(--ink-3);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin-bottom: var(--space-xs);
+  margin-bottom: var(--space-2xs);
 }
 
-.modules {
+/* ---------- Money snapshot (replaces the Volume/Fees/Savings columns the
+   table drops the moment a row is selected) ---------- */
+
+.snapshot {
   display: flex;
-  gap: var(--space-xs);
+  flex-wrap: wrap;
+  gap: var(--space-md) var(--space-xl);
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-md);
+}
+
+.snapshotItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.snapshotValue {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.1rem;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.snapshotValue--accent  { color: var(--accent-text); }
+.snapshotValue--success { color: var(--success); }
+
+.snapshotLabel {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+
+/* Quoted amounts — one-time and recurring are different units, so they stay
+   separate figures rather than being summed into one misleading total. */
+.moneyRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+  font-size: 0.85rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.moneyMeta { color: var(--ink-3); }
+
+/* ---------- Onboarding modules ---------- */
+
+.moduleList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.moduleRow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-md);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.moduleDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  flex-shrink: 0;
+}
+
+.moduleRow[data-status="in_progress"] .moduleDot { background: var(--warning); }
+.moduleRow[data-status="complete"]    .moduleDot { background: var(--success); }
+.moduleRow[data-locked="true"]        .moduleDot { background: var(--rule); }
+
+.moduleName {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.moduleRow[data-locked="true"] .moduleName { color: var(--ink-2); }
+
+.moduleStatus {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* ---------- Provider ids, folded away ----------
+   Since EasyOB stopped creating Adyen objects, most of these are permanently
+   null (only legalEntityId / tenantNumber / environment are ever written), so
+   they are no longer worth a row each in the main grid. */
+
+.disclosureSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosureSummary::-webkit-details-marker { display: none; }
+
+.disclosureSummary::before {
+  content: "›";
+  display: inline-block;
+  font-size: 0.9rem;
+  color: var(--ink-3);
+  transition: transform 150ms var(--ease-out);
+}
+
+details[open] > .disclosureSummary::before { transform: rotate(90deg); }
+
+.disclosureSummary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.idGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-sm) var(--space-md);
+  margin-top: var(--space-sm);
+}
+
+.idValue {
+  font-size: 0.78rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* ---------- HubSpot tenant / deal blocks ---------- */
+
+.linkedRow {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-start;
+  justify-content: space-between;
   flex-wrap: wrap;
 }
 
-.modulePill {
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: var(--space-2xs) var(--space-sm);
-  border-radius: var(--radius-pill);
-  background: var(--paper);
+.linkedRowMain { flex: 1; min-width: 200px; }
+
+.pickerResults {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-xs);
   border: 1px solid var(--rule);
-  color: var(--ink);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.pickerStatus {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  margin-top: var(--space-xs);
+}
+
+.confirmStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.confirmActions {
+  display: flex;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
 }
 
 /* ---------- Buttons ---------- */
@@ -531,6 +773,26 @@
 .btnGhost:hover { background: var(--rule); color: var(--ink); }
 .btnGhost:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .btnGhost:active { transform: scale(0.97); }
+
+/* Quiet until hovered — a destructive action that shouldn't compete for
+   attention with the forward ones, but must still be obvious once reached. */
+.btnQuietDanger {
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: var(--space-2xs) var(--space-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.btnQuietDanger:hover { color: var(--danger); background: var(--danger-bg); }
+.btnQuietDanger:disabled { opacity: 0.6; cursor: default; }
+.btnQuietDanger:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- Mobile table collapse ---------- */
 
@@ -638,7 +900,10 @@
   .btnGhost,
   .btnPrimary,
   .btnDanger,
-  .btnCopy {
+  .btnQuietDanger,
+  .btnCopy,
+  .detailClose,
+  .disclosureSummary::before {
     transition-duration: 1ms;
   }
 }
