@@ -7,6 +7,7 @@ import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
 import { adjustmentsFromQuoteLines, isProcessingQuote, picksFromQuoteLines, quoteTypeOf } from "@/lib/quoting";
 import { fmt$, fmtPct2 } from "@/lib/utils";
+import { SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 
@@ -16,7 +17,6 @@ type Props = {
   onCancel: () => void;
 };
 
-const MODELS: PricingModel[] = ["flat-rate", "2-tier", "interchange-plus"];
 
 // No fee overrides are persisted on the application today (they only ever
 // lived in the wizard's ephemeral PricingStep state), so a re-preview here
@@ -187,6 +187,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         quoteType={quoteType}
         picks={picks}
         channels={channels}
+        rail="inline"
         onQuoteTypeChange={setQuoteType}
         onPicksChange={setPicks}
         onChannelsChange={setChannels}
@@ -199,7 +200,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         <div style={{ padding: 16, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}>
           <div style={{ marginBottom: 8, fontWeight: 600 }}>Pricing Model</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {MODELS.map(m => (
+            {SELECTABLE_PRICING_MODELS.map(m => (
               <button
                 key={m}
                 type="button"

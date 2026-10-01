@@ -1,7 +1,7 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
 
 .page {
-  max-width: 56.25rem;
+  max-width: var(--measure-wide);
   margin-inline: auto;
   padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
 }
@@ -57,6 +57,10 @@
   outline-offset: 2px;
 }
 
+/* A model the platform can't sell yet. Legible but plainly inert — the point
+   is that the grid reads as three options with two coming, not as one option
+   rendered badly. Kept above the contrast floor rather than faded to nothing:
+   the rep is often reading this with the merchant beside them. */
 .modelHeader {
   display: flex;
   align-items: center;
@@ -88,10 +92,17 @@
 
 /* ---------- Layout ---------- */
 
+/* Two panes: what the MERCHANT sees on the left (computed rates, the fee
+   projection), what the REP drives on the right (margin, card mix, fee
+   overrides). The side column grew with the container — at 21.25rem inside a
+   56rem page the number inputs were cramped enough that reps were scrolling
+   past them. minmax(0, …) on the left so a long projection figure can't push
+   the controls off the edge. */
 .layout {
   display: grid;
-  grid-template-columns: 1fr 21.25rem;
+  grid-template-columns: minmax(0, 1fr) 24rem;
   gap: var(--space-lg);
+  align-items: start;
 }
 
 .layoutSide {
@@ -238,14 +249,6 @@
   color: var(--accent-text);
 }
 
-.sliderTicks {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.68rem;
-  color: var(--ink-3);
-  margin-top: var(--space-2xs);
-}
-
 .fieldGroup {
   margin-top: var(--space-md);
 }
@@ -363,9 +366,15 @@
 .btnPrimary:active { transform: scale(0.97); }
 .btnPrimary:disabled { cursor: not-allowed; }
 
+/* One column below the point where the control pane stops being usable —
+   matched to AnalysisStep's .columns so the two steps break together rather
+   than at different widths as the rep moves between them. */
+@media (max-width: 64rem) {
+  .layout { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 48rem) {
   .modelGrid { grid-template-columns: 1fr; }
-  .layout { grid-template-columns: 1fr; }
   .projectionGrid { grid-template-columns: repeat(2, 1fr); }
 }
 

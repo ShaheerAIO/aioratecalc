@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import { fmt$, fmtPct2 } from "@/lib/utils";
+import { SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { StatementAnalysis, ProposalOutput, Processor, ProcessorTier, PricingModel } from "@/types/merchant";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 import styles from "./PricingStep.module.css";
@@ -43,9 +44,10 @@ const TONE_BORDER: Record<Tone, string> = { info: "var(--info)", warning: "var(-
 const TONE_BG: Record<Tone, string> = { info: "var(--info-bg)", warning: "var(--warning-bg)", success: "var(--success-bg)" };
 const TONE_CLASS: Record<Tone, string> = { info: styles["value--info"], warning: styles["value--warning"], success: styles["value--success"] };
 
-// Only 2-tier is offered today (platform limit — Steve 2026-07-23). Flat-rate and
-// interchange-plus stay in MODEL_INFO / the engine for the future, just not selectable.
-const AVAILABLE_MODELS: PricingModel[] = ["2-tier"];
+// Only 2-tier is offered — see SELECTABLE_PRICING_MODELS. MODEL_INFO keeps all
+// three, and every rate-preview and fee-override branch below still handles
+// them: the engine prices models this screen no longer offers, and a stored
+// proposal can still carry one.
 
 export default function PricingStep({ analysis, activeProcessor, activeTier, onBack, onProposal }: Props) {
   const [model, setModel]         = useState<PricingModel>("2-tier");
@@ -101,7 +103,6 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   const belowMin    = pricing?.belowMarginFloor ?? false;
   const aboveMax    = !!pricing && targetMargin != null && targetMargin > pricing.maxMargin;
   const blocked     = belowFloor || belowMin;
-  const sliderVal   = targetMargin ?? 0;
 
   const generate = async () => {
     if (targetMargin == null) return; // the button is disabled until the server seeds it
@@ -133,7 +134,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
 
   return (
     <div className={styles.page}>
-      <h1 className={styles.title}>Select Pricing Model</h1>
+      <h1 className={styles.title}>Pricing</h1>
       <p className={styles.subtitle}>
         {hasCurrentCost ? (
           <>
@@ -145,9 +146,12 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
         Merchant volume: <strong className={styles.subtitleStrong}>{fmt$(analysis.totalVolume)}/mo</strong>.
       </p>
 
-      {/* Model selector */}
+      {/* Only the sellable models. With one of them this is a statement of what
+          the quote is priced on rather than a choice — but it still renders,
+          because the merchant is often looking at this screen and "2-Tier,
+          card-present and card-not-present" is the thing being sold. */}
       <div className={styles.modelGrid}>
-        {AVAILABLE_MODELS.map(m => {
+        {SELECTABLE_PRICING_MODELS.map(m => {
           const info = MODEL_INFO[m];
           const selected = model === m;
           return (
@@ -259,20 +263,16 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
             </button>
             {internalOpen && (
               <div id="pricing-internal" className={styles.disclosureBody}>
-              <div>
-                <div className={styles.sliderHeader}>
-                  <span className={styles.sliderLabel}>Target</span>
-                  <span className={styles.sliderValue}>{targetMargin == null ? "—" : fmtPct2(targetMargin)}</span>
-                </div>
-                <input
-                  type="range" min="0.001" max="0.04" step="0.0005"
-                  value={sliderVal}
-                  disabled={targetMargin == null}
-                  onChange={e => { setTarget(parseFloat(e.target.value)); setManual(""); }}
-                />
-                <div className={styles.sliderTicks}>
-                  <span>0.10%</span><span>4.00%</span>
-                </div>
+              {/* The drag-to-set slider is GONE from this screen (2026-10-01).
+                  This is the step a rep works through with the merchant in the
+                  room, and a margin that visibly slides is an invitation to
+                  negotiate it — a typed figure is a decision. The number is
+                  still fully editable, and the floor checks below are unchanged;
+                  the other two hosts (prospect creation, EditQuotePanel) keep
+                  their sliders, since neither is shown to a customer. */}
+              <div className={styles.sliderHeader}>
+                <span className={styles.sliderLabel}>Target</span>
+                <span className={styles.sliderValue}>{targetMargin == null ? "—" : fmtPct2(targetMargin)}</span>
               </div>
               <div className={styles.fieldGroup}>
                 <label className={styles.fieldLabel}>Manual input (%)</label>
