@@ -47,7 +47,7 @@ export const NO_REVIEW_PREFILL_APPLIED: AppliedReviewFields = {};
 // by one dotted-path list so the merge loop and isFromHubspotField share one
 // vocabulary. Deliberately excludes the fields hubspotPrefill.ts documents as
 // unmapped (business.bizType/yearsInBusiness/annualRevenue,
-// processing.mcc/monthlyVolume/avgTicket/cardPresentPct) — HubSpot has no data
+// processing.mcc/avgTicket/cardPresentPct) — HubSpot has no data
 // for those at all, so merging them would be a no-op dressed up as a rule; the
 // Review section marks them "HubSpot doesn't have this" instead (see
 // UNKNOWABLE_REVIEW_FIELDS below).
@@ -67,6 +67,9 @@ const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => st
   { path: "ownerContact.phone", read: p => p.ownerContact.phone },
   { path: "processing.currentProcessor", read: p => p.processing.currentProcessor },
   { path: "processing.businessDescription", read: p => p.processing.businessDescription },
+  // From `processing_volume`. Sparse, but present on real companies — it was
+  // wrongly listed as unknowable until 2026-09-25.
+  { path: "processing.monthlyVolume", read: p => p.processing.monthlyVolume },
 ];
 
 /**
@@ -77,7 +80,7 @@ const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => st
  */
 export const UNKNOWABLE_REVIEW_FIELDS: string[] = [
   "business.bizType", "business.yearsInBusiness", "business.annualRevenue",
-  "processing.mcc", "processing.monthlyVolume", "processing.avgTicket", "processing.cardPresentPct",
+  "processing.mcc", "processing.avgTicket", "processing.cardPresentPct",
 ];
 
 function readPath(sections: ReviewSections, path: string): string {

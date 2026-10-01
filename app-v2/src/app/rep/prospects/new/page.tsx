@@ -2,13 +2,11 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { createProspectAction, getHubspotCompanyForProspectAction, resolveDealChoiceAction } from "@/lib/actions/prospects";
-import { searchTenantCompaniesAction } from "@/lib/actions/applications";
+import { createProspectAction, openProspectFromDealAction } from "@/lib/actions/prospects";
 import ProductConfigurator, {
   type ConfiguredQuote,
   type ProductPick,
 } from "@/components/quoting/ProductConfigurator";
-import DealPicker, { type ResolvedDeal } from "@/components/rep/DealPicker";
 import ReviewSection from "@/components/rep/ReviewSection";
 import {
   mergeChannels,
@@ -19,12 +17,11 @@ import {
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import { ORDER_POINT_CHANNELS, isProcessingQuote } from "@/lib/quoting";
 import { fmtPct2 } from "@/lib/utils";
+import { SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
-import type { TenantCompany } from "@/lib/adapters/hubspot";
+import type { HubspotCompanyProfile, HubspotDeal } from "@/lib/adapters/hubspot";
 import styles from "./prospects-new.module.css";
-
-const MODELS: PricingModel[] = ["flat-rate", "2-tier", "interchange-plus"];
 
 const BLANK_BUSINESS: BusinessInfo = {
   legalName: "", dba: "", bizType: "llc", address: "", city: "", state: "", zip: "",
@@ -38,8 +35,10 @@ const BLANK_PROCESSING: ProcessingInfo = {
 
 function NewProspectFlow() {
   const searchParams = useSearchParams();
-  const hubspotCompanyId = searchParams.get("hubspotCompanyId");
-  // Set by the easyob_link on a HubSpot deal: open this company IN that deal.
+  // THE entry point. Every HubSpot deal carries an `easyob_link` pointing here
+  // with its own id; the company is read OFF the deal, so there is no company
+  // parameter to trust and no picker to disagree with it. A link that predates
+  // this still carries ?hubspotCompanyId= — harmless and ignored.
   const hubspotDealId = searchParams.get("hubspotDealId");
 
   const [avgTicket, setAvgTicket]       = useState("");
@@ -73,9 +72,7 @@ function NewProspectFlow() {
   const rated = isProcessingQuote(quoteType);
 
   // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
-  // prefilled from whatever HubSpot company is linked. Company is now a
-  // required part of this form (see the Company & Deal section below) rather
-  // than an optional deep-link enrichment — see prospects.ts's
+  // prefilled from the company on the deal — see prospects.ts's
   // createProspectAction for why the rep's own edits win over a server-side
   // re-merge on submit.
   const [business, setBusiness] = useState<BusinessInfo>(BLANK_BUSINESS);
@@ -83,18 +80,14 @@ function NewProspectFlow() {
   const [processing, setProcessing] = useState<ProcessingInfo>(BLANK_PROCESSING);
   const [reviewApplied, setReviewApplied] = useState<AppliedReviewFields>(NO_REVIEW_PREFILL_APPLIED);
 
-  const [hubspotCompany, setHubspotCompany]   = useState<TenantCompany | null>(null);
-  const [hubspotNotice, setHubspotNotice]     = useState<string | null>(null);
-  const [prefill, setPrefill]                 = useState<ProspectPrefill | null>(null);
-  const [prefillLoading, setPrefillLoading]   = useState(false);
-
-  // The deal picked (or created) for the linked company — see DealPicker.
-  // Cleared whenever the company changes, since a deal belongs to exactly one
-  // company and a stale resolution from a previous company must not survive
-  // the switch.
-  const [dealResolved, setDealResolved] = useState<ResolvedDeal | null>(null);
-  // Why the deal named in the HubSpot deep link couldn't be preselected.
-  const [dealNotice, setDealNotice] = useState<string | null>(null);
+  // The deal this quote is being built on, and the company HubSpot says it
+  // belongs to. One load sets both — they are never chosen separately, so they
+  // can never disagree.
+  const [deal, setDeal]                     = useState<HubspotDeal | null>(null);
+  const [hubspotCompany, setHubspotCompany] = useState<HubspotCompanyProfile | null>(null);
+  const [dealNotice, setDealNotice]         = useState<string | null>(null);
+  const [dealLoading, setDealLoading]       = useState(false);
+  const [prefill, setPrefill]               = useState<ProspectPrefill | null>(null);
 
   // Latest form values, so applying a prefill from an async callback merges
   // against what's on screen now rather than whatever was there when the fetch
@@ -107,9 +100,9 @@ function NewProspectFlow() {
   });
 
   // THE RULE (see prefillMerge.ts): HubSpot owns a field until the rep types in
-  // it. Switching companies therefore REPLACES the previous company's values —
+  // it. Switching deals therefore REPLACES the previous company's values —
   // they were recorded as HubSpot's — while anything the rep typed survives.
-  // Passing null (company cleared / unreadable) withdraws what HubSpot filled.
+  // Passing null (deal cleared / unreadable) withdraws what HubSpot filled.
   const applyPrefill = useCallback((next: ProspectPrefill | null) => {
     const { business: curBiz, ownerContact: curOwner, processing: curProc, channels: curChannels } = formRef.current;
     const merged = mergeReviewPrefill({ business: curBiz, ownerContact: curOwner, processing: curProc }, appliedRef.current.review, next);
@@ -129,96 +122,60 @@ function NewProspectFlow() {
     appliedRef.current = { review: merged.applied, channels: channelsMerged.applied };
   }, []);
 
-  useEffect(() => {
-    if (!hubspotCompanyId) return;
-    let cancelled = false;
-    getHubspotCompanyForProspectAction(hubspotCompanyId)
-      .then(res => {
-        if (cancelled) return;
-        if (res.company) {
-          setHubspotCompany(res.company);
-          setDealResolved(null);
-          applyPrefill(res.prefill);
-        }
-        if (res.error) setHubspotNotice(res.error);
-        if (!res.company || !hubspotDealId) return;
-        // The same resolution the picker runs on a click, so a deal that is
-        // closed, on another company, or already adopted is refused here too
-        // — and the picker stays open for the rep to choose another.
-        const choice = { mode: "existing" as const, dealId: hubspotDealId };
-        return resolveDealChoiceAction({ companyId: res.company.id, choice }).then(resolution => {
-          if (cancelled) return;
-          if (resolution.ok) setDealResolved({ choice, deal: resolution.deal });
-          else setDealNotice(resolution.message);
-        });
-      })
-      .catch(e => { if (!cancelled) setHubspotNotice(e instanceof Error ? e.message : "Could not reach HubSpot"); });
-    return () => { cancelled = true; };
-  }, [hubspotCompanyId, hubspotDealId, applyPrefill]);
+  // THE one load. A deal id in, and the deal + its company + the prefill all
+  // come back together — see openProspectFromDealAction. Used by both entry
+  // points, the deep link and the paste field, so neither can set up a state
+  // the other couldn't.
+  const dealRequestRef = useRef<string | null>(null);
 
-  // HubSpot deprecated classic CRM cards, so there's no "start from HubSpot"
-  // button anymore — the flow inverts: start here, find the company. This is
-  // a second way to set the SAME `hubspotCompany` state the deep link sets;
-  // everything downstream (prefill, badges, deal picker, submit) is shared.
-  const [hubspotQuery, setHubspotQuery]         = useState("");
-  const [hubspotResults, setHubspotResults]     = useState<TenantCompany[]>([]);
-  const [hubspotSearching, setHubspotSearching] = useState(false);
-  const [hubspotSearchError, setHubspotSearchError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const q = hubspotQuery.trim();
-    if (q.length < 2) { setHubspotResults([]); setHubspotSearching(false); setHubspotSearchError(null); return; }
-    setHubspotSearching(true);
-    let cancelled = false;
-    const t = setTimeout(() => {
-      searchTenantCompaniesAction(q)
-        .then(r => { if (!cancelled) { setHubspotResults(r); setHubspotSearchError(null); } })
-        .catch(e => { if (!cancelled) { setHubspotResults([]); setHubspotSearchError(e instanceof Error ? e.message : "Could not reach HubSpot"); } })
-        .finally(() => { if (!cancelled) setHubspotSearching(false); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [hubspotQuery]);
-
-  // The search result is only a TenantCompany — the prefill needs the full
-  // profile plus the owner contact, so the picker takes the same server round
-  // trip the deep link does. The badge appears immediately from the search row;
-  // the prefill lands when the read returns.
-  // Two picks in quick succession: the loser's response must not land on top of
-  // the winner's prefill.
-  const prefillRequestRef = useRef<string | null>(null);
-
-  const selectHubspotCompany = (company: TenantCompany) => {
-    setHubspotCompany(company);
-    setHubspotNotice(null);
-    setHubspotQuery("");
-    setHubspotResults([]);
-    setDealResolved(null);
+  const loadDeal = useCallback((dealIdOrUrl: string) => {
+    const key = dealIdOrUrl.trim();
+    if (!key) return;
+    dealRequestRef.current = key;
+    setDealLoading(true);
     setDealNotice(null);
-    setPrefillLoading(true);
-    prefillRequestRef.current = company.id;
-    getHubspotCompanyForProspectAction(company.id)
+    openProspectFromDealAction(key)
       .then(res => {
-        if (prefillRequestRef.current !== company.id) return;
+        if (dealRequestRef.current !== key) return;
+        if (!res.ok) {
+          setDeal(null);
+          setHubspotCompany(null);
+          applyPrefill(null);
+          setDealNotice(res.message);
+          return;
+        }
+        setDeal(res.deal);
+        setHubspotCompany(res.company);
         applyPrefill(res.prefill);
-        if (res.error) setHubspotNotice(res.error);
       })
       .catch(e => {
-        if (prefillRequestRef.current === company.id) {
-          setHubspotNotice(e instanceof Error ? e.message : "Could not reach HubSpot");
-        }
+        if (dealRequestRef.current !== key) return;
+        setDealNotice(e instanceof Error ? e.message : "Could not reach HubSpot");
       })
-      .finally(() => { if (prefillRequestRef.current === company.id) setPrefillLoading(false); });
-  };
+      .finally(() => { if (dealRequestRef.current === key) setDealLoading(false); });
+  }, [applyPrefill]);
 
-  const clearHubspotCompany = () => {
+  useEffect(() => {
+    if (hubspotDealId) loadDeal(hubspotDealId);
+  }, [hubspotDealId, loadDeal]);
+
+  // The one way in without a deep link. NOT a picker: `getDealById` is a direct
+  // GET, so unlike the old list-and-search it can't offer the wrong company's
+  // deal and can't lag behind a deal created a minute ago. It exists for the
+  // window between a rep creating a deal in HubSpot and the nightly cron
+  // stamping its EasyOB link.
+  const [dealInput, setDealInput] = useState("");
+
+  const clearDeal = () => {
+    dealRequestRef.current = null;
+    setDeal(null);
     setHubspotCompany(null);
-    setHubspotNotice(null);
-    setDealResolved(null);
     setDealNotice(null);
-    prefillRequestRef.current = null;
-    setPrefillLoading(false);
+    setDealInput("");
+    setDealLoading(false);
     applyPrefill(null);
   };
+
 
   // Optional statement upload — the rep path through the same /api/analyze
   // route the proposal wizard uses. When it succeeds the analysis rides along
@@ -278,8 +235,7 @@ function NewProspectFlow() {
   if (!business.zip.trim()) missingWarnings.push("ZIP");
 
   const hardBlocks: string[] = [];
-  if (!hubspotCompany) hardBlocks.push("Link a HubSpot company before sending this link.");
-  if (hubspotCompany && !dealResolved) hardBlocks.push("Pick or create a HubSpot deal for this company.");
+  if (!deal || !hubspotCompany) hardBlocks.push("Open this quote from its HubSpot deal before sending the link.");
   if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name.");
   if (!ownerContact.email.trim()) hardBlocks.push("Enter the customer's contact email.");
   hardBlocks.push(...malformedMessages);
@@ -314,7 +270,10 @@ function NewProspectFlow() {
         channels,
         adjustments,
         hubspotCompanyId: hubspotCompany!.id,
-        deal: dealResolved!.choice,
+        // Always "existing": this page no longer creates deals. The deal came
+        // from HubSpot and the server re-resolves it through the same
+        // resolveDealForCompany that validated it on the way in.
+        deal: { mode: "existing", dealId: deal!.id },
       });
       setLinkUrl(linkUrl);
       setEmailSent(emailResult.sent);
@@ -331,10 +290,9 @@ function NewProspectFlow() {
     setQuoteType("full_pos"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
-    setHubspotCompany(null); setHubspotNotice(null); setDealResolved(null); setDealNotice(null);
+    clearDeal();
     setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
     setPrefill(null); setReviewApplied(NO_REVIEW_PREFILL_APPLIED); appliedRef.current = { review: NO_REVIEW_PREFILL_APPLIED, channels: [] };
-    setHubspotQuery(""); setHubspotResults([]); setHubspotSearchError(null);
   };
 
   // Matches the server's gate (hasQuoteBasis): a statement with no readable
@@ -396,88 +354,59 @@ function NewProspectFlow() {
     <div className={styles.main}>
       <h1 className={styles.headerTitle}>Send Customer a Quote Link</h1>
       <p className={styles.headerSubtitle}>
-        Find the company and its deal in HubSpot, confirm what it already knows about the merchant,
-        then set a margin target and either prepare the quote yourself or send the link bare and let
-        them upload their own statement. Either way they see a quote at exactly this margin, with no
-        cost breakdown and no account required.
+        Confirm what HubSpot already knows about this merchant, then set a margin target and either
+        prepare the quote yourself or send the link bare and let them upload their own statement.
+        Either way they see a quote at exactly this margin, with no cost breakdown and no account
+        required.
       </p>
 
-      {/* ── Section 1: Company & Deal ────────────────────────────────────── */}
+      {/* ── Section 1: The deal ──────────────────────────────────────────────
+          A quote belongs to a deal, so the deal is where it starts. There is
+          nothing to choose here on purpose: the company is whatever HubSpot
+          says is on the deal, which is the only answer that can't attach a
+          merchant's quote to a stranger's record. */}
       <div className={styles.panel}>
         <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>Company &amp; Deal</h2>
+          <h2 className={styles.sectionTitle}>HubSpot Deal</h2>
           <p className={styles.sectionNote}>
-            Both are required — the customer link rides on the HubSpot deal the rep already owns,
-            rather than EasyOB minting a duplicate.
+            Open this page from the <strong>EasyOB Link</strong> on the deal in HubSpot. The
+            customer link rides on that deal, and the company on it is what ties the merchant to
+            their AIO tenant.
           </p>
         </div>
 
-        {hubspotCompany ? (
+        {dealLoading && <p className={styles.prefillNote}>Loading the deal from HubSpot…</p>}
+
+        {deal && hubspotCompany ? (
           <p className={styles.hubspotBadge}>
-            Linked to HubSpot company: <strong>{hubspotCompany.name}</strong> ({hubspotCompany.id})
-            <button type="button" className={styles.hubspotBadgeClear} onClick={clearHubspotCompany} aria-label="Remove HubSpot link">
+            <strong>{deal.name}</strong> · {deal.stageLabel ?? "no stage"} — {hubspotCompany.name}{" "}
+            ({hubspotCompany.id})
+            <button type="button" className={styles.hubspotBadgeClear} onClick={clearDeal} aria-label="Use a different deal">
               ×
             </button>
           </p>
-        ) : (
+        ) : !dealLoading && (
           <div className={styles.field}>
-            <label className={styles.label}>Search HubSpot companies</label>
+            <label className={styles.label}>Paste the HubSpot deal link or id</label>
             <input
-              type="search"
-              value={hubspotQuery}
-              onChange={e => setHubspotQuery(e.target.value)}
-              placeholder="Search HubSpot companies…"
+              value={dealInput}
+              onChange={e => setDealInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); loadDeal(dealInput); } }}
+              placeholder="https://app.hubspot.com/…/record/0-3/12345 or 12345"
               className={styles.input}
             />
-            {hubspotSearchError && (
-              <div className={styles.error}>Couldn&apos;t search HubSpot ({hubspotSearchError}).</div>
-            )}
-            {!hubspotSearchError && hubspotQuery.trim().length >= 2 && (
-              <div className={styles.hubspotResults}>
-                {hubspotSearching && <div className={styles.hubspotResultMeta}>Searching…</div>}
-                {!hubspotSearching && hubspotResults.length === 0 && (
-                  <div className={styles.hubspotResultMeta}>No matching companies.</div>
-                )}
-                {hubspotResults.map(c => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={styles.hubspotResultRow}
-                    onClick={() => selectHubspotCompany(c)}
-                  >
-                    <span className={styles.hubspotResultName}>{c.name}</span>
-                    <span className={styles.hubspotResultMeta}>{c.id}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            <button
+              type="button"
+              className={styles.btnGhost}
+              disabled={!dealInput.trim()}
+              onClick={() => loadDeal(dealInput)}
+            >
+              Open this deal
+            </button>
           </div>
         )}
-        {hubspotNotice && (
-          <div className={styles.error}>
-            {hubspotCompany
-              ? `Couldn't read this company's details from HubSpot (${hubspotNotice}) — nothing was prefilled below.`
-              : `Couldn't load that HubSpot company (${hubspotNotice}).`}
-          </div>
-        )}
-        {prefillLoading && <p className={styles.prefillNote}>Loading details from HubSpot…</p>}
 
-        {hubspotCompany && (
-          <div className={styles.row}>
-            <DealPicker
-              companyId={hubspotCompany.id}
-              companyName={hubspotCompany.name}
-              defaultDealName={merchantName || hubspotCompany.name}
-              resolved={dealResolved}
-              onResolved={d => { setDealResolved(d); setDealNotice(null); }}
-            />
-            {dealNotice && !dealResolved && (
-              <div className={styles.error}>
-                Couldn&apos;t open the HubSpot deal you came from: {dealNotice}
-              </div>
-            )}
-          </div>
-        )}
+        {dealNotice && <div className={styles.error}>{dealNotice}</div>}
       </div>
 
       {/* ── Section 2: Review What We Know ───────────────────────────────── */}
@@ -589,7 +518,7 @@ function NewProspectFlow() {
       <div className={styles.panel}>
         <label className={styles.label}>Pricing Model</label>
         <div className={styles.modelRow}>
-          {MODELS.map(m => (
+          {SELECTABLE_PRICING_MODELS.map(m => (
             <button key={m} onClick={() => setPricingModel(m)} className={styles.modelPill} data-active={pricingModel === m}>
               {m.replace("-", " ")}
             </button>

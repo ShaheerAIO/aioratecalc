@@ -6,7 +6,6 @@
   padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
 }
 
-.row { margin-top: var(--space-lg); }
 
 .headerTitle {
   font-family: var(--font-display);
@@ -257,52 +256,6 @@
   line-height: 1.55;
   margin: 0 0 var(--space-md);
 }
-
-/* ---------- HubSpot company picker ---------- */
-
-.hubspotResults {
-  margin-top: var(--space-2xs);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-  background: var(--paper);
-  overflow: hidden;
-}
-
-.hubspotResultRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-sm);
-  width: 100%;
-  padding: var(--space-xs) var(--space-sm);
-  border: none;
-  border-top: 1px solid var(--rule);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background 150ms var(--ease-out);
-}
-
-.hubspotResultRow:first-child { border-top: none; }
-.hubspotResultRow:hover { background: var(--paper-2); }
-.hubspotResultRow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-
-.hubspotResultName {
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.hubspotResultMeta {
-  font-size: 0.75rem;
-  color: var(--ink-3);
-  padding: var(--space-xs) var(--space-sm);
-}
-
-.hubspotResultRow .hubspotResultMeta { padding: 0; flex-shrink: 0; }
 
 /* ---------- Error ---------- */
 

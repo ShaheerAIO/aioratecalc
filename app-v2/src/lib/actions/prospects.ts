@@ -4,14 +4,14 @@ import { randomUUID } from "crypto";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import {
-  getCompanyOwnerContact, getCompanyProfile,
-  type HubspotCompanyProfile, type TenantCompany,
+  getCompanyOwnerContact, getCompanyProfile, getDealById,
+  type HubspotCompanyProfile, type HubspotDeal, type TenantCompany,
 } from "@/lib/adapters/hubspot";
 import { buildProspectPrefill, type ProspectPrefill } from "@/lib/hubspotPrefill";
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { resolveLeadLinkIssue } from "@/lib/customerLink";
-import { resolveDealForCompany, type DealChoice, type DealResolution } from "@/lib/hubspotDeal";
+import { resolveDealForCompany, type DealChoice, type DealRefusalCode, type DealResolution } from "@/lib/hubspotDeal";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
@@ -93,42 +93,81 @@ async function persistLeadLink(
   return { app: updated, linkUrl: leadLinkUrl(token) };
 }
 
-// ── Phase F: "Push to EasyOB" deep link from the HubSpot Company record ─────
-// A CRM card on the Company links out to /rep/prospects/new?hubspotCompanyId={id}.
-// The form fetches this server-side to prefill business name/contact and to
-// stamp tenantLink onto the new application from day one, instead of the
-// manual/late attach flow in applications.ts. Read-only — never writes HubSpot.
-
-// `company` stays a TenantCompany as far as callers are concerned (the profile
-// is a superset), so the tenant-link badge and the picker path are unaffected;
-// `prefill` is the new, mapped form data.
-export type ProspectPrefillResult = {
-  company: HubspotCompanyProfile | null;
-  prefill: ProspectPrefill | null;
-  error: string | null;
-};
+// ── Phase F: the "EasyOB Link" deep link from the HubSpot DEAL record ───────
+// Every deal carries an `easyob_link` property pointing at
+// /rep/prospects/new?hubspotCompanyId={id}&hubspotDealId={id} (written by
+// /api/cron/hubspot-links). The form fetches this server-side to prefill
+// business name/contact and to stamp tenantLink onto the new application from
+// day one, instead of the manual/late attach flow in applications.ts.
+// Read-only — never writes HubSpot.
 
 /**
- * Everything the deep link can prefill, in one call: the Company profile, its
- * owner Contact, and the mapping of both onto the app's own shapes.
+ * A quote starts at the DEAL (2026-10-01). The company is read OFF the deal
+ * rather than chosen beside it, which is what retired the company search and
+ * the deal picker from `/rep/prospects/new`: a rep arrives from the deal they
+ * already own, so there is nothing left to pick, and every pick was a chance
+ * to hang a merchant's quote off the wrong record.
  *
- * Returns an error string instead of throwing so a bad id or missing token
- * degrades to an un-prefilled, un-linked form rather than a broken page. The
- * contact read is best-effort inside the adapter (it spans a second token and
- * can 403), so a company with no readable contact still prefills the business
- * half rather than failing the whole call.
+ * Validation is `resolveDealForCompany`'s, unchanged and deliberately re-run
+ * rather than reimplemented — closed deals, deals already adopted by another
+ * application. The one refusal that is new here is `no_company`: a deal with
+ * no company association can't start a quote at all, because the company IS
+ * the tenant link and association 341 is only settable at deal create.
  */
-export async function getHubspotCompanyForProspectAction(companyId: string): Promise<ProspectPrefillResult> {
+export type ProspectFromDeal =
+  | { ok: true; deal: HubspotDeal; company: HubspotCompanyProfile; prefill: ProspectPrefill | null }
+  | { ok: false; code: DealRefusalCode | "no_company"; message: string };
+
+export async function openProspectFromDealAction(dealIdOrUrl: string): Promise<ProspectFromDeal> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
 
+  let deal: HubspotDeal | null;
+  try {
+    deal = await getDealById(dealIdOrUrl);
+  } catch (err) {
+    return { ok: false, code: "hubspot_error", message: err instanceof Error ? err.message : "Could not reach HubSpot" };
+  }
+  if (!deal) {
+    return { ok: false, code: "not_found", message: `No HubSpot deal found for '${dealIdOrUrl}'.` };
+  }
+
+  // `dedupeCompanyIds` has already collapsed the labeled and unlabeled rows
+  // for the one company a deal is actually on, so a second id here means the
+  // deal genuinely spans two companies and we must not guess which tenant the
+  // merchant belongs to.
+  if (deal.companyIds.length === 0) {
+    return {
+      ok: false,
+      code: "no_company",
+      message: `Deal '${deal.name}' has no company on it in HubSpot. Associate it with the merchant's company record, then come back — the company is what links this quote to their AIO tenant.`,
+    };
+  }
+  if (deal.companyIds.length > 1) {
+    return {
+      ok: false,
+      code: "no_company",
+      message: `Deal '${deal.name}' is on ${deal.companyIds.length} companies in HubSpot, so it's ambiguous which merchant this quote is for. Leave it on one and come back.`,
+    };
+  }
+  const companyId = deal.companyIds[0];
+
+  const resolution = await resolveDealForCompany({ companyId, choice: { mode: "existing", dealId: deal.id } });
+  if (!resolution.ok) return { ok: false, code: resolution.code, message: resolution.message };
+
   try {
     const company = await getCompanyProfile(companyId);
-    if (!company) return { company: null, prefill: null, error: "HubSpot company not found" };
+    if (!company) {
+      return {
+        ok: false,
+        code: "no_company",
+        message: `Deal '${deal.name}' points at HubSpot company ${companyId}, which couldn't be read back (deleted, merged, or out of this token's reach).`,
+      };
+    }
     const contact = await getCompanyOwnerContact(companyId);
-    return { company, prefill: buildProspectPrefill(company, contact), error: null };
+    return { ok: true, deal: resolution.deal, company, prefill: buildProspectPrefill(company, contact) };
   } catch (err) {
-    return { company: null, prefill: null, error: err instanceof Error ? err.message : "Could not reach HubSpot" };
+    return { ok: false, code: "hubspot_error", message: err instanceof Error ? err.message : "Could not reach HubSpot" };
   }
 }
 

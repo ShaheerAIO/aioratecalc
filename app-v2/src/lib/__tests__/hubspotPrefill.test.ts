@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildProspectPrefill, businessDescription, channelsFromModules,
-  normalizeCountry, normalizePhone, processorFromPos, streetLine,
+  monthlyVolumeFromCompany, normalizeCountry, normalizePhone, processorFromPos, streetLine,
 } from "@/lib/hubspotPrefill";
 import { pickOwnerAssociation, type CompanyAssociation, type HubspotCompanyProfile, type HubspotContact } from "@/lib/adapters/hubspot";
 
@@ -29,12 +29,14 @@ const FULL: HubspotCompanyProfile = {
   ownershipType: "Franchisee",
   currentPos: "Clover",
   modules: "POS;MPOS;Kiosk;Website;3PO",
+  processingVolume: "230000",
 };
 
 const EMPTY: HubspotCompanyProfile = {
   id: "1", name: "", tenantRef: null, adyenAccountHolderId: null, mid: null, phone: null, email: null,
   domain: null, website: null, address: null, city: null, state: null, zip: null, country: null,
   description: null, industryType: null, cuisineType: null, ownershipType: null, currentPos: null, modules: null,
+  processingVolume: null,
 };
 
 const CONTACT: HubspotContact = {
@@ -227,6 +229,7 @@ describe("buildProspectPrefill", () => {
     expect(p.processing).toEqual({
       currentProcessor: "Clover",
       businessDescription: "Authentic Lebanese dining, Mediterranean cuisine.",
+      monthlyVolume: "230000",
     });
     expect(p.channels).toEqual(["website", "third_party_delivery"]);
     expect(p.country).toBe("US");
@@ -235,15 +238,20 @@ describe("buildProspectPrefill", () => {
     expect(p.contactSource).toBe("Business Owner");
   });
 
-  it("never invents an MCC, a bizType, or volume figures", () => {
+  it("never invents an MCC, a bizType, or a ticket/card-mix figure", () => {
     const p = buildProspectPrefill(FULL, CONTACT);
     expect(p.processing.mcc).toBeUndefined();
-    expect(p.processing.monthlyVolume).toBeUndefined();
     expect(p.processing.avgTicket).toBeUndefined();
     expect(p.processing.cardPresentPct).toBeUndefined();
     expect(p.business.bizType).toBeUndefined();
     expect(p.business.yearsInBusiness).toBeUndefined();
     expect(p.business.annualRevenue).toBeUndefined();
+  });
+
+  it("leaves monthly volume absent when the company has none", () => {
+    const p = buildProspectPrefill({ ...FULL, processingVolume: null }, CONTACT);
+    expect(p.processing.monthlyVolume).toBeUndefined();
+    expect(p.fromHubspot).not.toContain("processing.monthlyVolume");
   });
 
   it("reports per-field provenance for exactly what HubSpot supplied", () => {
@@ -254,6 +262,7 @@ describe("buildProspectPrefill", () => {
       "ownerContact.firstName", "ownerContact.lastName", "ownerContact.title",
       "ownerContact.email", "ownerContact.phone",
       "processing.currentProcessor", "processing.businessDescription",
+      "processing.monthlyVolume",
       "channels",
     ]);
   });
@@ -327,5 +336,21 @@ describe("buildProspectPrefill", () => {
   it("keeps an unrecognised state string rather than dropping the rep's data", () => {
     const p = buildProspectPrefill({ ...EMPTY, state: "Baja California" }, null);
     expect(p.business.state).toBe("Baja California");
+  });
+});
+
+// `processing_volume` is the one volume property that is actually populated —
+// 24 companies on 2026-09-25, verified against the live portal. Its
+// near-namesake `monthly_card_volume` has 0 and is deliberately not read.
+describe("monthlyVolumeFromCompany", () => {
+  it("passes a real monthly volume through as a plain number string", () => {
+    expect(monthlyVolumeFromCompany("230000")).toBe("230000");
+    expect(monthlyVolumeFromCompany(" 80000 ")).toBe("80000");
+  });
+
+  it("drops zero, blank and non-numeric values rather than prefilling a wrong floor input", () => {
+    for (const v of ["0", "", "   ", null, undefined, "n/a", "-5"]) {
+      expect(monthlyVolumeFromCompany(v)).toBeUndefined();
+    }
   });
 });

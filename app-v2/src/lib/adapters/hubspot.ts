@@ -493,24 +493,40 @@ export async function listDealsForCompany(companyId: string): Promise<HubspotDea
 }
 
 /**
- * Free-text search over deal names — the escape hatch for a deal that isn't
- * (yet) associated to the company in HubSpot. Same `q.length < 2 → []` guard
- * as `searchTenantCompanies`. Companies are unknown from this search (HubSpot's
- * search API doesn't return associations), so `companyIds` comes back empty —
- * callers must re-validate via `getDealById` before treating a hit as "on this
- * company", same as `resolveDealForCompany` already does for every adoption.
+ * Free-text search over deal names, SCOPED to one company.
+ *
+ * `companyId` is required, and that is the whole point of this signature. It
+ * used to be a portal-wide search, sitting directly under a list of the
+ * company's own deals in the same picker — so typing a name there offered
+ * deals belonging to other restaurants entirely, and adopting one would hang
+ * this merchant's quote off a stranger's deal. The `associations.company`
+ * filter is ANDed with the text query, so a hit is always on this company and
+ * `companyIds` can be filled in without a second read (same reasoning as
+ * `listDealsForCompany`).
+ *
+ * This is NOT the escape hatch for a deal HubSpot's index hasn't caught up
+ * with — it is the same deals/search index `listDealsForCompany` uses and lags
+ * identically. `getDealById` (paste a link or id) is that escape hatch: a
+ * direct GET, never stale. Same `q.length < 2 → []` guard as
+ * `searchTenantCompanies`.
  */
-export async function searchDealsByName(query: string, limit = 10): Promise<HubspotDeal[]> {
+export async function searchDealsByName(query: string, companyId: string, limit = 10): Promise<HubspotDeal[]> {
   const q = query.trim();
   if (q.length < 2) return [];
+  if (!companyId.trim()) return [];
   const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/search`, {
     method: "POST",
     headers: billingHeaders(),
-    body: JSON.stringify({ query: q, limit, properties: DEAL_READ_PROPERTIES }),
+    body: JSON.stringify({
+      query: q,
+      filterGroups: [{ filters: [{ propertyName: "associations.company", operator: "EQ", value: companyId }] }],
+      limit,
+      properties: DEAL_READ_PROPERTIES,
+    }),
   });
   if (!res.ok) throw hubspotErr("HubSpot deal search failed", res.status, await res.text());
   const data = await res.json() as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
-  return (data.results ?? []).map(row => toHubspotDeal(row, []));
+  return (data.results ?? []).map(row => toHubspotDeal(row, [companyId]));
 }
 
 /**
@@ -742,12 +758,24 @@ export type HubspotCompanyProfile = TenantCompany & {
   ownershipType: string | null; // Inderpendant | Franchisee | Franchisor | Enterprise (sic — HubSpot's own spelling)
   currentPos: string | null;    // Brink | Clover | Square | Toast | …
   modules: string | null;       // "moduels", a checkbox enum: "POS;MPOS;Kiosk"
+  /**
+   * "processing_volume", labelled "Processing Volume $" — the merchant's
+   * MONTHLY card processing volume in dollars. Raw string, as HubSpot returns
+   * every property; hubspotPrefill parses it.
+   *
+   * Sparse but real: 24 companies carried a value on 2026-09-25, which is why
+   * it is read at all. Its near-namesake `monthly_card_volume` genuinely is
+   * empty portal-wide (0 rows) and is deliberately NOT read — an empty
+   * property is worse than no property, because it looks authoritative.
+   */
+  processingVolume: string | null;
 };
 
 const COMPANY_PROFILE_PROPS = [
   ...TENANT_COMPANY_PROPS,
   "domain", "website", "address", "city", "state", "zip", "country", "description",
   "industrytype", "cuisine_type", "ownership_type", "current_pos", "moduels",
+  "processing_volume",
 ];
 
 function toCompanyProfile(obj: { id: string; properties: Record<string, string | null> }): HubspotCompanyProfile {
@@ -767,6 +795,7 @@ function toCompanyProfile(obj: { id: string; properties: Record<string, string |
     ownershipType: clean(p.ownership_type),
     currentPos: clean(p.current_pos),
     modules: clean(p.moduels),
+    processingVolume: clean(p.processing_volume),
   };
 }
 

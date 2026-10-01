@@ -102,6 +102,24 @@ export function processorFromPos(currentPos: string | null | undefined): string 
 }
 
 /**
+ * `processing_volume` ("Processing Volume $") — the merchant's MONTHLY card
+ * volume in dollars, as a plain number for the form's number input.
+ *
+ * Rejects anything that isn't a positive finite number, including the zeros
+ * and blanks HubSpot returns for an unset numeric property. A zero here would
+ * be indistinguishable from a real answer in the form, and `monthlyVolume`
+ * feeds the margin floor — so an absent key (the form keeps its own value) is
+ * strictly better than a wrong one.
+ */
+export function monthlyVolumeFromCompany(processingVolume: string | null | undefined): string | undefined {
+  const raw = (processingVolume ?? "").trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return String(n);
+}
+
+/**
  * A human business description. HubSpot's own `description` wins when it's
  * there; otherwise cuisine + restaurant type are stitched into a short phrase.
  * Deliberately prose, not a code: see the MCC note on buildProspectPrefill.
@@ -164,9 +182,14 @@ function compact<T extends object>(obj: { [K in keyof T]?: string | undefined })
  *    not a legal-entity type; nothing in HubSpot says LLC vs corp.
  *  - yearsInBusiness / annualRevenue. `founded_year` and `annualrevenue` are
  *    ~0% populated portal-wide.
- *  - Volume, ticket and card-present split. Every candidate property
- *    (processing_volume, monthly_card_volume) is empty portal-wide; those come
- *    from the statement analysis.
+ *  - Ticket and card-present split. No HubSpot property carries either; they
+ *    come from the statement analysis.
+ *
+ * Monthly volume IS mapped, from `processing_volume` — an earlier version of
+ * this comment claimed that property was empty portal-wide and it is not (24
+ * companies carried a value on 2026-09-25). Its near-namesake
+ * `monthly_card_volume` is the empty one. Both facts were checked against the
+ * live portal, not inferred.
  */
 export function buildProspectPrefill(
   company: HubspotCompanyProfile | null | undefined,
@@ -204,6 +227,7 @@ export function buildProspectPrefill(
   const processing = compact<ProcessingInfo>({
     currentProcessor: processorFromPos(company.currentPos),
     businessDescription: businessDescription(company),
+    monthlyVolume: monthlyVolumeFromCompany(company.processingVolume),
   });
 
   const channels = channelsFromModules(company.modules);

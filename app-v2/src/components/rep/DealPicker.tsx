@@ -45,9 +45,11 @@ function dealMeta(d: HubspotDeal): string {
  * after. See resolveDealChoiceAction's own doc comment.
  *
  * `listCompanyDealsAction` is index-backed and can lag a just-created deal by
- * seconds to minutes — the paste-a-link/id field and the name search are both
- * DIRECT reads that never lag, and are the honest answer to that, not a
- * silently-incomplete list.
+ * seconds to minutes. The paste-a-link/id field is the honest answer to that —
+ * `getDealById` is a direct GET and never lags. The name search is NOT: it runs
+ * against the same deals/search index, and is only a way to narrow a company
+ * with more deals than the list comfortably shows. It is scoped to this
+ * company for the same reason the list is (see searchDealsByName).
  */
 export default function DealPicker({ companyId, companyName, defaultDealName, resolved, onResolved, allowCreate = true }: Props) {
   const [deals, setDeals] = useState<HubspotDeal[]>([]);
@@ -71,6 +73,8 @@ export default function DealPicker({ companyId, companyName, defaultDealName, re
   useEffect(() => {
     setDeals([]);
     setListError(null);
+    setNameQuery("");
+    setNameResults([]);
     setNewDealName(defaultDealName);
     setLoading(true);
     let cancelled = false;
@@ -89,12 +93,12 @@ export default function DealPicker({ companyId, companyName, defaultDealName, re
     setNameSearching(true);
     let cancelled = false;
     const t = setTimeout(() => {
-      searchDealsAction(q)
+      searchDealsAction(q, companyId)
         .then(r => { if (!cancelled) setNameResults(r.deals); })
         .finally(() => { if (!cancelled) setNameSearching(false); });
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [nameQuery]);
+  }, [nameQuery, companyId]);
 
   async function commit(choice: DealChoice) {
     setResolving(true);
@@ -195,17 +199,19 @@ export default function DealPicker({ companyId, companyName, defaultDealName, re
       </div>
 
       <div className={styles.field}>
-        <label className={styles.label}>Or search by deal name</label>
+        <label className={styles.label}>Or search {companyName}&apos;s deals by name</label>
         <input
           value={nameQuery}
           onChange={e => setNameQuery(e.target.value)}
-          placeholder="Search HubSpot deals…"
+          placeholder={`Search ${companyName}'s deals…`}
           className={styles.input}
         />
         {nameQuery.trim().length >= 2 && (
           <div className={styles.list}>
             {nameSearching && <p className={styles.meta}>Searching…</p>}
-            {!nameSearching && nameResults.length === 0 && <p className={styles.meta}>No matching deals.</p>}
+            {!nameSearching && nameResults.length === 0 && (
+              <p className={styles.meta}>No deals on this company match that name.</p>
+            )}
             {nameResults.map(d => (
               <button
                 key={d.id}

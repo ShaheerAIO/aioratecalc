@@ -131,9 +131,11 @@ export async function searchTenantCompaniesAction(query: string): Promise<Tenant
 }
 
 // ── Deal picker (adoption, not create-on-accept) ────────────────────────────
-// Reads for the "pick an existing deal" surface. All degrade to `{ error }`
-// rather than throwing, the `ProspectPrefillResult` precedent above: a bad id
-// or a HubSpot hiccup should leave the picker empty, not crash the page.
+// Reads for the "pick an existing deal" surface — which is now ONLY the
+// account-detail host (adopting a deal onto an existing application); prospect
+// creation starts at the deal and has no picker. All degrade to `{ error }`
+// rather than throwing: a bad id or a HubSpot hiccup should leave the picker
+// empty, not crash the page.
 
 export type DealListResult = { deals: HubspotDeal[]; error: string | null };
 
@@ -146,10 +148,12 @@ export async function listCompanyDealsAction(companyId: string): Promise<DealLis
   }
 }
 
-export async function searchDealsAction(query: string): Promise<DealListResult> {
+// Scoped to one company on purpose — see searchDealsByName. A portal-wide
+// deal search in the picker let a rep adopt another restaurant's deal.
+export async function searchDealsAction(query: string, companyId: string): Promise<DealListResult> {
   await requireScope();
   try {
-    return { deals: await searchDealsByName(query), error: null };
+    return { deals: await searchDealsByName(query, companyId), error: null };
   } catch (err) {
     return { deals: [], error: err instanceof Error ? err.message : "Could not reach HubSpot" };
   }
