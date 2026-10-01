@@ -128,6 +128,26 @@
 .acceptBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .acceptBtn:not(:disabled):active { transform: scale(0.97); }
 
+/* The "Not yet" half of the irreversibility prompt. Quiet, but a real button:
+   backing out of a one-way door must not look like the harder option. */
+.secondaryBtn {
+  padding: var(--space-sm) var(--space-lg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink-2);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.secondaryBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.secondaryBtn:not(:disabled):hover { border-color: var(--ink-3); color: var(--ink); }
+.secondaryBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
 .acceptError {
   font-size: 0.8rem;
   color: var(--danger);
@@ -167,7 +187,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .acceptBtn { transition-duration: 1ms; }
+  .acceptBtn, .secondaryBtn { transition-duration: 1ms; }
   .quoteHead {
     animation: none;
     opacity: 1;

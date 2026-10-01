@@ -1,35 +1,35 @@
 "use server";
 
-// Phase E — sending the quote. THE one-way door, and the rep's hand is on it.
+// Publishing a billing quote from the STAFF side.
 //
-// This used to be `retryBillingQuoteAction`, a recovery affordance behind an
-// auto-publish that fired inside the merchant's own acceptance POST. That
-// auto-publish is gone: acceptance is no longer something the merchant asserts
-// in EasyOB, it is something HubSpot reports once they sign and pay the hosted
-// quote (see lib/billing/acceptance.ts). Which means the quote has to be
-// PUBLISHED BEFORE the merchant ever opens their link, and something has to
-// decide when — so the rep does, with this.
+// ⚠️ This is no longer how a quote reaches a merchant. It used to be: the rep
+// clicked "Send Quote to Customer", that published the HubSpot quote, and only
+// then did the merchant's own link show them anything they could sign. Which
+// meant a merchant could open the link they had just been emailed, read their
+// quote, and have no way to accept it — waiting on a click from a rep who had
+// already sent them the link. Product-owner decision, 2026-09-25: scrap the
+// gate. The MERCHANT opens the one-way door now, from their own quote page
+// (`/api/lead/[token]/checkout`), the moment they choose to go to billing.
 //
-// Putting a human back on the irreversible act also restores the compensating
-// control `canPublishBillingQuote`'s header describes as lost. A published
-// HubSpot quote cannot be edited, deleted or voided through the API, and the
-// merchant authorizes an ACH mandate against it. Hence, still, NO re-publish
-// and no "unsend": this refuses outright once `publishedAt` is set.
+// What survives here is the staff ESCAPE HATCH for the case the merchant's own
+// click can't cover: a rep sitting with a merchant, or one finishing a deal
+// over the phone. Same preconditions, same irreversibility, same single
+// publish — it is simply no longer on the critical path, and nothing waits on
+// it.
+//
+// Still NO re-publish and no "unsend". A published HubSpot quote cannot be
+// edited (400 LOCKED), deleted (PUBLISHED_QUOTE_CANNOT_BE_DELETED) or voided
+// through the API, and the merchant authorizes an ACH mandate against it. This
+// refuses outright once `publishedAt` is set.
 //
 // Publishing also makes HubSpot email the signer the e-signature request
-// itself (association 702), so this single click is what actually puts the
-// quote in front of the merchant.
+// itself (association 702).
 
-import { eq } from "drizzle-orm";
-import { db } from "@/lib/db/client";
-import { merchantApplications } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
-import { buildDealProperties, tenantCompanyId } from "@/lib/adapters/hubspot";
-import { resolveDealForCompany } from "@/lib/hubspotDeal";
+import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
-import type { DealLink } from "@/types/merchant";
 
 export type SendQuoteResult = {
   ok: boolean;
@@ -63,88 +63,18 @@ export async function sendQuoteAction(applicationId: string): Promise<SendQuoteR
     };
   }
 
-  // A row accepted before commit 511e019 has no HubSpot deal at all: the deal
-  // push only ever ran at onboarding submission back then, so a merchant who
-  // accepted and stopped at the checklist left no deal behind. Association 64
-  // (quote → deal) is a hard publish requirement, so `canPublishBillingQuote`
-  // refuses those rows with `no_deal` forever and there is no other affordance
-  // that would ever create it — this has to close that gap itself or the
-  // account is unrecoverable from the UI.
-  //
-  // Only ever fills a MISSING id. It deliberately does not re-push an existing
-  // one: `syncDealFromApplication` PATCHes when hubspotDealId is set, and
-  // silently overwriting a deal a rep has since curated in the CRM is not this
-  // button's job. Unlike the fire-and-log push in lib/billing/acceptance.ts, a
-  // failure here is returned as a hard error — the rep clicked this to get a
-  // quote out, and without a deal the publish below would only refuse anyway.
-  //
-  // Routed through `resolveDealForCompany` (`mode: "create"`) rather than
-  // creating blind: under the mandatory-deal model a company that already has
-  // deals almost certainly has the one the rep actually wants — the picker on
-  // the account is where to adopt it — so this refuses `ambiguous` rather than
-  // minting a second deal on top of one a rep is already working.
-  let target = app;
-  if (!target.hubspotDealId) {
-    // …unless the account has no HubSpot Company yet, in which case creating
-    // the deal is exactly the wrong move: the company association is only
-    // settable at create time, so it would produce a deal permanently detached
-    // from the Company record. Answered as a precondition rather than an
-    // error, because it names something the rep can go and do.
-    const companyId = tenantCompanyId(target);
-    if (!companyId) {
-      return {
-        ok: false,
-        reasons: [{
-          code: "no_tenant_company",
-          message:
-            "This account isn't linked to a HubSpot company yet, so there's nothing to create the deal under. " +
-            "Link the tenant company on the account — the deal and quote build themselves as soon as you do.",
-        }],
-      };
-    }
-
-    const createdProps = buildDealProperties(target);
-    const resolution = await resolveDealForCompany({
-      companyId,
-      choice: {
-        mode: "create",
-        dealName: createdProps.dealname ?? "New Deal",
-        amount: createdProps.amount ? Number(createdProps.amount) : undefined,
-      },
-      excludeApplicationId: target.id,
-    });
-
-    if (!resolution.ok) {
-      if (resolution.code === "ambiguous") {
-        return {
-          ok: false,
-          reasons: [{
-            code: "deal_ambiguous",
-            message:
-              `This company already has ${resolution.candidates?.length ?? "multiple"} deal(s) in HubSpot. ` +
-              "Open the deal picker on the account and adopt the right one instead of creating a new one.",
-          }],
-        };
-      }
-      return {
-        ok: false,
-        error: `This deal isn't in HubSpot yet and creating it just failed, so there's nothing to attach a quote to: ${resolution.message}`,
-      };
-    }
-
-    const dealLink: DealLink = {
-      origin: resolution.created ? "created" : "adopted",
-      dealName: resolution.deal.name,
-      pipelineStageAtLink: resolution.deal.stageId,
-      linkedAt: new Date().toISOString(),
-      linkedByUserId: effective.userId,
-    };
-    await db
-      .update(merchantApplications)
-      .set({ hubspotDealId: resolution.deal.id, dealLink, updatedAt: new Date() })
-      .where(eq(merchantApplications.id, target.id));
-    target = { ...target, hubspotDealId: resolution.deal.id, dealLink };
+  // Fill in a missing deal first — see lib/billing/ensureDeal.ts for why some
+  // rows have none and why `canPublishBillingQuote` would otherwise refuse
+  // them `no_deal` forever. Shared with the merchant's own checkout route, so
+  // the two entry points cannot drift. Unlike the fire-and-log push in
+  // lib/billing/acceptance.ts, a failure here is returned as a hard error: the
+  // rep clicked this to get a quote out, and without a deal the publish below
+  // would only refuse anyway.
+  const dealResult = await ensureDealForPublish(app, effective.userId);
+  if (!dealResult.ok) {
+    return "reasons" in dealResult ? { ok: false, reasons: dealResult.reasons } : { ok: false, error: dealResult.error };
   }
+  const target = dealResult.app;
 
   const outcome = await buildAndPublishBillingQuote(target);
   switch (outcome.status) {

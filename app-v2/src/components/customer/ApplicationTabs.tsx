@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { CustomerSafeQuote, MerchantApplication } from "@/types/merchant";
-import type { OnboardingModule } from "@/lib/onboardingModules";
+import { checklistNotice, type OnboardingModule } from "@/lib/onboardingModules";
 import OnboardingChecklistPanel from "@/components/customer/OnboardingChecklistPanel";
 import CustomerOnboardStep from "@/components/customer/CustomerOnboardStep";
 import { DataGroups } from "@/components/customer/MyDataSection";
@@ -54,7 +54,13 @@ export default function ApplicationTabs({ app, modules, quote }: Props) {
         </div>
       ) : tab === "checklist" ? (
         <div className={styles.tabPanel}>
-          <OnboardingChecklistPanel modules={modules} />
+          <OnboardingChecklistPanel
+            modules={modules}
+            // Straight to the hosted quote, not to the quote tab — this
+            // merchant has already read the quote and signed it; what's left
+            // is the checkout half of that same HubSpot page.
+            notice={checklistNotice(app, { billingHref: `/customer/applications/${app.id}/billing` })}
+          />
         </div>
       ) : (
         <div className={styles.tabPanel}>

@@ -55,6 +55,7 @@ export async function refreshLeadBilling(app: MerchantApplication): Promise<Merc
       quoteLink: snapshot.quoteLink ?? hubspotIds.quoteLink,
       paymentStatus: snapshot.paymentStatus,
       paymentDate: snapshot.paymentDate,
+      esignStatus: snapshot.esignStatus,
       subscriptions,
       subscriptionStatus: rollUpSubscriptionStatus(subscriptions),
       syncedAt: new Date().toISOString(),

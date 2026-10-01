@@ -71,6 +71,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         quoteLink: snapshot.quoteLink,
         paymentStatus: snapshot.paymentStatus,
         paymentDate: snapshot.paymentDate,
+        esignStatus: snapshot.esignStatus,
         syncedAt: new Date().toISOString(),
         lastSyncError: null,
         lastSyncErrorAt: null,

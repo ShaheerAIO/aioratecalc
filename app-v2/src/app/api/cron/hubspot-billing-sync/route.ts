@@ -106,6 +106,7 @@ export async function GET(req: NextRequest) {
         quoteLink: snapshot.quoteLink ?? hubspotIds.quoteLink,
         paymentStatus: snapshot.paymentStatus,
         paymentDate: snapshot.paymentDate,
+        esignStatus: snapshot.esignStatus,
         subscriptions,
         subscriptionStatus: rollUpSubscriptionStatus(subscriptions),
         lastSyncError: null,
@@ -169,6 +170,7 @@ function snapshotChanged(current: HubspotIds, next: HubspotIds): boolean {
     current.quoteLink !== next.quoteLink ||
     current.paymentStatus !== next.paymentStatus ||
     current.paymentDate !== next.paymentDate ||
+    current.esignStatus !== next.esignStatus ||
     current.subscriptionStatus !== next.subscriptionStatus ||
     current.lastSyncError !== next.lastSyncError ||
     !sameSubscriptions(current.subscriptions, next.subscriptions)

@@ -17,10 +17,20 @@ import styles from "./LeadQuoteView.module.css";
 //
 // THERE IS ONE ACCEPTANCE, and for almost everyone it does not happen here.
 // A quote with products on it is signed and paid on HubSpot's hosted page —
-// e-signature and ACH mandate in one — so `checkoutUrl` is the whole panel:
-// one button, straight out to it. EasyOB used to ask the merchant to accept
-// first and THEN send them there to accept again, which is one acceptance too
-// many. Entering billing details IS accepting the quote.
+// e-signature and ACH mandate in one — so the panel is one button out to it.
+// EasyOB used to ask the merchant to accept first and THEN send them there to
+// accept again, which is one acceptance too many. Entering billing details IS
+// accepting the quote.
+//
+// THE MERCHANT OPENS THE DOOR. Until 2026-09-25 the HubSpot quote had to be
+// published by a rep first, and a merchant who opened the link they had just
+// been emailed saw "your quote is being finalised" and could do nothing at
+// all. That gate is gone: "Continue to Billing" POSTs ../checkout, which
+// builds and publishes the quote on the spot and hands back the hosted URL.
+//
+// Publishing is irreversible, so the button asks first. The confirmation talks
+// about what the MERCHANT loses — the chance to have the pricing changed — not
+// about HubSpot's inability to unpublish, which is not their problem.
 //
 // The in-app accept form below survives for exactly one case, `canAcceptHere`:
 // a rate-only quote, which creates no HubSpot document at all (see the header
@@ -33,11 +43,13 @@ type Props = {
   businessName: string | null;
   contactEmail: string | null;
   /**
-   * HubSpot's hosted quote — sign + pay in one. Present once the rep has sent
-   * the quote (`sendQuoteAction` publishes it); null while it is still a draft
-   * or the link hasn't populated yet.
+   * HubSpot's hosted quote — sign + pay in one. Present once the quote has
+   * been published; null before that, which is now the ordinary state rather
+   * than a wait, because pressing the button below is what publishes it.
    */
   checkoutUrl?: string | null;
+  /** True when the merchant signed the hosted quote but never finished paying. */
+  signedWithoutPaying?: boolean;
   /** Rate-only: no HubSpot document exists, so the merchant accepts right here. */
   canAcceptHere?: boolean;
   /** True when this quote has already been accepted (re-opened link). */
@@ -48,7 +60,8 @@ type Props = {
 
 export default function LeadQuoteView({
   token, quote, businessName, contactEmail,
-  checkoutUrl = null, canAcceptHere = false, alreadyAccepted = false, onUploadStatement,
+  checkoutUrl = null, canAcceptHere = false, alreadyAccepted = false,
+  signedWithoutPaying = false, onUploadStatement,
 }: Props) {
   const [email, setEmail]         = useState(contactEmail || "");
   const [accepting, setAccepting] = useState(false);
@@ -56,6 +69,52 @@ export default function LeadQuoteView({
   const [resent, setResent]       = useState(false);
   const [devUrl, setDevUrl]       = useState<string | null>(null);
   const [error, setError]         = useState<string | null>(null);
+
+  // The billing hand-off. `confirming` is the irreversibility prompt; `going`
+  // covers the publish, which is 8-12 HubSpot calls plus a ~3s link read, so
+  // the merchant is told it is working rather than left on a dead button.
+  const [confirming, setConfirming] = useState(false);
+  const [going, setGoing]           = useState(false);
+  const [goError, setGoError]       = useState<string | null>(null);
+
+  // What the merchant is told when the quote can't be published. Never the
+  // real reason: those messages name AIO's internals and the person who can
+  // fix them is a rep, not this merchant (see the route's own header).
+  const CHECKOUT_ERRORS: Record<string, string> = {
+    link_pending: "Your quote is being finalised right now — give it a few seconds and try again.",
+    not_ready: "We couldn't open billing just yet. Your AIO representative has been notified and will sort it out — no need to do anything.",
+    rate_only: "This quote has nothing to bill, so there's nothing to pay. Accept it below instead.",
+    no_quote: "There's no quote on this link yet.",
+    expired: "This link has expired. Ask your AIO representative for a new one.",
+    invalid: "This link is no longer valid. Ask your AIO representative for a new one.",
+  };
+
+  // Publishes the HubSpot quote if it isn't published yet, then sends the
+  // merchant to it. Idempotent server-side, so a double click can't produce a
+  // second document.
+  const continueToBilling = async () => {
+    if (checkoutUrl) { window.location.href = checkoutUrl; return; }
+    setGoing(true);
+    setGoError(null);
+    try {
+      const res = await fetch(`/api/lead/${token}/checkout`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        setGoError(CHECKOUT_ERRORS[data.error] ?? CHECKOUT_ERRORS.not_ready);
+        setGoing(false);
+        setConfirming(false);
+        return;
+      }
+      // Deliberately not resetting `going` — the navigation is the end of this
+      // component's life, and flipping the button back to idle mid-redirect
+      // invites a second click on a door that only opens once.
+      window.location.href = data.url;
+    } catch {
+      setGoError(CHECKOUT_ERRORS.not_ready);
+      setGoing(false);
+      setConfirming(false);
+    }
+  };
 
   // Rate-only only. Accepting and re-requesting the sign-in email are the same
   // call: that route records acceptance once and issues a fresh
@@ -155,18 +214,56 @@ export default function LeadQuoteView({
                 </div>
               </div>
             )
-          ) : checkoutUrl ? (
+          ) : signedWithoutPaying ? (
+            // Signed, not paid. The two happen on the same HubSpot page but
+            // are separate acts, and only the second one accepts the quote —
+            // so this merchant believes they are finished and is looking at a
+            // checklist that has unlocked nothing. Say exactly that, and send
+            // them back to the same page to finish.
             <>
-              <h2 className={styles.panelTitle}>Ready to move forward?</h2>
+              <h2 className={styles.panelTitle}>You&apos;ve signed — one step left</h2>
               <p className={styles.panelText}>
-                Review the full quote, sign it, and enter your billing details — all on one
-                secure page. That&apos;s everything; we&apos;ll set your account up from there.
+                Thanks for signing. Your billing details still need to go in before we can set up
+                your account and open the rest of your onboarding. It&apos;s the same page you
+                signed on, and it takes a minute.
               </p>
               <div className={styles.acceptRow}>
-                <a href={checkoutUrl} className={styles.acceptBtn}>Review &amp; Sign →</a>
+                <button onClick={continueToBilling} disabled={going} className={styles.acceptBtn}>
+                  {going ? "Opening…" : "Enter Billing Details →"}
+                </button>
               </div>
+              {goError && <div className={styles.acceptError}>{goError}</div>}
+            </>
+          ) : confirming ? (
+            // The one-way door, in the merchant's own terms. What they lose is
+            // the chance to have the pricing changed — say that, rather than
+            // anything about HubSpot.
+            <>
+              <h2 className={styles.panelTitle}>Ready to lock this quote in?</h2>
+              <p className={styles.panelText}>
+                Continuing prepares your final quote and takes you to a secure page to sign it and
+                set up payment. From that point the pricing and products above are fixed — if
+                anything looks wrong, talk to your AIO representative first and they&apos;ll put
+                together a new one for you.
+              </p>
+              <div className={styles.acceptRow}>
+                <button onClick={continueToBilling} disabled={going} className={styles.acceptBtn}>
+                  {going ? "Preparing your quote…" : "Yes, continue to billing →"}
+                </button>
+                <button
+                  onClick={() => { setConfirming(false); setGoError(null); }}
+                  disabled={going}
+                  className={styles.secondaryBtn}
+                >
+                  Not yet
+                </button>
+              </div>
+              {goError && <div className={styles.acceptError}>{goError}</div>}
             </>
           ) : canAcceptHere ? (
+            // Rate-only: no HubSpot document exists or ever will, so there is
+            // nothing to sign and nothing to pay. This form is these
+            // merchants' only acceptance, not a duplicate of one.
             <>
               <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
@@ -190,14 +287,28 @@ export default function LeadQuoteView({
               {error && <div className={styles.acceptError}>{error}</div>}
             </>
           ) : (
-            // Configured but not sent yet — the rep hasn't published it, so
-            // there is no document to sign and nothing for the merchant to do.
+            // The ordinary case. There used to be a fourth branch below this
+            // one — "your quote is being finalised", shown whenever no rep had
+            // published yet — and it was a dead end on a link the merchant had
+            // already been sent. It is gone: an unpublished quote is not a
+            // wait any more, it is simply a quote nobody has pressed the
+            // button on, and this is that button.
             <>
-              <h2 className={styles.panelTitle}>Your quote is being finalised</h2>
+              <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
-                Your AIO representative is putting the finishing touches on this. We&apos;ll email
-                it to you to review and sign as soon as it&apos;s ready.
+                Review the full quote, sign it, and enter your billing details — all on one
+                secure page. That&apos;s everything; we&apos;ll set your account up from there.
               </p>
+              <div className={styles.acceptRow}>
+                <button
+                  onClick={() => (checkoutUrl ? continueToBilling() : setConfirming(true))}
+                  disabled={going}
+                  className={styles.acceptBtn}
+                >
+                  {going ? "Opening…" : "Continue to Billing →"}
+                </button>
+              </div>
+              {goError && <div className={styles.acceptError}>{goError}</div>}
             </>
           )}
         </div>

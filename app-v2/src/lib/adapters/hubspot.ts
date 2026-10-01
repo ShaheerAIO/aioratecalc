@@ -1696,7 +1696,15 @@ export async function deleteQuoteLineItem(lineItemId: string): Promise<void> {
 
 // ── Quote network calls ─────────────────────────────────────────────────────
 
-const QUOTE_SNAPSHOT_PROPS = ["hs_status", "hs_quote_link", "hs_payment_status", "hs_payment_date"];
+// hs_quote_esign_status is the SIGNATURE half, and it moves independently of
+// the payment half: a merchant can sign the hosted quote and then abandon the
+// checkout, leaving SIGNED + PENDING. Observed live 2026-09-25 on quote
+// 330655913691. Without it that merchant is indistinguishable from one who
+// never opened the link, and the only thing we could tell them is "finish
+// signing" — which they already did.
+const QUOTE_SNAPSHOT_PROPS = [
+  "hs_status", "hs_quote_link", "hs_payment_status", "hs_payment_date", "hs_quote_esign_status",
+];
 
 /**
  * POSTs the DRAFT quote. The slug exists at create (so the public URL is
@@ -1825,6 +1833,8 @@ export type QuoteSnapshot = {
   quoteLink: string | null;
   paymentStatus: string | null;
   paymentDate: string | null;
+  /** hs_quote_esign_status: NO_ESIGN_STATUS | PENDING_SIGNATURE | SIGNED. */
+  esignStatus: string | null;
 };
 
 function toQuoteSnapshot(quoteId: string, props: Record<string, string | null> | undefined): QuoteSnapshot {
@@ -1834,6 +1844,7 @@ function toQuoteSnapshot(quoteId: string, props: Record<string, string | null> |
     quoteLink: clean(props?.hs_quote_link),
     paymentStatus: clean(props?.hs_payment_status),
     paymentDate: clean(props?.hs_payment_date),
+    esignStatus: clean(props?.hs_quote_esign_status),
   };
 }
 

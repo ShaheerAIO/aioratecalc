@@ -80,6 +80,50 @@
   outline-offset: 2px;
 }
 
+/* ---------- Notice ----------
+ * The banner above the list. Uses the WARNING token, not the accent: it
+ * encodes "something is waiting on you", which is meaning, not decoration.
+ * Sits above .list, so it owns its own bottom margin. */
+
+.notice {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  margin-bottom: var(--space-md);
+}
+
+.noticeTitle {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: var(--space-2xs);
+}
+
+.noticeBody {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.noticeCta {
+  display: inline-block;
+  margin-top: var(--space-md);
+  padding: var(--space-xs) var(--space-lg);
+  border-radius: var(--radius-pill);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+  background: var(--accent);
+  color: white;
+  transition: opacity 150ms var(--ease-out), transform 100ms var(--ease-out);
+}
+
+.noticeCta:hover { opacity: 0.92; }
+.noticeCta:active { transform: scale(0.97); }
+.noticeCta:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
 @media (prefers-reduced-motion: reduce) {
-  .cta { transition-duration: 1ms; }
+  .cta, .noticeCta { transition-duration: 1ms; }
 }

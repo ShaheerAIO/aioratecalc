@@ -153,7 +153,7 @@ describe("isReadyForAioProvisioning", () => {
   });
 });
 
-describe("hasBillingCompleted agrees with the billing checklist row", () => {
+describe("hasBillingCompleted agrees with the quote & billing checklist row", () => {
   // The whole reason this predicate was extracted: if it disagreed with what
   // the customer sees, the checklist could say "Billing is set up" while
   // nothing ever provisioned, or vice versa.
@@ -173,8 +173,12 @@ describe("hasBillingCompleted agrees with the billing checklist row", () => {
   for (const c of cases) {
     it(`${c.name}`, () => {
       const a = app({ hubspotIds: c.hubspotIds as never });
-      const billing = getOnboardingModules(a).find(m => m.key === "billing");
-      const moduleSaysComplete = billing?.status === "complete";
+      // Quote and billing are one row now (key "quote"), so this fixture
+      // keeps billable quoteLines: a rate-only quote has no billing half at
+      // all and completes at the signature, which is the one legitimate way
+      // the row can read complete while hasBillingCompleted is false.
+      const row = getOnboardingModules(a).find(m => m.key === "quote");
+      const moduleSaysComplete = row?.status === "complete";
       expect(hasBillingCompleted(a.hubspotIds)).toBe(moduleSaysComplete);
     });
   }

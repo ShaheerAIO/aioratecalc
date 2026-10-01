@@ -1,6 +1,6 @@
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
-import { getOnboardingModules } from "@/lib/onboardingModules";
+import { checklistNotice, getOnboardingModules } from "@/lib/onboardingModules";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { refreshLeadBilling } from "@/lib/billing/leadRefresh";
 import OnboardingChecklistPanel from "@/components/customer/OnboardingChecklistPanel";
@@ -45,6 +45,10 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
   const modules = getOnboardingModules(app, {
     basePath,
     quoteHref: `${basePath}/quote`,
+    // The authenticated host's `${basePath}/billing` redirect needs a session,
+    // so this host sends a signed-but-unpaid merchant to its own quote route
+    // instead — it serves the same hosted-quote link, publicly.
+    billingHref: `${basePath}/quote`,
     hasQuote: hasQuoteBasis(app),
   });
 
@@ -53,7 +57,11 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
       <div className={shellStyles.container}>
         <h1 className={shellStyles.title}>{businessName || "Your Application"}</h1>
         <p className={shellStyles.subtitle}>Here&apos;s what&apos;s left to finish setting up your account.</p>
-        <OnboardingChecklistPanel modules={modules} signInHref="/customer/login" />
+        <OnboardingChecklistPanel
+          modules={modules}
+          notice={checklistNotice(app, { billingHref: `${basePath}/quote` })}
+          signInHref="/customer/login"
+        />
       </div>
     </div>
   );

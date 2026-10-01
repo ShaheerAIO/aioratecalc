@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getOnboardingModules } from "@/lib/onboardingModules";
+import { checklistNotice, getOnboardingModules, hasSignedWithoutPaying } from "@/lib/onboardingModules";
 import type { HubspotIds, HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/merchant";
 
 // Minimal, fully-populated application fixture. Every module under test reads
@@ -79,42 +79,54 @@ const sub = (overrides: Partial<HubspotSubscriptionSnapshot>): HubspotSubscripti
 
 const appWith = (hubspotIds: HubspotIds | null): MerchantApplication => ({ ...BASE_APP, hubspotIds });
 
-const billing = (app: MerchantApplication) => getOnboardingModules(app).find(m => m.key === "billing")!;
+// Quote and billing are ONE row (key "quote", label "Quote & Billing") —
+// HubSpot's hosted quote collects the signature and the bank details on a
+// single page, and describing that page as two checklist steps produced two
+// rows that could only contradict each other.
+const billing = (app: MerchantApplication) => getOnboardingModules(app).find(m => m.key === "quote")!;
 
-describe("billingModule — PAYMENT-TEST-PLAN.md §1.5 status matrix", () => {
+describe("the quote & billing row — PAYMENT-TEST-PLAN.md §1.5 status matrix", () => {
+  it("is one row, not two", () => {
+    const modules = getOnboardingModules(appWith({
+      ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: "2026-08-01T00:00:00.000Z",
+    }));
+    expect(modules.filter(m => m.key === "billing")).toHaveLength(0);
+    expect(billing(appWith(null)).label).toBe("Quote & Billing");
+  });
+
   it("is not_started when hubspotIds is null", () => {
     const m = billing(appWith(null));
     expect(m.status).toBe("not_started");
     expect(m.href).toBeUndefined();
-    expect(m.description).toMatch(/quote is being prepared/i);
+    expect(m.description).toMatch(/rep is preparing your quote/i);
   });
 
   it("is not_started when hubspotIds exists but quoteId is null", () => {
     const m = billing(appWith({ ...EMPTY_HUBSPOT_IDS, quoteId: null }));
     expect(m.status).toBe("not_started");
     expect(m.href).toBeUndefined();
-    expect(m.description).toMatch(/quote is being prepared/i);
   });
 
   it("is not_started (same copy) when the quote is a draft — quoteId set, publishedAt null", () => {
     const m = billing(appWith({ ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: null }));
     expect(m.status).toBe("not_started");
-    expect(m.href).toBeUndefined();
     // A draft quote's link must never be surfaced.
-    expect(m.description).toMatch(/quote is being prepared/i);
+    expect(m.href).toBeUndefined();
   });
 
   it.each([null, "PENDING", "PROCESSING"] as const)(
-    "is in_progress with a Finish Signing CTA when published, no subscriptions, paymentStatus=%s",
+    "is not_started with a Review & Sign CTA when published, unsigned, no subscriptions, paymentStatus=%s",
     (paymentStatus) => {
       const m = billing(appWith({
         ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: "2026-08-01T00:00:00.000Z",
         paymentStatus, subscriptions: null,
       }));
-      expect(m.status).toBe("in_progress");
+      expect(m.status).toBe("not_started");
+      // The hosted document, not EasyOB's rendering of it — signing and
+      // paying both happen there.
       expect(m.href).toBe("/customer/applications/app-1/billing");
-      expect(m.ctaLabel).toBe("Finish Signing");
-      expect(m.description).toMatch(/finish signing your quote/i);
+      expect(m.ctaLabel).toBe("Review & Sign");
+      expect(m.description).toMatch(/sign it, and enter your billing details/i);
     }
   );
 
@@ -125,8 +137,10 @@ describe("billingModule — PAYMENT-TEST-PLAN.md §1.5 status matrix", () => {
       subscriptionStatus: "scheduled",
     }));
     expect(m.status).toBe("complete");
-    expect(m.href).toBeUndefined();
     expect(m.description).toMatch(/billing is set up/i);
+    // hs_quote_link is public_access and re-servable, so the signed document
+    // stays reachable — it's the merchant's only copy of the agreement.
+    expect(m.ctaLabel).toBe("View Quote");
   });
 
   it("includes the first charge date in the copy when billingStartDate is available", () => {
@@ -139,15 +153,14 @@ describe("billingModule — PAYMENT-TEST-PLAN.md §1.5 status matrix", () => {
     expect(m.description).toContain("2026-10-11");
   });
 
-  it("is complete ('Billing is active.') when subscriptionStatus is active", () => {
+  it("is complete when subscriptionStatus is active, and says the quote is signed too", () => {
     const m = billing(appWith({
       ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: "2026-08-01T00:00:00.000Z",
       subscriptions: [sub({ status: "active", paymentMethod: "ACH - 1117" })],
       subscriptionStatus: "active",
     }));
     expect(m.status).toBe("complete");
-    expect(m.href).toBeUndefined();
-    expect(m.description).toBe("Billing is active.");
+    expect(m.description).toBe("You've signed your quote and your billing is active.");
   });
 
   it("is complete for a one-time-charge-only quote — paymentStatus PAID, zero subscriptions", () => {
@@ -156,7 +169,6 @@ describe("billingModule — PAYMENT-TEST-PLAN.md §1.5 status matrix", () => {
       paymentStatus: "PAID", subscriptions: null,
     }));
     expect(m.status).toBe("complete");
-    expect(m.href).toBeUndefined();
   });
 
   it("is in_progress and logs an error on PAYMENT_NOT_ENABLED — a build defect, not a customer state", () => {
@@ -219,68 +231,52 @@ describe("billingModule — PAYMENT-TEST-PLAN.md §1.5 status matrix", () => {
   });
 });
 
-describe("billingModule — rate-only quote (empty quoteLines) discriminator", () => {
-  const findBilling = (app: MerchantApplication) => getOnboardingModules(app).find(m => m.key === "billing");
-
-  it("keeps the not_started 'being prepared' row when quoteLines is empty but the quote isn't accepted yet — the rep just hasn't configured it", () => {
+describe("rate-only quote (empty quoteLines) discriminator", () => {
+  it("is still 'being prepared' when quoteLines is empty but the quote isn't accepted yet — the rep just hasn't configured it", () => {
     const app: MerchantApplication = { ...BASE_APP, quoteAcceptedAt: null, quoteLines: null, hubspotIds: null };
-    const m = findBilling(app);
-    expect(m).toBeDefined();
-    expect(m!.status).toBe("not_started");
-    expect(m!.description).toMatch(/quote is being prepared/i);
+    const m = billing(app);
+    expect(m.status).toBe("not_started");
+    expect(m.description).toMatch(/rep is preparing your quote/i);
   });
 
-  it("omits the billing module entirely once the quote is accepted with no billable lines — a rate-only deal", () => {
+  it("is COMPLETE at the signature once a rate-only quote is accepted — there is no billing half coming", () => {
     // Processing-rate-only quotes never get a HubSpot quote built (AIO's
     // margin there comes from Adyen settlement, not HubSpot billing), so
-    // hubspotIds.quoteId stays null forever. There's nothing pending and
-    // nothing ever will be, so the row must disappear rather than show a
-    // permanently-stuck "being prepared" status.
+    // hubspotIds.quoteId stays null forever. Nothing is pending and nothing
+    // ever will be, so the row must not sit on a promise nobody will keep.
     const app: MerchantApplication = {
       ...BASE_APP, quoteAcceptedAt: "2026-08-01T00:00:00.000Z", quoteLines: [], hubspotIds: null,
     };
-    const modules = getOnboardingModules(app);
-    expect(modules.find(m => m.key === "billing")).toBeUndefined();
-    // The other modules are unaffected — this isn't a global failure, just an
-    // omission of one row.
-    expect(modules.map(m => m.key)).toEqual(["quote", "adyen", "payroll", "foodbuy"]);
+    const m = billing(app);
+    expect(m.status).toBe("complete");
+    expect(m.description).toMatch(/reviewed and signed your quote/i);
   });
 
-  it("also omits it when quoteLines is null (not just an empty array) on an accepted rate-only quote", () => {
+  it("treats a null quoteLines the same as an empty one on an accepted rate-only quote", () => {
     const app: MerchantApplication = {
       ...BASE_APP, quoteAcceptedAt: "2026-08-01T00:00:00.000Z", quoteLines: null, hubspotIds: null,
     };
-    expect(findBilling(app)).toBeUndefined();
+    expect(billing(app).status).toBe("complete");
   });
 
-  it("does NOT omit the module when the accepted quote has billable lines — normal not_started path applies", () => {
+  it("waits on AIO, not on the merchant, when an accepted quote has billable lines but no published quote yet", () => {
     const app: MerchantApplication = {
       ...BASE_APP,
       quoteAcceptedAt: "2026-08-01T00:00:00.000Z",
       quoteLines: [{ hubspotProductId: "217526517443", name: "AIO Platform (1 to 5 Order Points)", qty: 1, unitPrice: 99, billingFrequency: "weekly", productType: "Software" }],
       hubspotIds: null,
     };
-    const m = findBilling(app);
-    expect(m).toBeDefined();
-    expect(m!.status).toBe("not_started");
-  });
-
-  it("does NOT omit the module when a HubSpot quote already exists, even with empty quoteLines — defensive, not the expected shape", () => {
-    const app: MerchantApplication = {
-      ...BASE_APP,
-      quoteAcceptedAt: "2026-08-01T00:00:00.000Z",
-      quoteLines: [],
-      hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "q1" },
-    };
-    const m = findBilling(app);
-    expect(m).toBeDefined();
+    const m = billing(app);
+    expect(m.status).toBe("in_progress");
+    expect(m.href).toBeUndefined();
+    expect(m.description).toMatch(/no action needed/i);
   });
 });
 
 describe("getOnboardingModules — order and composition", () => {
-  it("returns quote, billing, adyen, payroll, foodbuy in that order", () => {
+  it("returns quote (& billing), adyen, payroll, foodbuy in that order", () => {
     const keys = getOnboardingModules(BASE_APP).map(m => m.key);
-    expect(keys).toEqual(["quote", "billing", "adyen", "payroll", "foodbuy"]);
+    expect(keys).toEqual(["quote", "adyen", "payroll", "foodbuy"]);
   });
 });
 
@@ -314,7 +310,7 @@ describe("getOnboardingModules is pure and network-free", () => {
 
     const modules = getOnboardingModules(fullyPopulated);
 
-    expect(modules).toHaveLength(5);
+    expect(modules).toHaveLength(4);
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
@@ -452,7 +448,7 @@ describe("foodbuyModule (regression net)", () => {
   });
 });
 
-describe("quoteModule (regression net)", () => {
+describe("the quote half, before HubSpot holds a published quote (regression net)", () => {
   const quote = (app: MerchantApplication, opts?: Parameters<typeof getOnboardingModules>[1]) =>
     getOnboardingModules(app, opts).find(m => m.key === "quote")!;
 
@@ -463,14 +459,15 @@ describe("quoteModule (regression net)", () => {
     expect(m.description).toMatch(/rep is preparing your quote/i);
   });
 
-  it("is not_started with a Review & Sign CTA once a quote exists", () => {
+  it("is not_started with a Review & Sign CTA pointing at EasyOB's own quote view once a quote exists", () => {
     const m = quote(BASE_APP, { hasQuote: true });
     expect(m.status).toBe("not_started");
+    // quoteHref, not billingHref — there is no hosted HubSpot page yet.
     expect(m.href).toBe("/customer/applications/app-1");
     expect(m.ctaLabel).toBe("Review & Sign");
   });
 
-  it("is complete with the href retained once the quote is accepted", () => {
+  it("is complete with the href retained once a rate-only quote is accepted", () => {
     const m = quote({ ...BASE_APP, quoteAcceptedAt: "2026-08-10T00:00:00.000Z" }, { hasQuote: true });
     expect(m.status).toBe("complete");
     expect(m.href).toBe("/customer/applications/app-1");
@@ -483,15 +480,20 @@ describe("the lock rule (post-pass)", () => {
     for (const m of getOnboardingModules(app, opts)) byKey[m.key] = m;
     return byKey;
   };
-  it("quote is never locked — it's the first thing the customer does", () => {
+  // Never locked, and since the merge that is doubly true: it's the first
+  // thing the customer does AND the only row that can ask for the billing
+  // details every other row waits on. Locking it would gate a row on its own
+  // completion, which is exactly the contradiction the merge removed.
+  it("quote is never locked", () => {
     expect(keyed(BASE_APP).quote.locked).toBeUndefined();
     expect(keyed({ ...BASE_APP, quoteAcceptedAt: "2026-08-10T00:00:00.000Z" }).quote.locked).toBeUndefined();
+    expect(keyed(appWith(SIGNED_UNPAID)).quote.locked).toBeUndefined();
   });
 
   it("everything after quote is locked (reason: quote) until the quote is accepted", () => {
     const app = { ...BASE_APP, hubspotIds: EMPTY_HUBSPOT_IDS };
     const modules = keyed(app);
-    for (const key of ["billing", "adyen", "payroll", "foodbuy"]) {
+    for (const key of ["adyen", "payroll", "foodbuy"]) {
       expect(modules[key].locked).toEqual({ reason: "quote", message: "Available after your quote is signed" });
     }
   });
@@ -502,21 +504,19 @@ describe("the lock rule (post-pass)", () => {
       hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "q1" },
     };
     const modules = keyed(app);
-    for (const key of ["billing", "adyen", "payroll", "foodbuy"]) {
+    for (const key of ["adyen", "payroll", "foodbuy"]) {
       expect(modules[key].locked).toBeUndefined();
     }
   });
 
   it("gates on quoteAcceptedAt, not on billing completion — a rate-only quote never locks Adyen out", () => {
-    // billingModule returns null here (accepted, no billable lines, no HubSpot
-    // quote) — see the rate-only discriminator tests above. Adyen must still
-    // unlock.
+    // A rate-only deal never gets a HubSpot quote, so hasBillingCompleted is
+    // false forever — see the rate-only discriminator tests above. Adyen must
+    // still unlock.
     const app: MerchantApplication = {
       ...BASE_APP, quoteAcceptedAt: "2026-08-10T00:00:00.000Z", quoteLines: [], hubspotIds: null,
     };
-    const modules = keyed(app);
-    expect(modules.billing).toBeUndefined();
-    expect(modules.adyen.locked).toBeUndefined();
+    expect(keyed(app).adyen.locked).toBeUndefined();
   });
 
   it("never downgrades a complete module to locked", () => {
@@ -540,40 +540,141 @@ describe("basePath interpolation", () => {
     const byKey: Record<string, string | undefined> = {};
     for (const m of modules) byKey[m.key] = m.href;
 
-    expect(byKey.quote).toBe("/lead/tok123");
-    expect(byKey.billing).toBe("/lead/tok123/billing");
+    // A published quote puts the row in its hosted states, which all link to
+    // the hosted page via billingHref — and that defaults under basePath.
+    expect(byKey.quote).toBe("/lead/tok123/billing");
     expect(byKey.adyen).toBe("/lead/tok123/edit");
     expect(byKey.payroll).toBe("/lead/tok123/payroll");
     expect(byKey.foodbuy).toBe("/lead/tok123/foodbuy");
   });
 
-  // The bug this task exists to fix: the token host has no tabs, so the quote
-  // needs its own route distinct from basePath — but every OTHER module's
-  // href is `${basePath}/...`, so if quoteHref were ever folded back into
-  // basePath (as it used to be, passing the quote route itself as basePath),
-  // every one of those hrefs would silently nest under the quote route
-  // instead — `/lead/{token}/quote/billing`, `/lead/{token}/quote/continue`,
-  // none of which are real routes. This test pins basePath and quoteHref to
-  // DIFFERENT paths and asserts no module's href ever resolves under
-  // quoteHref except the quote module's own.
-  it("keeps every non-quote module's href under basePath even when quoteHref points elsewhere", () => {
-    const app: MerchantApplication = {
-      ...BASE_APP,
-      quoteAcceptedAt: "2026-08-10T00:00:00.000Z",
-      hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: "2026-08-01T00:00:00.000Z" },
-    };
-    const basePath = "/lead/tok123";
-    const quoteHref = "/lead/tok123/quote";
-    const modules = getOnboardingModules(app, { basePath, quoteHref, hasQuote: true });
+  // The bug this test exists to catch: the token host has no tabs, so the
+  // quote needs its own route distinct from basePath — but every OTHER
+  // module's href is `${basePath}/...`, so if quoteHref were ever folded back
+  // into basePath (as it used to be, passing the quote route itself as
+  // basePath), every one of those hrefs would silently nest under the quote
+  // route instead — `/lead/{token}/quote/continue`, `/lead/{token}/quote/payroll`,
+  // none of which are real routes. This pins basePath, quoteHref and
+  // billingHref the way the token host passes them and asserts no module's
+  // href resolves under the quote route except the quote row's own.
+  it.each([null, "2026-08-10T00:00:00.000Z"] as const)(
+    "keeps every non-quote module's href under basePath even when the quote routes elsewhere (accepted=%s)",
+    (quoteAcceptedAt) => {
+      const app: MerchantApplication = {
+        ...BASE_APP,
+        quoteAcceptedAt,
+        hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: "2026-08-01T00:00:00.000Z" },
+      };
+      const basePath = "/lead/tok123";
+      const quoteRoute = "/lead/tok123/quote";
+      // Both of the row's link slots point at the token host's own quote
+      // route — it serves the hosted link itself, having no session-gated
+      // /billing redirect to offer.
+      const modules = getOnboardingModules(app, {
+        basePath, quoteHref: quoteRoute, billingHref: quoteRoute, hasQuote: true,
+      });
 
-    for (const m of modules) {
-      if (!m.href) continue;
-      if (m.key === "quote") {
-        expect(m.href).toBe(quoteHref);
-      } else {
-        expect(m.href.startsWith(quoteHref)).toBe(false);
-        expect(m.href === basePath || m.href.startsWith(`${basePath}/`)).toBe(true);
+      for (const m of modules) {
+        if (!m.href) continue;
+        if (m.key === "quote") {
+          expect(m.href).toBe(quoteRoute);
+        } else {
+          expect(m.href.startsWith(quoteRoute)).toBe(false);
+          expect(m.href === basePath || m.href.startsWith(`${basePath}/`)).toBe(true);
+        }
       }
     }
+  );
+});
+
+// ── Signed, not paid ────────────────────────────────────────────────────────
+// Signing and paying happen on the same HubSpot page but are separate acts,
+// and only the second one accepts the quote. So a merchant can finish what
+// looks to them like the whole thing and land back on a checklist where every
+// row is locked. Observed live 2026-09-25 on quote 330655913691: SIGNED,
+// hs_payment_status PENDING, no subscription.
+const SIGNED_UNPAID: HubspotIds = {
+  ...EMPTY_HUBSPOT_IDS,
+  quoteId: "q-1",
+  publishedAt: "2026-09-25T18:00:00.000Z",
+  esignStatus: "SIGNED",
+  paymentStatus: "PENDING",
+};
+
+describe("hasSignedWithoutPaying", () => {
+  it("is true for a signed quote with no completed checkout", () => {
+    expect(hasSignedWithoutPaying(SIGNED_UNPAID)).toBe(true);
+  });
+
+  it("is false once a subscription carries a payment method — that IS the acceptance", () => {
+    expect(hasSignedWithoutPaying({
+      ...SIGNED_UNPAID,
+      subscriptions: [sub({ status: "scheduled" })],
+      subscriptionStatus: "scheduled",
+    })).toBe(false);
+  });
+
+  it("is false before the merchant signs, and on a quote with no e-sign at all", () => {
+    expect(hasSignedWithoutPaying({ ...SIGNED_UNPAID, esignStatus: "PENDING_SIGNATURE" })).toBe(false);
+    expect(hasSignedWithoutPaying({ ...SIGNED_UNPAID, esignStatus: null })).toBe(false);
+    expect(hasSignedWithoutPaying(null)).toBe(false);
+  });
+});
+
+describe("the signed-but-unpaid checklist", () => {
+  const app = appWith(SIGNED_UNPAID);
+
+  it("asks for the billing details exactly once, on the one merged row", () => {
+    const modules = getOnboardingModules(app);
+    const asking = modules.filter(m => m.ctaLabel === "Enter Billing Details");
+    expect(asking).toHaveLength(1);
+    expect(asking[0].key).toBe("quote");
+    expect(asking[0].status).toBe("in_progress");
+    // It may SAY they signed; it must not ASK them to sign again.
+    expect(asking[0].description).toMatch(/you've signed/i);
+  });
+
+  // The ask goes to the hosted page via billingHref, not to quoteHref. On the
+  // authenticated host quoteHref is the application page itself, so pointing
+  // there gave the merchant a button that reloaded the page they were on.
+  it("sends the CTA to the billing href, defaulting under basePath", () => {
+    expect(billing(app).href).toBe("/customer/applications/app-1/billing");
+
+    const onToken = getOnboardingModules(app, {
+      basePath: "/lead/tok", quoteHref: "/lead/tok/quote", billingHref: "/lead/tok/quote",
+    }).find(m => m.key === "quote")!;
+    expect(onToken.href).toBe("/lead/tok/quote");
+  });
+
+  it("locks the rest on BILLING, not on a signature they already gave", () => {
+    const locked = getOnboardingModules(app).filter(m => m.locked);
+    expect(locked.length).toBeGreaterThan(0);
+    for (const m of locked) {
+      expect(m.key).not.toBe("quote");
+      expect(m.locked!.reason).toBe("billing");
+      expect(m.locked!.message).toMatch(/billing details/i);
+    }
+  });
+
+  it("asks an unsigned merchant to sign instead, and locks the rest on the quote", () => {
+    const unsigned = appWith({ ...SIGNED_UNPAID, esignStatus: "PENDING_SIGNATURE" });
+    expect(billing(unsigned).ctaLabel).toBe("Review & Sign");
+    expect(getOnboardingModules(unsigned).find(m => m.key === "adyen")!.locked!.reason).toBe("quote");
+  });
+
+  // The row alone is a weak way to tell a merchant who signed a document and
+  // closed the tab that they are not done — hence a banner saying it outright,
+  // naming the bank account, above the list.
+  it("raises a notice, with the CTA the host gives it", () => {
+    const notice = checklistNotice(app, { billingHref: "/lead/tok/quote" });
+    expect(notice).not.toBeNull();
+    expect(notice!.href).toBe("/lead/tok/quote");
+    expect(notice!.title).toMatch(/bank details/i);
+    expect(notice!.body).toMatch(/bank account/i);
+  });
+
+  it("raises no notice on the ordinary path", () => {
+    expect(checklistNotice(appWith(null))).toBeNull();
+    expect(checklistNotice(appWith({ ...SIGNED_UNPAID, esignStatus: "PENDING_SIGNATURE" }))).toBeNull();
   });
 });

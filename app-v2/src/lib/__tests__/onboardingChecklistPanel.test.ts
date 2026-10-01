@@ -4,13 +4,13 @@ import type { OnboardingModule } from "@/lib/onboardingModules";
 
 // The one piece of host-aware logic the shared checklist renderer adds on top
 // of the dumb ModuleChecklist row renderer: on the public /lead/[token] host,
-// any unlocked module other than quote can't use its own href (billing,
-// Adyen, payroll, and Foodbuy are all session-only), so it's swapped for a
+// any unlocked module other than quote can't use its own href (Adyen,
+// payroll, and Foodbuy are all session-only), so it's swapped for a
 // "Sign in to continue" CTA instead. quote/locked rows are untouched.
 
 const mod = (over: Partial<OnboardingModule> = {}): OnboardingModule => ({
-  key: "billing", label: "Billing", status: "in_progress", description: "…",
-  href: "/customer/applications/app-1/billing", ctaLabel: "Finish Signing",
+  key: "payroll", label: "Payroll (Check)", status: "in_progress", description: "…",
+  href: "/customer/applications/app-1/payroll/continue", ctaLabel: "Continue Payroll Setup",
   ...over,
 });
 
@@ -35,7 +35,7 @@ describe("withSignInOverride", () => {
   it("leaves a locked module alone — it already has no usable href", () => {
     const locked = mod({ locked: { reason: "quote", message: "Available after your quote is signed" } });
     const [result] = withSignInOverride([locked], "/customer/login");
-    expect(result.href).toBe("/customer/applications/app-1/billing");
+    expect(result.href).toBe("/customer/applications/app-1/payroll/continue");
     expect(result.locked).toEqual({ reason: "quote", message: "Available after your quote is signed" });
   });
 
