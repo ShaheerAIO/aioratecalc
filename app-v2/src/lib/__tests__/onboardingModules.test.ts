@@ -55,6 +55,7 @@ const EMPTY_HUBSPOT_IDS: HubspotIds = {
   publishedAt: null,
   paymentStatus: null,
   paymentDate: null,
+  esignStatus: null,
   subscriptions: null,
   subscriptionStatus: null,
   syncedAt: null,

@@ -9,11 +9,14 @@ import {
   applyLineAdjustment,
   buildQuote,
   describeBillingStart,
+  discountQtyBlockers,
   lineDiscountAmount,
   lineListAmount,
   lineNetAmount,
   picksFromQuoteLines,
+  quoteSanityBlockers,
   quoteTotals,
+  splitPartialDiscount,
   toQuoteLine,
 } from "@/lib/quoting";
 import { planLineItemReconciliation, toLineItemProperties } from "@/lib/adapters/hubspot";
@@ -163,6 +166,55 @@ describe("adjustmentBlockers", () => {
   });
 });
 
+describe("quoteSanityBlockers", () => {
+  const totals = (lines: QuoteLine[]) => quoteSanityBlockers(lines, quoteTotals(lines));
+
+  it("says nothing about an ordinary quote", () => {
+    expect(totals([line(), line({ unitPrice: 99, billingFrequency: "weekly" })])).toEqual([]);
+  });
+
+  it("refuses a negative price — the discount cap bounds a percentage, not the catalog", () => {
+    const [msg] = totals([line({ unitPrice: -749 })]);
+    expect(msg).toContain("POS Unit");
+    expect(msg).toContain("negative");
+  });
+
+  it("refuses a quantity that isn't a whole number of at least one", () => {
+    expect(totals([line({ qty: 0 })]).length).toBeGreaterThan(0);
+    expect(totals([line({ qty: 1.5 })]).length).toBeGreaterThan(0);
+  });
+
+  it("refuses a quote that totals backwards, whichever side is negative", () => {
+    const oneTime = totals([line({ unitPrice: -1 })]);
+    expect(oneTime.some(b => b.includes("bill the customer backwards"))).toBe(true);
+    const recurring = totals([line({ unitPrice: -99, billingFrequency: "weekly" })]);
+    expect(recurring.some(b => b.includes("bill the customer backwards"))).toBe(true);
+  });
+
+  it("refuses a quote whose every line nets to $0", () => {
+    const [msg] = totals([line({ discountPercent: 100 }), line({ unitPrice: 499, discountPercent: 100 })]);
+    expect(msg).toContain("$0");
+  });
+
+  // A rate-only quote carries no lines at all, and IS a real thing to send —
+  // the processing margin comes out of Adyen settlement, not a line item.
+  it("leaves a quote with no lines alone", () => {
+    expect(totals([])).toEqual([]);
+  });
+
+  it("gates buildQuote, so a $0 quote can't be sent or published", () => {
+    const pos = CATALOG.find(c => c.hubspotProductId === POS_ID)!;
+    const adjustments: QuoteAdjustments = {
+      [POS_ID]: { discountPercent: 100 },
+      [PLATFORM_ID]: { discountPercent: 100 },
+      [WIFI_ID]: { discountPercent: 100 },
+    };
+    const built = buildQuote("full_pos", [toQuoteLine(pos, 1)], [], CATALOG, adjustments, 100);
+    expect(built.totals.oneTime).toBe(0);
+    expect(built.blockers.some(b => b.includes("$0"))).toBe(true);
+  });
+});
+
 describe("buildQuote with adjustments", () => {
   const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)];
 
@@ -173,8 +225,10 @@ describe("buildQuote with adjustments", () => {
     const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
     expect(install.discountPercent).toBe(100);
     expect(lineNetAmount(install)).toBe(0);
-    // $999 install + $499 training + $999 wifi + $749 POS, less the comped install.
-    expect(built.totals.oneTime).toBe(2247);
+    // $999 wifi + $749 POS. The install AND the training are both comped —
+    // the install by this adjustment, the training by standing AIO policy
+    // (see COMPED_SERVICE_PRODUCT_IDS), so neither adds anything.
+    expect(built.totals.oneTime).toBe(1748);
     expect(built.blockers).toEqual([]);
   });
 
@@ -195,10 +249,50 @@ describe("buildQuote with adjustments", () => {
     expect(built.blockers[0]).toContain("POS Unit");
   });
 
-  it("applies nothing when no adjustments are passed", () => {
+  it("applies no REP adjustment when none is passed — only the standing comp", () => {
     const built = buildQuote("full_pos", picked, [], CATALOG);
-    expect(built.quoteLines.every(l => l.discountPercent === undefined)).toBe(true);
+    // The install and the training carry a 100% discount with no adjustment at
+    // all: that is AIO policy off the AE price sheet, not a rep's edit. Every
+    // other line is untouched.
+    expect(
+      built.quoteLines.filter(l => l.discountPercent !== undefined).map(l => l.name).sort()
+    ).toEqual(["Onsite Installation", "System Onboarding and Training"]);
     expect(built.quoteLines.every(l => l.billingStart === undefined)).toBe(true);
+  });
+
+  // The cap bounds what a REP may give away. The standing comp is not that,
+  // and at the default 50% cap an un-exempted comp would refuse every quote.
+  it("never blocks a quote on the standing comp, even at a low discount cap", () => {
+    const built = buildQuote("full_pos", picked, [], CATALOG, {}, 10);
+    expect(built.blockers).toEqual([]);
+  });
+
+  it("lets a rep's explicit discount win over the standing comp", () => {
+    const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 50 } };
+    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
+    expect(install.discountPercent).toBe(50);
+  });
+
+  // The cap bounds rep discretion, and a figure the rep chose on a comped line
+  // is still rep discretion — only the policy 100% is exempt.
+  it("still caps a rep's own over-limit discount on a comped line", () => {
+    const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 80 } };
+    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 50);
+    expect(built.blockers.join(" ")).toMatch(/Onsite Installation.*80%/);
+  });
+
+  // The failure this is here to prevent: a rep touches an unrelated control on
+  // a comped line and silently puts $999 back on the quote, because
+  // applyLineAdjustment clears discountPercent when an adjustment carries none.
+  it("keeps the comp when a rep only delays the billing start on that line", () => {
+    const adjustments: QuoteAdjustments = {
+      [INSTALL_ID]: { billingStart: { mode: "days", days: 30 } },
+    };
+    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
+    expect(install.discountPercent).toBe(100);
+    expect(lineNetAmount(install)).toBe(0);
   });
 });
 
@@ -312,5 +406,109 @@ describe("describeBillingStart", () => {
   it("reads as prose for a customer", () => {
     expect(describeBillingStart({ mode: "date", date: "2026-11-01" })).toBe("Billing starts 2026-11-01");
     expect(describeBillingStart({ mode: "days", days: 60 })).toBe("Billing starts 60 days after checkout");
+  });
+});
+
+// ── Scoping a discount to part of a line ────────────────────────────────────
+//
+// "One of the three POS units is free." The alternative is 33.3333% across the
+// line, which bills $1,498.07 rather than $1,498.00 at two decimal places — on
+// a document that cannot be amended after publish.
+
+describe("splitPartialDiscount", () => {
+  const pos = (qty: number, over: Partial<QuoteLine> = {}): QuoteLine => ({
+    ...toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, qty),
+    ...over,
+  });
+
+  it("splits the line into the discounted units and the rest", () => {
+    const [discounted, rest] = splitPartialDiscount(pos(3, { discountPercent: 100 }), { discountPercent: 100, discountQty: 1 });
+    expect(discounted).toMatchObject({ qty: 1, discountPercent: 100 });
+    expect(rest.qty).toBe(2);
+    expect(rest.discountPercent).toBeUndefined();
+  });
+
+  it("gives the exact money a percentage can't", () => {
+    const lines = splitPartialDiscount(pos(3, { discountPercent: 100 }), { discountPercent: 100, discountQty: 1 });
+    const net = lines.reduce((sum, l) => sum + lineNetAmount(l), 0);
+    expect(net).toBe(1498);
+    // What the whole-line percentage would have billed instead.
+    expect(lineNetAmount(pos(3, { discountPercent: 33.33 }))).toBe(1498.07);
+  });
+
+  it("leaves the line alone when the discount covers all of it", () => {
+    const l = pos(3, { discountPercent: 50 });
+    expect(splitPartialDiscount(l, { discountPercent: 50, discountQty: 3 })).toEqual([l]);
+    expect(splitPartialDiscount(l, { discountPercent: 50 })).toEqual([l]);
+  });
+
+  it("clamps a stale quantity left over from a bigger line rather than refusing", () => {
+    const l = pos(2, { discountPercent: 50 });
+    expect(splitPartialDiscount(l, { discountPercent: 50, discountQty: 5 })).toEqual([l]);
+  });
+
+  it("does nothing without a discount to scope", () => {
+    const l = pos(3);
+    expect(splitPartialDiscount(l, { discountQty: 1 })).toEqual([l]);
+  });
+
+  it("never splits a package-covered line — it is wholly paid for", () => {
+    const l = pos(3, { discountPercent: 100, coveredByPackage: "QSR Kit" });
+    expect(splitPartialDiscount(l, { discountPercent: 100, discountQty: 1 })).toEqual([l]);
+  });
+});
+
+describe("discountQtyBlockers", () => {
+  const lines = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 3)];
+
+  it("passes a whole positive number", () => {
+    expect(discountQtyBlockers({ [POS_ID]: { discountPercent: 50, discountQty: 2 } }, lines)).toEqual([]);
+    expect(discountQtyBlockers({ [POS_ID]: { discountPercent: 50 } }, lines)).toEqual([]);
+  });
+
+  it("refuses a fraction or a zero, and names the product", () => {
+    const [msg] = discountQtyBlockers({ [POS_ID]: { discountQty: 1.5 } }, lines);
+    expect(msg).toContain("POS Unit");
+    expect(discountQtyBlockers({ [POS_ID]: { discountQty: 0 } }, lines)).toHaveLength(1);
+    expect(discountQtyBlockers({ [POS_ID]: { discountQty: -1 } }, lines)).toHaveLength(1);
+  });
+});
+
+describe("a scoped discount through buildQuote", () => {
+  const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 3)];
+  const adjustments: QuoteAdjustments = { [POS_ID]: { discountPercent: 100, discountQty: 1 } };
+
+  it("puts two POS lines on the quote and charges for two units", () => {
+    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const pos = built.quoteLines.filter(l => l.hubspotProductId === POS_ID);
+    expect(pos.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [2, null]]);
+    expect(pos.reduce((sum, l) => sum + lineNetAmount(l), 0)).toBe(1498);
+  });
+
+  it("counts ordering points off the picks, so splitting can't move the platform tier", () => {
+    const split = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const whole = buildQuote("full_pos", picked, [], CATALOG, {}, 100);
+    expect(split.orderPoints.total).toBe(3);
+    expect(split.platform.productName).toBe(whole.platform.productName);
+  });
+
+  it("refuses a scoped discount over the cap, same as any other", () => {
+    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 50);
+    expect(built.blockers.join(" ")).toMatch(/POS Unit.*100%/);
+  });
+
+  it("round-trips: the quantity is recovered, not widened to the whole line", () => {
+    const saved = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100).quoteLines;
+
+    expect(picksFromQuoteLines(saved)).toContainEqual({ hubspotProductId: POS_ID, qty: 3 });
+    const reopened = adjustmentsFromQuoteLines(saved);
+    expect(reopened[POS_ID]).toEqual({ discountPercent: 100, discountQty: 1 });
+
+    expect(buildQuote("full_pos", picked, [], CATALOG, reopened, 100).quoteLines).toEqual(saved);
+  });
+
+  it("does not invent a quantity when the discount covered the whole line", () => {
+    const saved = buildQuote("full_pos", picked, [], CATALOG, { [POS_ID]: { discountPercent: 40 } }, 100).quoteLines;
+    expect(adjustmentsFromQuoteLines(saved)[POS_ID]).toEqual({ discountPercent: 40 });
   });
 });

@@ -6,6 +6,7 @@
 // operates on is read from HubSpot server-side and passed in.
 
 import { monthlyEquivalent } from "@/lib/utils";
+import { decomposePackages, isPackageProduct, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
   QuoteAdjustments, QuoteLine, QuoteTotals, QuoteType,
@@ -78,7 +79,11 @@ export function isPickable(product: CatalogProduct): boolean {
   return (
     !PICKER_EXCLUDED_PRODUCT_NAMES.includes(product.name as (typeof PICKER_EXCLUDED_PRODUCT_NAMES)[number]) &&
     !isPlatformProduct(product.name, product.hubspotProductId) &&
-    !isIncludedServiceProduct(product.hubspotProductId, product.name)
+    !isIncludedServiceProduct(product.hubspotProductId, product.name) &&
+    // Package SKUs are derived from what the cart contains, never picked. A
+    // rep who could add one by hand would put a package on the quote with
+    // nothing discounted underneath it — the merchant pays for it twice.
+    !isPackageProduct(product.hubspotProductId)
   );
 }
 
@@ -135,6 +140,132 @@ function isIncludedServiceProduct(id: string, name: string): boolean {
   return INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === id || s.name === name.trim());
 }
 
+/**
+ * Services AIO is currently giving away, quoted at MSRP and discounted to $0.
+ *
+ * Straight off the AE price sheet Steve issued, effective 2026-09-18, which is
+ * the source of truth for what a merchant is charged: "Installation and
+ * Training are currently being offered at no charge. They will still appear on
+ * customer quotes at their listed MSRP, automatically discounted to $0 — this
+ * is expected, not an error." Until this shipped, EasyOB put both on at full
+ * price, so every quote it built was $1,498 too high.
+ *
+ * NOT the WiFi package. It is a third always-included service and it is not on
+ * that sheet at all — the sheet prices the network as separate hardware (Unifi
+ * Router, 8 Port Switch, Access Point, U-LTE Backup Pro), so comping the $999
+ * package would be inventing a discount nobody authorized.
+ *
+ * TO END THE PROMOTION: empty this array. The lines keep appearing, at their
+ * catalog price, and nothing else has to change.
+ */
+export const COMPED_SERVICE_PRODUCT_IDS: string[] = [
+  "223452690133", // Onsite Installation — $999
+  "223152695032", // System Onboarding and Training — $499
+];
+
+export function isCompedService(line: Pick<QuoteLine, "hubspotProductId">): boolean {
+  return COMPED_SERVICE_PRODUCT_IDS.includes(line.hubspotProductId);
+}
+
+/**
+ * Apply the standing comp to a line that carries one.
+ *
+ * A DEFAULT, not an override: a rep who deliberately types a discount on this
+ * line keeps it. Silently turning their 50% into 100% would be the tool
+ * disagreeing with the person using it, and there are reasons to charge — a
+ * second location, a re-install — that the sheet doesn't have to anticipate.
+ *
+ * Applied at derivation AND again after `applyLineAdjustment`, because that
+ * function clears `discountPercent` whenever an adjustment carries none. A rep
+ * who only delayed the billing start on the install line would otherwise have
+ * silently put $999 back onto the quote — which is precisely the class of
+ * error this whole change exists to remove.
+ */
+export function applyServiceComp(line: QuoteLine, adjustment?: LineAdjustment): QuoteLine {
+  if (!isCompedService(line)) return line;
+  const repSet = adjustment?.discountPercent;
+  if (repSet !== undefined && repSet !== null) return line;
+  return { ...line, discountPercent: 100 };
+}
+
+/**
+ * Hold a package-covered line at 100% off.
+ *
+ * Unconditional, unlike `applyServiceComp`: a comp is a discount AIO chooses
+ * to give and a rep may overrule, whereas a covered line is hardware the
+ * merchant has already paid for in the package price. Charging for it again
+ * is double-billing, not a commercial decision.
+ *
+ * It has to run LAST for the same reason the service comp does:
+ * `applyLineAdjustment` clears `discountPercent` whenever the adjustment
+ * carries none, and adjustments are keyed by PRODUCT id — so a rep delaying
+ * billing on a product that is half covered and half remainder would
+ * otherwise silently put the covered half back onto the quote at full price.
+ * The rep's own discount still reaches the remainder line, which is the half
+ * the merchant is actually being charged for.
+ */
+export function applyPackageComp(line: QuoteLine): QuoteLine {
+  if (!line.coveredByPackage) return line;
+  return { ...line, discountPercent: 100 };
+}
+
+/**
+ * Scope a rep's discount to part of a line: `discountQty` units discounted,
+ * the rest at list. Returns one line when it applies to all of them, which is
+ * the ordinary case.
+ *
+ * A split rather than a percentage across the whole line, because the
+ * percentage doesn't divide: one of three $749 units is 33.3333%, and 33.33%
+ * bills $1,498.07 instead of $1,498.00. The shape is the same one the package
+ * decomposition already produces, so everything downstream — the quantity
+ * merge in `picksFromQuoteLines`, the round-trip in
+ * `adjustmentsFromQuoteLines`, HubSpot's happiness with the same product on a
+ * quote twice — is machinery that already exists.
+ *
+ * A `discountQty` larger than the line is CLAMPED, not refused: it means the
+ * rep set it and then reduced the quantity, and "as many as I said" caps out
+ * at "all of them". A `discountQty` that isn't a whole positive number is a
+ * different thing and `discountQtyBlockers` refuses it.
+ *
+ * Runs LAST, after the two comps, and deliberately ignores a package-covered
+ * line: that line is wholly paid for by the package and has nothing to scope.
+ */
+export function splitPartialDiscount(line: QuoteLine, adjustment: LineAdjustment | undefined): QuoteLine[] {
+  const want = adjustment?.discountQty;
+  if (
+    !want || !Number.isInteger(want) || want <= 0 ||
+    want >= line.qty ||
+    line.coveredByPackage ||
+    !line.discountPercent
+  ) return [line];
+
+  const rest: QuoteLine = { ...line, qty: line.qty - want };
+  delete rest.discountPercent;
+  return [{ ...line, qty: want }, rest];
+}
+
+/**
+ * What's wrong with the rep's discount quantities. Separate from
+ * `adjustmentBlockers` because `discountQty` never lands on a QuoteLine — it
+ * is consumed by the split — so the persisted lines the publish preconditions
+ * re-check carry no trace of it and need none.
+ */
+export function discountQtyBlockers(adjustments: QuoteAdjustments, lines: QuoteLine[]): string[] {
+  const blockers: string[] = [];
+  for (const [productId, adjustment] of Object.entries(adjustments)) {
+    const qty = adjustment.discountQty;
+    if (qty === undefined || qty === null) continue;
+    if (!Number.isInteger(qty) || qty <= 0) {
+      const name = lines.find(l => l.hubspotProductId === productId)?.name ?? productId;
+      blockers.push(
+        `The discount on "${name}" is set to apply to ${qty} units — that has to be a whole ` +
+        `number of at least 1, or left blank to discount the whole line.`
+      );
+    }
+  }
+  return blockers;
+}
+
 export type IncludedServicesResult = {
   /** The lines to put on the quote, qty 1 each. */
   lines: QuoteLine[];
@@ -167,7 +298,7 @@ export function resolveIncludedServices(
     const product =
       catalog.find(p => p.hubspotProductId === service.hubspotProductId) ??
       catalog.find(p => p.name.trim() === service.name);
-    if (product) lines.push(toQuoteLine(product, 1));
+    if (product) lines.push(applyServiceComp(toQuoteLine(product, 1)));
     else missing.push(service.name);
   }
   return { lines, missing };
@@ -360,6 +491,16 @@ export function ruleForLine(line: { hubspotProductId: string; name: string }): O
   return RULES_BY_PRODUCT_ID.get(line.hubspotProductId) ?? ORDER_POINT_RULES[line.name.trim()];
 }
 
+/**
+ * Ordering points one unit of this line is worth. The rules above are the
+ * single source of truth for it, and `quotePackages.ts` takes this function
+ * rather than importing the table — which is what keeps the package module
+ * free of any dependency on this one.
+ */
+export function orderPointsPerUnit(line: { hubspotProductId: string; name: string }): number {
+  return ruleForLine(line)?.pointsPerUnit ?? 0;
+}
+
 // Product types that are never physical ordering hardware. A line with one of
 // these and no rule isn't "unclassified" — it simply doesn't carry points.
 // Anything else with no rule (inventory, or untyped) does get flagged.
@@ -519,16 +660,28 @@ export function resolvePlatformLine(
  * Reopen a saved quote in the configurator: the picks that produced it.
  *
  * Derived lines are dropped, because they're re-derived on the way back out —
- * keeping them would send the platform fee and the three install services back
- * as picks, and the server refuses those (they aren't pickable) rather than
- * quoting them twice.
+ * keeping them would send the platform fee, the three install services and any
+ * package SKU back as picks, and the server refuses those (they aren't
+ * pickable) rather than quoting them twice.
+ *
+ * Quantities are SUMMED per product, because a package splits one pick into a
+ * covered line and a remainder line. Two picks of the same product would
+ * otherwise reach the server, and the last one written wins — silently
+ * dropping whichever half the package didn't cover.
  */
 export function picksFromQuoteLines(
   lines: QuoteLine[] | null | undefined
 ): Array<{ hubspotProductId: string; qty: number }> {
-  return (lines ?? [])
-    .filter(l => !isPlatformProduct(l.name, l.hubspotProductId) && !isIncludedServiceProduct(l.hubspotProductId, l.name))
-    .map(l => ({ hubspotProductId: l.hubspotProductId, qty: l.qty }));
+  const merged = new Map<string, number>();
+  for (const l of lines ?? []) {
+    if (
+      isPlatformProduct(l.name, l.hubspotProductId) ||
+      isIncludedServiceProduct(l.hubspotProductId, l.name) ||
+      isPackageProduct(l.hubspotProductId)
+    ) continue;
+    merged.set(l.hubspotProductId, (merged.get(l.hubspotProductId) ?? 0) + l.qty);
+  }
+  return [...merged].map(([hubspotProductId, qty]) => ({ hubspotProductId, qty }));
 }
 
 // ── Discounts and delayed billing starts ────────────────────────────────────
@@ -590,7 +743,13 @@ export function adjustmentBlockers(lines: QuoteLine[], maxDiscountPercent: numbe
     if (pct !== undefined && pct !== null) {
       if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
         blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
-      } else if (pct > cap) {
+      } else if (pct > cap && !((isCompedService(line) || line.coveredByPackage) && pct === 100)) {
+        // A comped service or a package-covered line sitting at exactly 100%
+        // is exempt: both are AIO policy — off the price sheet, and out of the
+        // package the merchant is already paying for — and the cap exists to
+        // bound REP discretion. Without this every quote carrying either would
+        // refuse to send, since the default cap is 50%. Any other figure on
+        // those lines IS a rep's choice and is capped like anything else.
         blockers.push(
           `"${line.name}" is discounted ${pct}%, over the ${cap}% limit AIO allows on a quote. ` +
           `Lower it, or ask an admin to raise the limit in Admin → Margin policy.`
@@ -614,19 +773,87 @@ export function adjustmentBlockers(lines: QuoteLine[], maxDiscountPercent: numbe
 }
 
 /**
+ * The arithmetic sanity checks: a quote nobody would knowingly send, as
+ * distinct from a rep's edit being out of policy (`adjustmentBlockers`) or the
+ * catalog being short a product (buildQuote's own).
+ *
+ * Worth asserting rather than assuming because two of the three are only
+ * reachable through bad CATALOG data — a price or quantity nobody in this
+ * codebase chose — and all of them ride onto a document that cannot be edited,
+ * voided or deleted once the merchant accepts it. "Negative" is the one the
+ * discount cap can't catch on its own: the cap bounds a percentage, and a
+ * negative list price turns any percentage into money owed the wrong way.
+ */
+export function quoteSanityBlockers(lines: QuoteLine[], totals: QuoteTotals): string[] {
+  const blockers: string[] = [];
+
+  for (const line of lines) {
+    if (!Number.isFinite(line.unitPrice) || line.unitPrice < 0) {
+      blockers.push(
+        `"${line.name}" is priced ${line.unitPrice} in the HubSpot catalog — a quote can't carry a negative or unreadable price.`
+      );
+    }
+    if (!Number.isInteger(line.qty) || line.qty < 1) {
+      blockers.push(`"${line.name}" has a quantity of ${line.qty}, which has to be a whole number of 1 or more.`);
+    }
+  }
+
+  const negativeCycle = totals.recurring.some(r => r.amount < 0);
+  if (totals.oneTime < 0 || negativeCycle || totals.monthlyEquivalent < 0) {
+    blockers.push(
+      "This quote totals a negative amount, which would bill the customer backwards. Check the prices and discounts above."
+    );
+  }
+
+  // A quote with lines on it that bills nothing is a mistake every time — a
+  // merchant who genuinely owes nothing gets a rate-only quote, which has no
+  // lines and never reaches here.
+  if (lines.length > 0 && totals.oneTime === 0 && totals.recurring.every(r => r.amount === 0)) {
+    blockers.push(
+      "Every line on this quote nets to $0, so it would charge the customer nothing at all. Remove a discount or a line."
+    );
+  }
+
+  return blockers;
+}
+
+/**
  * Reopen a saved quote's edits in the configurator, the discount/delay twin of
  * `picksFromQuoteLines`.
  *
  * Unlike the picks, DERIVED lines are kept: the platform fee and the three
  * install services are re-derived on the way back out, so a comped install
  * would silently return to full price if its adjustment weren't carried over.
+ *
+ * Package-covered lines are the exception. Their 100% is policy, re-applied by
+ * `applyPackageComp` on the way out, and reading it back as a REP adjustment
+ * would pin it to the product id — so the remainder half of a split line would
+ * come back free too, and would stay free even after the package stopped
+ * applying.
  */
 export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined): QuoteAdjustments {
+  // How many units of each product the merchant is actually being charged for,
+  // so a discounted line smaller than that total is recognised as a SPLIT and
+  // its quantity is carried back. Without this a "1 of 3 free" reopens as
+  // "all 3 free" — the same silent giveaway the comped-service round-trip
+  // exists to prevent, in the other direction.
+  const chargeable = new Map<string, number>();
+  for (const line of lines ?? []) {
+    if (line.coveredByPackage) continue;
+    chargeable.set(line.hubspotProductId, (chargeable.get(line.hubspotProductId) ?? 0) + line.qty);
+  }
+
   const out: QuoteAdjustments = {};
   for (const line of lines ?? []) {
+    if (line.coveredByPackage) continue;
     const adjustment: LineAdjustment = {};
-    if (line.discountPercent) adjustment.discountPercent = line.discountPercent;
+    if (line.discountPercent) {
+      adjustment.discountPercent = line.discountPercent;
+      if (line.qty < (chargeable.get(line.hubspotProductId) ?? 0)) adjustment.discountQty = line.qty;
+    }
     if (line.billingStart) adjustment.billingStart = line.billingStart;
+    // The undiscounted half of a split carries nothing of its own, so it adds
+    // no key and can't overwrite the half that does.
     if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
   }
   return out;
@@ -642,12 +869,18 @@ export function describeBillingStart(start: BillingStart): string {
 // ── The one derivation ──────────────────────────────────────────────────────
 
 export type BuiltQuote = {
-  /** Platform line, then the mandatory services, then what the rep picked. */
+  /**
+   * Platform line, then any package SKUs, then the mandatory services and what
+   * the rep picked — the latter two rewritten by the package decomposition, so
+   * a line a package absorbed sits here at 100% off carrying `coveredByPackage`.
+   */
   quoteLines: QuoteLine[];
   orderPoints: OrderPoints;
   platform: PlatformLineResult;
   includedServices: IncludedServicesResult;
   breakdown: OrderPointsBreakdown;
+  /** Which pre-made packages the cart broke down into, and what they absorbed. */
+  packages: PackageDecomposition;
   totals: QuoteTotals;
   /**
    * Reasons this quote must not be sent, in rep-readable prose. Empty means
@@ -691,13 +924,45 @@ export function buildQuote(
   const platform = resolvePlatformLine(quoteType, breakdown.orderPoints.total, catalog);
   const includedServices = resolveIncludedServices(quoteType, pickedLines, catalog);
 
+  // The pre-made packages, resolved against the mandatory services AND the
+  // picks — the QSR Kit covers the WiFi package, which is a derived line, so
+  // restricting this to the picks would leave $999 of it uncovered.
+  //
+  // The platform line is deliberately not offered: it is recurring, and a
+  // package only ever absorbs one-time charges (see quotePackages.ts). The
+  // frequency filter in there would drop it anyway; not passing it says why.
+  //
+  // Order-point counting runs BEFORE this and on the unsplit picks, which is
+  // the same count either way — splitting a line preserves its total quantity.
+  const packages = decomposePackages({
+    lines: [...includedServices.lines, ...pickedLines],
+    catalog,
+    orderPointsPerUnit,
+  });
+
   const quoteLines = [
     ...(platform.line ? [platform.line] : []),
-    ...includedServices.lines,
-    ...pickedLines,
-  ].map(line => applyLineAdjustment(line, adjustments[line.hubspotProductId]));
+    ...packages.packageLines,
+    ...packages.lines,
+  ].flatMap(line => {
+    const adjustment = adjustments[line.hubspotProductId];
+    // The comps come AFTER the rep's edits — an unrelated edit on the row must
+    // not clear them. An explicit discount from the rep beats the service comp
+    // (see applyServiceComp) but never the package one (see applyPackageComp),
+    // because a covered line is hardware the package price already bought.
+    const adjusted = applyPackageComp(applyServiceComp(applyLineAdjustment(line, adjustment), adjustment));
+    // Last: scoping a discount to part of the quantity splits the line in two.
+    return splitPartialDiscount(adjusted, adjustment);
+  });
 
-  const blockers: string[] = [...adjustmentBlockers(quoteLines, maxDiscountPercent)];
+  const totals = quoteTotals(quoteLines);
+
+  const blockers: string[] = [
+    ...adjustmentBlockers(quoteLines, maxDiscountPercent),
+    ...discountQtyBlockers(adjustments, quoteLines),
+    ...quoteSanityBlockers(quoteLines, totals),
+    ...packages.blockers,
+  ];
   if (platform.status === "unresolved") {
     blockers.push(
       `This quote needs the "${platform.productName}" platform product, which isn't in the HubSpot ` +
@@ -716,7 +981,8 @@ export function buildQuote(
     platform,
     includedServices,
     breakdown,
-    totals: quoteTotals(quoteLines),
+    packages,
+    totals,
     blockers,
   };
 }

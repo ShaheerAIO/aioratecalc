@@ -16,8 +16,11 @@
   padding: var(--space-md) var(--space-lg);
 }
 
+/* Tracks the steps below it. Every step that can use two panes now caps at
+   --measure-wide instead of hand-rolling 50rem, so the stepper matches or it
+   floats in the middle of a much wider page. */
 .stepper {
-  max-width: 50rem;
+  max-width: var(--measure-wide);
   margin-inline: auto;
   display: flex;
   align-items: center;
@@ -189,9 +192,17 @@
 /* ---------- Products step ---------- */
 
 .productsWrap {
-  max-width: 44rem;
+  max-width: var(--measure-wide);
   margin: 0 auto;
   padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
+
+  /* The configurator's sticky totals rail has to clear the sticky stepper as
+     well as the nav, which the default only accounts for. This mirrors
+     .stepperRow's own `top` above and adds its rendered height: 2 *
+     --space-md padding + a ~1.875rem control row (22px circle + 2 *
+     --space-2xs) + 1px border ≈ 4rem. Derived, not eyeballed — but if the
+     stepper's geometry changes, this moves with it. */
+  --configurator-sticky-top: calc(60px + var(--space-lg) + 4rem + var(--space-md));
 }
 
 .productsTitle {

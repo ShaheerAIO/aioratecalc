@@ -1,5 +1,21 @@
 export type PricingModel = "flat-rate" | "2-tier" | "interchange-plus";
 
+/**
+ * The models a rep may actually sell. 2-tier only — a platform limit (Steve,
+ * 2026-07-23), not a UI preference.
+ *
+ * Flat-rate and interchange-plus stay in the TYPE and in `pricing.ts`, which
+ * still computes both: the limit is on what can be sold today, and existing
+ * rows carry those values. They were rendered as disabled "Soon" cards until
+ * 2026-10-01, when the product owner asked for them hidden outright — a
+ * roadmap on a quoting screen invites a merchant to ask for one of the two.
+ *
+ * Lives here, next to the type, because three separate rep surfaces offer this
+ * choice and each used to keep its own copy of the list. Two of them had
+ * drifted and were offering all three as selectable.
+ */
+export const SELECTABLE_PRICING_MODELS: PricingModel[] = ["2-tier"];
+
 export type DealStage =
   | "prospect_created"      // rep created a prospect + set a margin target, no link sent yet
   | "lead_link_sent"        // rep sent the tokenized self-serve upload link, awaiting customer
@@ -159,6 +175,20 @@ export type QuoteLine = {
    * would ignore.
    */
   billingStart?: BillingStart | null;
+  /**
+   * Set when a pre-made package absorbed this line: the package name(s) that
+   * cover it. Presence is what makes the 100% discount on this line AIO policy
+   * rather than a rep's choice — `adjustmentBlockers` exempts it from the
+   * discount cap on that basis, exactly as it does a comped service.
+   *
+   * The NAME rather than an id, because a persisted quote has to render years
+   * later whether or not that package is still in `PACKAGES`.
+   *
+   * A line whose quantity is only partly covered is SPLIT into two lines, one
+   * carrying this and one not — never one line at a blended percentage, which
+   * would round the discount and make our totals disagree with HubSpot's.
+   */
+  coveredByPackage?: string | null;
 };
 
 /**
@@ -187,6 +217,20 @@ export type BillingStart =
  */
 export type LineAdjustment = {
   discountPercent?: number | null;
+  /**
+   * How many UNITS the discount applies to. Absent means the whole line, which
+   * is the overwhelming majority.
+   *
+   * This is how "one of the three POS units is free" is expressed. The
+   * alternative — a percentage across the whole line — doesn't land on a round
+   * number: one of three $749 units is 33.3333%, and at 33.33% HubSpot bills
+   * $1,498.07 rather than $1,498.00, on a document nobody can amend.
+   *
+   * `buildQuote` turns it into two lines, the discounted quantity and the
+   * rest, the same shape a package-covered line is split into. It never
+   * reaches HubSpot as a property — there is no such thing there.
+   */
+  discountQty?: number | null;
   billingStart?: BillingStart | null;
 };
 
@@ -297,6 +341,11 @@ export type HubspotIds = {
    *  (PAYMENT-TEST-PLAN.md §1.5). */
   paymentStatus: string | null;
   paymentDate: string | null;
+  /** hs_quote_esign_status: NO_ESIGN_STATUS | PENDING_SIGNATURE | SIGNED.
+   *  The SIGNATURE half of the hosted quote, tracked separately from payment
+   *  because the merchant can do one without the other — see
+   *  hasSignedWithoutPaying below. */
+  esignStatus: string | null;
   /** Every subscription this quote produced, via association 304. */
   subscriptions: HubspotSubscriptionSnapshot[] | null;
   /** Worst-of roll-up across `subscriptions`, so one broken subscription on a
@@ -326,6 +375,7 @@ export const EMPTY_HUBSPOT_IDS: HubspotIds = {
   publishedAt: null,
   paymentStatus: null,
   paymentDate: null,
+  esignStatus: null,
   subscriptions: null,
   subscriptionStatus: null,
   syncedAt: null,

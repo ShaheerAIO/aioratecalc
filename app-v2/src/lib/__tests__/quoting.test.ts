@@ -140,7 +140,14 @@ describe("always-included services", () => {
         "System Onboarding and Training",
       ]);
       expect(lines.every(l => l.qty === 1)).toBe(true);
-      expect(quoteTotals(lines).oneTime).toBe(999 + 999 + 499);
+      // Only the WiFi package is CHARGED. The install and the training are on
+      // the quote at MSRP and comped to $0 — AE price sheet, effective
+      // 2026-09-18. See COMPED_SERVICE_PRODUCT_IDS.
+      expect(quoteTotals(lines).oneTime).toBe(999);
+      const byName = new Map(lines.map(l => [l.name, l]));
+      expect(byName.get("AIO WiFi Network Package")!.discountPercent).toBeUndefined();
+      expect(byName.get("Onsite Installation")!.discountPercent).toBe(100);
+      expect(byName.get("System Onboarding and Training")!.discountPercent).toBe(100);
     }
   });
 
@@ -435,8 +442,10 @@ describe("buildQuote — the one derivation", () => {
       "POS Unit",
       "Cash Drawer",
     ]);
-    // 999 + 999 + 499 + 2×749 + 69 = $4,064 due once; the platform fee is weekly.
-    expect(built.totals.oneTime).toBe(4064);
+    // 999 + 2×749 + 69 = $2,566 due once. The install ($999) and the training
+    // ($499) are on the quote but comped to $0, so they add nothing — the
+    // list total would be $4,064. The platform fee is weekly.
+    expect(built.totals.oneTime).toBe(2566);
     expect(built.totals.recurring).toEqual([{ frequency: "weekly", amount: 99 }]);
   });
 

@@ -347,6 +347,7 @@ function NewProposalFlow() {
             picks={picks}
             channels={channels}
             selectableTypes={["full_pos", "food_truck"]}
+            rail="inline"
             onQuoteTypeChange={setQuoteType}
             onPicksChange={setPicks}
             onChannelsChange={setChannels}

@@ -1,5 +1,70 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
 
+/* ---------- Layout ----------
+ * One roomy column of decisions. The running total does NOT share that
+ * column — an earlier version put it in a 17rem track beside the catalog
+ * (`1fr 17rem` inside the page measure) and the product names wrapped the
+ * moment anything landed in the cart.
+ *
+ * When there is a total AND the host has a gutter (data-rail is unset), the
+ * grid grows *past* the parent by exactly `gap + 17rem`. `1fr` therefore
+ * resolves back to the page measure, and the rail hangs in the leftover
+ * viewport space to the right. Hosts whose column already fills the
+ * viewport — the statement wizard at --measure-wide, EditQuotePanel inside
+ * the accounts card — set data-rail="inline" so the totals stay underneath
+ * rather than clipping off-screen.
+ *
+ * The rail is sticky but NOT its own scroll container. It is short by
+ * construction — at most five rows — so it can follow the page down.
+ *
+ * Hanging starts at 80rem (laptop → wide). Below that, and on inline hosts,
+ * the totals sit under the catalog at full measure. Sticky is off in those
+ * cases so the box cannot pin over the picker.
+ *
+ * --configurator-sticky-top is what the rail pins below. The default clears
+ * the floating nav; a host with more sticky furniture above it overrides
+ * the variable rather than forking this rule (the statement wizard does,
+ * for its sticky stepper — see proposals-new.module.css). */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-xl);
+  align-items: start;
+}
+
+@media (min-width: 80rem) {
+  .layout[data-railed]:not([data-rail="inline"]) {
+    grid-template-columns: minmax(0, 1fr) 17rem;
+    column-gap: var(--space-lg);
+    width: calc(100% + var(--space-lg) + 17rem);
+  }
+
+  .layout[data-railed]:not([data-rail="inline"]) .sideCol {
+    position: sticky;
+    top: var(--configurator-sticky-top, calc(var(--nav-offset) + var(--space-md)));
+    /* Below the sticky nav/stepper, which own the higher z-indexes. */
+    z-index: 1;
+  }
+}
+
+.mainCol { min-width: 0; }
+
+.sideCol { min-width: 0; }
+
+/* A compact summary box, not a full-dress panel. The rail is meant to read as
+   a running total parked to the right of the work, so it takes the tighter
+   padding and drops the trailing margin that would make the sticky box taller
+   than its own content. */
+.sideCol .panel {
+  padding: var(--space-md);
+  margin-bottom: 0;
+}
+
+.sideCol .sectionHead { margin-bottom: var(--space-xs); }
+.sideCol .sectionTitle { font-size: 0.85rem; }
+.sideCol .sectionNote { font-size: 0.7rem; }
+
 /* ---------- Panels ---------- */
 
 .panel {
@@ -83,7 +148,13 @@
   gap: var(--space-md);
   padding: var(--space-xs) var(--space-2xs);
   border-radius: var(--radius-sm);
+  /* So the adjust control can drop onto a line of its own beneath the name and
+     the stepper, rather than squeezing between them. */
+  flex-wrap: wrap;
 }
+
+.productRow > .adjustWrap,
+.includedRow > .adjustWrap { flex-basis: 100%; }
 
 .productRow[data-picked="true"] { background: oklch(69% 0.17 32 / 0.07); }
 
@@ -147,6 +218,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-md);
   padding: var(--space-xs) var(--space-2xs);
   border-radius: var(--radius-sm);
@@ -295,23 +367,75 @@
    One row per quote line, controls wrapping below the name on a phone rather
    than squeezing a date input into a 78px column the way .productRow's
    stepper had to be protected from. */
-.adjustRow {
-  display: flex;
+/* ---------- Per-line adjust ----------
+ * Was a panel of its own listing every line a second time, which meant reading
+ * the quote twice — once to pick it, once to discount it. Now it is a small
+ * disclosure on the row itself, and it appears on EVERY line that is on the
+ * quote: picked hardware, the three always-included services, and the platform
+ * fee. The last two are the ones that matter most — comping the install and
+ * the training is the most common discount AIO gives, and neither is a row the
+ * picker offers. */
+
+.adjustWrap { margin-top: var(--space-2xs); }
+
+.adjustToggle {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-xs) var(--space-md);
-  padding: var(--space-xs) var(--space-2xs);
-  border-radius: var(--radius-sm);
+  gap: 4px;
+  padding: 2px var(--space-xs);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-3);
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 150ms var(--ease-out), color 150ms var(--ease-out);
 }
 
-.adjustRow + .adjustRow { border-top: 1px solid var(--rule); }
+.adjustToggle:hover { border-color: var(--ink-3); color: var(--ink); }
+.adjustToggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-.adjustControls {
+/* Carrying an adjustment is a fact about the quote, so the closed button states
+   it — a rep scanning the list can see what has been comped without opening
+   anything. */
+.adjustToggle[data-active] {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.adjustToggle[aria-expanded="true"] .adjustChevron { transform: rotate(180deg); }
+
+.adjustChevron {
+  font-size: 0.6rem;
+  transition: transform 150ms var(--ease-out);
+}
+
+.adjustDrawer {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
-  gap: var(--space-sm);
+  gap: var(--space-sm) var(--space-md);
+  margin-top: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.adjustNote {
+  flex-basis: 100%;
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.delayTag {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent-2-text);
 }
 
 .adjustField {
@@ -373,3 +497,54 @@
 }
 
 .totalValue[data-tone="discount"] { color: var(--accent-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  .adjustToggle, .adjustChevron { transition-duration: 1ms; }
+}
+
+/* ---------- Packages ---------- */
+
+/* Reads like the tier box — a derived outcome of the picks, not a control. The
+   accent edge is what both have in common: "the app decided this". */
+.packageRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+
+.packageRow + .packageRow { margin-top: var(--space-2xs); }
+
+.packageName { font-size: 0.88rem; font-weight: 700; color: var(--ink); }
+
+.packageContents {
+  font-size: 0.75rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+  margin-top: var(--space-3xs);
+}
+
+.packagePrice {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* On the picker row and the included-services row, so a rep can see at a
+   glance which of the things they added a package is already paying for. */
+.coveredTag {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+}

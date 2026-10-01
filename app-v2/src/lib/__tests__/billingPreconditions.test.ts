@@ -141,7 +141,7 @@ describe("canPublishBillingQuote", () => {
       hubspotIds: {
         quoteId: "q-1", quoteTemplateId: null, lineItemIds: null, contactId: null, quoteLink: null,
         publishedAt: "2026-08-20T10:00:00.000Z", paymentStatus: "PENDING", paymentDate: null,
-        subscriptions: null, subscriptionStatus: null, syncedAt: null, lastSyncError: null, lastSyncErrorAt: null,
+        esignStatus: null, subscriptions: null, subscriptionStatus: null, syncedAt: null, lastSyncError: null, lastSyncErrorAt: null,
       },
     });
     expect(result.ok).toBe(false);

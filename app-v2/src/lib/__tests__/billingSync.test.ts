@@ -51,6 +51,7 @@ const HUBSPOT_IDS: HubspotIds = {
   publishedAt: "2026-08-14T00:00:00.000Z",
   paymentStatus: "PENDING",
   paymentDate: null,
+  esignStatus: null,
   subscriptions: null,
   subscriptionStatus: null,
   syncedAt: null,
