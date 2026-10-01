@@ -950,33 +950,66 @@ export async function listProducts(): Promise<CatalogProduct[]> {
 }
 
 // ── Phase F: "Push to EasyOB" from HubSpot ──────────────────────────────────
-// HubSpot deprecated classic CRM cards, so the deep link lives on a Company
-// URL property (`easyob_link`, created manually in the HubSpot UI) instead of
-// a card data-fetch endpoint. This keeps that property in sync: every company
-// should carry `{base}/rep/prospects/new?hubspotCompanyId={id}`. Reads need
-// only the general app's existing companies.read scope; writes need
-// companies.write, which may not be granted yet — see backfillEasyobLinks.
+// HubSpot deprecated classic CRM cards, so the deep link lives on a DEAL URL
+// property (`easyob_link`, created manually in the HubSpot UI) and shows on the
+// Deals card of the Company record. Every deal carries
+// `{base}/rep/prospects/new?hubspotCompanyId={company}&hubspotDealId={deal}`,
+// which opens a new EasyOB application for that company, in THAT deal.
+//
+// The link used to live on the COMPANY (same property name), which opened the
+// form with no deal chosen. That was moved to the deal (2026-09-30), and the
+// company values are cleared — see clearCompanyEasyobLinks.
 
-export function buildEasyobLink(companyId: string, baseUrl: string): string {
-  return `${baseUrl}/rep/prospects/new?hubspotCompanyId=${companyId}`;
+export function buildEasyobDealLink(companyId: string, dealId: string, baseUrl: string): string {
+  const params = new URLSearchParams({ hubspotCompanyId: companyId, hubspotDealId: dealId });
+  return `${baseUrl}/rep/prospects/new?${params}`;
 }
 
-export type EasyobLinkCompany = { id: string; properties: { easyob_link?: string | null } };
 export type EasyobLinkUpdate = { id: string; properties: { easyob_link: string } };
 
-// Pure: given a page of companies and the base URL, return only the companies
-// whose easyob_link is missing or stale. Kept separate from the network I/O
-// below so it can be unit-tested without hitting HubSpot.
-export function planEasyobLinkUpdates(companies: EasyobLinkCompany[], baseUrl: string): EasyobLinkUpdate[] {
+type AssociationResult = { id: string | number; type?: string };
+
+/**
+ * Pure: which company a deal's link should name. The primary association
+ * (`deal_to_company`, typeId 5) when there is one, otherwise the first — a
+ * deal EasyOB created carries only the unlabeled 341, and HubSpot marks the
+ * first company primary on its own. Null for a deal on no company: the
+ * prospect form needs a company, so that deal gets no link.
+ */
+export function dealLinkCompanyId(results: AssociationResult[] | undefined): string | null {
+  const all = results ?? [];
+  const primary = all.find(r => r.type === "deal_to_company");
+  const chosen = primary ?? all[0];
+  return chosen ? String(chosen.id) : null;
+}
+
+export type EasyobLinkDeal = { id: string; companyId: string | null; easyobLink?: string | null };
+
+// Pure: given a page of deals and the base URL, return only the deals whose
+// easyob_link is missing or stale. A deal that has lost its company gets its
+// old link emptied rather than left pointing at a company it's no longer on.
+// Kept separate from the network I/O below so it can be unit-tested without
+// hitting HubSpot.
+export function planEasyobDealLinkUpdates(deals: EasyobLinkDeal[], baseUrl: string): EasyobLinkUpdate[] {
   const updates: EasyobLinkUpdate[] = [];
-  for (const company of companies) {
-    const expected = buildEasyobLink(company.id, baseUrl);
-    const current = (company.properties.easyob_link ?? "").trim();
+  for (const deal of deals) {
+    const expected = deal.companyId ? buildEasyobDealLink(deal.companyId, deal.id, baseUrl) : "";
+    const current = (deal.easyobLink ?? "").trim();
     if (current !== expected) {
-      updates.push({ id: company.id, properties: { easyob_link: expected } });
+      updates.push({ id: deal.id, properties: { easyob_link: expected } });
     }
   }
   return updates;
+}
+
+export type EasyobLinkCompany = { id: string; properties: { easyob_link?: string | null } };
+
+// Pure: the companies still carrying the old company-level link. Empty
+// string is how HubSpot clears a property value.
+export function planCompanyLinkClears(companies: EasyobLinkCompany[]): EasyobLinkUpdate[] {
+  return companies
+    .filter(c => (c.properties.easyob_link ?? "").trim() !== "")
+    .map(c => ({ id: c.id, properties: { easyob_link: "" } }));
 }
 
 export type EasyobLinkBackfillSummary = { checked: number; updated: number; failed: number; error?: string };
@@ -1057,48 +1090,60 @@ function baseUrlErrorMessage(raw: string | undefined): string {
   return `NEXT_PUBLIC_BASE_URL is ${shown} — refusing to write non-public links; set a public https URL`;
 }
 
-// Pages through every Company, then batch-PATCHes the ones missing or with a
-// stale easyob_link. A 403 on the batch update means the general app's token
-// doesn't have companies.write yet — that's surfaced as one clear error
-// rather than a per-company failure count, since it means nothing after the
-// first chunk will succeed either.
-export async function backfillEasyobLinks(): Promise<EasyobLinkBackfillSummary> {
-  const rawBase = process.env.NEXT_PUBLIC_BASE_URL;
-  if (!isPublicBaseUrl(rawBase)) {
-    return { checked: 0, updated: 0, failed: 0, error: baseUrlErrorMessage(rawBase) };
-  }
-  const base = rawBase;
-
-  const companies: EasyobLinkCompany[] = [];
+// Pages through every record of an object type with easyob_link (and, when
+// asked, its company associations).
+async function listForEasyobLinks(
+  objectType: "deals" | "companies",
+  hdrs: Record<string, string>,
+  withCompanies: boolean
+): Promise<Array<{ id: string; properties: Record<string, string | null>; companies?: AssociationResult[] }>> {
+  const rows: Array<{ id: string; properties: Record<string, string | null>; companies?: AssociationResult[] }> = [];
   let after: string | undefined;
-
   do {
     const params = new URLSearchParams({ limit: "100", properties: "easyob_link" });
+    if (withCompanies) params.set("associations", "companies");
     if (after) params.set("after", after);
-    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies?${params}`, { headers: headers() });
-    if (!res.ok) throw hubspotErr("HubSpot company list failed", res.status, await res.text());
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/${objectType}?${params}`, { headers: hdrs });
+    if (!res.ok) throw hubspotErr(`HubSpot ${objectType} list failed`, res.status, await res.text());
     const data = await res.json() as {
-      results?: Array<{ id: string; properties: Record<string, string | null> }>;
+      results?: Array<{
+        id: string;
+        properties: Record<string, string | null>;
+        associations?: { companies?: { results?: AssociationResult[] } };
+      }>;
       paging?: { next?: { after?: string } };
     };
-    companies.push(...(data.results ?? []).map(c => ({ id: c.id, properties: { easyob_link: c.properties.easyob_link } })));
+    rows.push(...(data.results ?? []).map(r => ({
+      id: r.id,
+      properties: r.properties,
+      companies: r.associations?.companies?.results,
+    })));
     after = data.paging?.next?.after;
     if (after) await sleep(REQUEST_SPACING_MS);
   } while (after);
+  return rows;
+}
 
-  const updates = planEasyobLinkUpdates(companies, base);
+// Batch-PATCHes easyob_link in chunks of 100. A 403 means the token lacks
+// the write scope — surfaced as one clear error rather than a per-record
+// failure count, since nothing after the first chunk would succeed either.
+async function batchUpdateEasyobLinks(
+  objectType: "deals" | "companies",
+  hdrs: Record<string, string>,
+  updates: EasyobLinkUpdate[],
+  missingScopeMessage: string
+): Promise<{ updated: number; failed: number }> {
   let updated = 0;
   let failed = 0;
-
   for (let i = 0; i < updates.length; i += 100) {
     const chunk = updates.slice(i, i + 100);
-    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/batch/update`, {
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/${objectType}/batch/update`, {
       method: "POST",
-      headers: headers(),
+      headers: hdrs,
       body: JSON.stringify({ inputs: chunk }),
     });
     if (res.status === 403) {
-      throw new Error("companies.write scope missing on the general app — grant crm.objects.companies.write and retry");
+      throw new Error(missingScopeMessage);
     } else if (res.ok) {
       // 200 (all succeeded) or 207 MULTI_STATUS (partial failure) — both are
       // res.ok, so the body is the only way to tell them apart.
@@ -1107,16 +1152,47 @@ export async function backfillEasyobLinks(): Promise<EasyobLinkBackfillSummary> 
       updated += outcome.updated;
       failed += outcome.failed;
       if (outcome.failed > 0) {
-        console.error("backfillEasyobLinks: batch update partial failure", outcome.failed, "of", chunk.length, body.errors);
+        console.error(`easyob_link ${objectType}: batch update partial failure`, outcome.failed, "of", chunk.length, body.errors);
       }
     } else {
       failed += chunk.length;
-      console.error("backfillEasyobLinks: batch update failed", res.status, await res.text());
+      console.error(`easyob_link ${objectType}: batch update failed`, res.status, await res.text());
     }
     if (i + 100 < updates.length) await sleep(REQUEST_SPACING_MS);
   }
+  return { updated, failed };
+}
 
-  return { checked: companies.length, updated, failed };
+// Deals are read and written on the billing app's token, like every other
+// deal call in this adapter (getDealById, createDeal, pushToHubSpot).
+export async function backfillEasyobDealLinks(): Promise<EasyobLinkBackfillSummary> {
+  const rawBase = process.env.NEXT_PUBLIC_BASE_URL;
+  if (!isPublicBaseUrl(rawBase)) {
+    return { checked: 0, updated: 0, failed: 0, error: baseUrlErrorMessage(rawBase) };
+  }
+  const rows = await listForEasyobLinks("deals", billingHeaders(), true);
+  const deals: EasyobLinkDeal[] = rows.map(r => ({
+    id: r.id,
+    companyId: dealLinkCompanyId(r.companies),
+    easyobLink: r.properties.easyob_link,
+  }));
+  const outcome = await batchUpdateEasyobLinks(
+    "deals", billingHeaders(), planEasyobDealLinkUpdates(deals, rawBase),
+    "deals write scope missing on the billing app — grant crm.objects.deals.write and retry"
+  );
+  return { checked: deals.length, ...outcome };
+}
+
+// Empties the old company-level easyob_link. Idempotent — once every company
+// is clear this only reads. Delete it (and its cron call) once the COMPANY
+// property itself has been deleted in HubSpot.
+export async function clearCompanyEasyobLinks(): Promise<EasyobLinkBackfillSummary> {
+  const rows = await listForEasyobLinks("companies", headers(), false);
+  const outcome = await batchUpdateEasyobLinks(
+    "companies", headers(), planCompanyLinkClears(rows),
+    "companies.write scope missing on the general app — grant crm.objects.companies.write and retry"
+  );
+  return { checked: rows.length, ...outcome };
 }
 
 // ── Phase E: the billing quote ──────────────────────────────────────────────

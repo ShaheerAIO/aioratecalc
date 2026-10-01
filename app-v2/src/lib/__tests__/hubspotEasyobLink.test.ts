@@ -1,69 +1,86 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildEasyobLink,
-  planEasyobLinkUpdates,
+  buildEasyobDealLink,
+  dealLinkCompanyId,
+  planEasyobDealLinkUpdates,
+  planCompanyLinkClears,
   isPublicBaseUrl,
   countBatchUpdateOutcome,
-  type EasyobLinkCompany,
+  type EasyobLinkDeal,
 } from "@/lib/adapters/hubspot";
 
 const BASE = "https://easyob.example.com";
 
-describe("buildEasyobLink", () => {
-  it("builds the prospect-prefill deep link for a company id", () => {
-    expect(buildEasyobLink("123", BASE)).toBe(
-      "https://easyob.example.com/rep/prospects/new?hubspotCompanyId=123"
+describe("buildEasyobDealLink", () => {
+  it("opens the prospect form for the company, in that deal", () => {
+    expect(buildEasyobDealLink("123", "456", BASE)).toBe(
+      "https://easyob.example.com/rep/prospects/new?hubspotCompanyId=123&hubspotDealId=456"
     );
   });
 });
 
-describe("planEasyobLinkUpdates", () => {
-  it("plans an update for a company with no easyob_link", () => {
-    const companies: EasyobLinkCompany[] = [{ id: "1", properties: { easyob_link: null } }];
-    expect(planEasyobLinkUpdates(companies, BASE)).toEqual([
-      { id: "1", properties: { easyob_link: buildEasyobLink("1", BASE) } },
+describe("dealLinkCompanyId", () => {
+  it("prefers the primary company association", () => {
+    expect(dealLinkCompanyId([
+      { id: "1", type: "deal_to_company_unlabeled" },
+      { id: "2", type: "deal_to_company" },
+      { id: "2", type: "deal_to_company_unlabeled" },
+    ])).toBe("2");
+  });
+
+  it("falls back to the first company when none is primary", () => {
+    expect(dealLinkCompanyId([{ id: 7, type: "deal_to_company_unlabeled" }])).toBe("7");
+  });
+
+  it("is null for a deal on no company", () => {
+    expect(dealLinkCompanyId(undefined)).toBeNull();
+    expect(dealLinkCompanyId([])).toBeNull();
+  });
+});
+
+describe("planEasyobDealLinkUpdates", () => {
+  it("plans a link for a deal with none", () => {
+    const deals: EasyobLinkDeal[] = [{ id: "10", companyId: "1", easyobLink: null }];
+    expect(planEasyobDealLinkUpdates(deals, BASE)).toEqual([
+      { id: "10", properties: { easyob_link: buildEasyobDealLink("1", "10", BASE) } },
     ]);
   });
 
-  it("plans an update for a company with an empty-string easyob_link", () => {
-    const companies: EasyobLinkCompany[] = [{ id: "2", properties: { easyob_link: "" } }];
-    expect(planEasyobLinkUpdates(companies, BASE)).toEqual([
-      { id: "2", properties: { easyob_link: buildEasyobLink("2", BASE) } },
-    ]);
-  });
-
-  it("plans an update for a company whose link points at a stale id or base URL", () => {
-    const companies: EasyobLinkCompany[] = [
-      { id: "3", properties: { easyob_link: "https://old.example.com/rep/prospects/new?hubspotCompanyId=3" } },
-      { id: "4", properties: { easyob_link: "https://easyob.example.com/rep/prospects/new?hubspotCompanyId=999" } },
+  it("rewrites a stale base URL or company", () => {
+    const deals: EasyobLinkDeal[] = [
+      { id: "11", companyId: "1", easyobLink: "https://old.example.com/rep/prospects/new?hubspotCompanyId=1&hubspotDealId=11" },
+      { id: "12", companyId: "2", easyobLink: buildEasyobDealLink("999", "12", BASE) },
     ];
-    expect(planEasyobLinkUpdates(companies, BASE)).toEqual([
-      { id: "3", properties: { easyob_link: buildEasyobLink("3", BASE) } },
-      { id: "4", properties: { easyob_link: buildEasyobLink("4", BASE) } },
+    expect(planEasyobDealLinkUpdates(deals, BASE)).toEqual([
+      { id: "11", properties: { easyob_link: buildEasyobDealLink("1", "11", BASE) } },
+      { id: "12", properties: { easyob_link: buildEasyobDealLink("2", "12", BASE) } },
     ]);
   });
 
-  it("skips a company whose easyob_link already matches", () => {
-    const companies: EasyobLinkCompany[] = [
-      { id: "5", properties: { easyob_link: buildEasyobLink("5", BASE) } },
-    ];
-    expect(planEasyobLinkUpdates(companies, BASE)).toEqual([]);
+  it("skips a deal whose link already matches", () => {
+    const deals: EasyobLinkDeal[] = [{ id: "13", companyId: "3", easyobLink: buildEasyobDealLink("3", "13", BASE) }];
+    expect(planEasyobDealLinkUpdates(deals, BASE)).toEqual([]);
   });
 
-  it("handles a mixed page, only planning the companies that need it", () => {
-    const companies: EasyobLinkCompany[] = [
-      { id: "6", properties: { easyob_link: buildEasyobLink("6", BASE) } },
-      { id: "7", properties: { easyob_link: null } },
-      { id: "8", properties: {} },
+  it("empties the link on a deal that has lost its company, and leaves an unlinked one alone", () => {
+    const deals: EasyobLinkDeal[] = [
+      { id: "14", companyId: null, easyobLink: buildEasyobDealLink("4", "14", BASE) },
+      { id: "15", companyId: null, easyobLink: null },
     ];
-    expect(planEasyobLinkUpdates(companies, BASE)).toEqual([
-      { id: "7", properties: { easyob_link: buildEasyobLink("7", BASE) } },
-      { id: "8", properties: { easyob_link: buildEasyobLink("8", BASE) } },
+    expect(planEasyobDealLinkUpdates(deals, BASE)).toEqual([
+      { id: "14", properties: { easyob_link: "" } },
     ]);
   });
+});
 
-  it("returns an empty plan for an empty page", () => {
-    expect(planEasyobLinkUpdates([], BASE)).toEqual([]);
+describe("planCompanyLinkClears", () => {
+  it("clears only companies still carrying the old link", () => {
+    expect(planCompanyLinkClears([
+      { id: "1", properties: { easyob_link: `${BASE}/rep/prospects/new?hubspotCompanyId=1` } },
+      { id: "2", properties: { easyob_link: "" } },
+      { id: "3", properties: { easyob_link: null } },
+      { id: "4", properties: {} },
+    ])).toEqual([{ id: "1", properties: { easyob_link: "" } }]);
   });
 });
 

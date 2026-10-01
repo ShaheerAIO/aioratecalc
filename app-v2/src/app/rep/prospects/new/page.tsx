@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { createProspectAction, getHubspotCompanyForProspectAction } from "@/lib/actions/prospects";
+import { createProspectAction, getHubspotCompanyForProspectAction, resolveDealChoiceAction } from "@/lib/actions/prospects";
 import { searchTenantCompaniesAction } from "@/lib/actions/applications";
 import ProductConfigurator, {
   type ConfiguredQuote,
@@ -39,6 +39,8 @@ const BLANK_PROCESSING: ProcessingInfo = {
 function NewProspectFlow() {
   const searchParams = useSearchParams();
   const hubspotCompanyId = searchParams.get("hubspotCompanyId");
+  // Set by the easyob_link on a HubSpot deal: open this company IN that deal.
+  const hubspotDealId = searchParams.get("hubspotDealId");
 
   const [avgTicket, setAvgTicket]       = useState("");
   const [monthlyVolume, setMonthlyVolume] = useState("");
@@ -91,6 +93,8 @@ function NewProspectFlow() {
   // company and a stale resolution from a previous company must not survive
   // the switch.
   const [dealResolved, setDealResolved] = useState<ResolvedDeal | null>(null);
+  // Why the deal named in the HubSpot deep link couldn't be preselected.
+  const [dealNotice, setDealNotice] = useState<string | null>(null);
 
   // Latest form values, so applying a prefill from an async callback merges
   // against what's on screen now rather than whatever was there when the fetch
@@ -137,10 +141,20 @@ function NewProspectFlow() {
           applyPrefill(res.prefill);
         }
         if (res.error) setHubspotNotice(res.error);
+        if (!res.company || !hubspotDealId) return;
+        // The same resolution the picker runs on a click, so a deal that is
+        // closed, on another company, or already adopted is refused here too
+        // — and the picker stays open for the rep to choose another.
+        const choice = { mode: "existing" as const, dealId: hubspotDealId };
+        return resolveDealChoiceAction({ companyId: res.company.id, choice }).then(resolution => {
+          if (cancelled) return;
+          if (resolution.ok) setDealResolved({ choice, deal: resolution.deal });
+          else setDealNotice(resolution.message);
+        });
       })
       .catch(e => { if (!cancelled) setHubspotNotice(e instanceof Error ? e.message : "Could not reach HubSpot"); });
     return () => { cancelled = true; };
-  }, [hubspotCompanyId, applyPrefill]);
+  }, [hubspotCompanyId, hubspotDealId, applyPrefill]);
 
   // HubSpot deprecated classic CRM cards, so there's no "start from HubSpot"
   // button anymore — the flow inverts: start here, find the company. This is
@@ -179,6 +193,7 @@ function NewProspectFlow() {
     setHubspotQuery("");
     setHubspotResults([]);
     setDealResolved(null);
+    setDealNotice(null);
     setPrefillLoading(true);
     prefillRequestRef.current = company.id;
     getHubspotCompanyForProspectAction(company.id)
@@ -199,6 +214,7 @@ function NewProspectFlow() {
     setHubspotCompany(null);
     setHubspotNotice(null);
     setDealResolved(null);
+    setDealNotice(null);
     prefillRequestRef.current = null;
     setPrefillLoading(false);
     applyPrefill(null);
@@ -315,7 +331,7 @@ function NewProspectFlow() {
     setQuoteType("full_pos"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
-    setHubspotCompany(null); setHubspotNotice(null); setDealResolved(null);
+    setHubspotCompany(null); setHubspotNotice(null); setDealResolved(null); setDealNotice(null);
     setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
     setPrefill(null); setReviewApplied(NO_REVIEW_PREFILL_APPLIED); appliedRef.current = { review: NO_REVIEW_PREFILL_APPLIED, channels: [] };
     setHubspotQuery(""); setHubspotResults([]); setHubspotSearchError(null);
@@ -453,8 +469,13 @@ function NewProspectFlow() {
               companyName={hubspotCompany.name}
               defaultDealName={merchantName || hubspotCompany.name}
               resolved={dealResolved}
-              onResolved={setDealResolved}
+              onResolved={d => { setDealResolved(d); setDealNotice(null); }}
             />
+            {dealNotice && !dealResolved && (
+              <div className={styles.error}>
+                Couldn&apos;t open the HubSpot deal you came from: {dealNotice}
+              </div>
+            )}
           </div>
         )}
       </div>
