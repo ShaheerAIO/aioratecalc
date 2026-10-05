@@ -115,11 +115,11 @@ vi.useFakeTimers({ toFake: ["Date"], now: NOW });
 const SIGNER_EMAIL = "ana@tortapalace.com";
 
 const PLATFORM: CatalogProduct = {
-  hubspotProductId: "217526517443",
-  name: "AIO Platform (1 to 5 Order Points)",
-  price: 99,
-  billingFrequency: "weekly",
-  productType: "Software",
+  hubspotProductId: "335283119838",
+  name: "All-in-One Platform",
+  price: 399,
+  billingFrequency: "monthly",
+  productType: "",
 };
 const POS: CatalogProduct = {
   hubspotProductId: "217445755632",
@@ -185,7 +185,7 @@ function baseRow(extra: Partial<Row> = {}): Row {
     adyenOnboardingUrl: null,
     checkIds: null,
     hubspotIds: null,
-    quoteType: "full_pos",
+    quoteType: "all_in_one",
     quoteConfig: { monthlyVolume: 40000, avgTicket: 30 },
     quoteLines: LINES,
     orderPoints: { hardware: { "POS Unit": 1 }, channels: [], total: 1 },
@@ -254,7 +254,7 @@ beforeEach(() => {
   findOwnerByEmail.mockResolvedValue({ id: "71234567", email: "rita@aioapp.com", firstName: "Rita", lastName: "Rep" });
   listProducts.mockResolvedValue([PLATFORM, POS, REVIEWABLE]);
   getQuoteTemplatePolicy.mockResolvedValue({
-    full_pos: "817263673055", food_truck: "817263673055", marketing_only: "817697352408",
+    order_pay_only: "817263673055", all_in_one: "817263673055", marketing_only: "817697352408",
   });
   ensureQuoteContact.mockResolvedValue("contact-7");
   createQuoteLineItems.mockImplementation(async (lines: QuoteLine[]) =>

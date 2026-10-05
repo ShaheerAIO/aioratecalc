@@ -12,8 +12,8 @@ import type { QuoteType } from "@/types/merchant";
 // one where the migration hasn't been applied) can still publish a Phase E
 // quote instead of hard-failing on a missing settings row.
 const DEFAULT_TEMPLATE_IDS: Record<QuoteType, string> = {
-  full_pos: "817263673055",
-  food_truck: "817263673055",
+  order_pay_only: "817263673055",
+  all_in_one: "817263673055",
   marketing_only: "817697352408",
 };
 
@@ -21,8 +21,8 @@ export type QuoteTemplatePolicy = Record<QuoteType, string>;
 
 function rowToPolicy(row: typeof quoteTemplatePolicy.$inferSelect): QuoteTemplatePolicy {
   return {
-    full_pos: row.fullPosTemplateId,
-    food_truck: row.foodTruckTemplateId,
+    order_pay_only: row.orderPayOnlyTemplateId,
+    all_in_one: row.allInOneTemplateId,
     marketing_only: row.marketingOnlyTemplateId,
   };
 }
@@ -55,8 +55,8 @@ export async function updateQuoteTemplatePolicyAction(input: QuoteTemplatePolicy
 
   const [existing] = await db.select({ id: quoteTemplatePolicy.id }).from(quoteTemplatePolicy).where(eq(quoteTemplatePolicy.isActive, true)).limit(1);
   const values = {
-    fullPosTemplateId: input.full_pos,
-    foodTruckTemplateId: input.food_truck,
+    allInOneTemplateId: input.all_in_one,
+    orderPayOnlyTemplateId: input.order_pay_only,
     marketingOnlyTemplateId: input.marketing_only,
     updatedByUserId: effective.userId,
     updatedAt: new Date(),

@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
-  FOOD_TRUCK_PLATFORM_NAME,
   INCLUDED_SERVICE_PRODUCTS,
   MARKETING_PRODUCTS,
+  MARKETING_TERM_PRODUCT_IDS,
   ORDER_POINT_RULES,
   PICKER_EXCLUDED_PRODUCT_NAMES,
-  PLATFORM_TIER_PRODUCT_NAMES,
+  PLATFORM_PRODUCTS,
   UNCATEGORIZED_GROUP,
   buildQuote,
   deriveOrderPoints,
@@ -13,14 +13,13 @@ import {
   isAllowedForQuoteType,
   isPickable,
   picksFromQuoteLines,
-  platformTierNameFor,
   quoteTotals,
   quoteTypeOf,
   resolveIncludedServices,
   resolvePlatformLine,
   toQuoteLine,
 } from "@/lib/quoting";
-import type { CatalogProduct, QuoteLine } from "@/types/merchant";
+import type { CatalogProduct, QuoteLine, QuoteType } from "@/types/merchant";
 
 // Fixture catalog mirroring the live HubSpot records (names and prices as they
 // actually are, post-trim). No network anywhere in this file.
@@ -33,55 +32,66 @@ const p = (
 ): CatalogProduct => ({ hubspotProductId, name, price, billingFrequency, productType });
 
 const CATALOG: CatalogProduct[] = [
-  p("217526517443", PLATFORM_TIER_PRODUCT_NAMES.small, 99, "weekly", "Software"),
-  p("292286544587", PLATFORM_TIER_PRODUCT_NAMES.large, 199, "weekly", "Software"),
-  p("247900575472", "AIO Platform - Food Truck", 75, "weekly", "Software"),
-  p("223152695997", "AIO Marketing Platform", 49, "weekly", "Software"),
-  p("303779019494", "AIO - Automated Review Manager", 39, "monthly", "Software"),
+  // The three plans' platform products. All monthly — AIO retired the weekly
+  // ones on 2026-10-05.
+  p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
+  p("335283119838", "All-in-One Platform", 399, "monthly", ""),
+  p("332609247965", "AIO Marketing Platform", 199, "monthly", "Software"),
+  // HubSpot really does hold two identical active records for the 2-year term.
+  p("332927902454", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
+  p("334139877086", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
+  p("332617109238", "Marketing Kit - Mega Kiosk", 1500, "one_time", "inventory"),
+  p("332793212658", "Marketing Kit - 27\" Kiosk", 999, "one_time", "inventory"),
+  p("333275576048", "Website", 50, "monthly", ""),
+  p("335280960199", "Additional Software License", 19, "monthly", "Software"),
   p("217445755632", "POS Unit", 749, "one_time", "inventory"),
-  p("223452690130", "POS Unit - With Customer Facing Display", 949, "one_time", "inventory"),
+  p("223452690130", "POS Unit - With Customer Facing Display", 899, "one_time", "inventory"),
   p("260674226888", "Mega Kiosk", 2459, "one_time", "inventory"),
-  p("222497165009", "Kiosk + Payment Terminal (AMS1) and Mount", 999, "one_time", "inventory"),
+  p("222497165009", "Kiosk 27\" + Payment Terminal (AMS1) and Mount", 999, "one_time", "inventory"),
+  p("335279520447", "AIO Tableside POS", 399, "one_time", ""),
   p("223511653101", "mPOS", 349, "one_time", "inventory"),
-  p("223511653105", "Payment Terminal - AMS1", 99, "one_time", "inventory"),
+  p("223511653105", "Payment Terminal - AMS1", 300, "one_time", "inventory"),
   p("222497165011", "Cash Drawer", 69, "one_time", "inventory"),
   p("276751313619", "Orders Hub Tablet", 199, "one_time", "inventory"),
   p("276754193118", "Clock in Tablet", 199, "one_time", "inventory"),
-  p("247901295335", "AIO Marketing Add Spend", 99, "monthly", "Service"),
   p("252941875920", "QSR POS Hardware Bundle", 1110, "one_time", "inventory"),
   // The three always-included services.
   p("281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"),
   p("223452690133", "Onsite Installation", 999, "one_time", "Service"),
   p("223152695032", "System Onboarding and Training", 499, "one_time", "Service"),
-  p("318731436770", "CAMP Invoice", 300, "one_time", ""),
   p("281354281678", "AIO Pre Auth", 0.5, "one_time", "Service"),
   p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
-  p("316076031729", "Small TV (32in to 43in)", 299, "one_time", ""),
 ];
+
+// Nothing in today's catalog bills weekly — every platform product that did is
+// deactivated. Published quotes still carry those lines, so `quoteTotals` has
+// to keep getting the 52/12 conversion right; this is the fixture for that.
+const RETIRED_WEEKLY_PLATFORM = p("217526517443", "AIO Platform (1 to 5 Order Points)", 99, "weekly", "Software");
 
 const find = (name: string) => CATALOG.find(c => c.name === name)!;
 const line = (name: string, qty: number) => toQuoteLine(find(name), qty);
 
 describe("picker exclusions", () => {
-  it("hides the placeholders, CAMP Invoice, the pre-auth, and every derived line", () => {
+  it("hides the placeholders, the pre-auth, and every derived line", () => {
     const hidden = CATALOG.filter(c => !isPickable(c)).map(c => c.name).sort();
     expect(hidden).toEqual([
-      "AIO Platform (1 to 5 Order Points)",
-      "AIO Platform (6 + Order Points)",
-      "AIO Platform - Food Truck",
+      "AIO Marketing Platform",
       "AIO Pre Auth",
       "AIO Processing Two Tiered Rate",
       "AIO WiFi Network Package",
-      "CAMP Invoice",
+      "All-in-One (Order & Pay only)",
+      "All-in-One Platform",
       "Onsite Installation",
       "System Onboarding and Training",
     ]);
   });
 
-  it("hides the food-truck platform, which is now derived from the quote type", () => {
-    // It used to be pickable, with resolvePlatformTier sniffing the lines for it.
-    // A rep picking it by hand is how a quote ends up with two platform fees.
-    expect(isPickable(find(FOOD_TRUCK_PLATFORM_NAME))).toBe(false);
+  it("hides every plan's platform product — they're derived from the quote type", () => {
+    // A rep picking one by hand is how a quote ends up with two platform fees,
+    // and it is the largest recurring line on the document.
+    for (const plan of Object.values(PLATFORM_PRODUCTS)) {
+      expect(isPickable(find(plan.name))).toBe(false);
+    }
   });
 
   it("hides the three always-included services — they are added, not chosen", () => {
@@ -92,7 +102,10 @@ describe("picker exclusions", () => {
 
   it("keeps ordinary hardware and software quotable", () => {
     expect(isPickable(find("POS Unit"))).toBe(true);
-    expect(isPickable(find("AIO Marketing Platform"))).toBe(true);
+    expect(isPickable(find("Additional Software License"))).toBe(true);
+    // The 2-year marketing term IS pickable — it's the derived $199/mo line
+    // that isn't, and the two share a name prefix, not an id.
+    expect(isPickable(find("AIO Marketing Platform (2-year term)"))).toBe(true);
   });
 
   it("names the exclusions rather than inlining them", () => {
@@ -101,29 +114,34 @@ describe("picker exclusions", () => {
 });
 
 describe("quote types", () => {
-  it("reads a row written before quote types existed as a full-POS deal", () => {
-    expect(quoteTypeOf(null)).toBe("full_pos");
-    expect(quoteTypeOf(undefined)).toBe("full_pos");
+  it("maps the retired values onto the plan that replaced them", () => {
+    // Their platform products are deactivated in HubSpot, so a row left on one
+    // couldn't resolve a platform line at all. All-in-One is the successor.
+    expect(quoteTypeOf("full_pos")).toBe("all_in_one");
+    expect(quoteTypeOf("food_truck")).toBe("all_in_one");
+    expect(quoteTypeOf(null)).toBe("all_in_one");
+    expect(quoteTypeOf(undefined)).toBe("all_in_one");
+    expect(quoteTypeOf("order_pay_only")).toBe("order_pay_only");
     expect(quoteTypeOf("marketing_only")).toBe("marketing_only");
   });
 
   it("lets a POS quote carry marketing products, but not the reverse", () => {
     // A restaurant buying marketing alongside its POS is one deal, not two
     // quotes — so only marketing-only restricts anything.
-    expect(isAllowedForQuoteType(find("AIO Marketing Platform"), "full_pos")).toBe(true);
+    expect(isAllowedForQuoteType(find("AIO Marketing Platform (2-year term)"), "all_in_one")).toBe(true);
     expect(isAllowedForQuoteType(find("POS Unit"), "marketing_only")).toBe(false);
     expect(isAllowedForQuoteType(find("Mega Kiosk"), "marketing_only")).toBe(false);
   });
 
-  it("allows exactly the two marketing products on a marketing-only quote", () => {
-    const allowed = CATALOG.filter(c => isAllowedForQuoteType(c, "marketing_only")).map(c => c.name).sort();
-    expect(allowed).toEqual([...MARKETING_PRODUCTS].map(m => m.name).sort());
+  it("allows exactly the marketing products on a marketing-only quote", () => {
+    const allowed = CATALOG.filter(c => isAllowedForQuoteType(c, "marketing_only"))
+      .map(c => c.hubspotProductId).sort();
+    expect(allowed).toEqual(MARKETING_PRODUCTS.map(m => m.hubspotProductId).sort());
   });
 
-  it("does not treat the Review Manager as marketing", () => {
-    // It's reputation management sold with a POS, not a marketing product.
-    expect(isAllowedForQuoteType(find("AIO - Automated Review Manager"), "marketing_only")).toBe(false);
-    expect(isAllowedForQuoteType(find("AIO - Automated Review Manager"), "full_pos")).toBe(true);
+  it("does not treat an ordinary software add-on as marketing", () => {
+    expect(isAllowedForQuoteType(find("Additional Software License"), "marketing_only")).toBe(false);
+    expect(isAllowedForQuoteType(find("Additional Software License"), "all_in_one")).toBe(true);
   });
 });
 
@@ -131,7 +149,7 @@ describe("always-included services", () => {
   const SOMETHING = [line("POS Unit", 1)];
 
   it("puts a network, an install and a training on any quote with products, one each", () => {
-    for (const quoteType of ["full_pos", "food_truck"] as const) {
+    for (const quoteType of ["order_pay_only", "all_in_one"] as const) {
       const { lines, missing } = resolveIncludedServices(quoteType, SOMETHING, CATALOG);
       expect(missing).toEqual([]);
       expect(lines.map(l => l.name)).toEqual([
@@ -156,26 +174,26 @@ describe("always-included services", () => {
   });
 
   it("adds none of them to a rate-only quote — no products means nothing to install", () => {
-    expect(resolveIncludedServices("full_pos", [], CATALOG)).toEqual({ lines: [], missing: [] });
-    expect(resolveIncludedServices("food_truck", [], CATALOG)).toEqual({ lines: [], missing: [] });
+    expect(resolveIncludedServices("all_in_one", [], CATALOG)).toEqual({ lines: [], missing: [] });
+    expect(resolveIncludedServices("order_pay_only", [], CATALOG)).toEqual({ lines: [], missing: [] });
   });
 
   it("attaches to products, not to declared channels", () => {
     // A website-ordering merchant has no on-site anything for a $999 install or
     // a $999 WiFi package to cover, even though the channel does carry a
     // platform fee.
-    const built = buildQuote("full_pos", [], ["website"], CATALOG);
+    const built = buildQuote("all_in_one", [], ["website"], CATALOG);
     expect(built.orderPoints.total).toBe(1);
     expect(built.platform.status).toBe("resolved");
     expect(built.includedServices.lines).toEqual([]);
-    expect(built.quoteLines.map(l => l.name)).toEqual([PLATFORM_TIER_PRODUCT_NAMES.small]);
+    expect(built.quoteLines.map(l => l.name)).toEqual(["All-in-One Platform"]);
   });
 
   it("is LOUD when a required service isn't in the catalog", () => {
     // Silently dropping it is $999 off the quote, so it has to block the send
     // rather than read as "not included."
     const without = CATALOG.filter(c => c.name !== "Onsite Installation");
-    const { lines, missing } = resolveIncludedServices("full_pos", SOMETHING, without);
+    const { lines, missing } = resolveIncludedServices("all_in_one", SOMETHING, without);
     expect(missing).toEqual(["Onsite Installation"]);
     expect(lines.map(l => l.name)).not.toContain("Onsite Installation");
   });
@@ -184,29 +202,41 @@ describe("always-included services", () => {
     const renamed = CATALOG.map(c =>
       c.name === "Onsite Installation" ? { ...c, name: "On-Site Installation (2026)" } : c
     );
-    const { lines, missing } = resolveIncludedServices("full_pos", SOMETHING, renamed);
+    const { lines, missing } = resolveIncludedServices("all_in_one", SOMETHING, renamed);
     expect(missing).toEqual([]);
     expect(lines.find(l => l.hubspotProductId === "223452690133")!.unitPrice).toBe(999);
   });
 });
 
 describe("groupProducts", () => {
-  const groups = groupProducts(CATALOG.filter(isPickable));
-
   it("orders hardware, software, service, then the untyped bucket", () => {
+    // Built from a synthetic list rather than CATALOG: AIO currently sells no
+    // pickable Service-typed product at all (the only ones are the two
+    // included services and the per-transaction pre-auth, all unpickable), so
+    // the live catalog can't exercise the ordering rule on its own.
+    const groups = groupProducts([
+      p("1", "Untyped Thing", 1, "one_time", ""),
+      p("2", "A Service", 1, "one_time", "Service"),
+      p("3", "A Hardware Thing", 1, "one_time", "inventory"),
+      p("4", "A Software Thing", 1, "monthly", "Software"),
+    ]);
     expect(groups.map(g => g.label)).toEqual(["Hardware", "Software", "Service", UNCATEGORIZED_GROUP]);
   });
 
   it("never silently hides an untyped product", () => {
+    const groups = groupProducts(CATALOG.filter(isPickable));
     const uncategorized = groups.find(g => g.type === UNCATEGORIZED_GROUP)!;
-    expect(uncategorized.products.map(x => x.name)).toContain("Small TV (32in to 43in)");
+    // Four live catalog entries carry no hs_product_type.
+    expect(uncategorized.products.map(x => x.name)).toContain("AIO Tableside POS");
+    expect(uncategorized.products.map(x => x.name)).toContain("Website");
   });
 });
 
 describe("quoteTotals — frequency-aware, never merged", () => {
   it("keeps a weekly platform fee and a one-time POS unit as separate numbers", () => {
-    // E2E-PLAN.md's Phase C verify case.
-    const lines = [line(PLATFORM_TIER_PRODUCT_NAMES.small, 1), line("POS Unit", 1)];
+    // E2E-PLAN.md's Phase C verify case, on the retired weekly platform fee:
+    // nothing sellable bills weekly any more, but published quotes do.
+    const lines = [toQuoteLine(RETIRED_WEEKLY_PLATFORM, 1), line("POS Unit", 1)];
     const t = quoteTotals(lines);
 
     expect(t.oneTime).toBe(749);
@@ -229,19 +259,19 @@ describe("quoteTotals — frequency-aware, never merged", () => {
 
   it("groups recurring lines by cycle instead of adding weekly to monthly", () => {
     const lines = [
-      line(PLATFORM_TIER_PRODUCT_NAMES.small, 1),   // $99/wk
-      line("AIO Marketing Platform", 1),            // $49/wk
-      line("AIO - Automated Review Manager", 1),    // $39/mo
+      toQuoteLine(RETIRED_WEEKLY_PLATFORM, 1),      // $99/wk
+      line("All-in-One Platform", 1),               // $399/mo
+      line("Additional Software License", 1),       // $19/mo
     ];
     const t = quoteTotals(lines);
 
     expect(t.recurring).toEqual([
-      { frequency: "weekly", amount: 148 },
-      { frequency: "monthly", amount: 39 },
+      { frequency: "weekly", amount: 99 },
+      { frequency: "monthly", amount: 418 },
     ]);
-    // 148 x 52/12 + 39 — the only legitimate way to combine the two cycles.
-    expect(t.monthlyEquivalent).toBeCloseTo(148 * (52 / 12) + 39, 10);
-    expect(t.recurring.some(r => r.amount === 187)).toBe(false);
+    // 99 x 52/12 + 418 — the only legitimate way to combine the two cycles.
+    expect(t.monthlyEquivalent).toBeCloseTo(99 * (52 / 12) + 418, 10);
+    expect(t.recurring.some(r => r.amount === 517)).toBe(false);
   });
 
   it("multiplies by quantity and leaves one-time charges out of the monthly figure", () => {
@@ -254,42 +284,61 @@ describe("quoteTotals — frequency-aware, never merged", () => {
 
 describe("snapshot immutability", () => {
   it("keeps the quoted price when the catalog price later changes", () => {
-    const catalogNow = [p("217526517443", PLATFORM_TIER_PRODUCT_NAMES.small, 99, "weekly", "Software")];
+    const catalogNow = [p("335283119838", "All-in-One Platform", 399, "monthly", "")];
     const quoted = toQuoteLine(catalogNow[0], 1);
 
     // HubSpot raises the platform fee after the quote went out.
-    catalogNow[0] = { ...catalogNow[0], price: 129, billingFrequency: "monthly" };
+    catalogNow[0] = { ...catalogNow[0], price: 449, billingFrequency: "weekly" };
 
-    expect(quoted.unitPrice).toBe(99);
-    expect(quoted.billingFrequency).toBe("weekly");
-    expect(quoteTotals([quoted]).recurring).toEqual([{ frequency: "weekly", amount: 99 }]);
+    expect(quoted.unitPrice).toBe(399);
+    expect(quoted.billingFrequency).toBe("monthly");
+    expect(quoteTotals([quoted]).recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 });
 
 describe("deriveOrderPoints", () => {
-  it("counts 3 POS + 2 kiosks + a website as 6 and flips to the 6+ tier", () => {
-    // The plan's own verify case.
+  it("counts 3 POS + 2 kiosks + a website as 6", () => {
     const lines = [line("POS Unit", 3), line("Mega Kiosk", 2)];
     const { orderPoints } = deriveOrderPoints(lines, ["website"]);
 
     expect(orderPoints.hardware).toEqual({ "POS Unit": 3, "Mega Kiosk": 2 });
     expect(orderPoints.channels).toEqual(["website"]);
     expect(orderPoints.total).toBe(6);
-    expect(platformTierNameFor(6)).toBe(PLATFORM_TIER_PRODUCT_NAMES.large);
-
-    const tier = resolvePlatformLine("full_pos", orderPoints.total, CATALOG);
-    expect(tier.status).toBe("resolved");
-    expect(tier.line!.name).toBe(PLATFORM_TIER_PRODUCT_NAMES.large);
-    expect(tier.line!.unitPrice).toBe(199);
-    expect(tier.line!.billingFrequency).toBe("weekly");
   });
 
-  it("stays on the 1-5 tier at exactly 5", () => {
-    const lines = [line("POS Unit", 3), line("mPOS", 1)];
-    const { orderPoints } = deriveOrderPoints(lines, ["website"]);
-    expect(orderPoints.total).toBe(5);
-    expect(platformTierNameFor(5)).toBe(PLATFORM_TIER_PRODUCT_NAMES.small);
-    expect(resolvePlatformLine("full_pos", 5, CATALOG).line!.unitPrice).toBe(99);
+  it("no longer moves the platform fee — the count is reporting only", () => {
+    // It used to select a 1-5 or 6+ tier, a $433/mo swing. Since 2026-10-05
+    // the plan decides, so the same quote type prices the same at any count.
+    for (const lines of [[line("POS Unit", 1)], [line("POS Unit", 3), line("Mega Kiosk", 2)]]) {
+      const platform = resolvePlatformLine("all_in_one", lines, [], CATALOG);
+      expect(platform.status).toBe("resolved");
+      expect(platform.line!.unitPrice).toBe(399);
+      expect(platform.line!.billingFrequency).toBe("monthly");
+    }
+  });
+
+  it("counts a tableside POS, which Steve's list calls a Tableside AI Device", () => {
+    expect(ORDER_POINT_RULES["AIO Tableside POS"].pointsPerUnit).toBe(1);
+    const { orderPoints, unclassified } = deriveOrderPoints([line("AIO Tableside POS", 2)], []);
+    expect(orderPoints.total).toBe(2);
+    expect(unclassified).toEqual([]);
+  });
+
+  it("counts neither marketing kit, and calls neither of them a mystery", () => {
+    // Named for kiosks, but not ordering kiosks (Shaheer, 2026-10-05). Both
+    // are typed `inventory`, so without an explicit 0-point rule they'd warn
+    // the rep about unclassified hardware on every marketing quote.
+    const lines = [line("Marketing Kit - Mega Kiosk", 1), line("Marketing Kit - 27\" Kiosk", 2)];
+    const { orderPoints, unclassified, needsReview } = deriveOrderPoints(lines, []);
+    expect(orderPoints.total).toBe(0);
+    expect(unclassified).toEqual([]);
+    expect(needsReview).toEqual([]);
+  });
+
+  it("counts the website CHANNEL, never the Website product, so it can't double", () => {
+    const { orderPoints } = deriveOrderPoints([line("Website", 1)], ["website"]);
+    expect(orderPoints.total).toBe(1);
+    expect(orderPoints.hardware).toEqual({});
   });
 
   it("counts the QSR bundle as the one POS it contains", () => {
@@ -314,7 +363,6 @@ describe("deriveOrderPoints", () => {
 
     expect(orderPoints.hardware["Mega Kiosk"]).toBe(2);
     expect(orderPoints.total).toBe(6);
-    expect(platformTierNameFor(orderPoints.total)).toBe(PLATFORM_TIER_PRODUCT_NAMES.large);
     expect(unclassified).toEqual([]);
   });
 
@@ -339,11 +387,11 @@ describe("deriveOrderPoints", () => {
   });
 
   it("excludes payment terminals, cash drawers and other non-ordering hardware", () => {
-    const lines = [line("Payment Terminal - AMS1", 4), line("Cash Drawer", 2), line("Small TV (32in to 43in)", 1)];
+    const lines = [line("Payment Terminal - AMS1", 4), line("Cash Drawer", 2), line("Website", 1)];
     const { orderPoints, unclassified } = deriveOrderPoints(lines, []);
     expect(orderPoints.total).toBe(0);
     // All three are known rules at 0 points, so none of them is a mystery —
-    // including the TV, which carries no hs_product_type live.
+    // including the Website product, which carries no hs_product_type live.
     expect(unclassified).toEqual([]);
   });
 
@@ -380,62 +428,87 @@ describe("deriveOrderPoints", () => {
 
   it("does not treat software or services as unclassified hardware", () => {
     const { unclassified } = deriveOrderPoints(
-      [line("Onsite Installation", 1), line("AIO Marketing Platform", 1)], []
+      [line("Onsite Installation", 1), line("Additional Software License", 1)], []
     );
     expect(unclassified).toEqual([]);
   });
 });
 
 describe("platform line selection", () => {
-  it("selects nothing at zero order points", () => {
-    expect(platformTierNameFor(0)).toBeNull();
-    expect(resolvePlatformLine("full_pos", 0, CATALOG))
-      .toEqual({ status: "none_needed", line: null, productName: null });
-  });
+  const SOME_PICK = [toQuoteLine(CATALOG.find(c => c.name === "POS Unit")!, 1)];
 
-  it("gives a food-truck quote the flat platform fee, whatever the point count", () => {
-    for (const total of [0, 1, 9]) {
-      const platform = resolvePlatformLine("food_truck", total, CATALOG);
+  it("gives each plan its own monthly platform product", () => {
+    const prices: Record<QuoteType, number> = {
+      order_pay_only: 299, all_in_one: 399, marketing_only: 199,
+    };
+    for (const [quoteType, price] of Object.entries(prices) as Array<[QuoteType, number]>) {
+      const platform = resolvePlatformLine(quoteType, SOME_PICK, [], CATALOG);
       expect(platform.status).toBe("resolved");
-      expect(platform.line!.name).toBe(FOOD_TRUCK_PLATFORM_NAME);
-      expect(platform.line!.unitPrice).toBe(75);
+      expect(platform.line!.name).toBe(PLATFORM_PRODUCTS[quoteType].name);
+      expect(platform.line!.unitPrice).toBe(price);
+      expect(platform.line!.billingFrequency).toBe("monthly");
     }
   });
 
-  it("gives a marketing-only quote no platform line at all", () => {
-    expect(resolvePlatformLine("marketing_only", 4, CATALOG))
-      .toEqual({ status: "not_applicable", line: null, productName: null });
+  it("selects nothing for a rate-only quote — nothing picked, no channel declared", () => {
+    expect(resolvePlatformLine("all_in_one", [], [], CATALOG))
+      .toEqual({ status: "none_needed", line: null, productName: null });
   });
 
-  it("finds the tier by product id, so a HubSpot rename can't drop the platform fee", () => {
+  it("still charges the plan when the only ordering point is a declared channel", () => {
+    // A website-ordering merchant with no hardware is on the platform. Unlike
+    // the install services, which need something physical on site.
+    const platform = resolvePlatformLine("all_in_one", [], ["website"], CATALOG);
+    expect(platform.status).toBe("resolved");
+    expect(platform.line!.unitPrice).toBe(399);
+  });
+
+  it("lets the 2-year marketing term REPLACE the monthly platform line", () => {
+    // Both are the same subscription; charging both bills $498/mo for one
+    // platform. Both of HubSpot's duplicate records have to be recognised.
+    for (const id of MARKETING_TERM_PRODUCT_IDS) {
+      const term = toQuoteLine(CATALOG.find(c => c.hubspotProductId === id)!, 1);
+      expect(resolvePlatformLine("marketing_only", [term], [], CATALOG))
+        .toEqual({ status: "term_replaced", line: null, productName: null });
+    }
+  });
+
+  it("still charges a marketing quote that carries no term line", () => {
+    const kit = toQuoteLine(CATALOG.find(c => c.name === "Marketing Kit - Mega Kiosk")!, 1);
+    const platform = resolvePlatformLine("marketing_only", [kit], [], CATALOG);
+    expect(platform.status).toBe("resolved");
+    expect(platform.line!.unitPrice).toBe(199);
+  });
+
+  it("finds the plan by product id, so a HubSpot rename can't drop the platform fee", () => {
     const renamed = CATALOG.map(c =>
-      c.name === PLATFORM_TIER_PRODUCT_NAMES.large ? { ...c, name: "AIO Platform (6+ Ordering Points)" } : c
+      c.name === "All-in-One Platform" ? { ...c, name: "All-in-One Platform (2027)" } : c
     );
-    const tier = resolvePlatformLine("full_pos", 6, renamed);
-    expect(tier.status).toBe("resolved");
-    expect(tier.line!.unitPrice).toBe(199);
+    const platform = resolvePlatformLine("all_in_one", SOME_PICK, [], renamed);
+    expect(platform.status).toBe("resolved");
+    expect(platform.line!.unitPrice).toBe(399);
   });
 
-  it("is LOUD, not null, when a tier is owed but the catalog can't supply it", () => {
-    // Silently omitting this line is a $433/mo hole in the quote, so the caller
+  it("is LOUD, not null, when the plan's fee is owed but the catalog can't supply it", () => {
+    // Silently omitting this line is a $399/mo hole in the quote, so the caller
     // has to be forced to deal with it rather than reading it as "no fee due".
-    const tier = resolvePlatformLine("full_pos", 3, []);
-    expect(tier.status).toBe("unresolved");
-    expect(tier.line).toBeNull();
-    expect(tier.productName).toBe(PLATFORM_TIER_PRODUCT_NAMES.small);
+    const platform = resolvePlatformLine("all_in_one", SOME_PICK, [], []);
+    expect(platform.status).toBe("unresolved");
+    expect(platform.line).toBeNull();
+    expect(platform.productName).toBe("All-in-One Platform");
   });
 });
 
 describe("buildQuote — the one derivation", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
 
-  it("assembles a full-POS quote: platform line, the three services, then the picks", () => {
-    const built = buildQuote("full_pos", picked([["POS Unit", 2], ["Cash Drawer", 1]]), ["website"], CATALOG);
+  it("assembles an All-in-One quote: platform line, the three services, then the picks", () => {
+    const built = buildQuote("all_in_one", picked([["POS Unit", 2], ["Cash Drawer", 1]]), ["website"], CATALOG);
 
     expect(built.blockers).toEqual([]);
     expect(built.orderPoints.total).toBe(3); // 2 POS + website
     expect(built.quoteLines.map(l => l.name)).toEqual([
-      PLATFORM_TIER_PRODUCT_NAMES.small,
+      "All-in-One Platform",
       "AIO WiFi Network Package",
       "Onsite Installation",
       "System Onboarding and Training",
@@ -444,67 +517,84 @@ describe("buildQuote — the one derivation", () => {
     ]);
     // 999 + 2×749 + 69 = $2,566 due once. The install ($999) and the training
     // ($499) are on the quote but comped to $0, so they add nothing — the
-    // list total would be $4,064. The platform fee is weekly.
+    // list total would be $4,064.
     expect(built.totals.oneTime).toBe(2566);
-    expect(built.totals.recurring).toEqual([{ frequency: "weekly", amount: 99 }]);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
+  });
+
+  it("prices the same cart $100/mo lower on the Order & Pay plan", () => {
+    const cart = picked([["POS Unit", 2], ["Cash Drawer", 1]]);
+    const lesser = buildQuote("order_pay_only", cart, ["website"], CATALOG);
+    const full = buildQuote("all_in_one", cart, ["website"], CATALOG);
+
+    expect(lesser.totals.oneTime).toBe(full.totals.oneTime);
+    expect(lesser.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
+    expect(full.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
   it("drops declared channels on a marketing-only quote", () => {
-    // Otherwise ticking "website / online ordering" conjures a $99/wk platform
-    // tier onto a $49/wk marketing quote.
+    // A marketing merchant isn't taking orders through AIO, so ticking
+    // "website / online ordering" must not report an ordering point.
     const built = buildQuote(
       "marketing_only",
-      picked([["AIO Marketing Platform", 1]]),
+      picked([["Marketing Kit - Mega Kiosk", 1]]),
       ["website", "qr"],
       CATALOG
     );
 
     expect(built.orderPoints).toEqual({ hardware: {}, channels: [], total: 0 });
-    expect(built.platform.status).toBe("not_applicable");
-    expect(built.quoteLines.map(l => l.name)).toEqual(["AIO Marketing Platform"]);
-    expect(built.totals.oneTime).toBe(0);
+    expect(built.quoteLines.map(l => l.name)).toEqual([
+      "AIO Marketing Platform",
+      "Marketing Kit - Mega Kiosk",
+    ]);
+    expect(built.includedServices.lines).toEqual([]);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 199 }]);
     expect(built.blockers).toEqual([]);
   });
 
-  it("leaves a rate-only quote empty — no products, so no install services", () => {
-    const built = buildQuote("full_pos", [], [], CATALOG);
+  it("leaves a rate-only quote empty — no products, so no plan and no services", () => {
+    const built = buildQuote("all_in_one", [], [], CATALOG);
     expect(built.platform.status).toBe("none_needed");
     expect(built.quoteLines).toEqual([]);
     expect(built.totals.oneTime).toBe(0);
   });
 
-  it("gives a food-truck quote its flat platform fee with nothing picked, and no services", () => {
-    const built = buildQuote("food_truck", [], [], CATALOG);
-    expect(built.quoteLines.map(l => l.name)).toEqual([FOOD_TRUCK_PLATFORM_NAME]);
-    expect(built.totals.recurring).toEqual([{ frequency: "weekly", amount: 75 }]);
-    expect(built.totals.oneTime).toBe(0);
+  it("still charges a marketing-only quote with nothing picked", () => {
+    // Unlike a processing quote, there is no rate behind this one — a quote
+    // with no lines on it would be nothing at all.
+    const built = buildQuote("marketing_only", [], [], CATALOG);
+    expect(built.quoteLines.map(l => l.name)).toEqual(["AIO Marketing Platform"]);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 199 }]);
   });
 
-  it("puts nothing on a marketing-only quote with nothing picked", () => {
-    expect(buildQuote("marketing_only", [], [], CATALOG).quoteLines).toEqual([]);
+  it("charges the 2-year term INSTEAD of the monthly platform, never both", () => {
+    const built = buildQuote("marketing_only", picked([["AIO Marketing Platform (2-year term)", 1]]), [], CATALOG);
+    expect(built.platform.status).toBe("term_replaced");
+    expect(built.quoteLines.map(l => l.name)).toEqual(["AIO Marketing Platform (2-year term)"]);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
   });
 
   it("blocks the send when a required line can't be priced", () => {
     const stripped = CATALOG.filter(
-      c => c.name !== "Onsite Installation" && c.name !== PLATFORM_TIER_PRODUCT_NAMES.small
+      c => c.name !== "Onsite Installation" && c.name !== "All-in-One Platform"
     );
-    const built = buildQuote("full_pos", picked([["POS Unit", 1]]), [], stripped);
+    const built = buildQuote("all_in_one", picked([["POS Unit", 1]]), [], stripped);
 
     expect(built.blockers).toHaveLength(2);
-    expect(built.blockers.join(" ")).toContain(PLATFORM_TIER_PRODUCT_NAMES.small);
+    expect(built.blockers.join(" ")).toContain("All-in-One Platform");
     expect(built.blockers.join(" ")).toContain("Onsite Installation");
   });
 
   it("round-trips through picksFromQuoteLines without duplicating a derived line", () => {
     // Reopening a saved quote must not send the platform fee or the services
     // back as picks — they'd be quoted twice, or refused as unpickable.
-    const first = buildQuote("full_pos", picked([["Mega Kiosk", 1]]), [], CATALOG);
+    const first = buildQuote("all_in_one", picked([["Mega Kiosk", 1]]), [], CATALOG);
     const reopened = picksFromQuoteLines(first.quoteLines);
 
     expect(reopened).toEqual([{ hubspotProductId: "260674226888", qty: 1 }]);
 
     const second = buildQuote(
-      "full_pos",
+      "all_in_one",
       reopened.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
       [],
       CATALOG

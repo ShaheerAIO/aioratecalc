@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/merchant";
-import { PLATFORM_TIER_PRODUCT_NAMES, picksFromQuoteLines, toQuoteLine } from "@/lib/quoting";
+import { picksFromQuoteLines, toQuoteLine } from "@/lib/quoting";
 
 // saveQuoteConfigurationAction — the one write path for the quoting half of an
 // application, shared by the wizard and the account-detail "Edit Quote" panel.
@@ -53,8 +53,8 @@ const p = (
 ): CatalogProduct => ({ hubspotProductId, name, price, billingFrequency, productType });
 
 const FULL_CATALOG: CatalogProduct[] = [
-  p("217526517443", PLATFORM_TIER_PRODUCT_NAMES.small, 99, "weekly", "Software"),
-  p("292286544587", PLATFORM_TIER_PRODUCT_NAMES.large, 199, "weekly", "Software"),
+  p("335283119838", "All-in-One Platform", 399, "monthly", ""),
+  p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p("217445755632", "POS Unit", 749, "one_time", "inventory"),
   p("281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"),
   p("223452690133", "Onsite Installation", 999, "one_time", "Service"),
@@ -77,7 +77,7 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
     checkIds: null,
     foodbuyIds: null,
     hubspotIds: null,
-    quoteType: "full_pos",
+    quoteType: "all_in_one",
     quoteConfig: { monthlyVolume: 10000, avgTicket: 50 },
     quoteLines: null,
     orderPoints: null,
@@ -162,13 +162,13 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
     const names = updated.quoteLines!.map(l => l.name).sort();
     expect(names).toEqual([
-      "AIO Platform (1 to 5 Order Points)",
       "AIO WiFi Network Package",
+      "All-in-One Platform",
       "Onsite Installation",
       "POS Unit",
       "System Onboarding and Training",
     ].sort());
-    // One ordering point (one POS Unit) → the 1–5 tier, not the 6+ tier.
+    // One ordering point (one POS Unit). Reported, not priced on.
     expect(updated.orderPoints?.total).toBe(1);
   });
 
@@ -181,7 +181,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
         // Onsite Installation — derived, hidden from the picker, and the line
         // AIO comps more than any other.
         "223452690133": { discountPercent: 50 },
-        "217526517443": { billingStart: { mode: "days", days: 60 } },
+        "335283119838": { billingStart: { mode: "days", days: 60 } },
       },
       targetMargin: 0.02,
       pricingModel: "2-tier",
@@ -189,7 +189,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
     const install = updated.quoteLines!.find(l => l.name === "Onsite Installation")!;
     expect(install.discountPercent).toBe(50);
-    const platform = updated.quoteLines!.find(l => l.name === PLATFORM_TIER_PRODUCT_NAMES.small)!;
+    const platform = updated.quoteLines!.find(l => l.name === "All-in-One Platform")!;
     expect(platform.billingStart).toEqual({ mode: "days", days: 60 });
   });
 
@@ -213,7 +213,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     // Simulate a quote that was already saved once: derived lines (platform +
     // the three included services) plus one picked POS unit.
     const savedLines: QuoteLine[] = [
-      toQuoteLine(FULL_CATALOG.find(c => c.name === PLATFORM_TIER_PRODUCT_NAMES.small)!, 1),
+      toQuoteLine(FULL_CATALOG.find(c => c.name === "All-in-One Platform")!, 1),
       toQuoteLine(FULL_CATALOG.find(c => c.name === "AIO WiFi Network Package")!, 1),
       toQuoteLine(FULL_CATALOG.find(c => c.name === "Onsite Installation")!, 1),
       toQuoteLine(FULL_CATALOG.find(c => c.name === "System Onboarding and Training")!, 1),
@@ -236,7 +236,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       pricingModel: "2-tier",
     });
 
-    const platformLines = updated.quoteLines!.filter(l => l.name === PLATFORM_TIER_PRODUCT_NAMES.small);
+    const platformLines = updated.quoteLines!.filter(l => l.name === "All-in-One Platform");
     const installLines = updated.quoteLines!.filter(l => l.name === "Onsite Installation");
     const wifiLines = updated.quoteLines!.filter(l => l.name === "AIO WiFi Network Package");
     const trainingLines = updated.quoteLines!.filter(l => l.name === "System Onboarding and Training");

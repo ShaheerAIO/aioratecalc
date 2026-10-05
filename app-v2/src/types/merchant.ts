@@ -118,9 +118,9 @@ export type BillingFrequency =
 
 // A product as it exists in AIO's HubSpot catalog. Read-only mirror — the
 // catalog is maintained in HubSpot, never here.
-// NOTE: `price` is per BILLING CYCLE, not per month. The flagship platform
-// products bill WEEKLY, so "AIO Platform (1 to 5 Order Points)" at $99 is
-// $99/week (~$429/mo). Never render a catalog price as monthly.
+// NOTE: `price` is per BILLING CYCLE, not per month. AIO's plans bill monthly
+// today, but the weekly platform products they replaced are still on published
+// quotes at $99/week (~$429/mo) — never render a catalog price as monthly.
 export type CatalogProduct = {
   hubspotProductId: string;
   name: string;
@@ -129,19 +129,34 @@ export type CatalogProduct = {
   productType: string; // HubSpot hs_product_type: "inventory" | "Software" | "Service" | "AIO Payment Processing"
 };
 
-// What kind of quote this is. Chosen BEFORE anything is picked, because every
-// selection rule hangs off it: which products a rep may put on the quote, which
-// platform line is derived, whether the mandatory network/install/training lines
-// are added, and whether a processing rate is quoted at all.
+// What kind of quote this is — and, since 2026-10-05, WHICH PLAN the merchant
+// is on. Chosen BEFORE anything is picked, because every selection rule hangs
+// off it: which products a rep may put on the quote, which platform line is
+// derived, whether the mandatory network/install/training lines are added, and
+// whether a processing rate is quoted at all.
+//
+// One plan, one monthly platform product. It used to be two of these three
+// ("full_pos" picked its platform line off an order-point tier, "food_truck"
+// off a flat weekly SKU); AIO retired all three weekly platform products in
+// HubSpot and replaced them with these monthly plans.
 export type QuoteType =
-  // The normal deal: POS hardware, an order-point-tiered platform fee, a rate.
-  | "full_pos"
-  // Same shape, but the platform fee is the flat food-truck product rather than
-  // an order-point tier.
-  | "food_truck"
-  // Marketing products alone. No POS hardware, no platform fee, no processing
-  // rate, and none of the mandatory install lines.
+  // All-in-One (Order & Pay only) — $299/mo. POS hardware and a rate, on the
+  // lesser platform plan.
+  | "order_pay_only"
+  // All-in-One Platform — $399/mo. The full deal.
+  | "all_in_one"
+  // AIO Marketing Platform — $199/mo. Marketing products alone: no POS
+  // hardware, no processing rate, none of the mandatory install lines.
   | "marketing_only";
+
+/**
+ * What the `quote_type` column may actually hold. The two retired values are
+ * still on rows written before 2026-10-05 and still have to parse; every read
+ * goes through `quoteTypeOf`, which maps them onto a live plan. Nothing may be
+ * WRITTEN as one — hence the separate, wider type rather than widening
+ * `QuoteType` itself.
+ */
+export type StoredQuoteType = QuoteType | "full_pos" | "food_truck";
 
 // A line on a quote. Price and frequency are SNAPSHOT at quote time rather than
 // joined live from the catalog — HubSpot line items work the same way (they
@@ -249,10 +264,10 @@ export type QuoteTotals = {
 
 // The QUOTED ordering-point count — order-point-bearing hardware lines plus the
 // non-hardware channels declared on the deal (a website is an ordering point
-// and will never appear in an inventory system). It selects the platform tier,
-// i.e. the largest recurring line on the quote, so it is part of what we
-// quoted: frozen at publish alongside quoteConfig/quoteLines, never overwritten
-// by a later sync. The DEPLOYED count is a separate, post-go-live thing that
+// and will never appear in an inventory system). It no longer prices anything
+// (the plan does, since 2026-10-05), but it is still part of what we quoted:
+// frozen at publish alongside quoteConfig/quoteLines, never overwritten by a
+// later sync. The DEPLOYED count is a separate, post-go-live thing that
 // comes from aioinventory — don't conflate the two.
 // `hardware` maps catalog product name → points that line contributed.
 export type OrderPoints = {
@@ -623,14 +638,16 @@ export type MerchantApplication = {
   checkIds: CheckIds | null; // Check payroll onboarding — null until the customer opts in
   foodbuyIds: FoodbuyIds | null; // Foodbuy enrollment — null until the customer opts in
   hubspotIds: HubspotIds | null; // HubSpot deal/quote/subscription — null until a quote is built
-  // What kind of quote this is. Frozen with the rest of the quote, because it's
-  // what the lines were derived UNDER: re-reading a marketing-only quote as a
-  // full-POS one would imply a platform fee that was never quoted. Null on rows
-  // written before quote types existed; read those as "full_pos".
-  quoteType: QuoteType | null;
+  // Which plan this quote is on. Frozen with the rest of the quote, because
+  // it's what the lines were derived UNDER: re-reading a marketing-only quote
+  // as an All-in-One one would imply a platform fee that was never quoted.
+  // `StoredQuoteType`, not `QuoteType` — rows written before 2026-10-05 carry a
+  // retired value, and null on rows written before quote types existed at all.
+  // Read it through `quoteTypeOf`, never directly.
+  quoteType: StoredQuoteType | null;
   quoteConfig: QuoteConfig | null; // rep-entered ticket/volume basis when there's no statement
   quoteLines: QuoteLine[] | null;  // hardware/platform/service lines; priced at quote time
-  orderPoints: OrderPoints | null; // the quoted order-point count that selected the platform tier
+  orderPoints: OrderPoints | null; // the quoted order-point count — reported, no longer priced on
   // When the customer explicitly accepted the quote on the customer quote view.
   // Distinct from stage: stage keeps moving through onboarding, this doesn't —
   // it's the moment the quote was agreed, and it belongs with the frozen

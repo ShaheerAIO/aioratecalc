@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import {
-  CHANNEL_LABELS, describeBillingStart, isPlatformTierProduct, lineListAmount, lineNetAmount,
+  describeBillingStart, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
 import { fmt$, fmt$0, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafeQuote, QuoteLine } from "@/types/merchant";
@@ -33,13 +33,11 @@ export default function QuoteSummary({ quote, basisAction }: Props) {
 
   const oneTimeLines  = quote.lines.filter(l => l.billingFrequency === "one_time");
   const recurringLines = quote.lines.filter(l => l.billingFrequency !== "one_time");
-  const points = quote.orderPoints;
 
   // NET of any discount — this is what the merchant is actually charged, and
   // it is the same figure `quoteTotals` sums into the totals below.
   const lineTotal = (l: QuoteLine) => lineNetAmount(l);
   const isDiscounted = (l: QuoteLine) => (l.discountPercent ?? 0) > 0;
-  const isPlatformLine = (l: QuoteLine) => isPlatformTierProduct(l.name);
 
   return (
     <>
@@ -115,14 +113,6 @@ export default function QuoteSummary({ quote, basisAction }: Props) {
                     <div className={styles.lineName}>
                       {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
                     </div>
-                    {isPlatformLine(l) && points && (
-                      <div className={styles.lineNote}>
-                        Based on {points.total} ordering point{points.total === 1 ? "" : "s"}
-                        {points.channels.length > 0 && (
-                          <> — including {points.channels.map(c => CHANNEL_LABELS[c] ?? c).join(", ").toLowerCase()}</>
-                        )}
-                      </div>
-                    )}
                     {/* When the first charge lands. Stated on the line rather than
                         in the totals: it changes the timing, not the amount. */}
                     {l.billingStart && (

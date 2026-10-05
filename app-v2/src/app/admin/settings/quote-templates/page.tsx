@@ -9,14 +9,12 @@ import {
   type QuoteTemplatePolicy,
 } from "@/lib/actions/quoteTemplates";
 import type { QuoteTemplate } from "@/lib/adapters/hubspot";
-import type { QuoteType } from "@/types/merchant";
+// The one list of quote types and their labels. Kept shared rather than
+// re-declared here: this page's local copy still said "Full POS" / "Food
+// Truck" after both were retired, which is how an admin ends up mapping a
+// template onto a plan that no longer exists.
+import { QUOTE_TYPES } from "@/lib/quoting";
 import styles from "./quote-templates.module.css";
-
-const QUOTE_TYPES: { type: QuoteType; label: string }[] = [
-  { type: "full_pos", label: "Full POS" },
-  { type: "food_truck", label: "Food Truck" },
-  { type: "marketing_only", label: "Marketing Only" },
-];
 
 export default function QuoteTemplatesSettingsPage() {
   const [policy, setPolicy]       = useState<QuoteTemplatePolicy | null>(null);
@@ -74,7 +72,7 @@ export default function QuoteTemplatesSettingsPage() {
         )}
 
         <div className={styles.panel}>
-          {QUOTE_TYPES.map(({ type, label }) => (
+          {QUOTE_TYPES.map(({ id: type, label }) => (
             <div className={styles.field} key={type}>
               <label className={styles.label}>{label} quote template</label>
               <select

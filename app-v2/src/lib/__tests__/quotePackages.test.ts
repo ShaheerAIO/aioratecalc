@@ -27,8 +27,8 @@ const ID = {
   wifi:     "281351401209", // AIO WiFi Network Package, $999, 0 points
   install:  "223452690133", // Onsite Installation, $999 — comped
   training: "223152695032", // System Onboarding and Training, $499 — comped
-  platform: "217526517443", // AIO Platform (1 to 5 Order Points), $99/wk
-  review:   "303779019494", // AIO - Automated Review Manager, $39/mo
+  platform: "335283119838", // All-in-One Platform, $399/mo
+  review:   "335280960199", // Additional Software License, $19/mo
   // Not a real product: the fixture package SKU.
   kit:      "900000000001",
 };
@@ -42,13 +42,13 @@ const CATALOG: CatalogProduct[] = [
   p(ID.posCfd,   "POS Unit - With Customer Facing Display", 899, "one_time", "inventory"),
   p(ID.pos,      "POS Unit", 749, "one_time", "inventory"),
   p(ID.mega,     "Mega Kiosk", 2459, "one_time", "inventory"),
-  p(ID.kds,      "Kitchen Display System", 499, "one_time", "inventory"),
+  p(ID.kds,      "KDS (Kitchen Display System)", 499, "one_time", "inventory"),
   p(ID.printer,  "Thermal Printer", 249, "one_time", "inventory"),
   p(ID.wifi,     "AIO WiFi Network Package", 999, "one_time", "inventory"),
   p(ID.install,  "Onsite Installation", 999, "one_time", "Service"),
   p(ID.training, "System Onboarding and Training", 499, "one_time", "Service"),
-  p(ID.platform, "AIO Platform (1 to 5 Order Points)", 99, "weekly", "Software"),
-  p(ID.review,   "AIO - Automated Review Manager", 39, "monthly", "Software"),
+  p(ID.platform, "All-in-One Platform", 399, "monthly", ""),
+  p(ID.review,   "Additional Software License", 19, "monthly", "Software"),
   p(ID.kit,      "Test Kit", 1500, "one_time", "inventory"),
 ];
 
@@ -231,7 +231,7 @@ describe("buildQuote with a package on it", () => {
 
   const build = (picks: QuoteLine[], adjustments = {}) => {
     restore = withPackage();
-    return buildQuote("full_pos", picks, [], CATALOG, adjustments);
+    return buildQuote("all_in_one", picks, [], CATALOG, adjustments);
   };
 
   it("puts the package line on the quote and covers the WiFi package with it", () => {
@@ -267,7 +267,7 @@ describe("buildQuote with a package on it", () => {
 
   it("counts ordering points off the unsplit picks, so splitting can't move the platform tier", () => {
     const withPkg = build([line(ID.posCfd, 3)]);
-    const withoutPkg = buildQuote("full_pos", [line(ID.posCfd, 3)], [], CATALOG);
+    const withoutPkg = buildQuote("all_in_one", [line(ID.posCfd, 3)], [], CATALOG);
     expect(withPkg.orderPoints.total).toBe(3);
     expect(withPkg.orderPoints.total).toBe(withoutPkg.orderPoints.total);
     expect(withPkg.platform.productName).toBe(withoutPkg.platform.productName);

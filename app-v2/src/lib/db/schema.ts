@@ -61,8 +61,12 @@ export const marginPolicy = pgTable("margin_policy", {
 // falling through a jsonb key that was never populated.
 export const quoteTemplatePolicy = pgTable("quote_template_policy", {
   id: uuid("id").primaryKey().defaultRandom(),
-  fullPosTemplateId: text("full_pos_template_id").notNull().default("817263673055"),
-  foodTruckTemplateId: text("food_truck_template_id").notNull().default("817263673055"),
+  // Renamed from full_pos_template_id / food_truck_template_id in migration
+  // 0016, when the quote types became plans. Exactly what the comment above
+  // predicted: a changed QuoteType forces a migration rather than silently
+  // falling through a jsonb key nobody populated.
+  allInOneTemplateId: text("all_in_one_template_id").notNull().default("817263673055"),
+  orderPayOnlyTemplateId: text("order_pay_only_template_id").notNull().default("817263673055"),
   marketingOnlyTemplateId: text("marketing_only_template_id").notNull().default("817697352408"),
   updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -114,17 +118,23 @@ export const merchantApplications = pgTable("merchant_applications", {
   hubspotIds: jsonb("hubspot_ids").$type<MerchantApplication["hubspotIds"]>(),
   // What kind of quote this is — it decides which products may be on it, which
   // platform line was derived, and whether there's a processing rate at all.
-  // Nullable because rows predate quote types; read those as "full_pos".
-  quoteType: text("quote_type", { enum: ["full_pos", "food_truck", "marketing_only"] }),
+  // Nullable because rows predate quote types. "full_pos"/"food_truck" are the
+  // retired pre-2026-10-05 values, still on existing rows and still readable;
+  // `quoteTypeOf` maps them onto a live plan. Plain text, not a PG enum, so
+  // this list is TypeScript-side only and needs no migration.
+  quoteType: text("quote_type", {
+    enum: ["order_pay_only", "all_in_one", "marketing_only", "full_pos", "food_truck"],
+  }),
   // The rep-entered ticket/volume basis for a quote built without a statement.
   quoteConfig: jsonb("quote_config").$type<MerchantApplication["quoteConfig"]>(),
-  // Quote lines, priced at quote time. Prices are per BILLING CYCLE (weekly for
-  // AIO's platform fees), never per month — see BillingFrequency.
+  // Quote lines, priced at quote time. Prices are per BILLING CYCLE, never per
+  // month — see BillingFrequency. Monthly on today's plans, weekly on the
+  // published quotes that predate them.
   quoteLines: jsonb("quote_lines").$type<MerchantApplication["quoteLines"]>(),
-  // The quoted ordering-point count that selected the platform tier. Belongs to
-  // the same frozen-at-publish bucket as quoteConfig/quoteLines — it's part of
-  // what we quoted, and the later quoted-vs-deployed comparison depends on it
-  // not moving.
+  // The quoted ordering-point count. It no longer selects anything — the plan
+  // sets the platform fee — but it belongs to the same frozen-at-publish
+  // bucket as quoteConfig/quoteLines, and the later quoted-vs-deployed
+  // comparison depends on it not moving.
   orderPoints: jsonb("order_points").$type<MerchantApplication["orderPoints"]>(),
   // Set once, when the customer accepts the quote on the customer quote view.
   // Frozen alongside quoteConfig/quoteLines — the record of what was agreed,

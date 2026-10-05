@@ -18,7 +18,7 @@ import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/emai
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import { analysisFromQuoteConfig, getMarginFloor, getPaddedFloorRate } from "@/lib/pricing";
 import { getActivePaddingPolicy, getMaxDiscountPercent } from "@/lib/actions/pricing";
-import { buildQuote, isAllowedForQuoteType, isProcessingQuote, toQuoteLine } from "@/lib/quoting";
+import { buildQuote, isAllowedForQuoteType, isProcessingQuote, quoteTypeOf, toQuoteLine } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
 import { fmtBps } from "@/lib/utils";
 import type {
@@ -204,9 +204,9 @@ function tenantLinkFromCompany(company: TenantCompany, linkedByUserId: string): 
 
 // ── Quote lines are re-derived here, never accepted from the browser ────────
 // The configurator computes the same thing for its live preview, but that copy
-// is display only: unit prices, the ordering-point count and the platform tier
-// it implies are money, and a stale tab or an edited payload would otherwise
-// persist a wrong price, a $0 platform fee, or the wrong tier ($433/mo).
+// is display only: unit prices and the plan's platform fee are money, and a
+// stale tab or an edited payload would otherwise persist a wrong price, a $0
+// platform fee, or the wrong plan ($100/mo between the two POS plans).
 // The client sends what the rep PICKED — product ids, quantities, channels —
 // and everything downstream of that is computed against the live catalog.
 
@@ -355,11 +355,12 @@ export async function createProspectAction(input: {
   // analysis wins for pricing; quoteConfig stays as what the rep quoted on.
   quoteConfig?: QuoteConfig | null;
   analysis?: StatementAnalysis | null;
-  // What KIND of quote this is. Every selection rule hangs off it, so it's part
-  // of the payload rather than inferred from the picks. Defaults to full_pos.
+  // Which PLAN this quote is on. Every selection rule hangs off it, so it's
+  // part of the payload rather than inferred from the picks. Defaults to
+  // All-in-One, the same plan quoteTypeOf() reads an unset row as.
   quoteType?: QuoteType | null;
   // Phase C — what the rep picked in the configurator. Prices, the
-  // ordering-point count and the platform tier are derived server-side from
+  // ordering-point count and the platform line are derived server-side from
   // these (see deriveQuoteLines); the client's own copy is preview only.
   picks?: QuotePick[] | null;
   channels?: string[] | null;
@@ -430,7 +431,7 @@ export async function createProspectAction(input: {
   // is dropped rather than stored-but-ignored: a statement, a ticket/volume
   // basis or a margin target on such a row would render as a rate we never
   // quoted. The rep form hides those inputs; this is the enforcement.
-  const quoteType: QuoteType = input.quoteType ?? "full_pos";
+  const quoteType: QuoteType = quoteTypeOf(input.quoteType);
   const rated = isProcessingQuote(quoteType);
 
   const quoteConfig =
@@ -596,7 +597,7 @@ export async function saveQuoteConfigurationAction(input: {
     );
   }
 
-  const quoteType: QuoteType = input.quoteType ?? "full_pos";
+  const quoteType: QuoteType = quoteTypeOf(input.quoteType);
   const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {});
 
   const quoteConfig =

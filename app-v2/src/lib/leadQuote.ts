@@ -12,7 +12,7 @@
 import { analysisFromQuoteConfig, derivePricing, type FeeOverrides } from "@/lib/pricing";
 import { isProcessingQuote, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import type {
-  CustomerSafeQuote, OrderPoints, QuoteConfig, QuoteLine, QuoteType, StatementAnalysis,
+  CustomerSafeQuote, OrderPoints, QuoteConfig, QuoteLine, StatementAnalysis, StoredQuoteType,
 } from "@/types/merchant";
 
 // What a quote can be built from. Mirrors the application columns that matter
@@ -25,9 +25,9 @@ export type QuoteBasis = {
   // Phase C. Optional so the rate-only callers and their tests are unchanged.
   quoteLines?: QuoteLine[] | null;
   orderPoints?: OrderPoints | null;
-  // Omitted / null on rows written before quote types existed — read as
-  // "full_pos", i.e. the rate is what makes the quote (see quoteTypeOf).
-  quoteType?: QuoteType | null;
+  // Omitted / null on rows written before quote types existed, and a retired
+  // value on rows written before 2026-10-05 — both read through quoteTypeOf.
+  quoteType?: StoredQuoteType | null;
 };
 
 // Customer-facing quotes carry no separate per-transaction or monthly fee —

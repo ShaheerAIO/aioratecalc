@@ -3,7 +3,6 @@ import {
   DEFAULT_MAX_DISCOUNT_PERCENT,
   INCLUDED_SERVICE_PRODUCTS,
   MAX_BILLING_DELAY_DAYS,
-  PLATFORM_TIER_PRODUCT_NAMES,
   adjustmentBlockers,
   adjustmentsFromQuoteLines,
   applyLineAdjustment,
@@ -24,8 +23,9 @@ import type { CatalogProduct, QuoteAdjustments, QuoteLine } from "@/types/mercha
 
 // Discounts and delayed billing starts, end to end through the pure layer.
 // The shapes here are the ones the live portal actually carries: a 100%-comped
-// install, a half-price weekly platform fee, and a platform line that doesn't
-// start billing until the restaurant opens.
+// install, a half-price recurring fee, and a platform line that doesn't start
+// billing until the restaurant opens. The bare weekly lines below are not
+// stale: nothing sellable bills weekly any more, but published quotes do.
 
 const p = (
   hubspotProductId: string,
@@ -35,15 +35,15 @@ const p = (
   productType: string,
 ): CatalogProduct => ({ hubspotProductId, name, price, billingFrequency, productType });
 
-const PLATFORM_ID = "217526517443";
+const PLATFORM_ID = "335283119838";
 const INSTALL_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "Onsite Installation")!.hubspotProductId;
 const TRAINING_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "System Onboarding and Training")!.hubspotProductId;
 const WIFI_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "AIO WiFi Network Package")!.hubspotProductId;
 const POS_ID = "217445755632";
 
 const CATALOG: CatalogProduct[] = [
-  p(PLATFORM_ID, PLATFORM_TIER_PRODUCT_NAMES.small, 99, "weekly", "Software"),
-  p("292286544587", PLATFORM_TIER_PRODUCT_NAMES.large, 199, "weekly", "Software"),
+  p(PLATFORM_ID, "All-in-One Platform", 399, "monthly", ""),
+  p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p(POS_ID, "POS Unit", 749, "one_time", "inventory"),
   p(WIFI_ID, "AIO WiFi Network Package", 999, "one_time", "inventory"),
   p(INSTALL_ID, "Onsite Installation", 999, "one_time", "Service"),
@@ -209,7 +209,7 @@ describe("quoteSanityBlockers", () => {
       [PLATFORM_ID]: { discountPercent: 100 },
       [WIFI_ID]: { discountPercent: 100 },
     };
-    const built = buildQuote("full_pos", [toQuoteLine(pos, 1)], [], CATALOG, adjustments, 100);
+    const built = buildQuote("all_in_one", [toQuoteLine(pos, 1)], [], CATALOG, adjustments, 100);
     expect(built.totals.oneTime).toBe(0);
     expect(built.blockers.some(b => b.includes("$0"))).toBe(true);
   });
@@ -220,7 +220,7 @@ describe("buildQuote with adjustments", () => {
 
   it("comps a DERIVED install line — the discount reps actually write most", () => {
     const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 100 } };
-    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100);
 
     const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
     expect(install.discountPercent).toBe(100);
@@ -236,21 +236,21 @@ describe("buildQuote with adjustments", () => {
     const adjustments: QuoteAdjustments = {
       [PLATFORM_ID]: { billingStart: { mode: "date", date: "2026-11-01" } },
     };
-    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100);
     const platform = built.quoteLines.find(l => l.hubspotProductId === PLATFORM_ID)!;
     expect(platform.billingStart).toEqual({ mode: "date", date: "2026-11-01" });
-    // Still the full weekly figure — a delay is not a discount.
-    expect(built.totals.recurring).toEqual([{ frequency: "weekly", amount: 99 }]);
+    // Still the full monthly figure — a delay is not a discount.
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
   it("blocks the whole quote when a discount is over the cap", () => {
-    const built = buildQuote("full_pos", picked, [], CATALOG, { [POS_ID]: { discountPercent: 90 } }, 50);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, { [POS_ID]: { discountPercent: 90 } }, 50);
     expect(built.blockers).toHaveLength(1);
     expect(built.blockers[0]).toContain("POS Unit");
   });
 
   it("applies no REP adjustment when none is passed — only the standing comp", () => {
-    const built = buildQuote("full_pos", picked, [], CATALOG);
+    const built = buildQuote("all_in_one", picked, [], CATALOG);
     // The install and the training carry a 100% discount with no adjustment at
     // all: that is AIO policy off the AE price sheet, not a rep's edit. Every
     // other line is untouched.
@@ -263,13 +263,13 @@ describe("buildQuote with adjustments", () => {
   // The cap bounds what a REP may give away. The standing comp is not that,
   // and at the default 50% cap an un-exempted comp would refuse every quote.
   it("never blocks a quote on the standing comp, even at a low discount cap", () => {
-    const built = buildQuote("full_pos", picked, [], CATALOG, {}, 10);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, {}, 10);
     expect(built.blockers).toEqual([]);
   });
 
   it("lets a rep's explicit discount win over the standing comp", () => {
     const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 50 } };
-    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100);
     const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
     expect(install.discountPercent).toBe(50);
   });
@@ -278,7 +278,7 @@ describe("buildQuote with adjustments", () => {
   // is still rep discretion — only the policy 100% is exempt.
   it("still caps a rep's own over-limit discount on a comped line", () => {
     const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 80 } };
-    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 50);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 50);
     expect(built.blockers.join(" ")).toMatch(/Onsite Installation.*80%/);
   });
 
@@ -289,7 +289,7 @@ describe("buildQuote with adjustments", () => {
     const adjustments: QuoteAdjustments = {
       [INSTALL_ID]: { billingStart: { mode: "days", days: 30 } },
     };
-    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100);
     const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
     expect(install.discountPercent).toBe(100);
     expect(lineNetAmount(install)).toBe(0);
@@ -299,7 +299,7 @@ describe("buildQuote with adjustments", () => {
 describe("reopening a saved quote", () => {
   it("carries a derived line's adjustment back, which the picks deliberately drop", () => {
     const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)];
-    const saved = buildQuote("full_pos", picked, [], CATALOG, {
+    const saved = buildQuote("all_in_one", picked, [], CATALOG, {
       [INSTALL_ID]: { discountPercent: 100 },
       [PLATFORM_ID]: { billingStart: { mode: "days", days: 60 } },
     }, 100).quoteLines;
@@ -313,7 +313,7 @@ describe("reopening a saved quote", () => {
     expect(reopened[PLATFORM_ID]).toEqual({ billingStart: { mode: "days", days: 60 } });
 
     // And a round trip through buildQuote reproduces the same lines.
-    const rebuilt = buildQuote("full_pos", picked, [], CATALOG, reopened, 100);
+    const rebuilt = buildQuote("all_in_one", picked, [], CATALOG, reopened, 100);
     expect(rebuilt.quoteLines).toEqual(saved);
   });
 
@@ -479,36 +479,36 @@ describe("a scoped discount through buildQuote", () => {
   const adjustments: QuoteAdjustments = { [POS_ID]: { discountPercent: 100, discountQty: 1 } };
 
   it("puts two POS lines on the quote and charges for two units", () => {
-    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100);
     const pos = built.quoteLines.filter(l => l.hubspotProductId === POS_ID);
     expect(pos.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [2, null]]);
     expect(pos.reduce((sum, l) => sum + lineNetAmount(l), 0)).toBe(1498);
   });
 
   it("counts ordering points off the picks, so splitting can't move the platform tier", () => {
-    const split = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100);
-    const whole = buildQuote("full_pos", picked, [], CATALOG, {}, 100);
+    const split = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100);
+    const whole = buildQuote("all_in_one", picked, [], CATALOG, {}, 100);
     expect(split.orderPoints.total).toBe(3);
     expect(split.platform.productName).toBe(whole.platform.productName);
   });
 
   it("refuses a scoped discount over the cap, same as any other", () => {
-    const built = buildQuote("full_pos", picked, [], CATALOG, adjustments, 50);
+    const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 50);
     expect(built.blockers.join(" ")).toMatch(/POS Unit.*100%/);
   });
 
   it("round-trips: the quantity is recovered, not widened to the whole line", () => {
-    const saved = buildQuote("full_pos", picked, [], CATALOG, adjustments, 100).quoteLines;
+    const saved = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100).quoteLines;
 
     expect(picksFromQuoteLines(saved)).toContainEqual({ hubspotProductId: POS_ID, qty: 3 });
     const reopened = adjustmentsFromQuoteLines(saved);
     expect(reopened[POS_ID]).toEqual({ discountPercent: 100, discountQty: 1 });
 
-    expect(buildQuote("full_pos", picked, [], CATALOG, reopened, 100).quoteLines).toEqual(saved);
+    expect(buildQuote("all_in_one", picked, [], CATALOG, reopened, 100).quoteLines).toEqual(saved);
   });
 
   it("does not invent a quantity when the discount covered the whole line", () => {
-    const saved = buildQuote("full_pos", picked, [], CATALOG, { [POS_ID]: { discountPercent: 40 } }, 100).quoteLines;
+    const saved = buildQuote("all_in_one", picked, [], CATALOG, { [POS_ID]: { discountPercent: 40 } }, 100).quoteLines;
     expect(adjustmentsFromQuoteLines(saved)[POS_ID]).toEqual({ discountPercent: 40 });
   });
 });

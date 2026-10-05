@@ -9,11 +9,11 @@ import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/mer
 // with the wrong numbers on it.
 
 const PLATFORM: CatalogProduct = {
-  hubspotProductId: "217526517443",
-  name: "AIO Platform (1 to 5 Order Points)",
-  price: 99,
-  billingFrequency: "weekly",
-  productType: "Software",
+  hubspotProductId: "335283119838",
+  name: "All-in-One Platform",
+  price: 399,
+  billingFrequency: "monthly",
+  productType: "",
 };
 
 const POS: CatalogProduct = {
@@ -87,7 +87,7 @@ function app(extra: Partial<MerchantApplication> = {}): MerchantApplication {
     checkIds: null,
     foodbuyIds: null,
     hubspotIds: null,
-    quoteType: "full_pos",
+    quoteType: "all_in_one",
     quoteConfig: { avgTicket: 30, monthlyVolume: 40000 },
     quoteLines: LINES,
     orderPoints: { hardware: { "POS Unit": 1 }, channels: [], total: 1 },
@@ -131,9 +131,9 @@ describe("canPublishBillingQuote", () => {
     if (!result.ok) return;
     expect(result.lineCount).toBe(2);
     expect(result.totals.oneTime).toBe(1200);
-    expect(result.totals.recurring).toEqual([{ frequency: "weekly", amount: 99 }]);
+    expect(result.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
     // The figure that reaches the log line, not a summed-together single number.
-    expect(result.totals.monthlyEquivalent).toBeCloseTo(99 * 52 / 12, 6);
+    expect(result.totals.monthlyEquivalent).toBe(399);
   });
 
   it("reports an already-published quote as a no-op, not a failure", () => {
@@ -173,29 +173,24 @@ describe("canPublishBillingQuote", () => {
     expect(codes(check({ quoteLines: [line(PLATFORM), quarterly] }))).toContain("unsupported_billing_frequency");
   });
 
-  it("refuses when the platform tier product is missing from the catalog", () => {
+  it("refuses when the plan's platform product is missing from the catalog", () => {
     // The largest recurring line on the quote. Publishing without it undercharges
     // permanently, so the catalog not yielding it must block.
     const result = check({}, { catalog: [POS, REVIEWABLE] });
     expect(codes(result)).toContain("platform_tier_unresolved");
   });
 
-  it("still resolves the platform line for a food truck, which is flat-rated", () => {
-    const foodTruck: CatalogProduct = {
-      hubspotProductId: "247900575472", name: "AIO Platform - Food Truck",
-      price: 79, billingFrequency: "weekly", productType: "Software",
-    };
-    const result = check(
-      { quoteType: "food_truck", quoteLines: [line(foodTruck), line(POS)] },
-      { catalog: [foodTruck, POS] }
-    );
+  it("resolves a RETIRED quote type's platform line on today's plan", () => {
+    // A row saved as "full_pos" reads as All-in-One — its own weekly product
+    // is deactivated in HubSpot, so holding it there would refuse forever.
+    const result = check({ quoteType: "full_pos" });
     expect(result.ok).toBe(true);
   });
 
-  it("passes a marketing-only quote, which owes no platform line at all", () => {
+  it("passes a marketing-only quote on its own platform product", () => {
     const marketing: CatalogProduct = {
-      hubspotProductId: "223152695997", name: "AIO Marketing Platform",
-      price: 49, billingFrequency: "weekly", productType: "Software",
+      hubspotProductId: "332609247965", name: "AIO Marketing Platform",
+      price: 199, billingFrequency: "monthly", productType: "Software",
     };
     const result = check(
       { quoteType: "marketing_only", quoteLines: [line(marketing)], orderPoints: null },
@@ -206,8 +201,8 @@ describe("canPublishBillingQuote", () => {
 
   it("REFUSES an unreviewed order-point line rather than letting it through", () => {
     // §6.1 item 9 allowed a rep to acknowledge these. Under auto-publish there
-    // is no rep at acceptance time, and a device on the wrong side of the 1–5/6+
-    // boundary is ~$433/mo on a document nobody can amend.
+    // is no rep at acceptance time, and an unclassified ordering device is a
+    // number on the deal nobody can correct once the quote is published.
     const result = check({ quoteLines: [line(PLATFORM), line(POS), line(REVIEWABLE)] });
     expect(codes(result)).toContain("order_points_need_review");
     if (!result.ok) {
@@ -301,7 +296,7 @@ describe("canPublishBillingQuote", () => {
   });
 
   it("nets discounts into the totals it hands back for logging", () => {
-    // POS at $1,200 comped entirely; the weekly platform line is untouched.
+    // POS at $1,200 comped entirely; the platform line is untouched.
     // Needs a cap that permits it — the default fixture cap is 50.
     const result = check(
       { quoteLines: [LINES[0], { ...LINES[1], discountPercent: 100 }] },
@@ -310,7 +305,7 @@ describe("canPublishBillingQuote", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.totals.oneTime).toBe(0);
-    expect(result.totals.recurring).toEqual([{ frequency: "weekly", amount: 99 }]);
+    expect(result.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
   it("refuses a malformed billing start rather than publishing a delay HubSpot will reject", () => {

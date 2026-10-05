@@ -14,8 +14,8 @@ const listQuoteTemplates = vi.fn();
 
 type Row = {
   id: string;
-  fullPosTemplateId: string;
-  foodTruckTemplateId: string;
+  allInOneTemplateId: string;
+  orderPayOnlyTemplateId: string;
   marketingOnlyTemplateId: string;
   updatedByUserId: string | null;
   updatedAt: Date;
@@ -65,8 +65,8 @@ const TEMPLATES = [
 ];
 
 const DEFAULTS: Record<QuoteType, string> = {
-  full_pos: "817263673055",
-  food_truck: "817263673055",
+  all_in_one: "817263673055",
+  order_pay_only: "817263673055",
   marketing_only: "817697352408",
 };
 
@@ -88,8 +88,8 @@ describe("getQuoteTemplatePolicy", () => {
   it("reads back a saved row when one exists", async () => {
     row = {
       id: "policy-1",
-      fullPosTemplateId: "787244469949",
-      foodTruckTemplateId: "787244469949",
+      allInOneTemplateId: "787244469949",
+      orderPayOnlyTemplateId: "787244469949",
       marketingOnlyTemplateId: "817697352408",
       updatedByUserId: "admin-1",
       updatedAt: new Date(),
@@ -98,8 +98,8 @@ describe("getQuoteTemplatePolicy", () => {
 
     const policy = await getQuoteTemplatePolicy();
     expect(policy).toEqual({
-      full_pos: "787244469949",
-      food_truck: "787244469949",
+      all_in_one: "787244469949",
+      order_pay_only: "787244469949",
       marketing_only: "817697352408",
     });
   });
@@ -118,7 +118,7 @@ describe("updateQuoteTemplatePolicyAction", () => {
     getEffectiveRole.mockResolvedValue({ role: "admin", userId: "admin-1", name: "Admin", isDebug: false });
 
     await expect(
-      updateQuoteTemplatePolicyAction({ ...DEFAULTS, full_pos: "999999999999" })
+      updateQuoteTemplatePolicyAction({ ...DEFAULTS, all_in_one: "999999999999" })
     ).rejects.toThrow(/999999999999/);
     expect(inserted).toHaveLength(0);
     expect(updated).toHaveLength(0);
@@ -127,22 +127,22 @@ describe("updateQuoteTemplatePolicyAction", () => {
   it("accepts an inactive template id — inactive templates are still selectable", async () => {
     getEffectiveRole.mockResolvedValue({ role: "admin", userId: "admin-1", name: "Admin", isDebug: false });
 
-    await updateQuoteTemplatePolicyAction({ ...DEFAULTS, full_pos: "111111111111" });
+    await updateQuoteTemplatePolicyAction({ ...DEFAULTS, all_in_one: "111111111111" });
     expect(inserted).toHaveLength(1);
-    expect(inserted[0].fullPosTemplateId).toBe("111111111111");
+    expect(inserted[0].allInOneTemplateId).toBe("111111111111");
   });
 
   it("inserts when no row exists yet, and attributes the admin who saved it", async () => {
     getEffectiveRole.mockResolvedValue({ role: "admin", userId: "admin-1", name: "Admin", isDebug: false });
 
     await updateQuoteTemplatePolicyAction({
-      full_pos: "787244469949", food_truck: "787244469949", marketing_only: "817697352408",
+      all_in_one: "787244469949", order_pay_only: "787244469949", marketing_only: "817697352408",
     });
 
     expect(inserted).toHaveLength(1);
     expect(inserted[0]).toMatchObject({
-      fullPosTemplateId: "787244469949",
-      foodTruckTemplateId: "787244469949",
+      allInOneTemplateId: "787244469949",
+      orderPayOnlyTemplateId: "787244469949",
       marketingOnlyTemplateId: "817697352408",
       updatedByUserId: "admin-1",
     });
@@ -151,8 +151,8 @@ describe("updateQuoteTemplatePolicyAction", () => {
   it("updates the existing row in place rather than inserting a second one", async () => {
     row = {
       id: "policy-1",
-      fullPosTemplateId: "817263673055",
-      foodTruckTemplateId: "817263673055",
+      allInOneTemplateId: "817263673055",
+      orderPayOnlyTemplateId: "817263673055",
       marketingOnlyTemplateId: "817697352408",
       updatedByUserId: "admin-0",
       updatedAt: new Date("2026-01-01"),
@@ -160,12 +160,12 @@ describe("updateQuoteTemplatePolicyAction", () => {
     };
     getEffectiveRole.mockResolvedValue({ role: "admin", userId: "admin-2", name: "Admin", isDebug: false });
 
-    await updateQuoteTemplatePolicyAction({ ...DEFAULTS, full_pos: "787244469949" });
+    await updateQuoteTemplatePolicyAction({ ...DEFAULTS, all_in_one: "787244469949" });
 
     expect(inserted).toHaveLength(0);
     expect(updated).toHaveLength(1);
     expect(updated[0].id).toBe("policy-1");
-    expect(updated[0].values).toMatchObject({ fullPosTemplateId: "787244469949", updatedByUserId: "admin-2" });
+    expect(updated[0].values).toMatchObject({ allInOneTemplateId: "787244469949", updatedByUserId: "admin-2" });
   });
 });
 
@@ -200,8 +200,8 @@ describe("QuoteType → template resolution", () => {
   it("resolves all three quote types from the saved policy", async () => {
     row = {
       id: "policy-1",
-      fullPosTemplateId: "817263673055",
-      foodTruckTemplateId: "787244469949",
+      allInOneTemplateId: "817263673055",
+      orderPayOnlyTemplateId: "787244469949",
       marketingOnlyTemplateId: "817697352408",
       updatedByUserId: null,
       updatedAt: new Date(),
@@ -209,7 +209,7 @@ describe("QuoteType → template resolution", () => {
     };
 
     const policy = await getQuoteTemplatePolicy();
-    const types: QuoteType[] = ["full_pos", "food_truck", "marketing_only"];
-    expect(types.map(t => policy[t])).toEqual(["817263673055", "787244469949", "817697352408"]);
+    const types: QuoteType[] = ["order_pay_only", "all_in_one", "marketing_only"];
+    expect(types.map(t => policy[t])).toEqual(["787244469949", "817263673055", "817697352408"]);
   });
 });

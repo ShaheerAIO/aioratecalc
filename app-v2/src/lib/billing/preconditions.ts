@@ -184,15 +184,20 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
     add("discount_over_policy", message);
   }
 
-  // 5. The platform tier resolved. Order points are recomputed from the lines
-  //    rather than read off the stored total, so a catalog that no longer
-  //    yields the tier product is caught here instead of at publish. Its own
-  //    docstring says an unresolved platform line must block the save: it is
-  //    the largest recurring charge on the quote, and quoting without it
-  //    undercharges by hundreds a month, permanently.
+  // 5. The plan's platform line resolved. Re-derived from the saved lines
+  //    rather than trusted off the row, so a catalog that no longer yields the
+  //    product is caught here instead of at publish. Its own docstring says an
+  //    unresolved platform line must block the save: it is the largest
+  //    recurring charge on the quote, and quoting without it undercharges by
+  //    hundreds a month, permanently.
+  //
+  //    The saved `lines` stand in for the picks, which is what makes the
+  //    rate-only case still read correctly: no lines and no channels means no
+  //    plan is being sold, and the platform line is rightly absent.
   const quoteType = quoteTypeOf(app.quoteType);
-  const breakdown = deriveOrderPoints(lines, app.orderPoints?.channels ?? []);
-  const platform = resolvePlatformLine(quoteType, breakdown.orderPoints.total, catalog);
+  const channels = app.orderPoints?.channels ?? [];
+  const breakdown = deriveOrderPoints(lines, channels);
+  const platform = resolvePlatformLine(quoteType, lines, channels, catalog);
   if (platform.status === "unresolved") {
     add(
       "platform_tier_unresolved",

@@ -45,7 +45,7 @@ function newApp(): MerchantApplication {
     checkIds: null,
     foodbuyIds: null,
     hubspotIds: null,
-    quoteType: "full_pos",
+    quoteType: "all_in_one",
     quoteConfig: null,
     quoteLines: null,
     orderPoints: null,
@@ -91,7 +91,7 @@ function NewProposalFlow() {
   // Product configurator — the parent owns the type and picks, the server owns
   // the money. Marketing-only isn't offered here: this wizard starts from a
   // statement analysis, and a marketing quote has no processing behind it.
-  const [quoteType, setQuoteType] = useState<QuoteType>("full_pos");
+  const [quoteType, setQuoteType] = useState<QuoteType>("all_in_one");
   const [picks, setPicks]         = useState<ProductPick[]>([]);
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
   const [channels, setChannels]   = useState<string[]>([]);
@@ -338,15 +338,15 @@ function NewProposalFlow() {
         <div className={styles.productsWrap}>
           <h1 className={styles.productsTitle}>Products &amp; Hardware</h1>
           <p className={styles.productsSubtitle}>
-            What the merchant is buying alongside the rate. The platform fee follows the ordering-point
-            count automatically, and any quote with products on it also carries the network, install
-            and training — leave everything at zero for a rate-only quote.
+            What the merchant is buying alongside the rate. The platform fee follows the plan, and any
+            quote with products on it also carries the network, install and training — leave everything
+            at zero for a rate-only quote.
           </p>
           <ProductConfigurator
             quoteType={quoteType}
             picks={picks}
             channels={channels}
-            selectableTypes={["full_pos", "food_truck"]}
+            selectableTypes={["order_pay_only", "all_in_one"]}
             rail="inline"
             onQuoteTypeChange={setQuoteType}
             onPicksChange={setPicks}

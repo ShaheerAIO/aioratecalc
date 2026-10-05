@@ -7,7 +7,6 @@ import {
   DEFAULT_MAX_DISCOUNT_PERCENT,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
-  PLATFORM_TIER_BOUNDARY,
   QUOTE_TYPES,
   buildQuote,
   groupProducts,
@@ -659,7 +658,7 @@ export default function ProductConfigurator({
                 <>
                   Priced from the live AIO catalog and snapshotted onto the quote, so a later catalog
                   change never moves what this customer was quoted. The platform fee isn&apos;t in the
-                  list — it follows the ordering-point count below.
+                  list — it follows the plan, and is shown below.
                 </>
               ) : (
                 <>
@@ -795,13 +794,53 @@ export default function ProductConfigurator({
           </div>
         )}
 
+        {/* The plan's platform fee. Its own panel since 2026-10-05: it used to
+            live inside Ordering Points because the count selected the tier, and
+            leaving it there would keep implying a link that no longer exists —
+            and would hide it entirely on a marketing-only quote, which now
+            carries one too. */}
+        <div className={styles.panel}>
+          <div className={styles.sectionHead}>
+            <h2 className={styles.sectionTitle}>Platform Fee</h2>
+            <p className={styles.sectionNote}>
+              Derived from the plan, not picked. Change it by changing the quote type above.
+            </p>
+          </div>
+
+          {platform.line ? (
+            <div className={styles.tierBox}>
+              <div className={styles.tierName}>{platform.line.name}</div>
+              <div className={styles.tierPrice}>{linePriceLabel(platform.line)}</div>
+              {lineAdjust(platform.line.hubspotProductId)}
+            </div>
+          ) : platform.status === "term_replaced" ? (
+            <p className={styles.sectionNote}>
+              Covered by the 2-year term line — that IS the platform subscription at the committed
+              price, so the monthly one isn&apos;t added on top.
+            </p>
+          ) : platform.status === "none_needed" ? (
+            <p className={styles.sectionNote}>
+              No platform fee — this is a rate-only quote. Pick a product or declare an ordering
+              channel and the plan&apos;s fee is added automatically.
+            </p>
+          ) : (
+            <div className={styles.error}>
+              <strong>Platform fee missing.</strong> This quote requires
+              &ldquo;{platform.productName}&rdquo;, which isn&apos;t in the HubSpot catalog (renamed,
+              archived, or the catalog didn&apos;t load). This quote can&apos;t be sent until
+              that&apos;s fixed — sending it would quote no platform fee at all.
+            </div>
+          )}
+        </div>
+
         {rated && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
               <h2 className={styles.sectionTitle}>Ordering Points</h2>
               <p className={styles.sectionNote}>
                 Every place an order can be placed. Hardware is counted from the lines above; these
-                channels never appear on a hardware list, so they have to be declared here.
+                channels never appear on a hardware list, so they have to be declared here. Reported
+                on the deal — the plan above is what sets the platform fee.
               </p>
             </div>
 
@@ -822,37 +861,6 @@ export default function ProductConfigurator({
               <span className={styles.countLabel}>Ordering points</span>
               <span className={styles.countValue}>{orderPoints.total}</span>
             </div>
-
-            {platform.line ? (
-              <div className={styles.tierBox} data-tier={orderPoints.total > PLATFORM_TIER_BOUNDARY ? "large" : "small"}>
-                <div className={styles.tierName}>{platform.line.name}</div>
-                <div className={styles.tierPrice}>{linePriceLabel(platform.line)}</div>
-                {lineAdjust(platform.line.hubspotProductId)}
-                <div className={styles.tierNote}>
-                  {quoteType === "food_truck" ? (
-                    <>Food-truck platform is priced flat, so the ordering-point count doesn&apos;t move it.</>
-                  ) : (
-                    <>
-                      {orderPoints.total} ordering point{orderPoints.total === 1 ? "" : "s"} →{" "}
-                      {orderPoints.total > PLATFORM_TIER_BOUNDARY
-                        ? `6+ tier. One point fewer would price at the 1–${PLATFORM_TIER_BOUNDARY} tier.`
-                        : `1–${PLATFORM_TIER_BOUNDARY} tier. One more point moves this to the 6+ tier.`}
-                    </>
-                  )}
-                </div>
-              </div>
-            ) : platform.status === "none_needed" ? (
-              <p className={styles.sectionNote}>
-                No platform fee yet — add hardware or a channel and the tier is selected automatically.
-              </p>
-            ) : (
-              <div className={styles.error}>
-                <strong>Platform fee missing.</strong> This quote requires
-                &ldquo;{platform.productName}&rdquo;, which isn&apos;t in the HubSpot catalog (renamed,
-                archived, or the catalog didn&apos;t load). This quote can&apos;t be sent until
-                that&apos;s fixed — sending it would quote no platform fee at all.
-              </div>
-            )}
 
             {breakdown.needsReview.map(r => (
               <div key={r.name} className={styles.reviewNote}>

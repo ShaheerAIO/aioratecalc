@@ -59,7 +59,7 @@ function NewProspectFlow() {
   // the lines, ordering-point count and derived platform/service lines they
   // imply come back derived. Declared above the HubSpot block because the
   // prefill seeds `channels`.
-  const [quoteType, setQuoteType] = useState<QuoteType>("full_pos");
+  const [quoteType, setQuoteType] = useState<QuoteType>("all_in_one");
   const [picks, setPicks]       = useState<ProductPick[]>([]);
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
   const [channels, setChannels] = useState<string[]>([]);
@@ -287,7 +287,7 @@ function NewProspectFlow() {
   const reset = () => {
     setTargetMargin(0.008); setPricingModel("2-tier");
     setAvgTicket(""); setMonthlyVolume(""); setFile(null); setAnalysis(null);
-    setQuoteType("full_pos"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
+    setQuoteType("all_in_one"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
     clearDeal();

@@ -9,7 +9,7 @@ import { monthlyEquivalent } from "@/lib/utils";
 import { decomposePackages, isPackageProduct, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
-  QuoteAdjustments, QuoteLine, QuoteTotals, QuoteType,
+  QuoteAdjustments, QuoteLine, QuoteTotals, QuoteType, StoredQuoteType,
 } from "@/types/merchant";
 
 // ── Quote types ─────────────────────────────────────────────────────────────
@@ -18,30 +18,49 @@ import type {
 // not inferred from what's on the quote: the mandatory install lines and the
 // platform line are added to an EMPTY quote, so there's nothing to infer from
 // at the moment the decision is needed.
+//
+// Since 2026-10-05 the type IS the plan: one quote type, one monthly platform
+// product, no tiering. See PLATFORM_PRODUCTS.
 export const QUOTE_TYPES: Array<{ id: QuoteType; label: string; note: string }> = [
   {
-    id: "full_pos",
-    label: "Full POS",
-    note: "Hardware, software and a processing rate. Platform fee follows the ordering-point count.",
+    id: "order_pay_only",
+    label: "Order & Pay Only",
+    note: "Hardware, software and a processing rate on the $299/mo plan.",
   },
   {
-    id: "food_truck",
-    label: "Food Truck",
-    note: "Same as Full POS, but the platform fee is the flat food-truck rate rather than a tier.",
+    id: "all_in_one",
+    label: "All-in-One",
+    note: "The full platform at $399/mo. Hardware, software and a processing rate.",
   },
   {
     id: "marketing_only",
     label: "Marketing Only",
-    note: "Marketing products alone — no POS hardware, no platform fee, no processing rate.",
+    note: "Marketing products alone — no POS hardware, no install lines, no processing rate.",
   },
 ];
 
-/** Read a persisted quote type. Rows written before quote types existed are full-POS deals. */
-export function quoteTypeOf(stored: QuoteType | null | undefined): QuoteType {
-  return stored ?? "full_pos";
+/**
+ * Read a persisted quote type as one of today's plans.
+ *
+ * The two retired values are MAPPED rather than preserved, because their
+ * platform products are deactivated in HubSpot: a row left as `full_pos` can't
+ * resolve a platform line at all and would simply refuse to save. "All-in-One"
+ * is the successor to both — it is the full plan, and the food-truck SKU it
+ * also absorbs has no replacement of its own. That re-prices an unpublished
+ * legacy row ($99/wk ≈ $429/mo, or $75/wk ≈ $325/mo, both → $399/mo), which is
+ * unavoidable: the old price is no longer purchasable. A PUBLISHED row is
+ * untouched — `publishBillingQuote` sends `quoteLines` verbatim and never
+ * re-derives.
+ *
+ * Rows written before quote types existed at all are null, and are full-POS
+ * deals, so they map the same way.
+ */
+export function quoteTypeOf(stored: StoredQuoteType | null | undefined): QuoteType {
+  if (stored === "full_pos" || stored === "food_truck" || stored == null) return "all_in_one";
+  return stored;
 }
 
-/** True for the quote types that carry a processing rate, an ordering-point count and a platform fee. */
+/** True for the plans that carry a processing rate and an ordering-point count. */
 export function isProcessingQuote(quoteType: QuoteType): boolean {
   return quoteType !== "marketing_only";
 }
@@ -89,13 +108,33 @@ export function isPickable(product: CatalogProduct): boolean {
 
 // ── Selection rules per quote type ──────────────────────────────────────────
 
-// The only products a marketing-only quote may carry. Confirmed with Shaheer
-// 2026-08-20: the Marketing Platform and Add Spend, and nothing else — the
-// Review Manager and Payroll are POS add-ons, not marketing.
+// The products a marketing-only quote may carry BY HAND. Confirmed with
+// Shaheer 2026-10-05, replacing the 2026-08-20 pair ($49/wk Marketing Platform
+// and $99/mo Add Spend) — both of those are deactivated in HubSpot.
+//
+// The $199/mo AIO Marketing Platform is deliberately NOT here: it is the plan's
+// derived platform line (see PLATFORM_PRODUCTS), so like every other derived
+// line it is never pickable.
 export const MARKETING_PRODUCTS = [
-  { name: "AIO Marketing Platform", hubspotProductId: "223152695997" },
-  { name: "AIO Marketing Add Spend", hubspotProductId: "247901295335" },
+  { name: "AIO Marketing Platform (2-year term)", hubspotProductId: "332927902454" },
+  { name: "AIO Marketing Platform (2-year term)", hubspotProductId: "334139877086" },
+  { name: "Marketing Kit - Mega Kiosk", hubspotProductId: "332617109238" },
+  { name: "Marketing Kit - 27\" Kiosk", hubspotProductId: "332793212658" },
+  { name: "Website", hubspotProductId: "333275576048" },
 ] as const;
+
+/**
+ * The 2-year commitment SKU, which REPLACES the derived $199/mo platform line
+ * rather than stacking on top of it (Shaheer, 2026-10-05) — a merchant on the
+ * 2-year term pays $299/mo, not $498.
+ *
+ * Two ids because HubSpot holds two identical active records for it. Neither
+ * is preferred — the rep picks whichever the picker shows them — so both have
+ * to be recognised here or half the 2-year quotes carry a double platform fee.
+ * Deduplicating them is a HubSpot-side cleanup; this list shrinks when it
+ * happens.
+ */
+export const MARKETING_TERM_PRODUCT_IDS = ["332927902454", "334139877086"];
 
 function isMarketingProduct(id: string, name: string): boolean {
   return MARKETING_PRODUCTS.some(m => m.hubspotProductId === id || m.name === name.trim());
@@ -451,8 +490,10 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "POS Unit - With Customer Facing Display": { pointsPerUnit: 1, hubspotProductId: "223452690130" },
   "mPOS": { pointsPerUnit: 1, hubspotProductId: "223511653101" },
   "Mega Kiosk": { pointsPerUnit: 1, hubspotProductId: "260674226888" },
-  "Kiosk + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "222497165009" },
-  "Kiosk Mini + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "223519571666" },
+  "Kiosk 27\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "222497165009" },
+  "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "223519571666" },
+  // Steve's list counts a "Tableside AI Device"; this is that product.
+  "AIO Tableside POS": { pointsPerUnit: 1, hubspotProductId: "335279520447" },
   // Resolved by Shaheer 2026-08-20: the bundle contains exactly one POS, so it
   // counts one point like a bare POS Unit. Was 0-with-needsReview while the
   // contents were unknown.
@@ -468,13 +509,25 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "Clock in Tablet": { pointsPerUnit: 0, hubspotProductId: "276754193118" },
   "Payment Terminal - AMS1": { pointsPerUnit: 0, hubspotProductId: "223511653105" },
   "Customer Facing Display": { pointsPerUnit: 0, hubspotProductId: "318736467644" },
-  "Kitchen Display System": { pointsPerUnit: 0, hubspotProductId: "223452690132" },
-  "Kitchen Display for Customer": { pointsPerUnit: 0, hubspotProductId: "265825703641" },
+  "KDS (Kitchen Display System)": { pointsPerUnit: 0, hubspotProductId: "223452690132" },
+  // Marketing hardware. Named for kiosks but not ordering kiosks — settled by
+  // Shaheer 2026-10-05. Typed `inventory`, so without an explicit 0 they'd
+  // show the rep an "unclassified hardware" warning on every marketing quote.
+  "Marketing Kit - Mega Kiosk": { pointsPerUnit: 0, hubspotProductId: "332617109238" },
+  "Marketing Kit - 27\" Kiosk": { pointsPerUnit: 0, hubspotProductId: "332793212658" },
+  // The "website / online ordering" CHANNEL is the ordering point, declared on
+  // the deal. This is the $50/mo product that builds the site; counting it too
+  // would double it.
+  "Website": { pointsPerUnit: 0, hubspotProductId: "333275576048" },
   "Menu Board Computer": { pointsPerUnit: 0, hubspotProductId: "223511653103" },
   "Thermal Printer": { pointsPerUnit: 0, hubspotProductId: "223511653104" },
   "Epson Sticky Printer": { pointsPerUnit: 0, hubspotProductId: "250458906315" },
   "Cash Drawer": { pointsPerUnit: 0, hubspotProductId: "222497165011" },
   "AIO WiFi Network Package": { pointsPerUnit: 0, hubspotProductId: "281351401209" },
+  // Deactivated in HubSpot 2026-10, so a rep can't pick these any more. The
+  // rules stay: a saved quote that already carries one must keep counting it
+  // at 0 rather than start reporting it as unclassified hardware.
+  "Kitchen Display for Customer": { pointsPerUnit: 0, hubspotProductId: "265825703641" },
   "Large TV (75in)": { pointsPerUnit: 0, hubspotProductId: "316081071858" },
   "Medium TV (50in to 65in)": { pointsPerUnit: 0, hubspotProductId: "316074591968" },
   "Small TV (32in to 43in)": { pointsPerUnit: 0, hubspotProductId: "316076031729" },
@@ -566,94 +619,96 @@ export function deriveOrderPoints(lines: QuoteLine[], channels: string[]): Order
   return { orderPoints: { hardware, channels: declared, total }, needsReview, unclassified };
 }
 
-// ── Platform tier (derived, not chosen) ─────────────────────────────────────
+// ── The platform line (derived, not chosen) ─────────────────────────────────
 
-// The largest recurring line on any quote, and a $433/mo swing across the
-// boundary, so it follows the count rather than a rep's dropdown.
-export const PLATFORM_TIER_BOUNDARY = 5; // 1–5 inclusive, then 6+
-
-export const PLATFORM_TIER_PRODUCT_NAMES = {
-  small: "AIO Platform (1 to 5 Order Points)",
-  large: "AIO Platform (6 + Order Points)",
-} as const;
-
-// Same reason as ORDER_POINT_RULES: the id is the stable key, the name is only
-// the fallback for a catalog record we haven't seen.
-export const PLATFORM_TIER_PRODUCT_IDS: Record<string, string> = {
-  [PLATFORM_TIER_PRODUCT_NAMES.small]: "217526517443",
-  [PLATFORM_TIER_PRODUCT_NAMES.large]: "292286544587",
+/**
+ * One plan, one platform product. The quote type IS the choice, so the largest
+ * recurring line on the quote follows it rather than a rep's dropdown.
+ *
+ * Replaced the order-point tiers on 2026-10-05, when AIO deactivated all three
+ * weekly platform SKUs in HubSpot. The count no longer prices anything (see
+ * ORDER_POINT_RULES, which is now reporting only) — the plan does.
+ *
+ * As with ORDER_POINT_RULES, the id is the key and the name is only the
+ * fallback for a catalog record renamed since this was written.
+ */
+export const PLATFORM_PRODUCTS: Record<QuoteType, { name: string; hubspotProductId: string }> = {
+  order_pay_only: { name: "All-in-One (Order & Pay only)", hubspotProductId: "335279520445" },
+  all_in_one: { name: "All-in-One Platform", hubspotProductId: "335283119838" },
+  marketing_only: { name: "AIO Marketing Platform", hubspotProductId: "332609247965" },
 };
 
-// Not order-point tiered — a food truck is priced flat. It's the food_truck
-// quote type's platform line, derived like the tiers rather than picked: a rep
-// picking it by hand next to a tiered quote is how you get two platform fees.
-export const FOOD_TRUCK_PLATFORM_NAME = "AIO Platform - Food Truck";
-export const FOOD_TRUCK_PLATFORM_ID = "247900575472";
+/**
+ * Platform products AIO no longer sells. They are deactivated in HubSpot, so
+ * nothing can be quoted on one again — but saved quotes still carry their
+ * lines, and `isPlatformProduct` is what keeps those out of the picks a quote
+ * is reopened as. Drop one from here and reopening a 2026-era quote offers its
+ * platform fee back as a rep-pickable product, next to the new plan's.
+ */
+const RETIRED_PLATFORM_PRODUCTS = [
+  { name: "AIO Platform (1 to 5 Order Points)", hubspotProductId: "217526517443" },
+  { name: "AIO Platform (6 + Order Points)", hubspotProductId: "292286544587" },
+  { name: "AIO Platform - Food Truck", hubspotProductId: "247900575472" },
+  // The $49/wk marketing platform. Same NAME as its $199/mo replacement, which
+  // is harmless here: both are platform lines either way.
+  { name: "AIO Marketing Platform", hubspotProductId: "223152695997" },
+];
 
-export function isPlatformTierProduct(name: string): boolean {
-  return name === PLATFORM_TIER_PRODUCT_NAMES.small || name === PLATFORM_TIER_PRODUCT_NAMES.large;
-}
-
-/** Any derived platform line — both order-point tiers and the flat food-truck one. */
+/** Any derived platform line, on today's plans or a retired one. */
 export function isPlatformProduct(name: string, id?: string): boolean {
   const trimmed = name.trim();
-  return (
-    isPlatformTierProduct(trimmed) ||
-    trimmed === FOOD_TRUCK_PLATFORM_NAME ||
-    id === FOOD_TRUCK_PLATFORM_ID ||
-    (!!id && Object.values(PLATFORM_TIER_PRODUCT_IDS).includes(id))
+  return [...Object.values(PLATFORM_PRODUCTS), ...RETIRED_PLATFORM_PRODUCTS].some(
+    p => p.name === trimmed || (!!id && p.hubspotProductId === id)
   );
-}
-
-/** Which tier product a given order-point total selects. Zero points selects nothing. */
-export function platformTierNameFor(total: number): string | null {
-  if (total <= 0) return null;
-  return total <= PLATFORM_TIER_BOUNDARY ? PLATFORM_TIER_PRODUCT_NAMES.small : PLATFORM_TIER_PRODUCT_NAMES.large;
 }
 
 export type PlatformLineResult =
   /** The platform line to put on the quote. */
   | { status: "resolved"; line: QuoteLine; productName: string }
-  /** Zero ordering points on a processing quote — no platform fee is due yet. */
+  /** A rate-only quote: nothing picked and no channel declared, so no plan is being sold yet. */
   | { status: "none_needed"; line: null; productName: null }
-  /** Marketing-only: AIO's platform isn't part of this quote at all. */
-  | { status: "not_applicable"; line: null; productName: null }
+  /** Marketing-only, on the 2-year term — that line IS the platform charge. */
+  | { status: "term_replaced"; line: null; productName: null }
   /** A platform line IS due but the catalog didn't yield it. Never quietly quote without it. */
   | { status: "unresolved"; line: null; productName: string };
 
 /**
- * The platform-fee line the quote type and order-point count imply, snapshotted
- * from the catalog like any other line. Which product that is depends on the
- * type, not on what the rep happened to pick:
- *   full_pos       → the 1–5 or 6+ tier, by count
- *   food_truck     → the flat food-truck platform, regardless of count
- *   marketing_only → none
+ * The platform-fee line the plan implies, snapshotted from the catalog like any
+ * other line. Which product that is depends on the quote type alone, not on
+ * what the rep happened to pick or how many ordering points they counted.
  *
  * Returns a status rather than a bare null because the "no line" cases are not
- * the same thing: three are correct, and the fourth — a line is owed but the
+ * the same thing: two are correct, and the third — a line is owed but the
  * catalog didn't yield the product — is the largest recurring charge on the
  * quote going missing. That case must reach the rep and must block the save.
  */
 export function resolvePlatformLine(
   quoteType: QuoteType,
-  total: number,
+  pickedLines: QuoteLine[],
+  channels: string[],
   catalog: CatalogProduct[]
 ): PlatformLineResult {
-  if (!isProcessingQuote(quoteType)) return { status: "not_applicable", line: null, productName: null };
+  if (quoteType === "marketing_only") {
+    // The 2-year term is the same subscription at the committed price, not an
+    // add-on to it. Charging both bills the merchant $498/mo for one platform.
+    if (pickedLines.some(l => MARKETING_TERM_PRODUCT_IDS.includes(l.hubspotProductId))) {
+      return { status: "term_replaced", line: null, productName: null };
+    }
+  } else if (pickedLines.length === 0 && channels.length === 0) {
+    // A RATE-ONLY quote — we're quoting a processing rate and nothing else, so
+    // there's no plan to charge for. Channels count here (unlike the install
+    // services, which need something physical on site): a website-ordering
+    // merchant with no hardware is still on the platform.
+    return { status: "none_needed", line: null, productName: null };
+  }
 
-  const [productName, productId] =
-    quoteType === "food_truck"
-      ? [FOOD_TRUCK_PLATFORM_NAME, FOOD_TRUCK_PLATFORM_ID]
-      : [platformTierNameFor(total), null];
-
-  if (!productName) return { status: "none_needed", line: null, productName: null };
-
-  const id = productId ?? PLATFORM_TIER_PRODUCT_IDS[productName];
+  const { name, hubspotProductId } = PLATFORM_PRODUCTS[quoteType];
   const product =
-    catalog.find(p => p.hubspotProductId === id) ?? catalog.find(p => p.name.trim() === productName);
+    catalog.find(p => p.hubspotProductId === hubspotProductId) ??
+    catalog.find(p => p.name.trim() === name);
   return product
-    ? { status: "resolved", line: toQuoteLine(product, 1), productName }
-    : { status: "unresolved", line: null, productName };
+    ? { status: "resolved", line: toQuoteLine(product, 1), productName: name }
+    : { status: "unresolved", line: null, productName: name };
 }
 
 /**
@@ -915,13 +970,14 @@ export function buildQuote(
   /** The admin discount cap. Defaults low on purpose; see DEFAULT_MAX_DISCOUNT_PERCENT. */
   maxDiscountPercent: number = DEFAULT_MAX_DISCOUNT_PERCENT
 ): BuiltQuote {
-  // Marketing-only quotes have no ordering points, so declared channels are
-  // dropped rather than trusted: a rep who ticks "website / online ordering"
-  // must not conjure a $99/wk platform tier onto a $49/wk marketing quote.
+  // Marketing-only quotes have no ordering points at all, so declared channels
+  // are dropped rather than trusted: ticking "website / online ordering" on a
+  // marketing quote would report an ordering point for a merchant who isn't
+  // taking orders through AIO.
   const effectiveChannels = isProcessingQuote(quoteType) ? channels : [];
 
   const breakdown = deriveOrderPoints(pickedLines, effectiveChannels);
-  const platform = resolvePlatformLine(quoteType, breakdown.orderPoints.total, catalog);
+  const platform = resolvePlatformLine(quoteType, pickedLines, effectiveChannels, catalog);
   const includedServices = resolveIncludedServices(quoteType, pickedLines, catalog);
 
   // The pre-made packages, resolved against the mandatory services AND the
