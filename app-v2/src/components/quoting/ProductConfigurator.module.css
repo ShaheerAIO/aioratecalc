@@ -478,6 +478,16 @@
 
 .adjustInput { width: 5.5rem; }
 
+.adjustInput:disabled,
+.adjustSelect:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.globalGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-sm);
+}
+
 .adjustInput:focus-visible,
 .adjustSelect:focus-visible {
   outline: 2px solid var(--focus);

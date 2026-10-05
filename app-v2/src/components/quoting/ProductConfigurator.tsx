@@ -12,6 +12,7 @@ import {
   buildQuote,
   groupProducts,
   isAllowedForQuoteType,
+  isCompedService,
   isProcessingQuote,
   lineDiscountAmount,
   lineListAmount,
@@ -356,6 +357,31 @@ export default function ProductConfigurator({
   }, [recurringLines]);
   const globalMode = sharedStart.mixed ? "" : (sharedStart.start?.mode ?? "now");
 
+  // ── The quote-wide discount ───────────────────────────────────────────────
+  // Every chargeable line EXCEPT the comped services. Those sit at 100% by
+  // default, and a rep's typed figure overrides the comp — so sweeping "10%
+  // off" across them would quietly put $1,348 of install and training back on.
+  // Package-covered lines are already absent from `lineFor`.
+  const discountIds = useMemo(
+    () => [...lineFor.keys()].filter(id => !isCompedService({ hubspotProductId: id })),
+    [lineFor]
+  );
+  const sharedDiscount = useMemo(() => {
+    if (discountIds.length === 0) return { mixed: false, pct: null as number | null };
+    const pctOf = (id: string) => adjustments[id]?.discountQty ? -1 : (lineFor.get(id)?.discountPercent ?? 0);
+    const first = pctOf(discountIds[0]);
+    const mixed = discountIds.some(id => pctOf(id) !== first);
+    return { mixed, pct: mixed || first <= 0 ? null : first };
+  }, [discountIds, lineFor, adjustments]);
+
+  const setGlobalDiscount = (raw: string) => {
+    const pct = raw.trim() === "" ? null : Number(raw);
+    const next = pct === null || Number.isNaN(pct) ? null : Math.min(100, Math.max(0, pct));
+    // Whole lines only: a per-line "1 of 3" scope can't be shared across lines
+    // with different quantities, so a quote-wide figure replaces it.
+    setAdjustments(discountIds, { discountPercent: next || null, discountQty: null });
+  };
+
   // A line's price, struck through and restated when it carries a discount.
   // Lifted verbatim out of the old Discounts panel — now that the adjust
   // control lives on the row, the row is where the discounted figure belongs,
@@ -540,6 +566,88 @@ export default function ProductConfigurator({
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* One lever for the whole quote, because that is how the concession is
+            actually given. Above the catalog so it can't be missed, and always
+            rendered so the catalog doesn't jump down when the first line lands.
+            The per-line drawers still win for exceptions — these write the
+            same `discountPercent` / `billingStart` they do. */}
+        {onAdjustmentsChange && (
+          <div className={styles.panel}>
+            <div className={styles.sectionHead}>
+              <h2 className={styles.sectionTitle}>Whole-Quote Adjustments</h2>
+              <p className={styles.sectionNote}>
+                {quoteLines.length === 0
+                  ? "Add products below, then discount or delay billing for the whole quote here."
+                  : "Sets every line at once. Use a line's own Adjust button for exceptions."}
+              </p>
+            </div>
+
+            <div className={styles.globalGrid}>
+              <label className={styles.adjustField}>
+                <span className={styles.adjustLabel}>Discount</span>
+                <span className={styles.pctWrap}>
+                  <input
+                    type="number" min={0} max={100} step={1}
+                    className={styles.adjustInput}
+                    value={sharedDiscount.pct ?? ""}
+                    placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
+                    disabled={discountIds.length === 0}
+                    onChange={e => setGlobalDiscount(e.target.value)}
+                    aria-label="Discount percent for every line on the quote"
+                  />
+                  <span className={styles.pctSign}>%</span>
+                </span>
+              </label>
+
+              <label className={styles.adjustField}>
+                <span className={styles.adjustLabel}>Billing starts</span>
+                <span className={styles.startWrap}>
+                  <select
+                    className={styles.adjustSelect}
+                    value={globalMode}
+                    disabled={recurringIds.length === 0}
+                    onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
+                    aria-label="When billing starts for every recurring line"
+                  >
+                    {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
+                    <option value="now">At checkout</option>
+                    <option value="date">On a date</option>
+                    <option value="days">After N days</option>
+                  </select>
+                  {sharedStart.start?.mode === "date" && (
+                    <input
+                      type="date"
+                      className={styles.adjustInput}
+                      value={sharedStart.start.date}
+                      onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
+                      aria-label="Billing start date for every recurring line"
+                    />
+                  )}
+                  {sharedStart.start?.mode === "days" && (
+                    <span className={styles.pctWrap}>
+                      <input
+                        type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
+                        className={styles.adjustInput}
+                        value={sharedStart.start.days}
+                        onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
+                        aria-label="Billing start delay in days for every recurring line"
+                      />
+                      <span className={styles.pctSign}>days</span>
+                    </span>
+                  )}
+                </span>
+              </label>
+            </div>
+
+            <p className={styles.adjustNote}>
+              The discount skips install and training, which are already comped to $0, and is
+              capped at {maxDiscountPercent}%. On a recurring line it is permanent — to give time
+              away, delay billing instead. A delay applies to recurring lines only; one-time
+              charges always bill at checkout.
+            </p>
           </div>
         )}
 
@@ -758,61 +866,6 @@ export default function ProductConfigurator({
                 ordering-point rules, counted as 0. Check before sending.
               </div>
             )}
-          </div>
-        )}
-
-        {/* One lever for the whole quote, because that is how the concession is
-            actually given. The per-line drawers above still win for the
-            exceptions — this writes the same `billingStart` they do. */}
-        {onAdjustmentsChange && recurringIds.length > 0 && (
-          <div className={styles.panel}>
-            <div className={styles.sectionHead}>
-              <h2 className={styles.sectionTitle}>Billing Start</h2>
-              <p className={styles.sectionNote}>
-                Applies to every recurring line on this quote — the platform fee and any
-                subscriptions. One-time charges (hardware, install, training) always bill at
-                checkout and aren&apos;t affected by this.
-              </p>
-            </div>
-            <div className={styles.startWrap}>
-              <select
-                className={styles.adjustSelect}
-                value={globalMode}
-                onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
-                aria-label="When billing starts for every recurring line"
-              >
-                {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
-                <option value="now">At checkout</option>
-                <option value="date">On a date</option>
-                <option value="days">After N days</option>
-              </select>
-              {sharedStart.start?.mode === "date" && (
-                <input
-                  type="date"
-                  className={styles.adjustInput}
-                  value={sharedStart.start.date}
-                  onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
-                  aria-label="Billing start date for every recurring line"
-                />
-              )}
-              {sharedStart.start?.mode === "days" && (
-                <span className={styles.pctWrap}>
-                  <input
-                    type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
-                    className={styles.adjustInput}
-                    value={sharedStart.start.days}
-                    onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
-                    aria-label="Billing start delay in days for every recurring line"
-                  />
-                  <span className={styles.pctSign}>days</span>
-                </span>
-              )}
-            </div>
-            <p className={styles.adjustNote}>
-              {sharedStart.mixed
-                ? "Recurring lines currently start at different times — choosing one here sets them all to it."
-                : "A delay moves when the first charge lands, not what the line is worth. The totals don't move."}
-            </p>
           </div>
         )}
 
