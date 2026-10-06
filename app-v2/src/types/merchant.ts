@@ -16,6 +16,70 @@ export type PricingModel = "flat-rate" | "2-tier" | "interchange-plus";
  */
 export const SELECTABLE_PRICING_MODELS: PricingModel[] = ["2-tier"];
 
+/**
+ * What a 2-tier quote is priced on: the two card rates and the per-transaction
+ * fee, exactly as the merchant reads them off the quote.
+ *
+ * These are the INPUT as of 2026-10-06. They used to be derived from a margin
+ * target the rep set — AIO would decide what it needed to make and the rates
+ * fell out of it. That inverted: the rep quotes a rate and whatever margin it
+ * leaves is whatever it leaves. The margin matrix in `pricing.ts` is untouched
+ * and still computes the floor for the internal panel, but nothing sets a
+ * margin and nothing refuses a quote for being under one.
+ *
+ * It is a flat default rather than a lookup because the ticket-size × volume
+ * matrix that should choose the rate doesn't exist yet. When it does, it
+ * replaces DEFAULT_QUOTE_RATES and nothing else has to move: a suggested rate
+ * and a typed one are the same three numbers.
+ *
+ * Lives here rather than in `pricing.ts` for the same reason
+ * SELECTABLE_PRICING_MODELS does — three rep surfaces need it, and importing
+ * pricing.ts into a client bundle would ship AIO's true margin floors to the
+ * browser.
+ */
+export type QuoteRates = {
+  /** Visa / Mastercard / Discover, card present. e.g. 0.0249 for 2.49%. */
+  cardPresentRate: number;
+  /** Visa / Mastercard / Discover, card not present. */
+  cardNotPresentRate: number;
+  /**
+   * American Express, card present. AMEX is its own pair because it settles at
+   * its own cost — the two brand groups are priced separately on every real
+   * rate card, AIO's included.
+   */
+  amexCardPresentRate: number;
+  /** American Express, card not present. */
+  amexCardNotPresentRate: number;
+  /** Charged on every transaction, on top of the rate — not folded into it. */
+  perTransactionFee: number;
+};
+
+/**
+ * 2.49% on all four lanes plus $0.15, the rate every merchant is quoted until
+ * the matrix exists. Editable on every rep surface; this is the starting
+ * point, not a cap or a floor.
+ *
+ * All four are the SAME number today, which is not what the industry does and
+ * not what HubSpot's rate card says — product-owner decision, 2026-10-06. The
+ * four fields still exist separately because they are four real prices that
+ * will diverge; collapsing them to one while they happen to be equal would
+ * mean rebuilding this the first time AMEX is priced on its own.
+ *
+ * NOTE for whoever updates these: HubSpot's own rate-card product
+ * (`AIO Processing Two Tiered Rate`, the $0 disclosure line) carries its rates
+ * in its DESCRIPTION, and as of 2026-10-06 that text still reads 3.50%
+ * card-not-present. Until someone edits it in HubSpot, a quote carrying that
+ * line states two different CNP rates. Flagged to the product owner; it is a
+ * HubSpot-side fix, not a code one.
+ */
+export const DEFAULT_QUOTE_RATES: QuoteRates = {
+  cardPresentRate: 0.0249,
+  cardNotPresentRate: 0.0249,
+  amexCardPresentRate: 0.0249,
+  amexCardNotPresentRate: 0.0249,
+  perTransactionFee: 0.15,
+};
+
 export type DealStage =
   | "prospect_created"      // rep created a prospect + set a margin target, no link sent yet
   | "lead_link_sent"        // rep sent the tokenized self-serve upload link, awaiting customer
@@ -80,6 +144,10 @@ export type ProposedRates2Tier = {
   cardPresentPerTxn: number;
   cardNotPresentRate: number;
   cardNotPresentPerTxn: number;
+  /** AMEX, priced separately from Visa/Mastercard/Discover. Absent on
+   *  proposals generated before 2026-10-06, which quoted two rates. */
+  amexCardPresentRate?: number;
+  amexCardNotPresentRate?: number;
   monthlyFee: number;
 };
 export type ProposedRatesIcPlus = {
@@ -146,8 +214,14 @@ export type QuoteType =
   // All-in-One Platform — $399/mo. The full deal.
   | "all_in_one"
   // AIO Marketing Platform — $199/mo. Marketing products alone: no POS
-  // hardware, no processing rate, none of the mandatory install lines.
-  | "marketing_only";
+  // hardware, no processing rate, none of the mandatory install lines. The
+  // kiosk is sold separately.
+  | "marketing_only"
+  // AIO Marketing Platform (2-year term) — $299/mo. The same marketing plan on
+  // a 2-year commitment, which INCLUDES one Mega or 27" kiosk at no cost. A
+  // plan of its own rather than a product a rep adds, because it replaces the
+  // $199 subscription rather than stacking on it — see PLATFORM_PRODUCTS.
+  | "marketing_term";
 
 /**
  * What the `quote_type` column may actually hold. The two retired values are
@@ -191,10 +265,12 @@ export type QuoteLine = {
    */
   billingStart?: BillingStart | null;
   /**
-   * Set when a pre-made package absorbed this line: the package name(s) that
-   * cover it. Presence is what makes the 100% discount on this line AIO policy
-   * rather than a rep's choice — `adjustmentBlockers` exempts it from the
-   * discount cap on that basis, exactly as it does a comped service.
+   * Set when something else on the quote has already paid for this line: the
+   * name of the pre-made package that absorbed it, or of the plan that
+   * includes it (the 2-year marketing term includes a kiosk and three menu
+   * board computers). Presence is what makes the 100% discount on this line
+   * AIO policy rather than a rep's choice — `adjustmentBlockers` exempts it
+   * from the discount cap on that basis, exactly as it does a comped service.
    *
    * The NAME rather than an id, because a persisted quote has to render years
    * later whether or not that package is still in `PACKAGES`.
@@ -653,7 +729,14 @@ export type MerchantApplication = {
   // it's the moment the quote was agreed, and it belongs with the frozen
   // quoteConfig/quoteLines rather than with the live deal state.
   quoteAcceptedAt: string | null;
-  targetMargin: number | null; // rep-set margin target, exists before any analysis
+  // The rates this quote is priced on. Null on rows written before 2026-10-06
+  // and read through `ratesFor()`, which falls back to DEFAULT_QUOTE_RATES.
+  quoteRates: QuoteRates | null;
+  // SUPERSEDED by quoteRates as the pricing input (2026-10-06). Still on every
+  // row written before then, and still the column the margin work will come
+  // back to — so it is kept and read, not dropped. Nothing writes it now and
+  // nothing prices off it.
+  targetMargin: number | null;
   pricingModel: PricingModel | null; // rep's pre-selected model for the prospect
   // Generalized token slot — serves both the pre-analysis self-serve upload
   // link (purpose "lead_upload") and the post-proposal Adyen KYC handoff

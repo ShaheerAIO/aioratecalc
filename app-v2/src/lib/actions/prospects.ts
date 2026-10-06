@@ -16,14 +16,14 @@ import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidatio
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
-import { analysisFromQuoteConfig, getMarginFloor, getPaddedFloorRate } from "@/lib/pricing";
-import { getActivePaddingPolicy, getMaxDiscountPercent } from "@/lib/actions/pricing";
-import { buildQuote, isAllowedForQuoteType, isProcessingQuote, quoteTypeOf, toQuoteLine } from "@/lib/quoting";
+import { analysisFromQuoteConfig } from "@/lib/pricing";
+import { getMaxDiscountPercent } from "@/lib/actions/pricing";
+import { buildQuote, isAllowedForQuoteType, isProcessingQuote, quoteHasProcessing, quoteTypeOf, toQuoteLine } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
-import { fmtBps } from "@/lib/utils";
+import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
 import type {
   BusinessInfo, DealLink, MerchantApplication, OrderPoints, OwnerContact, PricingModel, ProcessingInfo,
-  QuoteAdjustments, QuoteConfig, QuoteLine, QuoteType, StatementAnalysis, TenantLink,
+  QuoteAdjustments, QuoteConfig, QuoteLine, QuoteRates, QuoteType, StatementAnalysis, TenantLink,
 } from "@/types/merchant";
 
 const LINK_TTL_DAYS = 14;
@@ -213,71 +213,25 @@ function tenantLinkFromCompany(company: TenantCompany, linkedByUserId: string): 
 /** What the rep picked. Prices and the derived tier are the server's business. */
 export type QuotePick = { hubspotProductId: string; qty: number };
 
-// ── Floor enforcement, defence in depth ──────────────────────────────────────
-// PricingStep and EditQuotePanel already block a below-floor target client-side,
-// against the PADDED floor a rep is shown (derivePricingForRole in pricing.ts).
-// This is the write-path backstop for the same Server Actions, and it is
-// deliberately scoped PER ROLE rather than always enforcing the true floor:
+// ── Floor enforcement: OFF ───────────────────────────────────────────────────
+// Deleted 2026-10-06 along with the margin target it checked. Rates are the
+// pricing input now (see QuoteRates): a rep types 2.49% and whatever margin
+// that leaves is whatever it leaves, so there is no margin for a write path to
+// refuse. Any rate a rep types saves — product-owner decision, taken knowing
+// that a below-cost rate can now reach a merchant.
 //
-//   admin → the true floor (getMarginFloor's minMargin)
-//   rep   → the padded floor (getPaddedFloorRate of that same minMargin) —
-//           the exact number their own UI already blocks at
+// The machinery it used is INTACT and still runs: MARGIN_REQS, getMarginFloor
+// and getPaddedFloorRate still feed `derivePricingForRole`, which still tells
+// a rep's collapsed internal panel whether the rates they typed land under the
+// floor. What's gone is only the refusal.
 //
-// An earlier version of this guard enforced the true floor for every role,
-// on the theory that a number-free refusal message keeps the true floor
-// hidden from a rep. It doesn't: the refusal itself is an oracle. A rep who
-// calls this Server Action directly (skipping the client, which stops at the
-// padded floor) can binary-search targetMargin — refuse, refuse, succeed —
-// and recover the true floor to arbitrary precision, which is exactly the
-// number derivePricingForRole's pillow exists to keep from them.
-//
-// Enforcing the padded floor for reps closes that oracle (the only number a
-// rep can now recover by probing is the padded one, already shown on screen)
-// and it costs nothing: the padded floor is strictly above the true floor, so
-// this is a STRICTER limit than before, not a weaker one — no honest rep
-// workflow that passed the client-side check can fail here. A rep who
-// genuinely needs to go below the padded floor asks an admin, who saves it
-// themselves and is held to the true floor.
-//
-// The refusal text still never states the floor to a rep, even though it's
-// now the padded number — a rep isn't supposed to learn even that one from
-// the error text; PricingStep/EditQuotePanel already show it to them directly.
-// An admin's refusal names the true floor, same as before.
-async function assertMarginAboveFloor(
-  quoteType: QuoteType,
-  targetMargin: number,
-  analysis: StatementAnalysis | null,
-  quoteConfig: QuoteConfig | null,
-  role: "admin" | "rep"
-): Promise<void> {
-  // A marketing-only quote has no processing rate at all (isProcessingQuote) —
-  // there is nothing to floor.
-  if (!isProcessingQuote(quoteType)) return;
-
-  // Same volume precedence used elsewhere for a rated quote: a statement's
-  // totalVolume wins when one exists, otherwise the rep-entered config — see
-  // quotableAnalysis in leadQuote.ts and annualVolume in adapters/hubspot.ts.
-  const volume = analysis?.totalVolume || quoteConfig?.monthlyVolume || 0;
-
-  // No statement and no config means there's no volume to floor a rate
-  // against yet (a bare/pre-statement quote is a legitimate state — see
-  // createProspectAction) — refusing here would just make the action unusable.
-  if (!(volume > 0)) return;
-
-  const trueFloor = getMarginFloor(volume).minMargin;
-  if (role === "admin") {
-    if (targetMargin >= trueFloor) return;
-    throw new Error(
-      `Target margin is below AIO's true minimum floor for this volume (${fmtBps(trueFloor)}) — raise it.`
-    );
-  }
-
-  const padding = await getActivePaddingPolicy();
-  const floor = getPaddedFloorRate(trueFloor, padding);
-  if (targetMargin >= floor) return;
-
-  throw new Error("That target margin is below AIO's minimum for this volume — raise it and save again.");
-}
+// Worth re-reading before enforcement comes back, because it was subtle: the
+// guard was scoped PER ROLE (admins held to the true floor, reps to the padded
+// one) because a refusal is an oracle — a rep calling the Server Action
+// directly could binary-search the margin, refuse/refuse/succeed, and recover
+// AIO's true floor to arbitrary precision. Enforcing the padded floor for reps
+// closed that, at no cost, since the padded floor is strictly stricter. The
+// same trap is waiting for whoever re-enforces this against a typed rate.
 
 async function deriveQuoteLines(
   quoteType: QuoteType,
@@ -286,13 +240,23 @@ async function deriveQuoteLines(
   adjustments: QuoteAdjustments
 ): Promise<{ quoteLines: QuoteLine[] | null; orderPoints: OrderPoints | null }> {
   const wanted = picks.filter(p => p.hubspotProductId && p.qty > 0);
-  // Nothing picked and nothing declared still falls through for a rated quote:
-  // a food-truck deal owes its flat platform fee either way. What it does NOT
-  // pick up is the install services — those follow the products, so an empty
-  // picker is a rate-only quote (see resolveIncludedServices). A marketing-only
-  // quote with an empty picker genuinely has nothing on it, so it short-cuts
-  // the catalog read.
-  if (!wanted.length && !channels.length && !isProcessingQuote(quoteType)) {
+  // A PROCESSING quote with nothing picked and no channel declared is a
+  // rate-only quote: `resolvePlatformLine` returns `none_needed`, the install
+  // services follow the products and so stay off, and `buildQuote` would
+  // derive an empty line set. Returning that directly is the same answer
+  // without the catalog read — which also means creating a rate-only prospect
+  // survives a HubSpot outage.
+  //
+  // A MARKETING quote is the opposite and must NOT short-cut, which this
+  // condition used to have backwards. There is no rate behind it, so an empty
+  // picker doesn't mean "rate only", it means a subscription nobody has added
+  // hardware to — and it still owes $199 or $299 a month plus the three Menu
+  // Board Computers the plan includes. Skipping the derivation saved
+  // `quoteLines: null`, so the rep approved a quote the configurator had
+  // priced correctly in front of them and the merchant's link then showed no
+  // quote at all. buildQuote() is the one derivation; this was a second one
+  // disagreeing with it.
+  if (!wanted.length && !channels.length && isProcessingQuote(quoteType)) {
     return { quoteLines: null, orderPoints: null };
   }
 
@@ -346,7 +310,10 @@ export async function createProspectAction(input: {
   // contact info, but processing details (mcc, current processor, …) don't
   // apply to it, so the form may omit this section entirely.
   processing?: ProcessingInfo | null;
-  targetMargin: number;
+  // What this quote is priced on. Optional — a rep who never opens the rate
+  // controls quotes the standard 2.49% / 2.49% / $0.15, which is what the form
+  // shows them by default.
+  quoteRates?: QuoteRates | null;
   pricingModel: PricingModel;
   // Dual statement path. Either (or both) may be supplied: the rep can enter
   // ticket/volume configs, upload the statement themselves (analysis already
@@ -427,12 +394,16 @@ export async function createProspectAction(input: {
     linkedByUserId: effective.userId,
   };
 
-  // A marketing-only quote has no processing behind it, so the whole rate half
-  // is dropped rather than stored-but-ignored: a statement, a ticket/volume
-  // basis or a margin target on such a row would render as a rate we never
-  // quoted. The rep form hides those inputs; this is the enforcement.
+  // A quote with no processing behind it drops the whole rate half rather than
+  // storing-but-ignoring it: a statement, a ticket/volume basis or a margin
+  // target on such a row would render as a rate we never quoted. The rep form
+  // hides those inputs; this is the enforcement.
+  //
+  // Read off the PICKS, not the plan alone. A marketing quote carrying the
+  // Website sells through it, so its rate half is real and must be kept — the
+  // rep form shows those inputs for exactly the same reason.
   const quoteType: QuoteType = quoteTypeOf(input.quoteType);
-  const rated = isProcessingQuote(quoteType);
+  const rated = quoteHasProcessing(quoteType, input.picks ?? []);
 
   const quoteConfig =
     rated && input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0
@@ -440,19 +411,15 @@ export async function createProspectAction(input: {
       : null;
   const analysis = rated ? input.analysis ?? null : null;
 
-  // Server-side floor check — see assertMarginAboveFloor. A rep filling
-  // out the prospect form is exactly as capable of typing a below-floor
-  // number here as through the wizard, so this write path gets the same
-  // defence-in-depth backstop saveQuoteConfigurationAction has.
-  await assertMarginAboveFloor(quoteType, input.targetMargin, analysis, quoteConfig, effective.role);
-
   const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {});
 
   // The same predicate the customer-facing render uses, so a quote can't be
   // marked "sent" when it would draw as nothing. On a marketing-only quote the
   // lines ARE the quote, so they're what makes it sendable.
+  // Rates don't affect WHETHER a quote renders, only what it says — so null
+  // here is the honest answer rather than a dropped value.
   const hasQuote = hasQuoteBasis({
-    quoteType, analysis, quoteConfig, targetMargin: null, pricingModel: null, quoteLines,
+    quoteType, analysis, quoteConfig, quoteRates: null, targetMargin: null, pricingModel: null, quoteLines,
   });
 
   const app: MerchantApplication = {
@@ -481,7 +448,10 @@ export async function createProspectAction(input: {
     quoteLines,
     orderPoints,
     quoteAcceptedAt: null,
-    targetMargin: rated ? input.targetMargin : null,
+    quoteRates: rated ? (input.quoteRates ?? DEFAULT_QUOTE_RATES) : null,
+    // Not written any more — rates replaced it as the input. Null on every new
+    // row; the column stays for the rows that have one. See QuoteRates.
+    targetMargin: null,
     pricingModel: rated ? input.pricingModel : null,
     customerLinkToken: link.token,
     customerLinkPurpose: "lead_upload",
@@ -557,7 +527,8 @@ export async function saveQuoteConfigurationAction(input: {
    * the admin cap; the browser's copy of it is advisory only.
    */
   adjustments?: QuoteAdjustments | null;
-  targetMargin: number;
+  /** What this quote is priced on. Omitted keeps whatever the row already has. */
+  quoteRates?: QuoteRates | null;
   pricingModel: PricingModel;
   quoteConfig?: QuoteConfig | null;
   // The wizard is statement-driven, so it only ever offers the rated types —
@@ -605,21 +576,13 @@ export async function saveQuoteConfigurationAction(input: {
       ? input.quoteConfig
       : app.quoteConfig;
 
-  // Server-side floor check — see assertMarginAboveFloor. This action is
-  // the one write path for quote configuration (wizard + Edit Quote panel),
-  // so it's the one place this needs to live rather than duplicated per
-  // caller. `app.analysis` (not an input here — this action doesn't touch the
-  // statement) is the analysis half of the same volume precedence used
-  // elsewhere.
-  await assertMarginAboveFloor(quoteType, input.targetMargin, app.analysis, quoteConfig, effective.role);
-
   const updated: MerchantApplication = {
     ...app,
     quoteType,
     quoteConfig,
     quoteLines,
     orderPoints,
-    targetMargin: input.targetMargin,
+    quoteRates: input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES,
     pricingModel: input.pricingModel,
     updatedAt: new Date().toISOString(),
   };

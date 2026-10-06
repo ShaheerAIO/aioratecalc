@@ -36,6 +36,7 @@ const APP: MerchantApplication = {
   quoteLines: null,
   orderPoints: null,
   quoteAcceptedAt: null,
+  quoteRates: null,
   targetMargin: null,
   pricingModel: null,
   customerLinkToken: null,

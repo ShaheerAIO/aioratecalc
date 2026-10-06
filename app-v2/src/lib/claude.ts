@@ -1,5 +1,5 @@
 import { parseJSON } from "./utils";
-import type { StatementAnalysis, ProposalOutput, PricingModel, ProposedRates } from "@/types/merchant";
+import type { StatementAnalysis, ProposalOutput, PricingModel, ProposedRates, QuoteRates } from "@/types/merchant";
 import { derivePricing, blendedInterchangeEstimate, type FeeOverrides } from "./pricing";
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
@@ -193,15 +193,15 @@ Use 0 for unknown numerics. Never null.`,
 export async function generateProposal(
   analysis: StatementAnalysis,
   pricingModel: PricingModel,
-  targetMargin: number,
+  quoteRates: QuoteRates | null,
   feeOverrides: FeeOverrides
 ): Promise<ProposalOutput> {
   const vol  = analysis.totalVolume || 0;
   const txns = analysis.totalTransactions || 0;
   const annVol = vol * 12;
 
-  const { flatRate, cpRate, cnpRate, projectedMonthlyFees, cpVol, cnpVol } =
-    derivePricing(analysis, targetMargin, pricingModel, feeOverrides);
+  const { flatRate, cpRate, cnpRate, amexCpRate, amexCnpRate, perTxnFee, bps, projectedMonthlyFees, cpVol, cnpVol } =
+    derivePricing(analysis, quoteRates, pricingModel, feeOverrides);
 
   const exactRates: ProposedRates =
     pricingModel === "flat-rate"
@@ -210,14 +210,20 @@ export async function generateProposal(
       ? {
           pricingModel,
           cardPresentRate: cpRate,
-          cardPresentPerTxn: feeOverrides.cpPerTxnFee || 0,
+          // One per-transaction fee across both lanes — the quoted rates carry
+          // it now, where the two per-lane fee overrides used to.
+          cardPresentPerTxn: perTxnFee,
           cardNotPresentRate: cnpRate,
-          cardNotPresentPerTxn: feeOverrides.cnpPerTxnFee || 0,
+          cardNotPresentPerTxn: perTxnFee,
+          // AMEX is a separate price, so the proposal has to state it — a
+          // document quoting two of the four rates understates the offer.
+          amexCardPresentRate: amexCpRate,
+          amexCardNotPresentRate: amexCnpRate,
           monthlyFee: feeOverrides.monthlyFee || 0,
         }
       : {
           pricingModel,
-          basisPoints: Math.round(targetMargin * 10000),
+          basisPoints: bps,
           perTransaction: feeOverrides.perTxnFee || 0,
           monthlyFee: feeOverrides.monthlyFee || 0,
         };

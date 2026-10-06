@@ -5,10 +5,11 @@ import { analysisFromQuoteConfigAction, saveQuoteConfigurationAction } from "@/l
 import { getSettingsAction } from "@/lib/actions/applications";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
-import { adjustmentsFromQuoteLines, isProcessingQuote, picksFromQuoteLines, quoteTypeOf } from "@/lib/quoting";
-import { fmt$, fmtPct2 } from "@/lib/utils";
-import { SELECTABLE_PRICING_MODELS } from "@/types/merchant";
-import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteType, StatementAnalysis } from "@/types/merchant";
+import RateFields from "@/components/rep/RateFields";
+import { adjustmentsFromQuoteLines, picksFromQuoteLines, quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
+import { fmt$ } from "@/lib/utils";
+import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 
 type Props = {
@@ -50,15 +51,16 @@ const ZERO_FEES: FeeOverrides = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, c
  * has nothing to floor a below-cost margin against either, and says so.
  */
 export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
-  const [quoteType, setQuoteType] = useState<QuoteType>(quoteTypeOf(app.quoteType));
-  const [picks, setPicks] = useState<ProductPick[]>(picksFromQuoteLines(app.quoteLines));
+  const savedQuoteType = quoteTypeOf(app.quoteType);
+  const [quoteType, setQuoteType] = useState<QuoteType>(savedQuoteType);
+  const [picks, setPicks] = useState<ProductPick[]>(picksFromQuoteLines(app.quoteLines, savedQuoteType));
   const [channels, setChannels] = useState<string[]>(app.orderPoints?.channels ?? []);
   // Read off the SAVED lines, derived ones included — a comped install lives
   // on a derived line, and picksFromQuoteLines drops those by design.
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>(adjustmentsFromQuoteLines(app.quoteLines));
   const [quote, setQuote] = useState<ConfiguredQuote | null>(null);
 
-  const [targetMargin, setTargetMargin] = useState<number>(app.targetMargin ?? 0.008);
+  const [quoteRates, setQuoteRates] = useState<QuoteRates>(app.quoteRates ?? DEFAULT_QUOTE_RATES);
   const [pricingModel, setPricingModel] = useState<PricingModel>(app.pricingModel ?? "2-tier");
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -67,7 +69,11 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const rated = isProcessingQuote(quoteType);
+  // Whether this quote carries a RATE — which on a marketing plan depends on
+  // whether the Website is on it, not on the plan alone. Everything below
+  // hangs off this: the margin control, the rate preview, and whether an empty
+  // picker is a legitimate quote.
+  const rated = quoteHasProcessing(quoteType, picks);
 
   // Whether there's ANY volume basis to preview or floor-check a margin
   // against — a statement, or a rep-entered volume/ticket config. Neither
@@ -115,7 +121,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
     const handle = setTimeout(() => {
       getPricingPreviewAction({
         analysis: previewAnalysis!,
-        targetMargin,
+        quoteRates,
         pricingModel,
         feeOverrides: ZERO_FEES,
         activeTier,
@@ -124,14 +130,15 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
     return () => clearTimeout(handle);
     // previewAnalysis is a derived value (app.analysis, or the once-fetched
     // configAnalysis), not a ref-stable dependency worth excluding — include it.
-  }, [canPreview, previewAnalysis, targetMargin, pricingModel, activeTier]);
+  }, [canPreview, previewAnalysis, quoteRates, pricingModel, activeTier]);
 
+  // Reported, never enforced — floor enforcement went with the margin input on
+  // 2026-10-06. A rate under the floor warns the rep and still saves.
   const belowFloor = pricing?.belowCostFloor ?? false;
   const belowMin = pricing?.belowMarginFloor ?? false;
-  const blockedByMargin = canPreview && (belowFloor || belowMin);
   const blockers = quote?.blockers ?? [];
 
-  const disabled = saving || blockedByMargin || blockers.length > 0 || (!rated && !picks.length);
+  const disabled = saving || blockers.length > 0 || (!rated && !picks.length);
 
   const save = async () => {
     if (disabled) return;
@@ -143,7 +150,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         quoteType,
         picks,
         channels,
-        targetMargin,
+        quoteRates,
         pricingModel,
         quoteConfig: app.quoteConfig,
       });
@@ -198,47 +205,44 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
 
       {rated && (
         <div style={{ padding: 16, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>Pricing Model</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {SELECTABLE_PRICING_MODELS.map(m => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setPricingModel(m)}
-                data-active={pricingModel === m}
-                style={{
-                  padding: "6px 12px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.15)",
-                  background: pricingModel === m ? "var(--accent, #f9674e)" : "transparent",
-                  color: pricingModel === m ? "#fff" : "inherit", cursor: "pointer",
-                }}
-              >
-                {m.replace("-", " ")}
-              </button>
-            ))}
-          </div>
+          {/* Same as the prospect form: one sellable model means nothing to
+              pick, and a lone pill reads as a broken control. The rate fields
+              below are the two tiers. Returns if the list ever grows. */}
+          {SELECTABLE_PRICING_MODELS.length > 1 && (
+            <>
+              <div style={{ marginBottom: 8, fontWeight: 600 }}>Pricing Model</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {SELECTABLE_PRICING_MODELS.map(m => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setPricingModel(m)}
+                    data-active={pricingModel === m}
+                    style={{
+                      padding: "6px 12px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.15)",
+                      background: pricingModel === m ? "var(--accent, #f9674e)" : "transparent",
+                      color: pricingModel === m ? "#fff" : "inherit", cursor: "pointer",
+                    }}
+                  >
+                    {m.replace("-", " ")}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
-          <div style={{ marginTop: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-              <span>Margin Target</span>
-              <span>{fmtPct2(targetMargin)}</span>
-            </div>
-            <input
-              type="range" min="0.001" max="0.04" step="0.0005"
-              value={targetMargin}
-              onChange={e => setTargetMargin(parseFloat(e.target.value))}
-              style={{ width: "100%" }}
-            />
+          <div>
+            <RateFields value={quoteRates} onChange={setQuoteRates} />
             {!canPreview && hasVolumeBasis && (
               <p style={{ opacity: 0.7, fontSize: 13, marginTop: 6 }}>
-                Loading margin preview…
+                Loading preview…
               </p>
             )}
             {!canPreview && !hasVolumeBasis && (
               <p style={{ opacity: 0.7, fontSize: 13, marginTop: 6 }}>
                 No statement or volume/ticket basis on file for this account, so there&apos;s nothing
-                to preview or floor-check the margin against yet — this just sets the target the
-                customer&apos;s own upload will be priced at. AIO still refuses a below-floor target
-                once a basis exists to check it against.
+                to project these rates against yet — they still set what the customer&apos;s own
+                upload will be priced at.
               </p>
             )}
             {canPreview && pricing && (
@@ -247,12 +251,13 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
                 <div>AIO revenue: <strong>{fmt$(pricing.aioRevenue)}/mo</strong></div>
                 {belowFloor && (
                   <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Below cost floor — this margin would lose AIO money on this deal. Raise the target.
+                    Below cost — AIO loses money on this deal at this rate. Not blocked, but don&rsquo;t
+                    send it without asking.
                   </div>
                 )}
                 {belowMin && (
                   <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Below AIO&rsquo;s minimum margin floor for this volume. Raise the target.
+                    Below AIO&rsquo;s minimum margin for this volume.
                   </div>
                 )}
               </div>

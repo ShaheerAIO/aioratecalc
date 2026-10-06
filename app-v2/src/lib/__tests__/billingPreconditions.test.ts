@@ -92,6 +92,7 @@ function app(extra: Partial<MerchantApplication> = {}): MerchantApplication {
     quoteLines: LINES,
     orderPoints: { hardware: { "POS Unit": 1 }, channels: [], total: 1 },
     quoteAcceptedAt: "2026-08-21T00:00:00.000Z",
+    quoteRates: null,
     targetMargin: 0.019,
     pricingModel: "2-tier",
     customerLinkToken: "tok",

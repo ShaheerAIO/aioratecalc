@@ -120,6 +120,7 @@ export async function getMyQuoteAction(id: string): Promise<CustomerSafeQuote | 
     quoteType: app.quoteType,
     analysis: app.analysis,
     quoteConfig: app.quoteConfig,
+    quoteRates: app.quoteRates,
     targetMargin: app.targetMargin,
     pricingModel: app.pricingModel,
     quoteLines: app.quoteLines,

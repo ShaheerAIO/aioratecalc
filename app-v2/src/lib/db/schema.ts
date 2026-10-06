@@ -68,6 +68,10 @@ export const quoteTemplatePolicy = pgTable("quote_template_policy", {
   allInOneTemplateId: text("all_in_one_template_id").notNull().default("817263673055"),
   orderPayOnlyTemplateId: text("order_pay_only_template_id").notNull().default("817263673055"),
   marketingOnlyTemplateId: text("marketing_only_template_id").notNull().default("817697352408"),
+  // Added in migration 0017, when the marketing plan split into $199 and the
+  // $299 2-year term. Same template as the $199 plan by default — the document
+  // reads identically, only the plan line and the included kiosk differ.
+  marketingTermTemplateId: text("marketing_term_template_id").notNull().default("817697352408"),
   updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   isActive: boolean("is_active").notNull().default(true),
@@ -123,7 +127,10 @@ export const merchantApplications = pgTable("merchant_applications", {
   // `quoteTypeOf` maps them onto a live plan. Plain text, not a PG enum, so
   // this list is TypeScript-side only and needs no migration.
   quoteType: text("quote_type", {
-    enum: ["order_pay_only", "all_in_one", "marketing_only", "full_pos", "food_truck"],
+    enum: [
+      "order_pay_only", "all_in_one", "marketing_only", "marketing_term",
+      "full_pos", "food_truck",
+    ],
   }),
   // The rep-entered ticket/volume basis for a quote built without a statement.
   quoteConfig: jsonb("quote_config").$type<MerchantApplication["quoteConfig"]>(),
@@ -146,6 +153,15 @@ export const merchantApplications = pgTable("merchant_applications", {
   ownerContact: jsonb("owner_contact").$type<OwnerContact | null>(),
   processing: jsonb("processing").$type<ProcessingInfo | null>(),
   agreement: jsonb("agreement").$type<AgreementInfo | null>(),
+  // What a 2-tier quote is priced on since 2026-10-06: both card rates and the
+  // per-transaction fee, as the merchant reads them. jsonb rather than three
+  // numeric columns because they are one decision and always move together —
+  // and because the ticket × volume matrix that will eventually suggest them
+  // may add terms. Null on rows written before, read through `ratesFor()`.
+  quoteRates: jsonb("quote_rates").$type<MerchantApplication["quoteRates"]>(),
+  // SUPERSEDED by quoteRates as the pricing input. Kept, not dropped: every
+  // row written before 2026-10-06 carries one, and the margin work this was
+  // built for is deferred rather than cancelled.
   targetMargin: numeric("target_margin", { precision: 8, scale: 6 }),
   pricingModel: text("pricing_model"),
   // Generalized replacement for the old single-purpose merchantLinkToken/

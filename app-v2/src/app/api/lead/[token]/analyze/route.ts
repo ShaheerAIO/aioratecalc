@@ -5,7 +5,7 @@ import { merchantApplications } from "@/lib/db/schema";
 import { analyzeStatement } from "@/lib/claude";
 import { shouldAdvance } from "@/lib/stages";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
-import { isProcessingQuote, quoteTypeOf } from "@/lib/quoting";
+import { quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
 import type { StatementAnalysis } from "@/types/merchant";
 
 // Public, unauthenticated by design — the token itself (time-limited,
@@ -29,11 +29,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       return NextResponse.json({ error: "This link has expired" }, { status: 410 });
     }
 
-    // A marketing-only quote has no processing behind it, so there is nothing a
+    // A marketing quote has no processing behind it, so there is nothing a
     // statement could price. The lead page offers no upload on such a quote;
     // this refuses the request outright rather than burning a Claude call and
-    // storing an analysis the quote would ignore.
-    if (!isProcessingQuote(quoteTypeOf(row.quoteType))) {
+    // storing an analysis the quote would ignore. A marketing quote carrying
+    // the Website is the exception — that merchant does process, so their
+    // statement prices their rate like anyone else's.
+    if (!quoteHasProcessing(quoteTypeOf(row.quoteType), row.quoteLines)) {
       return NextResponse.json(
         { error: "This quote doesn't include payment processing, so there's nothing to compare a statement against." },
         { status: 409 }
@@ -47,6 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         quoteType: row.quoteType,
         analysis,
         quoteConfig: row.quoteConfig,
+        quoteRates: row.quoteRates,
         targetMargin: row.targetMargin != null ? Number(row.targetMargin) : null,
         pricingModel: row.pricingModel,
         quoteLines: row.quoteLines,

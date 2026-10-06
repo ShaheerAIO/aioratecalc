@@ -305,7 +305,7 @@ describe("reopening a saved quote", () => {
     }, 100).quoteLines;
 
     // The picks drop derived lines — that is their job, they get re-derived.
-    expect(picksFromQuoteLines(saved).map(x => x.hubspotProductId)).toEqual([POS_ID]);
+    expect(picksFromQuoteLines(saved, "all_in_one").map(x => x.hubspotProductId)).toEqual([POS_ID]);
 
     // The adjustments must NOT, or the comped install silently returns to $999.
     const reopened = adjustmentsFromQuoteLines(saved);
@@ -500,7 +500,7 @@ describe("a scoped discount through buildQuote", () => {
   it("round-trips: the quantity is recovered, not widened to the whole line", () => {
     const saved = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100).quoteLines;
 
-    expect(picksFromQuoteLines(saved)).toContainEqual({ hubspotProductId: POS_ID, qty: 3 });
+    expect(picksFromQuoteLines(saved, "all_in_one")).toContainEqual({ hubspotProductId: POS_ID, qty: 3 });
     const reopened = adjustmentsFromQuoteLines(saved);
     expect(reopened[POS_ID]).toEqual({ discountPercent: 100, discountQty: 1 });
 

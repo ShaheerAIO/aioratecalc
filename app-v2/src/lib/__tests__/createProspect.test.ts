@@ -58,12 +58,13 @@ function baseInput(over: Partial<Input> = {}): Input {
     business: BUSINESS,
     ownerContact: OWNER,
     processing: null,
-    targetMargin: 0.008,
     pricingModel: "2-tier",
-    // marketing_only + no picks/channels short-circuits deriveQuoteLines
-    // before it ever reaches the catalog — this suite is about the
-    // company/deal/field gates, not quote derivation.
-    quoteType: "marketing_only",
+    // A RATE-ONLY processing quote (no picks, no channels) short-circuits
+    // deriveQuoteLines before it ever reaches the catalog — this suite is
+    // about the company/deal/field gates, not quote derivation. It must not be
+    // a marketing plan: those always derive, since an empty marketing picker
+    // is a subscription nobody has added hardware to, not a rate-only quote.
+    quoteType: "all_in_one",
     picks: [],
     channels: [],
     hubspotCompanyId: COMPANY_ID,

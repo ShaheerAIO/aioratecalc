@@ -15,6 +15,7 @@ const DEFAULT_TEMPLATE_IDS: Record<QuoteType, string> = {
   order_pay_only: "817263673055",
   all_in_one: "817263673055",
   marketing_only: "817697352408",
+  marketing_term: "817697352408",
 };
 
 export type QuoteTemplatePolicy = Record<QuoteType, string>;
@@ -24,6 +25,7 @@ function rowToPolicy(row: typeof quoteTemplatePolicy.$inferSelect): QuoteTemplat
     order_pay_only: row.orderPayOnlyTemplateId,
     all_in_one: row.allInOneTemplateId,
     marketing_only: row.marketingOnlyTemplateId,
+    marketing_term: row.marketingTermTemplateId,
   };
 }
 
@@ -58,6 +60,7 @@ export async function updateQuoteTemplatePolicyAction(input: QuoteTemplatePolicy
     allInOneTemplateId: input.all_in_one,
     orderPayOnlyTemplateId: input.order_pay_only,
     marketingOnlyTemplateId: input.marketing_only,
+    marketingTermTemplateId: input.marketing_term,
     updatedByUserId: effective.userId,
     updatedAt: new Date(),
   };

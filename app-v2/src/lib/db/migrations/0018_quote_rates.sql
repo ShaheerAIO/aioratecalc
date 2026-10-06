@@ -1,0 +1,13 @@
+-- Rates became the pricing input (2026-10-06), replacing the margin target the
+-- rep used to set. A 2-tier quote now carries the two card rates and the
+-- per-transaction fee the merchant actually reads off it, defaulting to
+-- 2.49% / 2.49% / $0.15 until the ticket-size x volume matrix exists.
+--
+-- target_margin is deliberately NOT dropped. Every row written before today
+-- carries one, and the margin work is deferred rather than cancelled -- see
+-- MARGIN_REQS in pricing.ts, which still computes the floor for the rep's
+-- internal panel even though nothing refuses a quote for being under it.
+--
+-- Nullable with no backfill: a row with no rates prices at DEFAULT_QUOTE_RATES
+-- through `ratesFor()`, which is the same rate it would be quoted today.
+ALTER TABLE "merchant_applications" ADD COLUMN "quote_rates" jsonb;

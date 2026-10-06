@@ -163,55 +163,6 @@
 
 .modelPill:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-.marginRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: var(--space-xs);
-}
-
-.marginLabel { font-size: 0.85rem; color: var(--ink-2); }
-
-.marginValue {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 1.3rem;
-  color: var(--accent-text);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---------- AIO-internal disclosure ---------- */
-
-.disclosureBtn {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-sm);
-  width: 100%;
-  padding: 0;
-  border: none;
-  background: none;
-  font-family: var(--font-body);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--ink-2);
-  text-align: left;
-  cursor: pointer;
-}
-
-.disclosureBtn:hover { color: var(--ink); }
-.disclosureBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-
-.disclosureChevron {
-  font-size: 0.6rem;
-  color: var(--ink-3);
-  transition: transform 150ms var(--ease-out);
-}
-
-.disclosureBtn[aria-expanded="true"] .disclosureChevron { transform: rotate(180deg); }
-
-.disclosureBody { margin-top: var(--space-md); }
-
 /* ---------- HubSpot deep-link indicator ---------- */
 
 .hubspotBadge {
@@ -383,7 +334,128 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .modelPill, .btnPrimary, .btnGhost, .btnCopy, .input, .dropzone, .disclosureChevron {
+  .modelPill, .btnPrimary, .btnGhost, .btnCopy, .input, .dropzone {
     transition-duration: 1ms;
   }
+}
+
+/* Splits one panel into two halves that belong together but aren't the same
+   decision: what the merchant is charged, and what it's charged on. The rule
+   is what lets the "(optional)" sit on the second half only — it applies to
+   the ticket/volume/statement basis, never to the rates. */
+.subhead {
+  margin: var(--space-lg) 0 var(--space-md);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--rule);
+}
+
+.subheadTitle {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 0.9rem;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-3xs);
+}
+
+/* ---------- The deal, as a disclosure ---------- */
+/* NOT a card. It was one, and a card is a thing on the page whether or not it
+   has anything to say — this has nothing to say on the normal path, where the
+   rep arrived from the EasyOB Link and the deal is already resolved. So it
+   carries no surface, no border and no shadow of its own: collapsed, it is one
+   line of text. The card chrome appears only when it is open and there is
+   something in it.
+
+   A <details> rather than a button and a flag: the browser already does the
+   toggling, the keyboard handling and the semantics. */
+.dealPanel {
+  margin-bottom: var(--space-lg);
+  border-radius: var(--radius-lg);
+}
+
+.dealPanel[open] {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-md) var(--space-xl);
+}
+
+/* Has to read as a control, not as a heading that happens to move. Hence the
+   hover surface, the inset padding and a chevron big enough to see — it is the
+   only affordance on a row that otherwise looks exactly like the section
+   headings around it. */
+.dealSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  cursor: pointer;
+  list-style: none;
+  padding: var(--space-xs) var(--space-md);
+  margin: 0 calc(-1 * var(--space-md));
+  border-radius: var(--radius-sm);
+  transition: background 150ms var(--ease-out);
+}
+
+.dealSummary:hover { background: var(--paper-2); }
+.dealPanel[open] .dealSummary:hover { background: transparent; }
+
+/* Safari still draws its own disclosure triangle without this. */
+.dealSummary::-webkit-details-marker { display: none; }
+.dealSummary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+/* Reads the same folded or open: this is the section's heading either way,
+   and dimming it while collapsed made the row look disabled rather than
+   closed. */
+.dealSummaryTitle {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+/* The deal and company, so a collapsed panel still answers "which deal is
+   this quote on" without being opened. Truncates rather than wrapping — the
+   full name is in the badge inside. */
+.dealSummaryValue {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dealSummaryChevron {
+  flex-shrink: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  color: var(--accent-text);
+  transition: transform 150ms var(--ease-out);
+}
+
+.dealPanel[open] .dealSummaryChevron { transform: rotate(180deg); }
+
+/* No deal on the quote yet — the one case where this row is the thing the rep
+   has to act on, so it says so rather than sitting quiet in grey. */
+.dealSummaryValue[data-empty="true"] {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.dealBody { margin-top: var(--space-md); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dealSummaryChevron { transition-duration: 1ms; }
+}
+
+/* A smaller button for actions inside a panel, as opposed to the page's own
+   submit. The full-size pill is sized to be the one thing you press on the
+   screen; two of them stacked in a folded-open card just crowds it. */
+.btnSm {
+  font-size: 0.8rem;
+  padding: var(--space-2xs) var(--space-md);
+  margin-top: var(--space-2xs);
 }

@@ -6,7 +6,7 @@
 
 import type { MerchantApplication } from "@/types/merchant";
 import { hasBillingCompleted } from "@/lib/onboardingModules";
-import { isProcessingQuote, quoteTypeOf } from "@/lib/quoting";
+import { quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
 
 export type ProvisioningSkip =
   | "already_provisioned"
@@ -41,10 +41,13 @@ export function isReadyForAioProvisioning(app: MerchantApplication, now = new Da
   if (app.stage === "closed_lost") return { ready: false, reason: "closed_lost" };
   if (!app.quoteAcceptedAt) return { ready: false, reason: "quote_not_accepted" };
 
-  // A marketing-only merchant pays us but sells nothing, so they never need an
-  // Adyen account and their KYC would sit permanently incomplete. Same
-  // predicate the quote itself was built under.
-  if (!isProcessingQuote(quoteTypeOf(app.quoteType))) {
+  // A marketing merchant who sells nothing through us never needs an Adyen
+  // account, and their KYC would sit permanently incomplete. Same predicate
+  // the quote itself was built under — which is why it reads the LINES and not
+  // just the plan: a marketing merchant who bought the Website does sell
+  // through us, and refusing them here would bill them for card processing
+  // they can never be onboarded for.
+  if (!quoteHasProcessing(quoteTypeOf(app.quoteType), app.quoteLines)) {
     return { ready: false, reason: "no_processing_quote" };
   }
 

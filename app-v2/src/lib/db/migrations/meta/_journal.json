@@ -120,6 +120,20 @@
       "when": 1791230807537,
       "tag": "0016_quote_type_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791320438914,
+      "tag": "0017_marketing_term_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791325405799,
+      "tag": "0018_quote_rates",
+      "breakpoints": true
     }
   ]
 }

@@ -95,10 +95,17 @@
 
 /* ---------- Quote type ---------- */
 
+/* Two or four across, never three. auto-fit passes through a 3-column layout
+   at some widths, which leaves the fourth plan stranded alone on a second row
+   — ragged, and it reads as a lesser option than the three above it. */
 .typeRow {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-xs);
+}
+
+@media (min-width: 60rem) {
+  .typeRow { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 .typeCard {
@@ -123,7 +130,28 @@
 
 .typeLabel { font-size: 0.88rem; font-weight: 700; color: var(--ink); }
 
-.typeNote { font-size: 0.72rem; color: var(--ink-2); line-height: 1.45; }
+/* The figure a rep is actually comparing across the four, so it gets to be a
+   number rather than a clause buried in a sentence. Pinned to the bottom edge
+   of the card: the notes are different lengths, and a price that floats with
+   the text can't be read across the row at a glance. */
+.typePrice {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  margin-top: auto;
+  padding-top: var(--space-2xs);
+}
+
+.typeCard[data-active="true"] .typePrice { color: var(--accent-text); }
+
+.typeNote {
+  font-size: 0.72rem;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
 
 /* ---------- Product configurator ---------- */
 
@@ -557,4 +585,12 @@
   text-transform: uppercase;
   color: var(--accent-text);
   font-variant-numeric: tabular-nums;
+}
+
+/* A line the quote does not carry YET, because something has to be bought
+   first. Dimmed rather than hidden: the rep is showing this screen to the
+   merchant, and "you could have this" is the sales conversation. */
+.includedRow[data-pending="true"] {
+  background: oklch(69% 0.17 32 / 0.03);
+  opacity: 0.55;
 }

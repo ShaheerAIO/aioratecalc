@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   INCLUDED_SERVICE_PRODUCTS,
   MARKETING_PRODUCTS,
-  MARKETING_TERM_PRODUCT_IDS,
+  MARKETING_INCLUDED_HARDWARE,
+  MARKETING_TERM_KIOSK_IDS,
+  SINGLE_INSTANCE_PRODUCT_IDS,
+  maxQtyFor,
+  PROCESSING_DISCLOSURE_PRODUCT,
   ORDER_POINT_RULES,
   PICKER_EXCLUDED_PRODUCT_NAMES,
   PLATFORM_PRODUCTS,
@@ -12,10 +16,13 @@ import {
   groupProducts,
   isAllowedForQuoteType,
   isPickable,
+  isProcessingQuote,
   picksFromQuoteLines,
+  quoteHasProcessing,
   quoteTotals,
   quoteTypeOf,
   resolveIncludedServices,
+  resolveMarketingHardware,
   resolvePlatformLine,
   toQuoteLine,
 } from "@/lib/quoting";
@@ -37,12 +44,17 @@ const CATALOG: CatalogProduct[] = [
   p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p("335283119838", "All-in-One Platform", 399, "monthly", ""),
   p("332609247965", "AIO Marketing Platform", 199, "monthly", "Software"),
-  // HubSpot really does hold two identical active records for the 2-year term.
+  // HubSpot holds two active records for the 2-year term and they are NOT
+  // identical: 332927902454 includes "1 x Mega Kiosk or 27\" Kiosk" and is the
+  // one `marketing_term` quotes, while 334139877086 includes only the 27" and
+  // is retired.
   p("332927902454", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
   p("334139877086", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
   p("332617109238", "Marketing Kit - Mega Kiosk", 1500, "one_time", "inventory"),
   p("332793212658", "Marketing Kit - 27\" Kiosk", 999, "one_time", "inventory"),
   p("333275576048", "Website", 50, "monthly", ""),
+  // Included ×3 on both marketing plans; ordinary $99 hardware on a POS quote.
+  p("223511653103", "Menu Board Computer", 99, "one_time", "inventory"),
   p("335280960199", "Additional Software License", 19, "monthly", "Software"),
   p("217445755632", "POS Unit", 749, "one_time", "inventory"),
   p("223452690130", "POS Unit - With Customer Facing Display", 899, "one_time", "inventory"),
@@ -76,6 +88,10 @@ describe("picker exclusions", () => {
     const hidden = CATALOG.filter(c => !isPickable(c)).map(c => c.name).sort();
     expect(hidden).toEqual([
       "AIO Marketing Platform",
+      // Both 2-year records: one is this plan's derived platform line, the
+      // other is its retired twin. Neither may be picked.
+      "AIO Marketing Platform (2-year term)",
+      "AIO Marketing Platform (2-year term)",
       "AIO Pre Auth",
       "AIO Processing Two Tiered Rate",
       "AIO WiFi Network Package",
@@ -103,9 +119,10 @@ describe("picker exclusions", () => {
   it("keeps ordinary hardware and software quotable", () => {
     expect(isPickable(find("POS Unit"))).toBe(true);
     expect(isPickable(find("Additional Software License"))).toBe(true);
-    // The 2-year marketing term IS pickable — it's the derived $199/mo line
-    // that isn't, and the two share a name prefix, not an id.
-    expect(isPickable(find("AIO Marketing Platform (2-year term)"))).toBe(true);
+    // Hardware a marketing plan includes stays ordinary pickable hardware on a
+    // POS quote — `isPickable` is about the product, and only the quote type
+    // knows whether a line of it was derived or chosen.
+    expect(isPickable(find("Menu Board Computer"))).toBe(true);
   });
 
   it("names the exclusions rather than inlining them", () => {
@@ -123,20 +140,27 @@ describe("quote types", () => {
     expect(quoteTypeOf(undefined)).toBe("all_in_one");
     expect(quoteTypeOf("order_pay_only")).toBe("order_pay_only");
     expect(quoteTypeOf("marketing_only")).toBe("marketing_only");
+    expect(quoteTypeOf("marketing_term")).toBe("marketing_term");
   });
 
   it("lets a POS quote carry marketing products, but not the reverse", () => {
     // A restaurant buying marketing alongside its POS is one deal, not two
     // quotes — so only marketing-only restricts anything.
-    expect(isAllowedForQuoteType(find("AIO Marketing Platform (2-year term)"), "all_in_one")).toBe(true);
-    expect(isAllowedForQuoteType(find("POS Unit"), "marketing_only")).toBe(false);
-    expect(isAllowedForQuoteType(find("Mega Kiosk"), "marketing_only")).toBe(false);
+    expect(isAllowedForQuoteType(find("Marketing Kit - Mega Kiosk"), "all_in_one")).toBe(true);
+    for (const plan of ["marketing_only", "marketing_term"] as const) {
+      expect(isAllowedForQuoteType(find("POS Unit"), plan)).toBe(false);
+      expect(isAllowedForQuoteType(find("Mega Kiosk"), plan)).toBe(false);
+      // Included by the plan, so derived — never a thing a rep adds.
+      expect(isAllowedForQuoteType(find("Menu Board Computer"), plan)).toBe(false);
+    }
   });
 
   it("allows exactly the marketing products on a marketing-only quote", () => {
-    const allowed = CATALOG.filter(c => isAllowedForQuoteType(c, "marketing_only"))
-      .map(c => c.hubspotProductId).sort();
-    expect(allowed).toEqual(MARKETING_PRODUCTS.map(m => m.hubspotProductId).sort());
+    for (const plan of ["marketing_only", "marketing_term"] as const) {
+      const allowed = CATALOG.filter(c => isAllowedForQuoteType(c, plan))
+        .map(c => c.hubspotProductId).sort();
+      expect(allowed).toEqual(MARKETING_PRODUCTS.map(m => m.hubspotProductId).sort());
+    }
   });
 
   it("does not treat an ordinary software add-on as marketing", () => {
@@ -171,6 +195,7 @@ describe("always-included services", () => {
 
   it("adds none of them to a marketing-only quote — nothing is being installed", () => {
     expect(resolveIncludedServices("marketing_only", SOMETHING, CATALOG)).toEqual({ lines: [], missing: [] });
+    expect(resolveIncludedServices("marketing_term", SOMETHING, CATALOG)).toEqual({ lines: [], missing: [] });
   });
 
   it("adds none of them to a rate-only quote — no products means nothing to install", () => {
@@ -439,7 +464,7 @@ describe("platform line selection", () => {
 
   it("gives each plan its own monthly platform product", () => {
     const prices: Record<QuoteType, number> = {
-      order_pay_only: 299, all_in_one: 399, marketing_only: 199,
+      order_pay_only: 299, all_in_one: 399, marketing_only: 199, marketing_term: 299,
     };
     for (const [quoteType, price] of Object.entries(prices) as Array<[QuoteType, number]>) {
       const platform = resolvePlatformLine(quoteType, SOME_PICK, [], CATALOG);
@@ -463,21 +488,24 @@ describe("platform line selection", () => {
     expect(platform.line!.unitPrice).toBe(399);
   });
 
-  it("lets the 2-year marketing term REPLACE the monthly platform line", () => {
-    // Both are the same subscription; charging both bills $498/mo for one
-    // platform. Both of HubSpot's duplicate records have to be recognised.
-    for (const id of MARKETING_TERM_PRODUCT_IDS) {
-      const term = toQuoteLine(CATALOG.find(c => c.hubspotProductId === id)!, 1);
-      expect(resolvePlatformLine("marketing_only", [term], [], CATALOG))
-        .toEqual({ status: "term_replaced", line: null, productName: null });
-    }
+  it("quotes the 2-year term as the PLAN, picking HubSpot's 'Mega or 27\"' record", () => {
+    // It used to be a product a rep added, which replaced the $199 line. It is
+    // a plan of its own since 2026-10-06 — and of HubSpot's two $299 records
+    // this is the one whose description carries the kiosk CHOICE.
+    const platform = resolvePlatformLine("marketing_term", [], [], CATALOG);
+    expect(platform.status).toBe("resolved");
+    expect(platform.line!.hubspotProductId).toBe("332927902454");
+    expect(platform.line!.unitPrice).toBe(299);
   });
 
-  it("still charges a marketing quote that carries no term line", () => {
-    const kit = toQuoteLine(CATALOG.find(c => c.name === "Marketing Kit - Mega Kiosk")!, 1);
-    const platform = resolvePlatformLine("marketing_only", [kit], [], CATALOG);
-    expect(platform.status).toBe("resolved");
-    expect(platform.line!.unitPrice).toBe(199);
+  it("never leaves a marketing plan rate-only — there is no rate behind it", () => {
+    // `none_needed` is for a processing quote with nothing on it. An empty
+    // marketing quote is a subscription nobody has added to yet, and it bills.
+    for (const [plan, price] of [["marketing_only", 199], ["marketing_term", 299]] as const) {
+      const platform = resolvePlatformLine(plan, [], [], CATALOG);
+      expect(platform.status).toBe("resolved");
+      expect(platform.line!.unitPrice).toBe(price);
+    }
   });
 
   it("finds the plan by product id, so a HubSpot rename can't drop the platform fee", () => {
@@ -545,6 +573,7 @@ describe("buildQuote — the one derivation", () => {
     expect(built.orderPoints).toEqual({ hardware: {}, channels: [], total: 0 });
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "AIO Marketing Platform",
+      "Menu Board Computer",
       "Marketing Kit - Mega Kiosk",
     ]);
     expect(built.includedServices.lines).toEqual([]);
@@ -563,15 +592,13 @@ describe("buildQuote — the one derivation", () => {
     // Unlike a processing quote, there is no rate behind this one — a quote
     // with no lines on it would be nothing at all.
     const built = buildQuote("marketing_only", [], [], CATALOG);
-    expect(built.quoteLines.map(l => l.name)).toEqual(["AIO Marketing Platform"]);
+    expect(built.quoteLines.map(l => l.name)).toEqual([
+      "AIO Marketing Platform",
+      "Menu Board Computer",
+    ]);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 199 }]);
-  });
-
-  it("charges the 2-year term INSTEAD of the monthly platform, never both", () => {
-    const built = buildQuote("marketing_only", picked([["AIO Marketing Platform (2-year term)", 1]]), [], CATALOG);
-    expect(built.platform.status).toBe("term_replaced");
-    expect(built.quoteLines.map(l => l.name)).toEqual(["AIO Marketing Platform (2-year term)"]);
-    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
+    // The included hardware is on the quote at MSRP and costs nothing.
+    expect(built.totals.oneTime).toBe(0);
   });
 
   it("blocks the send when a required line can't be priced", () => {
@@ -589,7 +616,7 @@ describe("buildQuote — the one derivation", () => {
     // Reopening a saved quote must not send the platform fee or the services
     // back as picks — they'd be quoted twice, or refused as unpickable.
     const first = buildQuote("all_in_one", picked([["Mega Kiosk", 1]]), [], CATALOG);
-    const reopened = picksFromQuoteLines(first.quoteLines);
+    const reopened = picksFromQuoteLines(first.quoteLines, "all_in_one");
 
     expect(reopened).toEqual([{ hubspotProductId: "260674226888", qty: 1 }]);
 
@@ -600,5 +627,220 @@ describe("buildQuote — the one derivation", () => {
       CATALOG
     );
     expect(second.quoteLines).toEqual(first.quoteLines);
+  });
+});
+
+// ── The two marketing plans ─────────────────────────────────────────────────
+// $199 and $299 (2-year term) differ in exactly two ways: the platform line,
+// and whether the kiosk is free. Everything else about them is identical, and
+// these are the tests that keep it that way.
+describe("marketing plans", () => {
+  const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
+  const MEGA = "Marketing Kit - Mega Kiosk";
+  const KIOSK_27 = "Marketing Kit - 27\" Kiosk";
+
+  it("hands both plans three Menu Board Computers at no charge", () => {
+    for (const plan of ["marketing_only", "marketing_term"] as const) {
+      const { lines, missing } = resolveMarketingHardware(plan, CATALOG);
+      expect(missing).toEqual([]);
+      expect(lines.map(l => [l.name, l.qty, l.discountPercent, l.coveredByPackage])).toEqual([
+        ["Menu Board Computer", 3, 100, PLATFORM_PRODUCTS[plan].name],
+      ]);
+      expect(quoteTotals(lines).oneTime).toBe(0);
+    }
+  });
+
+  it("gives a processing quote none of it — the computers are ordinary hardware there", () => {
+    expect(resolveMarketingHardware("all_in_one", CATALOG)).toEqual({ lines: [], missing: [] });
+  });
+
+  it("blocks a 2-year quote with no kiosk on it", () => {
+    // The kiosk is part of what $299/mo buys. A quote without one charges the
+    // committed price for hardware that never appears on the document.
+    const built = buildQuote("marketing_term", [], [], CATALOG);
+    expect(built.blockers).toHaveLength(1);
+    expect(built.blockers[0]).toContain("includes one kiosk at no cost");
+  });
+
+  it("holds the first kiosk at $0 on the 2-year plan and bills the rest", () => {
+    const built = buildQuote("marketing_term", picked([[MEGA, 3]]), [], CATALOG);
+    expect(built.blockers).toEqual([]);
+
+    const kiosks = built.quoteLines.filter(l => l.name === MEGA);
+    expect(kiosks.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [2, null]]);
+    // $1,500 × 2 — the third is the plan's, and the menu boards are free.
+    expect(built.totals.oneTime).toBe(3000);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
+  });
+
+  it("charges for the same kiosk on the $199 plan", () => {
+    const built = buildQuote("marketing_only", picked([[MEGA, 1]]), [], CATALOG);
+    expect(built.blockers).toEqual([]);
+    expect(built.totals.oneTime).toBe(1500);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 199 }]);
+  });
+
+  it("comps the DEARER kiosk when a merchant buys both", () => {
+    // The plan says "a Mega or a 27-inch". Buying the other one too must not
+    // cost the merchant the better half of the inclusion.
+    const built = buildQuote("marketing_term", picked([[KIOSK_27, 1], [MEGA, 1]]), [], CATALOG);
+    const free = built.quoteLines.find(l => l.discountPercent === 100 && l.name !== "Menu Board Computer");
+    expect(free!.name).toBe(MEGA);
+    expect(built.totals.oneTime).toBe(999);
+  });
+
+  it("names both kiosks the plan may include", () => {
+    expect(MARKETING_TERM_KIOSK_IDS).toEqual([find(MEGA).hubspotProductId, find(KIOSK_27).hubspotProductId]);
+    expect(MARKETING_INCLUDED_HARDWARE.map(h => h.hubspotProductId))
+      .toEqual([find("Menu Board Computer").hubspotProductId]);
+  });
+
+  it("reopens a 2-year quote with the kiosk whole and the included hardware gone", () => {
+    // The split halves sum back to what the rep picked, and the three derived
+    // Menu Board Computers must NOT come back as picks — the server refuses
+    // them outright on a marketing quote, so a round-trip would wedge the save.
+    const first = buildQuote("marketing_term", picked([[MEGA, 2]]), [], CATALOG);
+    const reopened = picksFromQuoteLines(first.quoteLines, "marketing_term");
+    expect(reopened).toEqual([{ hubspotProductId: find(MEGA).hubspotProductId, qty: 2 }]);
+
+    const second = buildQuote(
+      "marketing_term",
+      reopened.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
+      [],
+      CATALOG
+    );
+    expect(second.quoteLines).toEqual(first.quoteLines);
+  });
+
+  it("keeps the Menu Board Computer as a pick when reopening a POS quote", () => {
+    const built = buildQuote("all_in_one", picked([["Menu Board Computer", 2]]), [], CATALOG);
+    expect(picksFromQuoteLines(built.quoteLines, "all_in_one"))
+      .toContainEqual({ hubspotProductId: find("Menu Board Computer").hubspotProductId, qty: 2 });
+  });
+
+  it("will not let a rep charge for what the plan already paid for", () => {
+    // Same rule as a package-covered line, and for the same reason: the
+    // subscription bought it. An unrelated edit on the row can't restore it.
+    const built = buildQuote(
+      "marketing_term",
+      picked([[MEGA, 1]]),
+      [],
+      CATALOG,
+      { [find(MEGA).hubspotProductId]: { billingStart: { mode: "days", days: 60 } } }
+    );
+    const kiosk = built.quoteLines.find(l => l.name === MEGA)!;
+    expect(kiosk.discountPercent).toBe(100);
+    expect(built.totals.oneTime).toBe(0);
+  });
+});
+
+// ── The website unlock ──────────────────────────────────────────────────────
+// A marketing merchant who buys the $50 Website sells through it, so AIO
+// processes those card payments. That makes them a PROCESSING merchant without
+// making them a POS merchant, and these tests exist to keep those two apart.
+describe("website on a marketing quote", () => {
+  const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
+  const RATE_LINE = PROCESSING_DISCLOSURE_PRODUCT.name;
+
+  it("separates 'is this a POS deal' from 'does AIO touch their money'", () => {
+    const withSite = [{ hubspotProductId: find("Website").hubspotProductId }];
+
+    for (const plan of ["marketing_only", "marketing_term"] as const) {
+      // The plan alone: no processing.
+      expect(isProcessingQuote(plan)).toBe(false);
+      expect(quoteHasProcessing(plan, [])).toBe(false);
+      // Add the website and they process — but it is still not a POS deal.
+      expect(quoteHasProcessing(plan, withSite)).toBe(true);
+      expect(isProcessingQuote(plan)).toBe(false);
+    }
+
+    // A processing plan processes whatever is on it.
+    expect(quoteHasProcessing("all_in_one", [])).toBe(true);
+  });
+
+  it("states the card rates on the quote once the website is on it", () => {
+    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG);
+    expect(built.blockers).toEqual([]);
+    expect(built.quoteLines.map(l => l.name)).toEqual([
+      "AIO Marketing Platform",
+      RATE_LINE,
+      "Menu Board Computer",
+      "Website",
+    ]);
+    // It discloses, it doesn't bill: $199 + $50 and nothing one-time.
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 249 }]);
+    expect(built.totals.oneTime).toBe(0);
+  });
+
+  it("leaves a marketing quote with no website alone", () => {
+    const built = buildQuote("marketing_only", picked([["Marketing Kit - Mega Kiosk", 1]]), [], CATALOG);
+    expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
+  });
+
+  it("does NOT add it to a POS quote, which has always processed without one", () => {
+    // Every POS quote AIO has ever sent carries no rate line, and those
+    // documents can't be amended once published. The marketing case is
+    // different because nothing else on that quote says AIO touches the money.
+    const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Website", 1]]), [], CATALOG);
+    expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
+  });
+
+  it("still installs nothing — a website merchant has nothing on site", () => {
+    // The regression this whole split exists to prevent: answering "do they
+    // process" with the plan predicate, or "is this a POS deal" with this one,
+    // puts a $999 onsite installation on a website merchant's quote.
+    const built = buildQuote("marketing_term", picked([["Website", 1], ["Marketing Kit - Mega Kiosk", 1]]), [], CATALOG);
+    expect(built.includedServices.lines).toEqual([]);
+    expect(built.quoteLines.map(l => l.name)).not.toContain("Onsite Installation");
+    expect(built.quoteLines.map(l => l.name)).not.toContain("AIO WiFi Network Package");
+    expect(built.orderPoints.total).toBe(0);
+  });
+
+  it("blocks the quote when the rate product is missing from the catalog", () => {
+    const stripped = CATALOG.filter(c => c.name !== RATE_LINE);
+    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], stripped);
+    expect(built.blockers).toHaveLength(1);
+    expect(built.blockers[0]).toContain("state the card rates");
+  });
+
+  it("never hands the rate line back as a pick — no rep may put it on by hand", () => {
+    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG);
+    expect(isPickable(find(RATE_LINE))).toBe(false);
+    expect(picksFromQuoteLines(built.quoteLines, "marketing_only"))
+      .toEqual([{ hubspotProductId: find("Website").hubspotProductId, qty: 1 }]);
+  });
+});
+
+describe("one website per merchant", () => {
+  const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
+  const WEBSITE = "Website";
+
+  it("caps the Website at one and leaves hardware uncapped", () => {
+    expect(maxQtyFor(find(WEBSITE).hubspotProductId)).toBe(1);
+    expect(SINGLE_INSTANCE_PRODUCT_IDS).toEqual([find(WEBSITE).hubspotProductId]);
+    // A restaurant buys several POS units; that must stay unrestricted.
+    expect(maxQtyFor(find("POS Unit").hubspotProductId)).toBeNull();
+  });
+
+  it("refuses a quote carrying two of them", () => {
+    const built = buildQuote("all_in_one", picked([[WEBSITE, 2]]), [], CATALOG);
+    expect(built.blockers.some(b => b.includes("only have 1"))).toBe(true);
+  });
+
+  it("allows exactly one", () => {
+    expect(buildQuote("all_in_one", picked([[WEBSITE, 1]]), [], CATALOG).blockers).toEqual([]);
+    expect(buildQuote("marketing_only", picked([[WEBSITE, 1]]), [], CATALOG).blockers).toEqual([]);
+  });
+
+  it("catches two SPLIT across lines, not just two on one line", () => {
+    // A scoped discount splits one pick into two lines. Counting per line
+    // instead of per product would let 1 + 1 through as "no line over 1".
+    const id = find(WEBSITE).hubspotProductId;
+    const built = buildQuote(
+      "all_in_one", picked([[WEBSITE, 2]]), [], CATALOG,
+      { [id]: { discountPercent: 50, discountQty: 1 } }, 100
+    );
+    expect(built.quoteLines.filter(l => l.hubspotProductId === id)).toHaveLength(2);
+    expect(built.blockers.some(b => b.includes("only have 1"))).toBe(true);
   });
 });

@@ -1,0 +1,98 @@
+/* Grouped by card brand. Four equal percentages in one undifferentiated row
+   is unreadable, and a rep changing "the card-present rate" has to see which
+   of the two brand groups they are on. */
+.brand + .brand { margin-top: var(--space-md); }
+
+.brandLabel {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim, var(--ink-3));
+  margin-bottom: var(--space-2xs);
+}
+
+/* Says the AMEX lanes are tracking rather than merely equal, so a rep who
+   edits V/MD isn't surprised when AMEX moves with it. Disappears the moment
+   they diverge, which is also the moment the tracking stops. */
+.brandTracking {
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  min-width: 0;
+}
+
+.label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* The unit sits inside the box rather than in the label, so a rep reading the
+   row fast can't mistake a percentage for dollars — the two differ by 2.49 vs
+   0.15 and nothing else. */
+.inputWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2xs) var(--space-sm) var(--space-2xs) var(--space-2xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.unit {
+  position: absolute;
+  right: var(--space-2xs);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.unit[data-side="left"] {
+  right: auto;
+  left: var(--space-2xs);
+}
+
+.input[data-unit="leading"] {
+  padding-left: var(--space-md);
+  padding-right: var(--space-2xs);
+}
+
+.note {
+  margin: var(--space-2xs) 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}

@@ -1,0 +1,13 @@
+-- The marketing plan split in two (2026-10-06): "marketing_only" stays at
+-- $199/mo with the kiosk sold separately, and "marketing_term" is the $299/mo
+-- 2-year commitment that INCLUDES a Mega or 27" kiosk. The $299 SKU used to be
+-- a product a rep picked, which replaced the $199 platform line; it is a plan
+-- of its own now, so it names a quote template like every other plan.
+--
+-- Defaulted to the SAME template as the $199 plan: the document reads
+-- identically, only the platform line and the included hardware differ. An
+-- admin can split them at /admin/settings/quote-templates.
+--
+-- merchant_applications.quote_type needs no migration, as in 0016: plain text,
+-- no check constraint, and the new value is simply writable.
+ALTER TABLE "quote_template_policy" ADD COLUMN "marketing_term_template_id" text DEFAULT '817697352408' NOT NULL;

@@ -73,11 +73,27 @@ describe("isReadyForAioProvisioning", () => {
     expect(isReadyForAioProvisioning(canceled, NOW)).toEqual({ ready: false, reason: "billing_not_paid" });
   });
 
-  it("skips a marketing-only merchant — they pay us but sell nothing, so KYC would never complete", () => {
-    expect(isReadyForAioProvisioning(app({ quoteType: "marketing_only" }), NOW)).toEqual({
-      ready: false,
-      reason: "no_processing_quote",
+  it("skips a marketing merchant who sells nothing through us — KYC would never complete", () => {
+    for (const quoteType of ["marketing_only", "marketing_term"] as const) {
+      expect(isReadyForAioProvisioning(app({ quoteType }), NOW)).toEqual({
+        ready: false,
+        reason: "no_processing_quote",
+      });
+    }
+  });
+
+  it("provisions a marketing merchant who bought the Website", () => {
+    // They sell through it, so the card payments run through AIO and the
+    // tenant has to exist. Gating on the plan alone would take their money for
+    // processing and never open an account to process it.
+    const withSite = app({
+      quoteType: "marketing_only",
+      quoteLines: [{
+        hubspotProductId: "333275576048", name: "Website",
+        qty: 1, unitPrice: 50, billingFrequency: "monthly", productType: "",
+      }],
     });
+    expect(isReadyForAioProvisioning(withSite, NOW)).toEqual({ ready: true });
   });
 
   it("skips a closed-lost deal", () => {

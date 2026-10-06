@@ -10,9 +10,9 @@
 // pricing.ts itself. Client components receive the returned CustomerSafeQuote
 // as a prop; they never import this module.
 import { analysisFromQuoteConfig, derivePricing, type FeeOverrides } from "@/lib/pricing";
-import { isProcessingQuote, quoteTotals, quoteTypeOf } from "@/lib/quoting";
+import { isMarketingQuote, quoteHasProcessing, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import type {
-  CustomerSafeQuote, OrderPoints, QuoteConfig, QuoteLine, StatementAnalysis, StoredQuoteType,
+  CustomerSafeQuote, OrderPoints, QuoteConfig, QuoteLine, QuoteRates, StatementAnalysis, StoredQuoteType,
 } from "@/types/merchant";
 
 // What a quote can be built from. Mirrors the application columns that matter
@@ -20,7 +20,18 @@ import type {
 export type QuoteBasis = {
   analysis: StatementAnalysis | null;
   quoteConfig: QuoteConfig | null;
+  // SUPERSEDED by quoteRates (2026-10-06) and no longer priced off. Still read
+  // from the row, because every application written before then carries one.
   targetMargin: number | null;
+  // What the quote is priced on. Null prices at DEFAULT_QUOTE_RATES.
+  //
+  // REQUIRED, unlike quoteLines/orderPoints beside it, and deliberately so:
+  // every caller must say what rate this merchant was quoted. Optional, it
+  // shipped omitted from all three customer-facing call sites, and every
+  // customer quote silently priced at the standard rate however the rep had
+  // configured it. `null` is a fine answer — it means the standard rate — but
+  // it has to be one someone wrote.
+  quoteRates: QuoteRates | null;
   pricingModel: string | null;
   // Phase C. Optional so the rate-only callers and their tests are unchanged.
   quoteLines?: QuoteLine[] | null;
@@ -44,9 +55,11 @@ const NO_FEE_OVERRIDES: FeeOverrides = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFe
  * basis on a POS quote, priced lines on a marketing one.
  */
 function quotableAnalysis(basis: QuoteBasis): StatementAnalysis | null {
-  // A marketing-only quote has no processing behind it, so there is no rate to
+  // A marketing quote has no processing behind it, so there is no rate to
   // derive and nothing to derive it from — its lines are the whole quote.
-  if (!isProcessingQuote(quoteTypeOf(basis.quoteType))) return null;
+  // UNLESS it carries the Website: that merchant sells through it, and the
+  // rate on those sales is as real as a POS merchant's.
+  if (!quoteHasProcessing(quoteTypeOf(basis.quoteType), basis.quoteLines)) return null;
   const analysis = basis.analysis ?? (basis.quoteConfig ? analysisFromQuoteConfig(basis.quoteConfig) : null);
   if (!analysis || !(analysis.totalVolume > 0)) return null;
   return analysis;
@@ -65,10 +78,21 @@ export function hasQuoteBasis(basis: QuoteBasis): boolean {
 export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | null {
   const lines = basis.quoteLines ?? [];
 
-  // Marketing-only: priced lines with no rate half at all. Null (not a $0 rate)
-  // when there are no lines, so an empty marketing quote reads as "no quote yet"
-  // exactly like a missing statement does on the rated path.
-  if (!isProcessingQuote(quoteTypeOf(basis.quoteType))) {
+  const analysis = quotableAnalysis(basis);
+
+  // Marketing with no rate behind it: priced lines and no rate half at all.
+  // Null (not a $0 rate) when there are no lines, so an empty marketing quote
+  // reads as "no quote yet" exactly like a missing statement does on the rated
+  // path.
+  //
+  // Reached in two ways now, and they must land in the same place: a marketing
+  // quote with no website on it (never had a rate), and one WITH a website but
+  // no volume to price it on yet (the rep hasn't entered a ticket and volume,
+  // or the merchant hasn't uploaded a statement). The second is a half-built
+  // quote, not a different kind of quote — showing their hardware and holding
+  // the rate back beats showing nothing, and the rate appears as soon as there
+  // is something to compute it from.
+  if (!analysis && isMarketingQuote(quoteTypeOf(basis.quoteType))) {
     if (!lines.length) return null;
     return {
       basis: "products",
@@ -78,16 +102,16 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
     };
   }
 
-  const analysis = quotableAnalysis(basis);
+  // A PROCESSING plan with no readable rate basis stays null, unchanged: that
+  // quote is the rate, so there is nothing to show without one.
   if (!analysis) return null;
   const fromStatement = !!basis.analysis;
   const vol = analysis.totalVolume;
 
-  // undefined (not null) lets derivePricing fall back to the volume tier's
-  // desired margin from Steve's matrix rather than a flat default.
-  const targetMargin = basis.targetMargin ?? undefined;
+  // Null falls back to DEFAULT_QUOTE_RATES — today's standard rate — so a row
+  // written before rates were the input quotes the same thing a new one would.
   const pricingModel = basis.pricingModel || "2-tier";
-  const pricing = derivePricing(analysis, targetMargin, pricingModel, NO_FEE_OVERRIDES);
+  const pricing = derivePricing(analysis, basis.quoteRates, pricingModel, NO_FEE_OVERRIDES);
 
   const projectedMonthlyCost = pricing.projectedMonthlyFees;
   // Savings require a current cost. Only a statement supplies one.

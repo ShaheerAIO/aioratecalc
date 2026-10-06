@@ -5,7 +5,8 @@
 //   maxMargin     = soft ceiling (above it the rep gets a non-blocking warning)
 //   desiredArr    = target annual revenue per account — reference only, not used in math
 
-import type { ProcessorTier, QuoteConfig, StatementAnalysis } from "@/types/merchant";
+import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
+import type { ProcessorTier, QuoteConfig, QuoteRates, StatementAnalysis } from "@/types/merchant";
 
 export const MARGIN_REQS = [
   { maxVol: 25000,    minMargin: 0.0067, desiredMargin: 0.0133,   maxMargin: 0.0200, desiredArr: 2000 },
@@ -147,9 +148,16 @@ export type DerivedPricing = {
   flatRate: number;
   cpRate: number;
   cnpRate: number;
+  amexCpRate: number;
+  amexCnpRate: number;
+  /** Volume attributed to AMEX. 0 with no statement — see the note in derivePricing. */
+  amexVol: number;
   bps: number;                 // interchange-plus basis points (above IC)
   perTxnFee: number;           // effective per-txn fee used
-  appliedTargetMargin: number; // the target margin actually used (defaults to the tier's desired margin)
+  // On 2-tier, the margin the QUOTED rates leave over interchange — an output,
+  // not the input it used to be. On the two unsellable models, still the volume
+  // tier's desired margin, which is what they price off.
+  appliedTargetMargin: number;
   projectedMonthlyFees: number;
   aioRevenue: number;          // projected AIO monthly revenue
   marginFloor: number;         // minimum-margin floor in $ for this volume tier (vol × minMargin)
@@ -159,9 +167,24 @@ export type DerivedPricing = {
   cnpPct: number;
 };
 
+/** The rates to price a 2-tier quote on, with the standard ones as the floor-less default. */
+export function ratesFor(rates: QuoteRates | null | undefined): QuoteRates {
+  return rates ?? DEFAULT_QUOTE_RATES;
+}
+
 export function derivePricing(
-  analysis: { totalVolume: number; totalTransactions: number; interchangeRate: number; icEstimated?: boolean; cardPresentPct?: number; cardNotPresentPct?: number; cardPresentVolume?: number; cardNotPresentVolume?: number },
-  targetMargin: number | undefined,
+  analysis: { totalVolume: number; totalTransactions: number; interchangeRate: number; icEstimated?: boolean; cardPresentPct?: number; cardNotPresentPct?: number; cardPresentVolume?: number; cardNotPresentVolume?: number; amexVolume?: number },
+  /**
+   * The quoted rates, for the only model AIO sells. Null falls back to
+   * DEFAULT_QUOTE_RATES — a row written before rates were the input prices at
+   * today's standard rate rather than at nothing.
+   *
+   * The other two models have no rate input and never had one: they are not
+   * sellable (see SELECTABLE_PRICING_MODELS) and keep pricing off the volume
+   * tier's desired margin, which is what they did before any of this when the
+   * caller passed no target.
+   */
+  rates: QuoteRates | null | undefined,
   pricingModel: string,
   feeOverrides: FeeOverrides
 ): DerivedPricing {
@@ -169,8 +192,9 @@ export function derivePricing(
   const txns  = analysis.totalTransactions || 0;
   const icRate = analysis.interchangeRate || 0;
 
-  // Default to the volume tier's desired margin when the caller doesn't specify one.
-  const margin = targetMargin ?? getDesiredMargin(vol);
+  const quoted = ratesFor(rates);
+  // Only the unsellable models still work backwards from a margin.
+  const margin = getDesiredMargin(vol);
 
   // CP/CNP split — default 90/10 (Steve 2026-07-23) when the statement gives neither.
   // 0 means "unknown" (the analyzer coerces invalid pcts to 0), so a genuine 0 only
@@ -197,23 +221,51 @@ export function derivePricing(
   const flatPctRevNeeded = Math.max(0, flatRevNeeded - flatFeeRevenue);
   const derivedFlatRate  = icRate + flatPctRevNeeded / (vol || 1);
 
-  // 2-tier — fees are charged ON TOP of the rate (Steve 2026-07-23), so each lane's
-  // discount rate is simply interchange + margin; per-txn + monthly fees are added
-  // as separate line items in projectedMonthlyFees below (not folded into the rate).
-  const derivedCPRate  = cpIcRate  + margin;
-  const derivedCNPRate = cnpIcRate + margin;
+  // 2-tier — the rates are QUOTED, not derived. Fees are charged on top of the
+  // rate (Steve 2026-07-23) rather than folded into it, so the per-transaction
+  // fee is a separate term in projectedMonthlyFees below and never moves the
+  // percentage the merchant was shown.
+  const derivedCPRate  = quoted.cardPresentRate;
+  const derivedCNPRate = quoted.cardNotPresentRate;
+
+  // AMEX is priced apart from Visa/Mastercard/Discover, so the volume splits
+  // four ways: two brand groups x two lanes.
+  //
+  // The statement gives an AMEX total and a card-present split, but never the
+  // cross-tab of the two — so AMEX is assumed to split CP/CNP in the same
+  // ratio as the merchant overall. It is the only assumption available, and it
+  // errs small: the two rates are equal by default, so it moves nothing until
+  // someone prices AMEX differently.
+  //
+  // With NO statement there is no AMEX figure at all, and none is invented
+  // (product-owner decision, 2026-10-06) — `analysisFromQuoteConfig` leaves
+  // amexVolume at 0, so a config quote prices every dollar at the V/MD rates.
+  // The AMEX rates still appear on the quote; they just don't move the
+  // projection. Assuming a share would be quoting a saving off a number
+  // nobody supplied.
+  const amexVol = Math.max(0, Math.min(vol, analysis.amexVolume || 0));
+  const amexCpVol  = amexVol * cpPct;
+  const amexCnpVol = amexVol * cnpPct;
+  const baseCpVol  = Math.max(0, cpVol  - amexCpVol);
+  const baseCnpVol = Math.max(0, cnpVol - amexCnpVol);
 
   const bps        = Math.round(margin * 10000);
-  const perTxnFee  = feeOverrides.perTxnFee || 0;
+  const perTxnFee  = pricingModel === "2-tier"
+    ? (quoted.perTransactionFee || 0)
+    : (feeOverrides.perTxnFee || 0);
 
   let projectedMonthlyFees = 0;
   if (pricingModel === "flat-rate") {
     projectedMonthlyFees = vol * derivedFlatRate + txns * perTxnFee + (feeOverrides.monthlyFee || 0);
   } else if (pricingModel === "2-tier") {
+    // One per-transaction fee across both lanes, which is how the rate card
+    // reads ("+ $0.15" on every line) and how a merchant checks their
+    // statement. The old per-lane overrides are gone with the margin input
+    // they shipped beside.
     projectedMonthlyFees =
-      cpVol * derivedCPRate + cnpVol * derivedCNPRate +
-      txns * cpPct * (feeOverrides.cpPerTxnFee || 0) +
-      txns * cnpPct * (feeOverrides.cnpPerTxnFee || 0) +
+      baseCpVol * derivedCPRate + baseCnpVol * derivedCNPRate +
+      amexCpVol * quoted.amexCardPresentRate + amexCnpVol * quoted.amexCardNotPresentRate +
+      txns * perTxnFee +
       (feeOverrides.monthlyFee || 0);
   } else {
     projectedMonthlyFees = vol * icRate + vol * margin + txns * perTxnFee + (feeOverrides.monthlyFee || 0);
@@ -225,12 +277,23 @@ export function derivePricing(
   const icOnlyCost  = vol * icRate;
   const aioRev      = projectedMonthlyFees - icOnlyCost;
 
+  // On 2-tier this is now an OUTPUT — what the quoted rates happen to leave
+  // over interchange, per dollar of volume — where it used to be the input the
+  // rates were worked back from. Nothing refuses a quote for it; it feeds the
+  // rep's collapsed internal panel and the margin work that comes later.
+  const effectiveMargin = pricingModel === "2-tier"
+    ? (vol > 0 ? aioRev / vol : 0)
+    : margin;
+
   return {
     flatRate: derivedFlatRate,
     cpRate: derivedCPRate,
     cnpRate: derivedCNPRate,
+    amexCpRate: quoted.amexCardPresentRate,
+    amexCnpRate: quoted.amexCardNotPresentRate,
+    amexVol,
     bps, perTxnFee,
-    appliedTargetMargin: margin,
+    appliedTargetMargin: effectiveMargin,
     projectedMonthlyFees,
     aioRevenue: Math.max(0, aioRev),
     marginFloor,
@@ -276,14 +339,14 @@ export type RoleScopedPricing = DerivedPricing & {
 // booleans computed from the true numbers without ever exposing them.
 export function derivePricingForRole(
   analysis: Parameters<typeof derivePricing>[0],
-  targetMargin: number | undefined,
+  rates: QuoteRates | null | undefined,
   pricingModel: string,
   feeOverrides: FeeOverrides,
   role: "admin" | "rep",
   activeTier: ProcessorTier | null,
   padding: PaddingConfig
 ): RoleScopedPricing {
-  const result = derivePricing(analysis, targetMargin, pricingModel, feeOverrides);
+  const result = derivePricing(analysis, rates, pricingModel, feeOverrides);
   const appliedMargin = result.appliedTargetMargin;
   const vol = analysis.totalVolume || 0;
   const tier = getMarginFloor(vol);

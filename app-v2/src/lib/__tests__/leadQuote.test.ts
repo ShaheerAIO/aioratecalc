@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   CONFIG_QUOTE_ASSUMPTIONS,
-  INTERCHANGE_ESTIMATE,
   analysisFromQuoteConfig,
 } from "@/lib/pricing";
+import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
 import { buildCustomerSafeQuote, hasQuoteBasis } from "@/lib/leadQuote";
 import type { CustomerSafeQuote, StatementAnalysis } from "@/types/merchant";
 
@@ -66,22 +66,33 @@ describe("buildCustomerSafeQuote — config basis", () => {
   const quote = rated(buildCustomerSafeQuote({
     analysis: null,
     quoteConfig: CONFIG,
-    targetMargin: 0.008,
+    targetMargin: null,
+    quoteRates: DEFAULT_QUOTE_RATES,
     pricingModel: "2-tier",
   }));
 
-  it("prices each lane at its own interchange estimate plus the target margin", () => {
-    // 2-tier charges fees on top of the rate (Steve 2026-07-23), and a customer
-    // quote carries no per-txn or monthly fee, so:
-    //   CP  90,000 × (2.10% + 0.80%) = $2,610
-    //   CNP 10,000 × (2.50% + 0.80%) =   $330
-    const expectedMonthly =
-      90_000 * (INTERCHANGE_ESTIMATE.cardPresent + 0.008) +
-      10_000 * (INTERCHANGE_ESTIMATE.cardNotPresent + 0.008);
-    expect(expectedMonthly).toBeCloseTo(2940, 6);
-    expect(quote.projectedMonthlyCost).toBeCloseTo(2940, 6);
-    expect(quote.projectedAnnualCost).toBeCloseTo(35_280, 6);
-    expect(quote.effectiveRate).toBeCloseTo(0.0294, 10);
+  it("prices each lane at the rate the rep quoted, not at a margin over interchange", () => {
+    // Rates became the INPUT on 2026-10-06. Both lanes are quoted 2.49% and
+    // every transaction carries $0.15 on top (Steve 2026-07-23: fees ride
+    // alongside the rate, never folded into it):
+    //   volume      100,000 × 2.49%        = $2,490
+    //   2,500 txns (100,000 ÷ $40) × $0.15 =   $375
+    const expectedMonthly = 100_000 * 0.0249 + 2_500 * 0.15;
+    expect(expectedMonthly).toBeCloseTo(2865, 6);
+    expect(quote.projectedMonthlyCost).toBeCloseTo(2865, 6);
+    expect(quote.projectedAnnualCost).toBeCloseTo(34_380, 6);
+    expect(quote.effectiveRate).toBeCloseTo(0.02865, 10);
+  });
+
+  it("splits the lanes when the two rates differ", () => {
+    const split = rated(buildCustomerSafeQuote({
+      analysis: null, quoteConfig: CONFIG, targetMargin: null, pricingModel: "2-tier",
+      quoteRates: { cardPresentRate: 0.0249, cardNotPresentRate: 0.035, amexCardPresentRate: 0.0249, amexCardNotPresentRate: 0.035, perTransactionFee: 0.15 },
+    }));
+    // 90/10 split on $100k, the statement-less default.
+    const expectedMonthly = 90_000 * 0.0249 + 10_000 * 0.035 + 2_500 * 0.15;
+    expect(split.projectedMonthlyCost).toBeCloseTo(expectedMonthly, 6);
+    expect(split.projectedMonthlyCost).toBeGreaterThan(quote.projectedMonthlyCost);
   });
 
   it("echoes the rep-entered basis back", () => {
@@ -98,16 +109,23 @@ describe("buildCustomerSafeQuote — config basis", () => {
     expect(quote.savingsPct).toBeNull();
   });
 
-  it("falls back to the volume tier's desired margin when the rep set none", () => {
-    // $100k lands in the maxVol 100,000 tier: desiredMargin 0.0038.
-    const defaulted = rated(buildCustomerSafeQuote({
-      analysis: null, quoteConfig: CONFIG, targetMargin: null, pricingModel: "2-tier",
+  it("prices a row with NO rates at the standard rate, not at nothing", () => {
+    // Every application written before 2026-10-06 has a null quoteRates. It
+    // has to quote something, and the something is what a new quote would get.
+    const legacy = rated(buildCustomerSafeQuote({
+      analysis: null, quoteConfig: CONFIG, quoteRates: null, targetMargin: 0.008, pricingModel: "2-tier",
     }));
-    const expectedMonthly =
-      90_000 * (INTERCHANGE_ESTIMATE.cardPresent + 0.0038) +
-      10_000 * (INTERCHANGE_ESTIMATE.cardNotPresent + 0.0038);
-    expect(defaulted.projectedMonthlyCost).toBeCloseTo(expectedMonthly, 6);
-    expect(defaulted.projectedMonthlyCost).toBeLessThan(quote.projectedMonthlyCost);
+    expect(legacy.projectedMonthlyCost).toBeCloseTo(quote.projectedMonthlyCost, 6);
+  });
+
+  it("ignores the superseded margin target entirely", () => {
+    // targetMargin is still read off the row (older rows carry one) but it no
+    // longer prices anything — a wildly different one changes nothing.
+    const withMargin = rated(buildCustomerSafeQuote({
+      analysis: null, quoteConfig: CONFIG, targetMargin: 0.039,
+      quoteRates: DEFAULT_QUOTE_RATES, pricingModel: "2-tier",
+    }));
+    expect(withMargin.projectedMonthlyCost).toBeCloseTo(quote.projectedMonthlyCost, 6);
   });
 
   it("exposes no cost, margin, floor or interchange field to the customer", () => {
@@ -146,6 +164,7 @@ describe("buildCustomerSafeQuote — quote lines and order points", () => {
   const quote = rated(buildCustomerSafeQuote({
     analysis: null,
     quoteConfig: CONFIG,
+    quoteRates: null,
     targetMargin: 0.008,
     pricingModel: "2-tier",
     quoteLines: [...LINES],
@@ -192,23 +211,28 @@ describe("buildCustomerSafeQuote — statement basis", () => {
 
   it("compares against the statement's own fee total", () => {
     const quote = rated(buildCustomerSafeQuote({
-      analysis, quoteConfig: null, targetMargin: 0.008, pricingModel: "2-tier",
+      analysis, quoteConfig: null, targetMargin: null,
+      quoteRates: DEFAULT_QUOTE_RATES, pricingModel: "2-tier",
     }));
-    // Itemized interchange, so each lane keeps the statement's blended rate:
-    // 100,000 × (1.80% + 0.80%) = $2,600.
+    // The quoted rate, not a margin over the statement's interchange:
+    //   100,000 × 2.49% + 2,500 × $0.15 = $2,865.
+    // The statement's own interchange still matters — it is what AIO's margin
+    // is measured against internally — but it no longer sets the price.
+    const projected = 100_000 * 0.0249 + 2_500 * 0.15;
     expect(quote.basis).toBe("statement");
-    expect(quote.projectedMonthlyCost).toBeCloseTo(2600, 6);
+    expect(quote.projectedMonthlyCost).toBeCloseTo(projected, 6);
     expect(quote.currentMonthlyCost).toBe(3500);
     expect(quote.currentEffectiveRate).toBeCloseTo(0.035, 10);
-    expect(quote.monthlySavings).toBeCloseTo(900, 6);
-    expect(quote.annualSavings).toBeCloseTo(10_800, 6);
-    expect(quote.savingsPct).toBeCloseTo(900 / 3500, 10);
+    expect(quote.monthlySavings).toBeCloseTo(3500 - projected, 6);
+    expect(quote.annualSavings).toBeCloseTo((3500 - projected) * 12, 6);
+    expect(quote.savingsPct).toBeCloseTo((3500 - projected) / 3500, 10);
   });
 
   it("takes precedence over a quoteConfig on the same application", () => {
     const quote = rated(buildCustomerSafeQuote({
       analysis,
       quoteConfig: { avgTicket: 5, monthlyVolume: 1_000 },
+      quoteRates: null,
       targetMargin: 0.008,
       pricingModel: "2-tier",
     }));
@@ -218,7 +242,7 @@ describe("buildCustomerSafeQuote — statement basis", () => {
 });
 
 describe("hasQuoteBasis", () => {
-  const none = { analysis: null, quoteConfig: null, targetMargin: null, pricingModel: null };
+  const none = { analysis: null, quoteConfig: null, quoteRates: null, targetMargin: null, pricingModel: null };
 
   it("is false with neither a statement nor configs", () => {
     expect(hasQuoteBasis(none)).toBe(false);
@@ -281,7 +305,7 @@ const MARKETING_LINES = [
 describe("buildCustomerSafeQuote — marketing-only", () => {
   const basis = {
     quoteType: "marketing_only" as const,
-    analysis: null, quoteConfig: null, targetMargin: null, pricingModel: null,
+    analysis: null, quoteConfig: null, quoteRates: null, targetMargin: null, pricingModel: null,
     quoteLines: [...MARKETING_LINES],
     orderPoints: null,
   };
@@ -311,9 +335,12 @@ describe("buildCustomerSafeQuote — marketing-only", () => {
   });
 
   it("ignores a rate basis that somehow rode along on the row", () => {
-    // Belt and braces: createProspectAction already drops these for this type.
+    // Belt and braces: createProspectAction already drops these when there is
+    // no processing on the quote. Note WHY this stays products-only — these
+    // lines carry no Website. A marketing quote that does carry one is rated,
+    // and that is the describe block below.
     const quote = buildCustomerSafeQuote({
-      ...basis, quoteConfig: CONFIG, targetMargin: 0.008, pricingModel: "2-tier",
+      ...basis, quoteConfig: CONFIG, quoteRates: null, targetMargin: 0.008, pricingModel: "2-tier",
     })!;
     expect(quote.basis).toBe("products");
   });
@@ -325,7 +352,7 @@ describe("buildCustomerSafeQuote — marketing-only", () => {
 
   it("reads a row with no quoteType as a rated quote, unchanged", () => {
     const rated = buildCustomerSafeQuote({
-      analysis: null, quoteConfig: CONFIG, targetMargin: 0.008, pricingModel: "2-tier",
+      analysis: null, quoteConfig: CONFIG, quoteRates: null, targetMargin: 0.008, pricingModel: "2-tier",
     })!;
     expect(rated.basis).toBe("config");
   });
@@ -344,10 +371,11 @@ describe("buildCustomerSafeQuote — one projection for both rep flows", () => {
   ] as const;
   const POINTS = { hardware: {}, channels: ["website"], total: 1 };
 
-  // What the wizard now persists (targetMargin/pricingModel/quoteLines/
+  // What the wizard now persists (quoteRates/pricingModel/quoteLines/
   // orderPoints) against what the prospect form has always persisted.
   const wizardRow = {
-    analysis: null, quoteConfig: CONFIG, targetMargin: 0.011, pricingModel: "2-tier",
+    analysis: null, quoteConfig: CONFIG, targetMargin: null, pricingModel: "2-tier",
+    quoteRates: { cardPresentRate: 0.0275, cardNotPresentRate: 0.0275, amexCardPresentRate: 0.0275, amexCardNotPresentRate: 0.0275, perTransactionFee: 0.15 },
     quoteLines: [...LINES], orderPoints: POINTS,
   };
   const prospectRow = { ...wizardRow };
@@ -356,14 +384,12 @@ describe("buildCustomerSafeQuote — one projection for both rep flows", () => {
     expect(buildCustomerSafeQuote(wizardRow)).toEqual(buildCustomerSafeQuote(prospectRow));
   });
 
-  it("honours the rep's own margin instead of the volume tier default", () => {
-    // The wizard used to hard-code targetMargin to null, so a Flow A deal was
-    // silently quoted at the $100k tier's 0.38% desired margin.
-    const chosen   = rated(buildCustomerSafeQuote(wizardRow));
-    const defaulted = rated(buildCustomerSafeQuote({ ...wizardRow, targetMargin: null }));
-    const expectedMonthly =
-      90_000 * (INTERCHANGE_ESTIMATE.cardPresent + 0.011) +
-      10_000 * (INTERCHANGE_ESTIMATE.cardNotPresent + 0.011);
+  it("honours the rep's own rates instead of the standard ones", () => {
+    // The wizard used to drop what the rep set on the Pricing step, so a Flow A
+    // deal was silently quoted at the default. Same hazard, new input.
+    const chosen    = rated(buildCustomerSafeQuote(wizardRow));
+    const defaulted = rated(buildCustomerSafeQuote({ ...wizardRow, quoteRates: null }));
+    const expectedMonthly = 100_000 * 0.0275 + 2_500 * 0.15;
     expect(chosen.projectedMonthlyCost).toBeCloseTo(expectedMonthly, 6);
     expect(chosen.projectedMonthlyCost).toBeGreaterThan(defaulted.projectedMonthlyCost);
   });
@@ -398,5 +424,114 @@ describe("buildCustomerSafeQuote — one projection for both rep flows", () => {
     expect(withStatement.monthlySavings).toBeGreaterThan(0);
     // The hardware lines ride along either way.
     expect(withStatement.lines).toEqual([...LINES]);
+  });
+});
+
+// ── Marketing + Website: priced lines AND a rate ────────────────────────────
+// The $50 Website makes a marketing merchant a processing merchant, so their
+// quote has both halves. The CustomerSafeQuote union already allowed that —
+// the rated variant is `CustomerSafeRate & CustomerSafeLines` — which is why
+// this needed no new shape, only the right predicate in front of it.
+describe("buildCustomerSafeQuote — marketing with a website", () => {
+  const WEBSITE = {
+    hubspotProductId: "333275576048", name: "Website",
+    qty: 1, unitPrice: 50, billingFrequency: "monthly" as const, productType: "",
+  };
+  const PLATFORM = {
+    hubspotProductId: "332609247965", name: "AIO Marketing Platform",
+    qty: 1, unitPrice: 199, billingFrequency: "monthly" as const, productType: "Software",
+  };
+  const basis = {
+    quoteType: "marketing_only" as const,
+    analysis: null, quoteConfig: null, quoteRates: null, targetMargin: null, pricingModel: null,
+    quoteLines: [PLATFORM, WEBSITE],
+    orderPoints: null,
+  };
+
+  it("quotes a real rate once there's a volume to price it on", () => {
+    const quote = rated(buildCustomerSafeQuote({ ...basis, quoteConfig: CONFIG, quoteRates: null, targetMargin: 0.008, pricingModel: "2-tier" }));
+    expect(quote.basis).toBe("config");
+    expect(quote.monthlyVolume).toBe(CONFIG.monthlyVolume);
+    expect(quote.effectiveRate).toBeGreaterThan(0);
+    // And the lines are still there — this merchant buys both.
+    expect(quote.lines).toEqual([PLATFORM, WEBSITE]);
+    expect(quote.lineTotals!.recurring).toEqual([{ frequency: "monthly", amount: 249 }]);
+  });
+
+  it("prices the same rate a POS merchant would get on that volume", () => {
+    // The merchant is the same to Adyen either way; only the plan differs.
+    const marketing = rated(buildCustomerSafeQuote({ ...basis, quoteConfig: CONFIG, quoteRates: null, targetMargin: 0.008, pricingModel: "2-tier" }));
+    const pos = rated(buildCustomerSafeQuote({
+      quoteType: "all_in_one" as const, analysis: null, quoteConfig: CONFIG,
+      quoteRates: null, targetMargin: 0.008, pricingModel: "2-tier",
+    }));
+    expect(marketing.effectiveRate).toBe(pos.effectiveRate);
+    expect(marketing.projectedMonthlyCost).toBe(pos.projectedMonthlyCost);
+  });
+
+  it("shows the hardware and holds the rate back when there's no volume yet", () => {
+    // A half-built quote, not a different kind of quote. Showing them what
+    // they're buying beats showing nothing while the rep chases a statement.
+    const quote = buildCustomerSafeQuote(basis)!;
+    expect(quote.basis).toBe("products");
+    expect(quote.lines).toEqual([PLATFORM, WEBSITE]);
+    expect(quote).not.toHaveProperty("effectiveRate");
+  });
+
+  it("is still null with no lines at all", () => {
+    expect(buildCustomerSafeQuote({ ...basis, quoteLines: [], quoteConfig: CONFIG })).toBeNull();
+  });
+
+  it("leaves a PROCESSING plan with no rate basis null, not products-only", () => {
+    // Unchanged, and deliberately not folded into the fallback above: a POS
+    // quote IS the rate, so there is nothing to show without one.
+    expect(buildCustomerSafeQuote({
+      quoteType: "all_in_one" as const, analysis: null, quoteConfig: null,
+      quoteRates: null, targetMargin: null, pricingModel: null, quoteLines: [PLATFORM],
+    })).toBeNull();
+  });
+});
+
+// The rep types a rate on one screen and the merchant reads it on another.
+// Every customer-facing entry point builds its QuoteBasis by hand from the
+// application row, and all three of them shipped omitting `quoteRates` — so
+// every customer quote priced at the standard rate however the rep had
+// configured it. That is why QuoteBasis.quoteRates is REQUIRED rather than
+// optional: the compiler now refuses the next one.
+describe("the rep's rates reach the customer", () => {
+  const CUSTOM = { cardPresentRate: 0.0199, cardNotPresentRate: 0.0199, amexCardPresentRate: 0.0199, amexCardNotPresentRate: 0.0199, perTransactionFee: 0.05 };
+
+  it("prices the customer's quote at what the rep configured, not the default", () => {
+    const quote = rated(buildCustomerSafeQuote({
+      quoteRates: CUSTOM, analysis: null, quoteConfig: CONFIG,
+      targetMargin: null, pricingModel: "2-tier",
+    }));
+    const standard = rated(buildCustomerSafeQuote({
+      quoteRates: null, analysis: null, quoteConfig: CONFIG,
+      targetMargin: null, pricingModel: "2-tier",
+    }));
+
+    expect(quote.projectedMonthlyCost).toBeCloseTo(100_000 * 0.0199 + 2_500 * 0.05, 6);
+    expect(quote.projectedMonthlyCost).toBeLessThan(standard.projectedMonthlyCost);
+  });
+
+  it("carries the rate through to the savings the merchant is shown", () => {
+    const analysis = {
+      totalVolume: 100_000, totalTransactions: 2_500, totalFees: 3_500, averageTicket: 40,
+      interchangeRate: 0.018, icEstimated: false,
+      cardPresentPct: 0.9, cardNotPresentPct: 0.1,
+      cardPresentVolume: 90_000, cardNotPresentVolume: 10_000,
+    } as StatementAnalysis;
+
+    const cheap = rated(buildCustomerSafeQuote({
+      quoteRates: CUSTOM, analysis, quoteConfig: null, targetMargin: null, pricingModel: "2-tier",
+    }));
+    const standard = rated(buildCustomerSafeQuote({
+      quoteRates: null, analysis, quoteConfig: null, targetMargin: null, pricingModel: "2-tier",
+    }));
+
+    // A better rate is a bigger saving — the number the whole proposal rests on.
+    expect(cheap.monthlySavings!).toBeGreaterThan(standard.monthlySavings!);
+    expect(cheap.monthlySavings!).toBeCloseTo(3_500 - (100_000 * 0.0199 + 2_500 * 0.05), 6);
   });
 });

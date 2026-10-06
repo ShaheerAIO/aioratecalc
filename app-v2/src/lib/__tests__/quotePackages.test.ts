@@ -275,7 +275,7 @@ describe("buildQuote with a package on it", () => {
 
   it("round-trips through the configurator: picks merge, the package SKU is dropped", () => {
     const built = build([line(ID.posCfd, 3), line(ID.kds, 1)]);
-    const picks = picksFromQuoteLines(built.quoteLines);
+    const picks = picksFromQuoteLines(built.quoteLines, "all_in_one");
 
     expect(picks).toContainEqual({ hubspotProductId: ID.posCfd, qty: 3 });
     expect(picks).toContainEqual({ hubspotProductId: ID.kds, qty: 1 });

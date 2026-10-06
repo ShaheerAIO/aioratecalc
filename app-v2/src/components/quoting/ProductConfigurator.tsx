@@ -7,15 +7,20 @@ import {
   DEFAULT_MAX_DISCOUNT_PERCENT,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
+  PLATFORM_PRODUCTS,
+  PROCESSING_DISCLOSURE_PRODUCT,
   QUOTE_TYPES,
   buildQuote,
   groupProducts,
   isAllowedForQuoteType,
+  carriesWebsite,
   isCompedService,
+  isMarketingQuote,
   isProcessingQuote,
   lineDiscountAmount,
   lineListAmount,
   lineNetAmount,
+  maxQtyFor,
   toQuoteLine,
   type BuiltQuote,
 } from "@/lib/quoting";
@@ -152,7 +157,44 @@ export default function ProductConfigurator({
     () => buildQuote(quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent),
     [quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent]
   );
-  const { orderPoints, breakdown, platform, includedServices, packages, totals, quoteLines } = built;
+  const {
+    orderPoints, breakdown, platform, includedServices, planHardware,
+    processingDisclosure, packages, totals, quoteLines,
+  } = built;
+
+  // Whether the Website is on the quote. `rated` above is the PLAN's answer and
+  // stays that way — the install services and the ordering-point count follow
+  // the plan, and a website merchant has nothing on site to install and no
+  // ordering point we count. This is the other question: does AIO touch their
+  // money.
+  const websiteOn = carriesWebsite(pickedLines);
+
+  // Each plan's monthly price, read off the live catalog entry for its
+  // platform product rather than written into QUOTE_TYPES. The four notes used
+  // to carry the figure in prose, where a HubSpot price change would leave it
+  // quietly wrong on the one screen a rep quotes from.
+  const planPrice = (id: QuoteType): string | null => {
+    const want = PLATFORM_PRODUCTS[id];
+    const product =
+      fullCatalog.find(c => c.hubspotProductId === want.hubspotProductId) ??
+      fullCatalog.find(c => c.name.trim() === want.name);
+    return product ? `${fmt$(monthlyEquivalent(product.price, product.billingFrequency))}/mo` : null;
+  };
+
+  // What the PLAN hands over at no charge, as opposed to what a package
+  // absorbed. Both are expressed the same way — a line at MSRP, 100% off,
+  // carrying the name of whatever paid for it — so the covering name is what
+  // tells them apart, and the rep needs them worded differently: one is a
+  // package they built by picking hardware, the other is what the subscription
+  // they chose includes.
+  const planName = PLATFORM_PRODUCTS[quoteType].name;
+  const planCoveredQty = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const l of quoteLines) {
+      if (l.coveredByPackage === planName) map.set(l.hubspotProductId, (map.get(l.hubspotProductId) ?? 0) + l.qty);
+    }
+    return map;
+  }, [quoteLines, planName]);
 
   // productId → how many of it a package is already paying for. Lets the
   // picker row and the always-included row say so, instead of the rep having
@@ -552,101 +594,27 @@ export default function ProductConfigurator({
               </p>
             </div>
             <div className={styles.typeRow}>
-              {types.map(t => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={styles.typeCard}
-                  data-active={quoteType === t.id}
-                  onClick={() => changeType(t.id)}
-                >
-                  <span className={styles.typeLabel}>{t.label}</span>
-                  <span className={styles.typeNote}>{t.note}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* One lever for the whole quote, because that is how the concession is
-            actually given. Above the catalog so it can't be missed, and always
-            rendered so the catalog doesn't jump down when the first line lands.
-            The per-line drawers still win for exceptions — these write the
-            same `discountPercent` / `billingStart` they do. */}
-        {onAdjustmentsChange && (
-          <div className={styles.panel}>
-            <div className={styles.sectionHead}>
-              <h2 className={styles.sectionTitle}>Whole-Quote Adjustments</h2>
-              <p className={styles.sectionNote}>
-                {quoteLines.length === 0
-                  ? "Add products below, then discount or delay billing for the whole quote here."
-                  : "Sets every line at once. Use a line's own Adjust button for exceptions."}
-              </p>
-            </div>
-
-            <div className={styles.globalGrid}>
-              <label className={styles.adjustField}>
-                <span className={styles.adjustLabel}>Discount</span>
-                <span className={styles.pctWrap}>
-                  <input
-                    type="number" min={0} max={100} step={1}
-                    className={styles.adjustInput}
-                    value={sharedDiscount.pct ?? ""}
-                    placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
-                    disabled={discountIds.length === 0}
-                    onChange={e => setGlobalDiscount(e.target.value)}
-                    aria-label="Discount percent for every line on the quote"
-                  />
-                  <span className={styles.pctSign}>%</span>
-                </span>
-              </label>
-
-              <label className={styles.adjustField}>
-                <span className={styles.adjustLabel}>Billing starts</span>
-                <span className={styles.startWrap}>
-                  <select
-                    className={styles.adjustSelect}
-                    value={globalMode}
-                    disabled={recurringIds.length === 0}
-                    onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
-                    aria-label="When billing starts for every recurring line"
+              {types.map(t => {
+                const price = planPrice(t.id);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={styles.typeCard}
+                    data-active={quoteType === t.id}
+                    onClick={() => changeType(t.id)}
                   >
-                    {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
-                    <option value="now">At checkout</option>
-                    <option value="date">On a date</option>
-                    <option value="days">After N days</option>
-                  </select>
-                  {sharedStart.start?.mode === "date" && (
-                    <input
-                      type="date"
-                      className={styles.adjustInput}
-                      value={sharedStart.start.date}
-                      onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
-                      aria-label="Billing start date for every recurring line"
-                    />
-                  )}
-                  {sharedStart.start?.mode === "days" && (
-                    <span className={styles.pctWrap}>
-                      <input
-                        type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
-                        className={styles.adjustInput}
-                        value={sharedStart.start.days}
-                        onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
-                        aria-label="Billing start delay in days for every recurring line"
-                      />
-                      <span className={styles.pctSign}>days</span>
-                    </span>
-                  )}
-                </span>
-              </label>
+                    <span className={styles.typeLabel}>{t.label}</span>
+                    <span className={styles.typeNote}>{t.note}</span>
+                    {/* Last, and pushed to the bottom edge, so the four prices
+                        sit on one line however long each note runs. Rendered
+                        only once the catalog has loaded — a plan whose product
+                        is missing shows no price rather than a $0 one. */}
+                    {price && <span className={styles.typePrice}>{price}</span>}
+                  </button>
+                );
+              })}
             </div>
-
-            <p className={styles.adjustNote}>
-              The discount skips install and training, which are already comped to $0, and is
-              capped at {maxDiscountPercent}%. On a recurring line it is permanent — to give time
-              away, delay billing instead. A delay applies to recurring lines only; one-time
-              charges always bill at checkout.
-            </p>
           </div>
         )}
 
@@ -682,7 +650,12 @@ export default function ProductConfigurator({
               <div className={styles.groupTitle}>{group.label}</div>
               {group.products.map(p => {
                 const n = qtyOf(p.hubspotProductId);
+                // Capped in the picker AND refused by buildQuote. The cap is
+                // the courtesy; the blocker is the authority, since the server
+                // re-derives from the picks and never trusts the browser.
+                const max = maxQtyFor(p.hubspotProductId);
                 const covered = coveredQty.get(p.hubspotProductId) ?? 0;
+                const planCovered = planCoveredQty.get(p.hubspotProductId) ?? 0;
                 return (
                   <div key={p.hubspotProductId} className={styles.productRow} data-picked={n > 0}>
                     <div className={styles.productMain}>
@@ -691,6 +664,13 @@ export default function ProductConfigurator({
                       {covered > 0 && (
                         <div className={styles.coveredTag}>
                           {covered === n ? "In the package" : `${covered} of ${n} in the package`}
+                        </div>
+                      )}
+                      {planCovered > 0 && (
+                        <div className={styles.coveredTag}>
+                          {planCovered === n
+                            ? "Included in the plan"
+                            : `${planCovered} of ${n} included in the plan`}
                         </div>
                       )}
                     </div>
@@ -703,6 +683,7 @@ export default function ProductConfigurator({
                       <span className={styles.stepQty}>{n}</span>
                       <button
                         type="button" className={styles.stepBtn}
+                        disabled={max != null && n >= max}
                         onClick={() => setQtyFor(p.hubspotProductId, n + 1)}
                         aria-label={`Add one ${p.name}`}
                       >+</button>
@@ -756,6 +737,76 @@ export default function ProductConfigurator({
           </div>
         )}
 
+        {/* Everything the marketing plan carries that the rep did not pick:
+            the hardware it hands over, and the card processing the Website
+            turns on. One panel because they are one answer to one question â
+            what does this plan come with â and two panels of $0 rows read as
+            two unrelated asides.
+
+            No stepper and no adjust control, unlike Always Included: these
+            aren't comped services a rep may decide to charge for.
+
+            The payments row renders on EVERY marketing quote, not only the
+            ones that have a Website, and is greyed until one is picked: a rep
+            is looking at this screen with the merchant, so "add a website and
+            you can take card payments" is the conversation. The whole panel
+            disappears on a POS quote, where none of this is a question. */}
+        {isMarketingQuote(quoteType) && (
+          <div className={styles.panel}>
+            <div className={styles.sectionHead}>
+              <h2 className={styles.sectionTitle}>Included With This Plan</h2>
+              <p className={styles.sectionNote}>
+                What {planName} comes with, at no cost and shown at list price so the merchant can
+                see what they got. TVs are not supplied or installed by AIO.
+                {quoteType === "marketing_term" &&
+                  " The kiosk is the Marketing Kit you pick above â the first one is free."}
+              </p>
+            </div>
+
+            {planHardware.lines.map(l => (
+              <div key={l.hubspotProductId} className={styles.includedRow}>
+                <div className={styles.productMain}>
+                  <div className={styles.productName}>{l.name}</div>
+                  <div className={styles.productPrice}>{priceLabel(l.unitPrice, l.billingFrequency)}</div>
+                </div>
+                <span className={styles.includedTag}>Included ×{l.qty}</span>
+              </div>
+            ))}
+
+            <div className={styles.includedRow} data-pending={!websiteOn || undefined}>
+              <div className={styles.productMain}>
+                <div className={styles.productName}>{PROCESSING_DISCLOSURE_PRODUCT.name}</div>
+                <div className={styles.productPrice}>
+                  {websiteOn
+                    ? "Card rates, stated on the quote — bills nothing by itself"
+                    : "Add the Website above and AIO processes the card payments it takes"}
+                </div>
+              </div>
+              <span className={styles.includedTag}>
+                {websiteOn ? "Included ×1" : "Needs the Website"}
+              </span>
+            </div>
+
+            {planHardware.missing.length > 0 && (
+              <div className={styles.error}>
+                <strong>Can&apos;t price what the plan includes.</strong>{" "}
+                {planHardware.missing.join(", ")} {planHardware.missing.length === 1 ? "is" : "are"}{" "}
+                included with {planName} but missing from the HubSpot catalog (renamed, archived, or
+                the catalog didn&apos;t load). Fix that before sending this quote.
+              </div>
+            )}
+            {processingDisclosure.missing.length > 0 && (
+              <div className={styles.error}>
+                <strong>Can&apos;t state the card rates.</strong>{" "}
+                {processingDisclosure.missing.join(", ")} isn&apos;t in the HubSpot catalog (renamed,
+                archived, or the catalog didn&apos;t load). This quote can&apos;t be sent until
+                that&apos;s fixed — the merchant would be signed up for card processing with no rates
+                written on the document.
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Every quote that puts the system in a restaurant includes these three.
             Shown, priced, and not a decision — hence no stepper. */}
         {rated && (includedServices.lines.length > 0 || includedServices.missing.length > 0) && (
@@ -793,45 +844,6 @@ export default function ProductConfigurator({
             )}
           </div>
         )}
-
-        {/* The plan's platform fee. Its own panel since 2026-10-05: it used to
-            live inside Ordering Points because the count selected the tier, and
-            leaving it there would keep implying a link that no longer exists —
-            and would hide it entirely on a marketing-only quote, which now
-            carries one too. */}
-        <div className={styles.panel}>
-          <div className={styles.sectionHead}>
-            <h2 className={styles.sectionTitle}>Platform Fee</h2>
-            <p className={styles.sectionNote}>
-              Derived from the plan, not picked. Change it by changing the quote type above.
-            </p>
-          </div>
-
-          {platform.line ? (
-            <div className={styles.tierBox}>
-              <div className={styles.tierName}>{platform.line.name}</div>
-              <div className={styles.tierPrice}>{linePriceLabel(platform.line)}</div>
-              {lineAdjust(platform.line.hubspotProductId)}
-            </div>
-          ) : platform.status === "term_replaced" ? (
-            <p className={styles.sectionNote}>
-              Covered by the 2-year term line — that IS the platform subscription at the committed
-              price, so the monthly one isn&apos;t added on top.
-            </p>
-          ) : platform.status === "none_needed" ? (
-            <p className={styles.sectionNote}>
-              No platform fee — this is a rate-only quote. Pick a product or declare an ordering
-              channel and the plan&apos;s fee is added automatically.
-            </p>
-          ) : (
-            <div className={styles.error}>
-              <strong>Platform fee missing.</strong> This quote requires
-              &ldquo;{platform.productName}&rdquo;, which isn&apos;t in the HubSpot catalog (renamed,
-              archived, or the catalog didn&apos;t load). This quote can&apos;t be sent until
-              that&apos;s fixed — sending it would quote no platform fee at all.
-            </div>
-          )}
-        </div>
 
         {rated && (
           <div className={styles.panel}>
@@ -877,11 +889,134 @@ export default function ProductConfigurator({
           </div>
         )}
 
+        {/* One lever for the whole quote, because that is how the concession is
+            actually given. LAST, after everything it applies to: a rep picks
+            the plan, picks the hardware and then decides what to take off, and
+            a discount control above an empty quote is a lever with nothing on
+            the other end of it. Still always rendered, so the panels above
+            don't reflow when the first line lands. The per-line drawers win
+            for exceptions — these write the same `discountPercent` /
+            `billingStart` they do. */}
+        {onAdjustmentsChange && (
+            <div className={styles.panel}>
+              <div className={styles.sectionHead}>
+                <h2 className={styles.sectionTitle}>Whole-Quote Adjustments</h2>
+                <p className={styles.sectionNote}>
+                  {quoteLines.length === 0
+                    ? "Pick products above, then discount or delay billing for the whole quote here."
+                    : "Sets every line at once. Use a line's own Adjust button for exceptions."}
+                </p>
+              </div>
+
+              <div className={styles.globalGrid}>
+                <label className={styles.adjustField}>
+                  <span className={styles.adjustLabel}>Discount</span>
+                  <span className={styles.pctWrap}>
+                    <input
+                      type="number" min={0} max={100} step={1}
+                      className={styles.adjustInput}
+                      value={sharedDiscount.pct ?? ""}
+                      placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
+                      disabled={discountIds.length === 0}
+                      onChange={e => setGlobalDiscount(e.target.value)}
+                      aria-label="Discount percent for every line on the quote"
+                    />
+                    <span className={styles.pctSign}>%</span>
+                  </span>
+                </label>
+
+                <label className={styles.adjustField}>
+                  <span className={styles.adjustLabel}>Billing starts</span>
+                  <span className={styles.startWrap}>
+                    <select
+                      className={styles.adjustSelect}
+                      value={globalMode}
+                      disabled={recurringIds.length === 0}
+                      onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
+                      aria-label="When billing starts for every recurring line"
+                    >
+                      {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
+                      <option value="now">At checkout</option>
+                      <option value="date">On a date</option>
+                      <option value="days">After N days</option>
+                    </select>
+                    {sharedStart.start?.mode === "date" && (
+                      <input
+                        type="date"
+                        className={styles.adjustInput}
+                        value={sharedStart.start.date}
+                        onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
+                        aria-label="Billing start date for every recurring line"
+                      />
+                    )}
+                    {sharedStart.start?.mode === "days" && (
+                      <span className={styles.pctWrap}>
+                        <input
+                          type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
+                          className={styles.adjustInput}
+                          value={sharedStart.start.days}
+                          onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
+                          aria-label="Billing start delay in days for every recurring line"
+                        />
+                        <span className={styles.pctSign}>days</span>
+                      </span>
+                    )}
+                  </span>
+                </label>
+              </div>
+
+              <p className={styles.adjustNote}>
+                The discount skips install and training, which are already comped to $0, and is
+                capped at {maxDiscountPercent}%. On a recurring line it is permanent — to give time
+                away, delay billing instead. A delay applies to recurring lines only; one-time
+                charges always bill at checkout.
+              </p>
+            </div>
+        )}
+
       </div>
 
       {/* Hangs in the page gutter on wide hosts; short by construction, so it
           can follow the page down without becoming its own scroll box. */}
       <aside className={styles.sideCol}>
+        {/* The plan's platform fee. Its own panel since 2026-10-05: it used to
+            live inside Ordering Points because the count selected the tier, and
+            leaving it there would keep implying a link that no longer exists —
+            and would hide it entirely on a marketing-only quote, which now
+            carries one too.
+
+            In the side column with the totals, because that is what it is: the
+            largest recurring number on the quote, read alongside the rest of
+            the money rather than among the things a rep is picking. */}
+        <div className={styles.panel}>
+          <div className={styles.sectionHead}>
+            <h2 className={styles.sectionTitle}>Platform Fee</h2>
+            <p className={styles.sectionNote}>
+              Derived from the plan, not picked. Change it by changing the quote type above.
+            </p>
+          </div>
+
+          {platform.line ? (
+            <div className={styles.tierBox}>
+              <div className={styles.tierName}>{platform.line.name}</div>
+              <div className={styles.tierPrice}>{linePriceLabel(platform.line)}</div>
+              {lineAdjust(platform.line.hubspotProductId)}
+            </div>
+          ) : platform.status === "none_needed" ? (
+            <p className={styles.sectionNote}>
+              No platform fee — this is a rate-only quote. Pick a product or declare an ordering
+              channel and the plan&apos;s fee is added automatically.
+            </p>
+          ) : (
+            <div className={styles.error}>
+              <strong>Platform fee missing.</strong> This quote requires
+              &ldquo;{platform.productName}&rdquo;, which isn&apos;t in the HubSpot catalog (renamed,
+              archived, or the catalog didn&apos;t load). This quote can&apos;t be sent until
+              that&apos;s fixed — sending it would quote no platform fee at all.
+            </div>
+          )}
+        </div>
+
         {quoteLines.length > 0 && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>

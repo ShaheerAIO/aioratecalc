@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/merchant";
 import { picksFromQuoteLines, toQuoteLine } from "@/lib/quoting";
+import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
 
 // saveQuoteConfigurationAction — the one write path for the quoting half of an
 // application, shared by the wizard and the account-detail "Edit Quote" panel.
@@ -59,6 +60,11 @@ const FULL_CATALOG: CatalogProduct[] = [
   p("281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"),
   p("223452690133", "Onsite Installation", 999, "one_time", "Service"),
   p("223152695032", "System Onboarding and Training", 499, "one_time", "Service"),
+  // The marketing plans and the hardware they include — enough to prove an
+  // empty marketing picker still derives a real quote.
+  p("332609247965", "AIO Marketing Platform", 199, "monthly", "Software"),
+  p("332927902454", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
+  p("223511653103", "Menu Board Computer", 99, "one_time", "inventory"),
 ];
 const PICKABLE = FULL_CATALOG.filter(c => c.hubspotProductId === "217445755632");
 
@@ -82,7 +88,6 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
     quoteLines: null,
     orderPoints: null,
     quoteAcceptedAt: null,
-    targetMargin: 0.008,
     pricingModel: "2-tier",
     customerLinkToken: "tok-live",
     customerLinkPurpose: "lead_upload",
@@ -121,7 +126,6 @@ describe("saveQuoteConfigurationAction — acceptance guard", () => {
         applicationId: "app-1",
         picks: [{ hubspotProductId: "217445755632", qty: 2 }],
         channels: [],
-        targetMargin: 0.01,
         pricingModel: "2-tier",
       })
     ).rejects.toThrow(/accepted/i);
@@ -139,7 +143,6 @@ describe("saveQuoteConfigurationAction — acceptance guard", () => {
         channels: [],
         // Above the rep-padded floor for this volume (~0.01005) — this test is
         // about the acceptance guard, not the margin floor.
-        targetMargin: 0.02,
         pricingModel: "2-tier",
       })
     ).resolves.toBeDefined();
@@ -156,7 +159,6 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       channels: [],
       // Above the rep-padded floor for this volume (~0.01005) — this test is
       // about re-derivation, not the margin floor.
-      targetMargin: 0.02,
       pricingModel: "2-tier",
     });
 
@@ -172,6 +174,48 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     expect(updated.orderPoints?.total).toBe(1);
   });
 
+  it("still derives a marketing quote when the rep picked nothing at all", async () => {
+    // The most natural shape of the $199 plan: marketing, no hardware. It used
+    // to short-cut the derivation and save `quoteLines: null`, so the rep
+    // approved the quote the configurator had priced in front of them and the
+    // merchant's link then showed no quote at all. There is no rate behind a
+    // marketing plan, so an empty picker is not a rate-only quote.
+    getApplication.mockResolvedValue(app({ quoteType: "marketing_only" }));
+
+    const updated = await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [],
+      channels: [],
+      pricingModel: "2-tier",
+      quoteType: "marketing_only",
+    });
+
+    expect(updated.quoteLines!.map(l => l.name)).toEqual([
+      "AIO Marketing Platform",
+      "Menu Board Computer",
+    ]);
+    // Included, so the merchant pays the subscription and nothing else.
+    expect(updated.quoteLines!.find(l => l.name === "Menu Board Computer")!.discountPercent).toBe(100);
+    // Marketing quotes carry no ordering-point count.
+    expect(updated.orderPoints).toBeNull();
+  });
+
+  it("still saves a rate-only processing quote as no lines, without reading the catalog", async () => {
+    // The other half of the same condition, and the reason it can't simply be
+    // deleted: a rate-only quote derives to nothing either way, so skipping
+    // the catalog read keeps prospect creation working through a HubSpot
+    // outage.
+    const updated = await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [],
+      channels: [],
+      pricingModel: "2-tier",
+    });
+
+    expect(updated.quoteLines).toBeNull();
+    expect(listQuotableProductsAction).not.toHaveBeenCalled();
+  });
+
   it("applies a rep's discount to a DERIVED line the picks never carry", async () => {
     const updated = await saveQuoteConfigurationAction({
       applicationId: "app-1",
@@ -183,7 +227,6 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
         "223452690133": { discountPercent: 50 },
         "335283119838": { billingStart: { mode: "days", days: 60 } },
       },
-      targetMargin: 0.02,
       pricingModel: "2-tier",
     });
 
@@ -202,7 +245,6 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
         // The mocked getMaxDiscountPercent above says 50. A client that shipped
         // a 100% comp anyway gets refused here, not quietly saved.
         adjustments: { "217445755632": { discountPercent: 100 } },
-        targetMargin: 0.02,
         pricingModel: "2-tier",
       })
     ).rejects.toThrow(/100%.*50% limit/);
@@ -223,7 +265,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
     // The UI rehydrates the configurator with picksFromQuoteLines — derived
     // lines are stripped back out, leaving just what the rep actually picked.
-    const rehydratedPicks = picksFromQuoteLines(savedLines);
+    const rehydratedPicks = picksFromQuoteLines(savedLines, "all_in_one");
     expect(rehydratedPicks).toEqual([{ hubspotProductId: "217445755632", qty: 1 }]);
 
     const updated = await saveQuoteConfigurationAction({
@@ -232,7 +274,6 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       channels: [],
       // Above the rep-padded floor for this volume (~0.01005) — this test is
       // about line-item deduplication, not the margin floor.
-      targetMargin: 0.02,
       pricingModel: "2-tier",
     });
 
@@ -265,120 +306,77 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 // Fixture volume is 10000 (app()'s default quoteConfig), which sits in
 // MARGIN_REQS' first tier (maxVol 25000): true minMargin 0.0067, and — with
 // the default 50% admin pillow (mocked above) — a padded floor of ~0.01005.
-describe("saveQuoteConfigurationAction — true-floor enforcement", () => {
-  it("refuses a target margin below AIO's true minimum floor for this volume", async () => {
-    await expect(
-      saveQuoteConfigurationAction({
-        applicationId: "app-1",
-        picks: [],
-        channels: [],
-        targetMargin: 0.005, // below the 0.0067 true floor for this volume tier
-        pricingModel: "2-tier",
-      })
-    ).rejects.toThrow();
-    expect(saveApplication).not.toHaveBeenCalled();
-  });
+describe("saveQuoteConfigurationAction — rates, and the floor that no longer blocks", () => {
+  it("saves a rate far below AIO's cost without complaint", async () => {
+    // Floor enforcement was removed on 2026-10-06 with the margin input it
+    // checked (product-owner decision). 0.5% is below the true floor for every
+    // volume tier AND below AIO's processing cost; it saves anyway. The rep is
+    // still WARNED — derivePricingForRole computes belowCostFloor and both rep
+    // surfaces render it — but nothing refuses.
+    const updated = await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [],
+      channels: [],
+      quoteRates: { cardPresentRate: 0.005, cardNotPresentRate: 0.005, amexCardPresentRate: 0.005, amexCardNotPresentRate: 0.005, perTransactionFee: 0 },
+      pricingModel: "2-tier",
+    });
 
-  it("the refusal names no floor number for a rep", async () => {
-    getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
-    let message = "";
-    try {
-      await saveQuoteConfigurationAction({
-        applicationId: "app-1",
-        picks: [],
-        channels: [],
-        targetMargin: 0.005,
-        pricingModel: "2-tier",
-      });
-    } catch (e) {
-      message = (e as Error).message;
-    }
-    expect(message).toMatch(/minimum for this volume/i);
-    // A rep who's told "the minimum is X" can binary-search the slider to
-    // learn AIO's true floor — the whole thing the pillow exists to prevent.
-    expect(message).not.toMatch(/[0-9]/);
-  });
-
-  it("an admin's refusal names the true floor (admins already see true numbers elsewhere)", async () => {
-    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
-    let message = "";
-    try {
-      await saveQuoteConfigurationAction({
-        applicationId: "app-1",
-        picks: [],
-        channels: [],
-        targetMargin: 0.005,
-        pricingModel: "2-tier",
-      });
-    } catch (e) {
-      message = (e as Error).message;
-    }
-    expect(message).toMatch(/[0-9]/);
-  });
-
-  it("does not block a marketing_only quote, which has no processing rate to floor", async () => {
-    getApplication.mockResolvedValue(app({ quoteType: "marketing_only", quoteConfig: null, analysis: null }));
-
-    await expect(
-      saveQuoteConfigurationAction({
-        applicationId: "app-1",
-        picks: [],
-        channels: [],
-        targetMargin: 0, // would be below every tier's floor if this were checked
-        pricingModel: "2-tier",
-        quoteType: "marketing_only",
-      })
-    ).resolves.toBeDefined();
-  });
-
-  it("does not block when there is no volume basis at all (no analysis, no quoteConfig)", async () => {
-    getApplication.mockResolvedValue(app({ quoteConfig: null, analysis: null }));
-
-    await expect(
-      saveQuoteConfigurationAction({
-        applicationId: "app-1",
-        picks: [{ hubspotProductId: "217445755632", qty: 1 }],
-        channels: [],
-        targetMargin: 0.0001,
-        pricingModel: "2-tier",
-        quoteConfig: null,
-      })
-    ).resolves.toBeDefined();
-  });
-
-  // This pair is the heart of the role-scoped change: 0.008 sits between the
-  // true floor (0.0067) and the padded floor (~0.01005) for this volume — a
-  // margin no honest rep workflow should ever want below, since it's exactly
-  // what their own UI already blocks. A rep saving it directly must now be
-  // refused (closing the oracle); an admin, who is trusted with the true
-  // floor, must still be able to save it.
-  it("refuses a margin between the true floor and the padded floor for a REP", async () => {
-    getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
-
-    await expect(
-      saveQuoteConfigurationAction({
-        applicationId: "app-1",
-        picks: [],
-        channels: [],
-        targetMargin: 0.008,
-        pricingModel: "2-tier",
-      })
-    ).rejects.toThrow();
-    expect(saveApplication).not.toHaveBeenCalled();
-  });
-
-  it("saves a margin between the true floor and the padded floor for an ADMIN", async () => {
-    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
-
-    await expect(
-      saveQuoteConfigurationAction({
-        applicationId: "app-1",
-        picks: [],
-        channels: [],
-        targetMargin: 0.008,
-        pricingModel: "2-tier",
-      })
-    ).resolves.toBeDefined();
+    expect(updated.quoteRates).toEqual({
+      cardPresentRate: 0.005, cardNotPresentRate: 0.005,
+      amexCardPresentRate: 0.005, amexCardNotPresentRate: 0.005, perTransactionFee: 0,
+    });
     expect(saveApplication).toHaveBeenCalled();
+  });
+
+  it("refuses nothing for a rep that it would allow an admin", async () => {
+    // The old guard was scoped per role — admins held to the true floor, reps
+    // to the padded one — specifically because a refusal is an oracle a rep
+    // could binary-search. With no refusal there is no oracle, and the two
+    // roles save identically. Worth re-reading the note in prospects.ts before
+    // enforcement comes back against a typed rate.
+    const low = {
+      applicationId: "app-1",
+      picks: [],
+      channels: [],
+      quoteRates: { cardPresentRate: 0.008, cardNotPresentRate: 0.008, amexCardPresentRate: 0.008, amexCardNotPresentRate: 0.008, perTransactionFee: 0 },
+      pricingModel: "2-tier" as const,
+    };
+
+    getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
+    const asRep = await saveQuoteConfigurationAction(low);
+    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
+    const asAdmin = await saveQuoteConfigurationAction(low);
+
+    expect(asRep.quoteRates).toEqual(asAdmin.quoteRates);
+  });
+
+  it("keeps the row's existing rates when the caller sends none", async () => {
+    const existing = { cardPresentRate: 0.0275, cardNotPresentRate: 0.03, amexCardPresentRate: 0.0275, amexCardNotPresentRate: 0.03, perTransactionFee: 0.2 };
+    getApplication.mockResolvedValue(app({ quoteRates: existing }));
+
+    const updated = await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [],
+      channels: [],
+      pricingModel: "2-tier",
+    });
+
+    expect(updated.quoteRates).toEqual(existing);
+  });
+
+  it("falls back to the standard rates on a row that has none", async () => {
+    // Every row written before 2026-10-06. It must come out of a save with a
+    // real rate on it rather than null, so what the merchant is quoted is
+    // recorded rather than inferred later.
+    getApplication.mockResolvedValue(app({ quoteRates: null }));
+
+    const updated = await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [],
+      channels: [],
+      pricingModel: "2-tier",
+    });
+
+    expect(updated.quoteRates).toEqual(DEFAULT_QUOTE_RATES);
   });
 });

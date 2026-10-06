@@ -8,6 +8,7 @@ import ProductConfigurator, {
   type ProductPick,
 } from "@/components/quoting/ProductConfigurator";
 import ReviewSection from "@/components/rep/ReviewSection";
+import RateFields from "@/components/rep/RateFields";
 import {
   mergeChannels,
   mergeReviewPrefill,
@@ -15,10 +16,9 @@ import {
   type AppliedReviewFields,
 } from "@/lib/prefillMerge";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
-import { ORDER_POINT_CHANNELS, isProcessingQuote } from "@/lib/quoting";
-import { fmtPct2 } from "@/lib/utils";
-import { SELECTABLE_PRICING_MODELS } from "@/types/merchant";
-import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteType, StatementAnalysis } from "@/types/merchant";
+import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
+import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import type { HubspotCompanyProfile, HubspotDeal } from "@/lib/adapters/hubspot";
 import styles from "./prospects-new.module.css";
@@ -43,11 +43,10 @@ function NewProspectFlow() {
 
   const [avgTicket, setAvgTicket]       = useState("");
   const [monthlyVolume, setMonthlyVolume] = useState("");
-  const [targetMargin, setTargetMargin] = useState(0.008);
+  const [quoteRates, setQuoteRates] = useState<QuoteRates>(DEFAULT_QUOTE_RATES);
   const [pricingModel, setPricingModel] = useState<PricingModel>("2-tier");
   // Shoulder-surfing guard: the margin target is AIO-internal, so it stays shut
   // until the rep opens it. The default above still applies while collapsed.
-  const [internalOpen, setInternalOpen] = useState(false);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
   const [smsSent, setSmsSent]           = useState(false);
@@ -69,7 +68,11 @@ function NewProspectFlow() {
   // A marketing-only quote has no processing behind it: no rate, no margin
   // target, no statement, no processing details in Review. The server drops
   // those fields for this type too — this is just not asking for them.
-  const rated = isProcessingQuote(quoteType);
+  // Whether this quote carries a RATE. Not the same as "is this a POS deal":
+  // a marketing merchant who adds the Website sells through it, so they get
+  // the ticket/volume inputs, the statement upload and a quoted rate — while
+  // still getting none of the POS hardware, install lines or ordering points.
+  const rated = quoteHasProcessing(quoteType, picks);
 
   // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
   // prefilled from the company on the deal — see prospects.ts's
@@ -261,7 +264,7 @@ function NewProspectFlow() {
     try {
       const { linkUrl, emailResult, smsResult } = await createProspectAction({
         business, ownerContact, processing: rated ? processing : null,
-        targetMargin, pricingModel, quoteType,
+        quoteRates, pricingModel, quoteType,
         quoteConfig: ticket > 0 && volume > 0 ? { avgTicket: ticket, monthlyVolume: volume } : null,
         analysis: rated ? analysis : null,
         // Only the picks cross the wire — prices and the tier are re-derived
@@ -285,7 +288,7 @@ function NewProspectFlow() {
   };
 
   const reset = () => {
-    setTargetMargin(0.008); setPricingModel("2-tier");
+    setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier");
     setAvgTicket(""); setMonthlyVolume(""); setFile(null); setAnalysis(null);
     setQuoteType("all_in_one"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
@@ -364,50 +367,83 @@ function NewProspectFlow() {
           A quote belongs to a deal, so the deal is where it starts. There is
           nothing to choose here on purpose: the company is whatever HubSpot
           says is on the deal, which is the only answer that can't attach a
-          merchant's quote to a stranger's record. */}
-      <div className={styles.panel}>
-        <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>HubSpot Deal</h2>
+          merchant's quote to a stranger's record.
+
+          COLLAPSED BY DEFAULT. Arriving from the EasyOB Link on the deal is the
+          normal path, and on that path this panel has nothing left to ask — it
+          was taking the top of the page to restate an answer the rep already
+          gave. With no deal on it the summary says so in the accent colour,
+          and the hard block at the bottom of the page names the fix. */}
+      {/* Collapsed by default, and uncontrolled — no `open` prop and no state.
+          The normal path arrives from the EasyOB Link with the deal already
+          resolved, so there is nothing to ask; the summary says which deal it
+          is, and the rep opens the row on the rare occasion they need to
+          change it. */}
+      <details className={styles.dealPanel}>
+        {/* The heading IS the control — clicking anywhere on this row opens
+            the card. The chevron sits against the title rather than out at the
+            far edge, so the two read as one thing to click. */}
+        <summary className={styles.dealSummary}>
+          <span className={styles.dealSummaryTitle}>HubSpot Deal</span>
+          {/* An SVG rather than a "▾" glyph: the character renders far smaller
+              than its font-size implies and sits off the baseline, so it can't
+              be scaled up to the size this affordance needs. */}
+          <svg
+            className={styles.dealSummaryChevron}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M5 9l7 7 7-7" />
+          </svg>
+          <span className={styles.dealSummaryValue} data-empty={!dealLoading && !deal ? "true" : undefined}>
+            {dealLoading
+              ? "Loading…"
+              : deal && hubspotCompany
+                ? `${deal.name} · ${hubspotCompany.name}`
+                : "Not linked yet"}
+          </span>
+        </summary>
+
+        <div className={styles.dealBody}>
           <p className={styles.sectionNote}>
             Open this page from the <strong>EasyOB Link</strong> on the deal in HubSpot. The
             customer link rides on that deal, and the company on it is what ties the merchant to
             their AIO tenant.
           </p>
+
+          {deal && hubspotCompany ? (
+            <p className={styles.hubspotBadge}>
+              <strong>{deal.name}</strong> · {deal.stageLabel ?? "no stage"} — {hubspotCompany.name}{" "}
+              ({hubspotCompany.id})
+              <button type="button" className={styles.hubspotBadgeClear} onClick={clearDeal} aria-label="Use a different deal">
+                ×
+              </button>
+            </p>
+          ) : !dealLoading && (
+            <div className={styles.field}>
+              <label className={styles.label}>Paste the HubSpot deal link or id</label>
+              <input
+                value={dealInput}
+                onChange={e => setDealInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); loadDeal(dealInput); } }}
+                placeholder="https://app.hubspot.com/…/record/0-3/12345 or 12345"
+                className={styles.input}
+              />
+              <button
+                type="button"
+                className={`${styles.btnGhost} ${styles.btnSm}`}
+                disabled={!dealInput.trim()}
+                onClick={() => loadDeal(dealInput)}
+              >
+                Open this deal
+              </button>
+            </div>
+          )}
+
+          {dealNotice && <div className={styles.error}>{dealNotice}</div>}
         </div>
-
-        {dealLoading && <p className={styles.prefillNote}>Loading the deal from HubSpot…</p>}
-
-        {deal && hubspotCompany ? (
-          <p className={styles.hubspotBadge}>
-            <strong>{deal.name}</strong> · {deal.stageLabel ?? "no stage"} — {hubspotCompany.name}{" "}
-            ({hubspotCompany.id})
-            <button type="button" className={styles.hubspotBadgeClear} onClick={clearDeal} aria-label="Use a different deal">
-              ×
-            </button>
-          </p>
-        ) : !dealLoading && (
-          <div className={styles.field}>
-            <label className={styles.label}>Paste the HubSpot deal link or id</label>
-            <input
-              value={dealInput}
-              onChange={e => setDealInput(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); loadDeal(dealInput); } }}
-              placeholder="https://app.hubspot.com/…/record/0-3/12345 or 12345"
-              className={styles.input}
-            />
-            <button
-              type="button"
-              className={styles.btnGhost}
-              disabled={!dealInput.trim()}
-              onClick={() => loadDeal(dealInput)}
-            >
-              Open this deal
-            </button>
-          </div>
-        )}
-
-        {dealNotice && <div className={styles.error}>{dealNotice}</div>}
-      </div>
+      </details>
 
       {/* ── Section 2: Review What We Know ───────────────────────────────── */}
       <div className={styles.sectionHead}>
@@ -435,11 +471,48 @@ function NewProspectFlow() {
 
       {/* ── Section 3: Quote ─────────────────────────────────────────────── */}
       {/* A marketing-only quote has no processing behind it, so there
-          is nothing to price against a statement — the products ARE the quote. */}
+          is nothing to price against a statement — the products ARE the quote.
+
+          The rates and the ticket/volume basis are ONE panel as of 2026-10-06.
+          They were two, with the whole product configurator between them, so a
+          rep set a rate on one screen and the volume it applies to on another
+          and never saw the two together. The rule inside is what keeps
+          "(optional)" attached to the basis alone: the rates always apply. */}
       {rated && (
       <div className={styles.panel}>
         <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>Prepare the Quote (optional)</h2>
+          <h2 className={styles.sectionTitle}>Pricing</h2>
+          <p className={styles.sectionNote}>
+            What this merchant is charged, and what it&apos;s charged on.
+          </p>
+        </div>
+
+        {/* Nothing to pick while 2-tier is the only sellable model, and a
+            grid holding one option reads as a control that's broken rather
+            than a decision already made. The rate fields below ARE the two
+            tiers, so the model needs no separate statement. The picker comes
+            back on its own if SELECTABLE_PRICING_MODELS ever grows. */}
+        {SELECTABLE_PRICING_MODELS.length > 1 && (
+          <>
+            <label className={styles.label}>Pricing Model</label>
+            <div className={styles.modelRow}>
+              {SELECTABLE_PRICING_MODELS.map(m => (
+                <button key={m} onClick={() => setPricingModel(m)} className={styles.modelPill} data-active={pricingModel === m}>
+                  {m.replace("-", " ")}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* The quoted rates. Outside any AIO-internal disclosure, unlike the
+            margin slider they replaced on 2026-10-06: a margin is an AIO
+            number, a rate is what the merchant is quoted and will read on
+            their own statement. */}
+        <RateFields value={quoteRates} onChange={setQuoteRates} />
+
+        <div className={styles.subhead}>
+          <h3 className={styles.subheadTitle}>Quote basis (optional)</h3>
           <p className={styles.sectionNote}>
             Give us either the numbers or the statement and the customer opens the link straight to their
             quote. Leave both blank and they&apos;ll be asked to upload a statement first.
@@ -512,44 +585,6 @@ function NewProspectFlow() {
         <p className={styles.prefillNote}>
           Ordering channels ticked above from HubSpot: {prefilledChannels.join(", ")}.
         </p>
-      )}
-
-      {rated && (
-      <div className={styles.panel}>
-        <label className={styles.label}>Pricing Model</label>
-        <div className={styles.modelRow}>
-          {SELECTABLE_PRICING_MODELS.map(m => (
-            <button key={m} onClick={() => setPricingModel(m)} className={styles.modelPill} data-active={pricingModel === m}>
-              {m.replace("-", " ")}
-            </button>
-          ))}
-        </div>
-        {/* Rep-only. Collapsed by default and showing no figure in the header:
-            the rep often has the laptop turned toward the merchant. */}
-        <button
-          type="button"
-          className={styles.disclosureBtn}
-          aria-expanded={internalOpen}
-          aria-controls="prospect-internal"
-          onClick={() => setInternalOpen(o => !o)}
-        >
-          AIO Internal
-          <span className={styles.disclosureChevron} aria-hidden="true">▾</span>
-        </button>
-        {internalOpen && (
-          <div id="prospect-internal" className={styles.disclosureBody}>
-            <div className={styles.marginRow}>
-              <span className={styles.marginLabel}>Margin Target</span>
-              <span className={styles.marginValue}>{fmtPct2(targetMargin)}</span>
-            </div>
-            <input
-              type="range" min="0.001" max="0.04" step="0.0005"
-              value={targetMargin}
-              onChange={e => setTargetMargin(parseFloat(e.target.value))}
-            />
-          </div>
-        )}
-      </div>
       )}
 
       {error && (

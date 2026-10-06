@@ -6,7 +6,7 @@ import { marginPolicy } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { derivePricingForRole, type PaddingConfig, type RoleScopedPricing, type FeeOverrides } from "@/lib/pricing";
 import { DEFAULT_MAX_DISCOUNT_PERCENT } from "@/lib/quoting";
-import type { StatementAnalysis, ProcessorTier } from "@/types/merchant";
+import type { StatementAnalysis, ProcessorTier, QuoteRates } from "@/types/merchant";
 
 // paddingPct is a proportion (0.5 = +50%). It is persisted in the existing integer
 // padding_bps column as basis points of proportion (5000 = 0.50) — no schema change.
@@ -77,7 +77,10 @@ export async function updateMaxDiscountPercentAction(maxDiscountPercent: number)
 
 export async function getPricingPreviewAction(input: {
   analysis: StatementAnalysis;
-  targetMargin?: number; // omit on first load → server applies the tier's desired margin
+  // The rates the rep has typed. Omitted means "the standard rate" —
+  // DEFAULT_QUOTE_RATES — not "work one out from a margin", which is what the
+  // omitted targetMargin this replaced used to mean.
+  quoteRates?: QuoteRates | null;
   pricingModel: string;
   feeOverrides: FeeOverrides;
   activeTier: ProcessorTier | null;
@@ -86,7 +89,7 @@ export async function getPricingPreviewAction(input: {
   if (!effective) throw new Error("Not authenticated");
   const padding = await getActivePaddingPolicy();
   return derivePricingForRole(
-    input.analysis, input.targetMargin, input.pricingModel, input.feeOverrides,
+    input.analysis, input.quoteRates, input.pricingModel, input.feeOverrides,
     effective.role, input.activeTier, padding
   );
 }

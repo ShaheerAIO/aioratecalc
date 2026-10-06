@@ -68,6 +68,9 @@ const DEFAULTS: Record<QuoteType, string> = {
   all_in_one: "817263673055",
   order_pay_only: "817263673055",
   marketing_only: "817697352408",
+  // The 2-year plan reads on the same document as the $199 one — only the
+  // platform line and the included kiosk differ.
+  marketing_term: "817697352408",
 };
 
 beforeEach(() => {
@@ -136,7 +139,8 @@ describe("updateQuoteTemplatePolicyAction", () => {
     getEffectiveRole.mockResolvedValue({ role: "admin", userId: "admin-1", name: "Admin", isDebug: false });
 
     await updateQuoteTemplatePolicyAction({
-      all_in_one: "787244469949", order_pay_only: "787244469949", marketing_only: "817697352408",
+      all_in_one: "787244469949", order_pay_only: "787244469949",
+      marketing_only: "817697352408", marketing_term: "817697352408",
     });
 
     expect(inserted).toHaveLength(1);

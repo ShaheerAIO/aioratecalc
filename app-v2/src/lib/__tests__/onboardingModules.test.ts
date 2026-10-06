@@ -26,6 +26,7 @@ const BASE_APP: MerchantApplication = {
   quoteLines: null,
   orderPoints: null,
   quoteAcceptedAt: null,
+  quoteRates: null,
   targetMargin: null,
   pricingModel: null,
   customerLinkToken: null,
@@ -344,9 +345,26 @@ describe("adyenModule (regression net)", () => {
     expect(m.description).toMatch(/setting up your account/i);
   });
 
-  it("is OMITTED entirely for a marketing-only quote — they pay us but never need Adyen", () => {
-    const modules = getOnboardingModules({ ...BASE_APP, quoteType: "marketing_only" });
-    expect(modules.find(m => m.key === "adyen")).toBeUndefined();
+  it("is OMITTED entirely for a marketing quote that sells nothing through us", () => {
+    for (const quoteType of ["marketing_only", "marketing_term"] as const) {
+      const modules = getOnboardingModules({ ...BASE_APP, quoteType });
+      expect(modules.find(m => m.key === "adyen")).toBeUndefined();
+    }
+  });
+
+  it("APPEARS for a marketing merchant who bought the Website", () => {
+    // They take card payments on it, so they need the Adyen account. Reading
+    // the plan alone here would bill them for processing they can never be
+    // onboarded for — the row would simply never exist.
+    const withSite = {
+      ...BASE_APP,
+      quoteType: "marketing_only" as const,
+      quoteLines: [{
+        hubspotProductId: "333275576048", name: "Website",
+        qty: 1, unitPrice: 50, billingFrequency: "monthly" as const, productType: "",
+      }],
+    };
+    expect(getOnboardingModules(withSite).find(m => m.key === "adyen")).toBeTruthy();
   });
 
   it("still appears for a quote type that carries a processing rate", () => {

@@ -50,6 +50,7 @@ function newApp(): MerchantApplication {
     quoteLines: null,
     orderPoints: null,
     quoteAcceptedAt: null,
+    quoteRates: null,
     targetMargin: null,
     pricingModel: null,
     customerLinkToken: null,
@@ -124,8 +125,9 @@ function NewProposalFlow() {
           // from an empty picker and wipe the hardware. Derived lines (the
           // platform fee, the three always-included services) are dropped —
           // they aren't picks, they come back from the quote type and count.
-          setQuoteType(quoteTypeOf(existing.quoteType));
-          setPicks(picksFromQuoteLines(existing.quoteLines));
+          const existingType = quoteTypeOf(existing.quoteType);
+          setQuoteType(existingType);
+          setPicks(picksFromQuoteLines(existing.quoteLines, existingType));
           setChannels(existing.orderPoints?.channels ?? []);
         }
       })
@@ -172,10 +174,12 @@ function NewProposalFlow() {
       return;
     }
     // On a resumed application the pricing step hasn't been re-run this
-    // session, so fall back to what was already persisted.
-    const targetMargin = outcome?.targetMargin ?? app.targetMargin;
+    // session, so fall back to what was already persisted. Rates may legitimately
+    // be null on an older row — the server reads that as the standard rate —
+    // so only the model gates the save.
+    const quoteRates = outcome?.quoteRates ?? app.quoteRates;
     const pricingModel = outcome?.pricingModel ?? app.pricingModel;
-    if (targetMargin == null || pricingModel == null) { setStep(4); return; }
+    if (pricingModel == null) { setStep(4); return; }
 
     setBusy(true);
     setError(null);
@@ -186,7 +190,7 @@ function NewProposalFlow() {
         picks,
         channels,
         adjustments,
-        targetMargin,
+        quoteRates,
         pricingModel,
         quoteConfig: app.quoteConfig,
       });

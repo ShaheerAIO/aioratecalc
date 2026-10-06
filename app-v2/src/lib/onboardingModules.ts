@@ -4,7 +4,7 @@ import type { HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/m
 // margin floors — out of the browser bundle. quoting.ts imports nothing but
 // `monthlyEquivalent` from utils and a few types, so it carries no margin data.
 // Don't widen this to anything that reaches pricing.ts.
-import { isProcessingQuote, quoteTypeOf } from "@/lib/quoting";
+import { quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
 
 export type ModuleStatus = "not_started" | "in_progress" | "complete";
 
@@ -441,13 +441,14 @@ function adyenModule(app: MerchantApplication, basePath: string): OnboardingModu
   const label = "Payment Processing (Adyen)";
   const editHref = `${basePath}/edit`;
 
-  // A marketing-only merchant pays us but sells nothing through us, so they
-  // never need an Adyen account and this row would sit permanently
-  // incomplete. OMIT it rather than show a promise that will never be kept —
-  // same reasoning as billingModule's rate-only branch, and it keeps the
-  // dashboard's "N of M complete" count honest. Uses the same predicate the
-  // quote itself was built under.
-  if (!isProcessingQuote(quoteTypeOf(app.quoteType))) return null;
+  // A marketing merchant who sells nothing through us never needs an Adyen
+  // account, and this row would sit permanently incomplete. OMIT it rather
+  // than show a promise that will never be kept — same reasoning as
+  // billingModule's rate-only branch, and it keeps the dashboard's "N of M
+  // complete" count honest. Uses the same predicate the quote itself was built
+  // under, LINES included: a marketing merchant who bought the Website takes
+  // card payments, so they do need this row.
+  if (!quoteHasProcessing(quoteTypeOf(app.quoteType), app.quoteLines)) return null;
 
   if (app.stage === "adyen_kyc_complete" || app.stage === "adyen_approved") {
     return { key, label, status: "complete", description: "Verification complete." };
