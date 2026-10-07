@@ -29,6 +29,20 @@
   gap: var(--space-sm);
 }
 
+/* Rate and its per-transaction fee on one line: "[2.49 %] + [$ 0.15]". */
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.plus {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
 .field {
   display: flex;
   flex-direction: column;

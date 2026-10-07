@@ -77,50 +77,47 @@ export default function RateFields({ value, onChange, hideNote }: RateFieldsProp
                 <span className={styles.brandTracking}> · matching Visa/MC/Discover</span>
               )}
           </span>
+          {/* Each lane reads as the sentence the merchant will see on their
+              quote: "2.49% + $0.15". The fee is ONE number on the quote, so
+              the four fee boxes are views of it — editing any one moves all. */}
           <div className={styles.grid}>
             {([["Card Present", brand.cp], ["Card Not Present", brand.cnp]] as const).map(([label, key]) => (
-              <label key={key} className={styles.field}>
+              <div key={key} className={styles.field}>
                 <span className={styles.label}>{label}</span>
-                <span className={styles.inputWrap}>
-                  <input
-                    type="number" min="0" max="100" step="0.01" inputMode="decimal"
-                    className={styles.input}
-                    value={pctText(value[key])}
-                    onChange={e => setRate(key)(e.target.value)}
-                    aria-label={`${brand.label}, ${label.toLowerCase()} rate, percent`}
-                  />
-                  <span className={styles.unit}>%</span>
-                </span>
-              </label>
+                <div className={styles.pair}>
+                  <span className={styles.inputWrap}>
+                    <input
+                      type="number" min="0" max="100" step="0.01" inputMode="decimal"
+                      className={styles.input}
+                      value={pctText(value[key])}
+                      onChange={e => setRate(key)(e.target.value)}
+                      aria-label={`${brand.label}, ${label.toLowerCase()} rate, percent`}
+                    />
+                    <span className={styles.unit}>%</span>
+                  </span>
+                  <span className={styles.plus} aria-hidden="true">+</span>
+                  <span className={styles.inputWrap}>
+                    <span className={styles.unit} data-side="left">$</span>
+                    <input
+                      type="number" min="0" step="0.01" inputMode="decimal"
+                      className={styles.input} data-unit="leading"
+                      value={value.perTransactionFee}
+                      onChange={e => onChange({ ...value, perTransactionFee: parseFloat(e.target.value) || 0 })}
+                      aria-label={`${brand.label}, ${label.toLowerCase()} per transaction fee, dollars`}
+                    />
+                  </span>
+                </div>
+              </div>
             ))}
           </div>
         </div>
       ))}
 
-      <div className={styles.brand}>
-        <span className={styles.brandLabel}>Every transaction</span>
-        <div className={styles.grid}>
-          <label className={styles.field}>
-            <span className={styles.label}>Per Transaction</span>
-            <span className={styles.inputWrap}>
-              <span className={styles.unit} data-side="left">$</span>
-              <input
-                type="number" min="0" step="0.01" inputMode="decimal"
-                className={styles.input} data-unit="leading"
-                value={value.perTransactionFee}
-                onChange={e => onChange({ ...value, perTransactionFee: parseFloat(e.target.value) || 0 })}
-                aria-label="Per transaction fee, dollars"
-              />
-            </span>
-          </label>
-        </div>
-      </div>
-
       {!hideNote && (
         <p className={styles.note}>
-          Every merchant is quoted {pctText(DEFAULT_QUOTE_RATES.cardPresentRate)}% on all four lanes
-          plus ${DEFAULT_QUOTE_RATES.perTransactionFee.toFixed(2)} until the ticket-size and volume
-          matrix exists. Change it here if this deal needs a different rate.
+          Default is {pctText(DEFAULT_QUOTE_RATES.cardPresentRate)}% + ${DEFAULT_QUOTE_RATES.perTransactionFee.toFixed(2)} on
+          every lane until the ticket-size and volume matrix exists. The per-transaction fee is one
+          number across all four.
         </p>
       )}
     </>
