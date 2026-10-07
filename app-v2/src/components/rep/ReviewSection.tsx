@@ -2,6 +2,8 @@
 
 import type React from "react";
 import { isFromHubspotField, UNKNOWABLE_REVIEW_FIELDS, type AppliedReviewFields } from "@/lib/prefillMerge";
+import { contactOptionLabel } from "@/lib/hubspotPrefill";
+import type { HubspotContact } from "@/lib/adapters/hubspot";
 import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
 import styles from "./ReviewSection.module.css";
 
@@ -17,6 +19,13 @@ type Props = {
   onBusinessChange: (next: BusinessInfo) => void;
   onOwnerChange: (next: OwnerContact) => void;
   onProcessingChange: (next: ProcessingInfo) => void;
+  // Every contact on the deal's company. With any, the Owner Contact panel
+  // leads with a dropdown so the rep says WHICH person this quote is for —
+  // HubSpot can't tell us. Empty (no deal, or a company with no contacts)
+  // renders no dropdown and the fields are typed by hand.
+  contacts: HubspotContact[];
+  selectedContactId: string | null;
+  onContactSelect: (id: string | null) => void;
 };
 
 const isUnknowable = (path: string) => UNKNOWABLE_REVIEW_FIELDS.includes(path);
@@ -37,6 +46,7 @@ const isUnknowable = (path: string) => UNKNOWABLE_REVIEW_FIELDS.includes(path);
 export default function ReviewSection({
   business, ownerContact, processing, applied, showProcessing,
   onBusinessChange, onOwnerChange, onProcessingChange,
+  contacts, selectedContactId, onContactSelect,
 }: Props) {
   const field = (
     path: string,
@@ -106,7 +116,28 @@ export default function ReviewSection({
 
       <div className={styles.panel}>
         <h2 className={styles.sectionTitle}>Owner Contact</h2>
-        <div className={styles.grid2}>
+        {contacts.length > 0 && (
+          <div className={styles.row}>
+            <label className={styles.label} htmlFor="hubspot-contact">
+              HubSpot Contact
+              {contacts.length > 1 && <span className={styles.badgeUnknown}>{contacts.length} on this company</span>}
+            </label>
+            <select
+              id="hubspot-contact"
+              value={selectedContactId ?? ""}
+              onChange={e => onContactSelect(e.target.value || null)}
+              className={styles.input}
+            >
+              <option value="">
+                {contacts.length > 1 ? "Select a contact…" : "Enter manually"}
+              </option>
+              {contacts.map(c => (
+                <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div className={`${styles.grid2} ${contacts.length > 0 ? styles.row : ""}`}>
           {field("ownerContact.firstName", "First Name", ownerContact.firstName, v => onOwnerChange({ ...ownerContact, firstName: v }))}
           {field("ownerContact.lastName", "Last Name", ownerContact.lastName, v => onOwnerChange({ ...ownerContact, lastName: v }))}
         </div>

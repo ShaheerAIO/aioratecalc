@@ -21,7 +21,7 @@ vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail }));
 vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms }));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction: vi.fn() }));
 vi.mock("@/lib/adapters/hubspot", () => ({
-  getCompanyOwnerContact: vi.fn(),
+  listCompanyContacts: vi.fn(),
   getCompanyProfile: vi.fn(),
 }));
 // prospects.ts now imports getActivePaddingPolicy for the role-scoped floor

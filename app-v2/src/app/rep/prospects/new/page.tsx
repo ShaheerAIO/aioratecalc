@@ -20,7 +20,8 @@ import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
 import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
-import type { HubspotCompanyProfile, HubspotDeal } from "@/lib/adapters/hubspot";
+import { buildProspectPrefillForContact } from "@/lib/hubspotPrefill";
+import type { HubspotCompanyProfile, HubspotContact, HubspotDeal } from "@/lib/adapters/hubspot";
 import styles from "./prospects-new.module.css";
 
 const BLANK_BUSINESS: BusinessInfo = {
@@ -91,6 +92,12 @@ function NewProspectFlow() {
   const [dealNotice, setDealNotice]         = useState<string | null>(null);
   const [dealLoading, setDealLoading]       = useState(false);
   const [prefill, setPrefill]               = useState<ProspectPrefill | null>(null);
+  // Every contact on the deal's company, and which one this quote is for. A
+  // company with several has no "owner contact" we can honestly prefill, so
+  // the rep picks (see ReviewSection's dropdown); only a company with exactly
+  // one contact arrives with it already chosen.
+  const [contacts, setContacts]                 = useState<HubspotContact[]>([]);
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
 
   // Latest form values, so applying a prefill from an async callback merges
   // against what's on screen now rather than whatever was there when the fetch
@@ -143,12 +150,16 @@ function NewProspectFlow() {
         if (!res.ok) {
           setDeal(null);
           setHubspotCompany(null);
+          setContacts([]);
+          setSelectedContactId(null);
           applyPrefill(null);
           setDealNotice(res.message);
           return;
         }
         setDeal(res.deal);
         setHubspotCompany(res.company);
+        setContacts(res.contacts);
+        setSelectedContactId(res.selectedContactId);
         applyPrefill(res.prefill);
       })
       .catch(e => {
@@ -173,10 +184,20 @@ function NewProspectFlow() {
     dealRequestRef.current = null;
     setDeal(null);
     setHubspotCompany(null);
+    setContacts([]);
+    setSelectedContactId(null);
     setDealNotice(null);
     setDealInput("");
     setDealLoading(false);
     applyPrefill(null);
+  };
+
+  // The rep's pick from the contact dropdown. Re-applies the prefill with that
+  // contact: HubSpot-filled owner fields are replaced by the new person's (or
+  // cleared, for "no one"), while anything the rep typed themselves stays.
+  const selectContact = (id: string | null) => {
+    setSelectedContactId(id);
+    applyPrefill(buildProspectPrefillForContact(hubspotCompany, contacts, id));
   };
 
 
@@ -462,6 +483,9 @@ function NewProspectFlow() {
         onBusinessChange={setBusiness}
         onOwnerChange={setOwnerContact}
         onProcessingChange={setProcessing}
+        contacts={contacts}
+        selectedContactId={selectedContactId}
+        onContactSelect={selectContact}
       />
       {missingWarnings.length > 0 && (
         <p className={styles.prefillNote}>

@@ -12,7 +12,7 @@ import type { HubspotDeal } from "@/lib/adapters/hubspot";
 const getEffectiveRole = vi.fn();
 const saveApplication = vi.fn();
 const getCompanyProfile = vi.fn();
-const getCompanyOwnerContact = vi.fn();
+const listCompanyContacts = vi.fn();
 const resolveDealForCompany = vi.fn();
 const sendLeadLinkEmail = vi.fn();
 const sendLeadLinkSms = vi.fn();
@@ -20,7 +20,7 @@ const listQuotableProductsAction = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { saveApplication } }));
-vi.mock("@/lib/adapters/hubspot", () => ({ getCompanyProfile, getCompanyOwnerContact }));
+vi.mock("@/lib/adapters/hubspot", () => ({ getCompanyProfile, listCompanyContacts }));
 // The Company & Deal picker's resolution service — mocked so the real module
 // (which pulls in the server-only db client) is never loaded here.
 vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany }));

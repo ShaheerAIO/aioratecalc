@@ -22,7 +22,7 @@ vi.mock("@/lib/storage/postgresAdapter", () => ({
 }));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
 vi.mock("@/lib/adapters/hubspot", () => ({
-  getCompanyOwnerContact: vi.fn(),
+  listCompanyContacts: vi.fn(),
   getCompanyProfile: vi.fn(),
 }));
 vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail: vi.fn() }));

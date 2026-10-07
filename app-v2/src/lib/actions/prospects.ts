@@ -4,10 +4,10 @@ import { randomUUID } from "crypto";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import {
-  getCompanyOwnerContact, getCompanyProfile, getDealById,
-  type HubspotCompanyProfile, type HubspotDeal, type TenantCompany,
+  listCompanyContacts, getCompanyProfile, getDealById,
+  type HubspotCompanyProfile, type HubspotContact, type HubspotDeal, type TenantCompany,
 } from "@/lib/adapters/hubspot";
-import { buildProspectPrefill, type ProspectPrefill } from "@/lib/hubspotPrefill";
+import { buildProspectPrefillForContact, initialContactChoice, type ProspectPrefill } from "@/lib/hubspotPrefill";
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { resolveLeadLinkIssue } from "@/lib/customerLink";
@@ -115,7 +115,16 @@ async function persistLeadLink(
  * the tenant link and association 341 is only settable at deal create.
  */
 export type ProspectFromDeal =
-  | { ok: true; deal: HubspotDeal; company: HubspotCompanyProfile; prefill: ProspectPrefill | null }
+  | {
+      ok: true;
+      deal: HubspotDeal;
+      company: HubspotCompanyProfile;
+      /** Every contact on the company, best association label first. The rep picks one. */
+      contacts: HubspotContact[];
+      /** Preselected only when the company has exactly one contact. */
+      selectedContactId: string | null;
+      prefill: ProspectPrefill | null;
+    }
   | { ok: false; code: DealRefusalCode | "no_company"; message: string };
 
 export async function openProspectFromDealAction(dealIdOrUrl: string): Promise<ProspectFromDeal> {
@@ -164,8 +173,16 @@ export async function openProspectFromDealAction(dealIdOrUrl: string): Promise<P
         message: `Deal '${deal.name}' points at HubSpot company ${companyId}, which couldn't be read back (deleted, merged, or out of this token's reach).`,
       };
     }
-    const contact = await getCompanyOwnerContact(companyId);
-    return { ok: true, deal: resolution.deal, company, prefill: buildProspectPrefill(company, contact) };
+    const contacts = await listCompanyContacts(companyId);
+    const selectedContactId = initialContactChoice(contacts);
+    return {
+      ok: true,
+      deal: resolution.deal,
+      company,
+      contacts,
+      selectedContactId,
+      prefill: buildProspectPrefillForContact(company, contacts, selectedContactId),
+    };
   } catch (err) {
     return { ok: false, code: "hubspot_error", message: err instanceof Error ? err.message : "Could not reach HubSpot" };
   }

@@ -820,7 +820,8 @@ export async function getCompanyProfile(companyId: string): Promise<HubspotCompa
 //   2. A company can have several contacts with different association labels.
 //      This portal defines "Business Owner" and "Location Liason" as
 //      USER_DEFINED labels alongside HubSpot's "Billing Contact" and "Contact
-//      with Primary Company" — pick the right one rather than the first.
+//      with Primary Company". Labels only ORDER the list (best first) — they
+//      can't say which person a given quote is for, so the rep picks.
 
 export type HubspotContact = {
   id: string;
@@ -848,86 +849,117 @@ export type CompanyAssociation = {
 };
 
 /**
- * Pure: which associated contact to prefill from. Kept separate from the fetch
- * so the preference order is unit-testable without HubSpot.
+ * Pure: EVERY associated contact, best label first. Each contact is ranked on
+ * its BEST label, so one that is both "Business Owner" and "Contact with
+ * Primary Company" sorts as the owner. Ties keep HubSpot's own order, and a
+ * contact id that appears twice (one row per association label is normal)
+ * is collapsed to one entry. Kept separate from the fetch so the preference
+ * order is unit-testable without HubSpot.
  */
-export function pickOwnerAssociation(
+export function rankContactAssociations(
   results: CompanyAssociation[]
-): { contactId: string; label: string | null } | null {
-  let best: { contactId: string; label: string | null; rank: number } | null = null;
+): Array<{ contactId: string; label: string | null }> {
+  const ranked: Array<{ contactId: string; label: string | null; rank: number }> = [];
 
   for (const result of results) {
     if (result?.toObjectId === undefined || result.toObjectId === null) continue;
+    const contactId = String(result.toObjectId);
     const labels = (result.associationTypes ?? []).map(t => clean(t?.label)).filter((l): l is string => !!l);
-    // Rank on the contact's BEST label, so a contact that is both "Business
-    // Owner" and "Contact with Primary Company" is ranked as the owner.
     let rank = CONTACT_LABEL_PRIORITY.length;
     let label: string | null = labels[0] ?? null;
     for (const l of labels) {
       const i = CONTACT_LABEL_PRIORITY.indexOf(l);
       if (i !== -1 && i < rank) { rank = i; label = l; }
     }
-    if (!best || rank < best.rank) best = { contactId: String(result.toObjectId), label, rank };
+    const seen = ranked.find(r => r.contactId === contactId);
+    if (seen) {
+      if (rank < seen.rank) { seen.rank = rank; seen.label = label; }
+      continue;
+    }
+    ranked.push({ contactId, label, rank });
   }
 
-  return best ? { contactId: best.contactId, label: best.label } : null;
+  // Array.prototype.sort is stable, so equal ranks keep HubSpot's order.
+  return ranked.sort((a, b) => a.rank - b.rank).map(({ contactId, label }) => ({ contactId, label }));
+}
+
+/** The single best associated contact — the head of `rankContactAssociations`. */
+export function pickOwnerAssociation(
+  results: CompanyAssociation[]
+): { contactId: string; label: string | null } | null {
+  return rankContactAssociations(results)[0] ?? null;
 }
 
 const CONTACT_PROPS = ["firstname", "lastname", "jobtitle", "email", "phone", "mobilephone"];
 
+// HubSpot's batch-read ceiling. A company with more contacts than this shows
+// its best-ranked 100 — more than a dropdown can sensibly offer anyway.
+const CONTACT_BATCH_LIMIT = 100;
+
 /**
- * Best-effort owner contact for a company. NEVER throws: this is enrichment on
- * a page that must still render without it, and both calls have their own
- * failure modes (missing billing token, 403, no contacts at all). A contact
- * whose properties can't be read is still returned with its id and label —
- * partial data beats none.
+ * Every contact associated with a company, best association label first — the
+ * rep picks which one this quote is for, rather than us guessing (a company
+ * with several contacts has no single "owner contact" we can honestly
+ * prefill). NEVER throws: this is enrichment on a page that must still render
+ * without it, and both calls have their own failure modes (missing billing
+ * token, 403, no contacts at all). Contacts whose properties can't be read
+ * are still returned with their id and label — partial data beats none.
  */
-export async function getCompanyOwnerContact(companyId: string): Promise<HubspotContact | null> {
-  let picked: { contactId: string; label: string | null } | null = null;
+export async function listCompanyContacts(companyId: string): Promise<HubspotContact[]> {
+  let ranked: Array<{ contactId: string; label: string | null }>;
   try {
     const res = await fetch(`${BASE}/crm/v4/objects/companies/${companyId}/associations/contacts`, {
       headers: headers(),
     });
     if (!res.ok) {
-      console.warn("getCompanyOwnerContact: association read failed", companyId, res.status);
-      return null;
+      console.warn("listCompanyContacts: association read failed", companyId, res.status);
+      return [];
     }
     const data = await res.json() as { results?: CompanyAssociation[] };
-    picked = pickOwnerAssociation(data.results ?? []);
+    ranked = rankContactAssociations(data.results ?? []).slice(0, CONTACT_BATCH_LIMIT);
   } catch (err) {
-    console.warn("getCompanyOwnerContact: association read errored", companyId, err);
-    return null;
+    console.warn("listCompanyContacts: association read errored", companyId, err);
+    return [];
   }
-  if (!picked) return null;
+  if (ranked.length === 0) return [];
 
-  const empty: HubspotContact = {
-    id: picked.contactId, firstName: null, lastName: null, jobTitle: null,
-    email: null, phone: null, associationLabel: picked.label,
-  };
+  const unread = (c: { contactId: string; label: string | null }): HubspotContact => ({
+    id: c.contactId, firstName: null, lastName: null, jobTitle: null,
+    email: null, phone: null, associationLabel: c.label,
+  });
 
+  let props = new Map<string, Record<string, string | null>>();
   try {
-    const res = await fetch(
-      `${BASE}/crm/v3/objects/contacts/${picked.contactId}?properties=${CONTACT_PROPS.join(",")}`,
-      { headers: billingHeaders() }
-    );
+    const res = await fetch(`${BASE}/crm/v3/objects/contacts/batch/read`, {
+      method: "POST",
+      headers: billingHeaders(),
+      body: JSON.stringify({
+        properties: CONTACT_PROPS,
+        inputs: ranked.map(c => ({ id: c.contactId })),
+      }),
+    });
     if (!res.ok) {
-      console.warn("getCompanyOwnerContact: contact read failed", picked.contactId, res.status);
-      return empty;
+      console.warn("listCompanyContacts: contact read failed", companyId, res.status);
+    } else {
+      const data = await res.json() as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
+      props = new Map((data.results ?? []).map(r => [String(r.id), r.properties ?? {}]));
     }
-    const data = await res.json() as { properties: Record<string, string | null> };
-    const p = data.properties;
+  } catch (err) {
+    console.warn("listCompanyContacts: contact read errored", companyId, err);
+  }
+
+  return ranked.map(c => {
+    const p = props.get(c.contactId);
+    if (!p) return unread(c);
     return {
-      ...empty,
+      ...unread(c),
       firstName: clean(p.firstname),
       lastName: clean(p.lastname),
       jobTitle: clean(p.jobtitle),
       email: clean(p.email),
       phone: clean(p.phone) ?? clean(p.mobilephone),
     };
-  } catch (err) {
-    console.warn("getCompanyOwnerContact: contact read errored", picked.contactId, err);
-    return empty;
-  }
+  });
 }
 
 // ── Product catalog ─────────────────────────────────────────────────────────

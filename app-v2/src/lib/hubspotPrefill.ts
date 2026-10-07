@@ -193,8 +193,18 @@ function compact<T extends object>(obj: { [K in keyof T]?: string | undefined })
  */
 export function buildProspectPrefill(
   company: HubspotCompanyProfile | null | undefined,
-  contact?: HubspotContact | null
+  contact?: HubspotContact | null,
+  options: {
+    /**
+     * Whether the Company's own `location_email` may stand in when there is no
+     * contact email. Callers turn it OFF once the company is known to have
+     * contacts: at that point the rep is choosing a PERSON, and an address that
+     * belongs to the location would be a guess dressed as their pick.
+     */
+    companyEmailFallback?: boolean;
+  } = {}
 ): ProspectPrefill {
+  const { companyEmailFallback = true } = options;
   const empty: ProspectPrefill = { business: {}, ownerContact: {}, processing: {}, channels: [], fromHubspot: [] };
   if (!company) return empty;
 
@@ -220,7 +230,7 @@ export function buildProspectPrefill(
     title: contact?.jobTitle ?? undefined,
     // The Company's own location_email is a weak fallback (~1% populated) but
     // costs nothing when the contact read didn't yield an address.
-    email: contact?.email ?? company.email ?? undefined,
+    email: contact?.email ?? (companyEmailFallback ? company.email : null) ?? undefined,
     phone: normalizePhone(contact?.phone),
   });
 
@@ -252,4 +262,39 @@ export function buildProspectPrefill(
   ];
 
   return prefill;
+}
+
+// ── Choosing among several contacts ─────────────────────────────────────────
+//
+// A company can have many contacts and nothing in HubSpot says which one is
+// THIS quote's. Guessing by association label picked the wrong person often
+// enough to be a problem, so the rep chooses. The one case with no choice to
+// make is a company with exactly one contact.
+
+/** The contact to preselect: only ever when there is nothing to choose between. */
+export function initialContactChoice(contacts: HubspotContact[]): string | null {
+  return contacts.length === 1 ? contacts[0].id : null;
+}
+
+/**
+ * The prefill for a given contact choice. `selectedId` null (or not in the
+ * list) leaves the owner-contact fields for the rep to fill or pick — and once
+ * the company has contacts, the company's own location email is no longer
+ * offered as a stand-in for one.
+ */
+export function buildProspectPrefillForContact(
+  company: HubspotCompanyProfile | null | undefined,
+  contacts: HubspotContact[],
+  selectedId: string | null
+): ProspectPrefill {
+  const contact = contacts.find(c => c.id === selectedId) ?? null;
+  return buildProspectPrefill(company, contact, { companyEmailFallback: contacts.length === 0 });
+}
+
+/** How a contact reads in the dropdown: name, then whatever identifies them. */
+export function contactOptionLabel(contact: HubspotContact): string {
+  const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
+  const parts = [name, contact.jobTitle, contact.email].filter(Boolean);
+  const head = parts.length ? parts.join(" · ") : `Contact ${contact.id}`;
+  return contact.associationLabel ? `${head} (${contact.associationLabel})` : head;
 }

@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildProspectPrefill, businessDescription, channelsFromModules,
+  buildProspectPrefill, buildProspectPrefillForContact, businessDescription, channelsFromModules,
+  contactOptionLabel, initialContactChoice,
   monthlyVolumeFromCompany, normalizeCountry, normalizePhone, processorFromPos, streetLine,
 } from "@/lib/hubspotPrefill";
-import { pickOwnerAssociation, type CompanyAssociation, type HubspotCompanyProfile, type HubspotContact } from "@/lib/adapters/hubspot";
+import { pickOwnerAssociation, rankContactAssociations, type CompanyAssociation, type HubspotCompanyProfile, type HubspotContact } from "@/lib/adapters/hubspot";
 
 // A company with everything HubSpot could plausibly hold, using real observed
 // value shapes (E.164 phone, free-text state, "USA" country, the `moduels`
@@ -206,6 +207,85 @@ describe("pickOwnerAssociation", () => {
 
   it("is null when the company has no contacts", () => {
     expect(pickOwnerAssociation([])).toBeNull();
+  });
+});
+
+describe("rankContactAssociations", () => {
+  const assoc = (id: number, ...labels: Array<string | null>): CompanyAssociation => ({
+    toObjectId: id,
+    associationTypes: labels.map(label => ({ label })),
+  });
+
+  it("returns every contact, best label first", () => {
+    expect(rankContactAssociations([
+      assoc(1, "Location Liason"),
+      assoc(2, null),
+      assoc(3, "Business Owner"),
+      assoc(4, "Billing Contact"),
+    ]).map(c => c.contactId)).toEqual(["3", "4", "1", "2"]);
+  });
+
+  it("keeps HubSpot's order among equally ranked contacts", () => {
+    expect(rankContactAssociations([assoc(5, null), assoc(6, null), assoc(7, null)]).map(c => c.contactId))
+      .toEqual(["5", "6", "7"]);
+  });
+
+  it("collapses a contact that appears on several association rows", () => {
+    expect(rankContactAssociations([
+      assoc(1, "Contact with Primary Company"),
+      assoc(1, "Business Owner"),
+    ])).toEqual([{ contactId: "1", label: "Business Owner" }]);
+  });
+
+  it("is empty when there are no contacts", () => {
+    expect(rankContactAssociations([])).toEqual([]);
+  });
+});
+
+describe("choosing among several contacts", () => {
+  const person = (id: string, firstName: string, email: string | null): HubspotContact => ({
+    id, firstName, lastName: "Smith", jobTitle: null, email, phone: null, associationLabel: null,
+  });
+  const company = { ...EMPTY, name: "Bojax", email: "store@example.com" };
+
+  it("preselects a contact only when there is exactly one", () => {
+    expect(initialContactChoice([])).toBeNull();
+    expect(initialContactChoice([person("1", "Ann", "a@x.com")])).toBe("1");
+    expect(initialContactChoice([person("1", "Ann", "a@x.com"), person("2", "Bo", "b@x.com")])).toBeNull();
+  });
+
+  it("leaves the owner fields blank until one of several contacts is picked", () => {
+    const contacts = [person("1", "Ann", "a@x.com"), person("2", "Bo", "b@x.com")];
+    const p = buildProspectPrefillForContact(company, contacts, null);
+    expect(p.ownerContact).toEqual({});
+    expect(p.business.legalName).toBe("Bojax");
+  });
+
+  it("fills the owner fields from whichever contact was picked", () => {
+    const contacts = [person("1", "Ann", "a@x.com"), person("2", "Bo", "b@x.com")];
+    expect(buildProspectPrefillForContact(company, contacts, "2").ownerContact)
+      .toEqual({ firstName: "Bo", lastName: "Smith", email: "b@x.com" });
+  });
+
+  it("does not stand the company's location email in for a contact who has none", () => {
+    const contacts = [person("1", "Ann", null), person("2", "Bo", "b@x.com")];
+    expect(buildProspectPrefillForContact(company, contacts, "1").ownerContact)
+      .toEqual({ firstName: "Ann", lastName: "Smith" });
+  });
+
+  it("still uses the location email when the company has no contacts at all", () => {
+    expect(buildProspectPrefillForContact(company, [], null).ownerContact).toEqual({ email: "store@example.com" });
+  });
+
+  it("labels a contact by name, title and email, then association", () => {
+    expect(contactOptionLabel({
+      id: "1", firstName: "Angie", lastName: "Johnson", jobTitle: "Owner",
+      email: "angie@x.com", phone: null, associationLabel: "Business Owner",
+    })).toBe("Angie Johnson · Owner · angie@x.com (Business Owner)");
+    expect(contactOptionLabel(person("2", "Bo", null))).toBe("Bo Smith");
+    expect(contactOptionLabel({
+      id: "9", firstName: null, lastName: null, jobTitle: null, email: null, phone: null, associationLabel: null,
+    })).toBe("Contact 9");
   });
 });
 
