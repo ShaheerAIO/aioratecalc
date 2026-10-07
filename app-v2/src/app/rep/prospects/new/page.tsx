@@ -30,7 +30,7 @@ const BLANK_BUSINESS: BusinessInfo = {
 };
 const BLANK_OWNER: OwnerContact = { firstName: "", lastName: "", title: "", email: "", phone: "" };
 const BLANK_PROCESSING: ProcessingInfo = {
-  monthlyVolume: "", avgTicket: "", cardPresentPct: "", mcc: "", businessDescription: "",
+  monthlyVolume: "", avgTicket: "", cardPresentPct: "95", mcc: "", businessDescription: "",
   previouslyTerminated: "no", bankruptcy: "no", currentProcessor: "",
 };
 

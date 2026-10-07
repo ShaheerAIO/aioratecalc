@@ -158,7 +158,7 @@ export default function ReviewSection({
             {field("processing.avgTicket", "Average Ticket ($)", processing.avgTicket, v => onProcessingChange({ ...processing, avgTicket: v }), { placeholder: "45", type: "number" })}
           </div>
           <div className={`${styles.grid2} ${styles.row}`}>
-            {field("processing.cardPresentPct", "Card Present % (0-100)", processing.cardPresentPct, v => onProcessingChange({ ...processing, cardPresentPct: v }), { placeholder: "80", type: "number" })}
+            {field("processing.cardPresentPct", "Card Present % (0-100)", processing.cardPresentPct, v => onProcessingChange({ ...processing, cardPresentPct: v }), { placeholder: "95", type: "number" })}
             {field("processing.mcc", "MCC Code", processing.mcc, v => onProcessingChange({ ...processing, mcc: v }), { placeholder: "5812" })}
           </div>
           <div className={styles.row}>
