@@ -6,7 +6,7 @@ import {
   lineListAmount,
   lineNetAmount,
 } from "@/lib/quoting";
-import { fmt$, fmtFrequency } from "@/lib/utils";
+import { fmt$, fmtCycle, fmtFrequency } from "@/lib/utils";
 import type { QuoteLine, QuoteTotals } from "@/types/merchant";
 import styles from "./ProductConfigurator.module.css";
 
@@ -47,7 +47,7 @@ export default function QuoteReceipt({
         <ReceiptGroup
           key={r.frequency}
           title={`Per ${fmtFrequency(r.frequency)}`}
-          subtotal={`${fmt$(r.amount)}/${fmtFrequency(r.frequency)}`}
+          subtotal={`${fmt$(r.amount)}/${fmtCycle(r.frequency)}`}
           lines={lines.filter(l => l.billingFrequency === r.frequency)}
         />
       ))}
@@ -101,7 +101,7 @@ function ReceiptGroup({ title, subtotal, lines }: { title: string; subtotal: str
 function ReceiptLine({ line }: { line: QuoteLine }) {
   const discounted = (line.discountPercent ?? 0) > 0;
   const tag = line.coveredByPackage ? "In package" : isCompedService(line) ? "Included" : null;
-  const cycle = line.billingFrequency === "one_time" ? "" : `/${fmtFrequency(line.billingFrequency)}`;
+  const cycle = line.billingFrequency === "one_time" ? "" : `/${fmtCycle(line.billingFrequency)}`;
 
   return (
     <div className={styles.receiptLine}>

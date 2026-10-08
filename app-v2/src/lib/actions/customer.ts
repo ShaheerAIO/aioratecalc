@@ -40,7 +40,12 @@ const LOGIN_TOKEN_TTL_MINUTES = 30;
 // HubSpot read app.business.state as-is — so normalize once, here, and persist
 // the USPS code every consumer expects.
 function withStateCode(business: BusinessInfo): BusinessInfo {
-  return { ...business, state: usStateCode(business.state) ?? "" };
+  return {
+    ...business,
+    state: usStateCode(business.state) ?? "",
+    // Only when present: a blank DBA address must stay absent, not become "".
+    ...(business.dbaState ? { dbaState: usStateCode(business.dbaState) ?? "" } : {}),
+  };
 }
 
 async function requireCustomer(): Promise<{ userId: string }> {

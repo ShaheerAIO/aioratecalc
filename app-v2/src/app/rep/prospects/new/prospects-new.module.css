@@ -1,25 +1,257 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
 
-.main {
-  max-width: 48rem;
+/* ---------- Workspace ----------
+ * The quote is the page. A merchant bar names who it's for and where it goes,
+ * a one-line drawer holds the onboarding details nobody prices on, and the
+ * rest of the width is ProductConfigurator's document layout: what's being
+ * sold on the left, the live quote the customer will open on the right. */
+.workspace {
+  max-width: 112rem;
   margin-inline: auto;
-  padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
+  padding: var(--space-xl) var(--space-lg) var(--space-3xl);
 }
 
+@media (min-width: 72rem) {
+  .workspace { padding-inline: var(--space-2xl); }
+}
 
-.headerTitle {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: clamp(1.5rem, 2vw + 1rem, 2rem);
-  letter-spacing: -0.02em;
+/* ---------- Merchant bar ---------- */
+
+.merchantBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-md) var(--space-xl);
+  padding-bottom: var(--space-lg);
+  border-bottom: 1px solid var(--rule);
+}
+
+.identity { min-width: 0; flex: 1 1 20rem; }
+
+.eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-xs);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
   margin: 0 0 var(--space-2xs);
 }
 
-.headerSubtitle {
+/* No deal yet: the one state where this line is the thing to act on. */
+.eyebrow[data-empty="true"] { color: var(--accent-text); }
+
+.merchantName {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(1.5rem, 1.5vw + 1rem, 2.1rem);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.recipient, .dealPaste {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-md);
+  flex: 0 1 42rem;
+}
+
+.recipient .field, .dealPaste .field { flex: 1 1 16rem; margin-bottom: 0; }
+.dealPaste .btnSm { margin-top: 0; margin-bottom: 2px; }
+
+/* ---------- Merchant details drawer ---------- */
+
+.details {
+  margin-bottom: var(--space-xl);
+  border-bottom: 1px solid var(--rule);
+  scroll-margin-top: calc(var(--nav-offset) + var(--space-md));
+}
+
+.detailsToggle {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs) var(--space-sm);
+  padding: var(--space-sm) 0;
+  background: none;
+  border: none;
+  font-family: var(--font-body);
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.detailsToggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+.detailsChevron {
+  width: 0.9rem;
+  height: 0.9rem;
+  align-self: center;
+  color: var(--accent-text);
+  transition: transform 150ms var(--ease-out);
+}
+
+.detailsToggle[aria-expanded="true"] .detailsChevron { transform: rotate(90deg); }
+
+.detailsTitle { font-weight: 700; font-size: 0.9rem; }
+
+.detailsMeta {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-2);
+}
+
+.detailsMeta[data-warn="true"] { color: var(--accent-text); font-weight: 600; }
+
+.detailsNote { font-size: 0.8rem; color: var(--ink-3); }
+
+.detailsBody { padding: var(--space-sm) 0 var(--space-lg); }
+
+/* ---------- Card rate (the configurator's build slot) ---------- */
+
+.rateBlock {
+  padding: var(--space-lg);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+}
+
+.blockHead {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-md);
+}
+
+.rateLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.rateHint { font-size: 0.85rem; color: var(--ink-2); }
+
+/* An input with its unit inside the same box, so "2.9 %" and "$ 0.30" read as
+   one value each rather than a field with a stray symbol beside it. */
+.affix {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3xs);
+  padding: 0 var(--space-sm);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink-3);
   font-size: 0.9rem;
-  line-height: 1.55;
-  margin: 0 0 var(--space-xl);
+  transition: border-color 150ms var(--ease-out);
+}
+
+.affix:focus-within { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 1px; }
+
+.rateInput {
+  width: 5.5rem;
+  min-width: 0;
+  padding: var(--space-sm) 0;
+  border: none;
+  background: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.basisRow .affix { display: flex; }
+.basisRow .rateInput { width: 100%; }
+
+.basisRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-md);
+  align-items: end;
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--rule);
+}
+
+.basisRow .field { margin-bottom: 0; }
+.basisRow + .prefillNote { margin: var(--space-sm) 0 0; }
+
+.linkBtn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.linkBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+
+/* ---------- Inside the quote document ---------- */
+
+.docHead { margin-bottom: var(--space-md); }
+.docHead .eyebrow { margin-bottom: var(--space-3xs); }
+
+.docTitle {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.docRate {
+  display: grid;
+  gap: var(--space-3xs);
+  padding: var(--space-sm) 0 var(--space-md);
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: var(--space-md);
+}
+
+.docRateLabel { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.docRateValue { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+.docRateNote { font-size: 0.78rem; color: var(--ink-3); }
+
+.sendBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+
+.sendBlock .error { margin-bottom: 0; }
+
+.blocks { font-size: 0.8rem; line-height: 1.5; color: var(--ink-2); }
+.blocksTitle { font-weight: 700; color: var(--ink); margin: 0 0 var(--space-2xs); }
+.blocks ul { margin: 0 0 var(--space-xs); padding-left: 1.1em; list-style: disc; }
+.blocks li + li { margin-top: var(--space-3xs); }
+
+.sendNote { font-size: 0.75rem; color: var(--ink-3); margin: 0; text-align: center; overflow-wrap: anywhere; }
+
+.btnBlock { width: 100%; white-space: normal; }
+
+@media (prefers-reduced-motion: reduce) {
+  .detailsChevron, .affix { transition-duration: 1ms; }
 }
 
 /* ---------- Panels ---------- */
@@ -64,33 +296,7 @@
   outline-offset: 1px;
 }
 
-/* ---------- Prepare-the-quote section ---------- */
-
-.sectionHead { margin-bottom: var(--space-md); }
-
-.sectionTitle {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 1rem;
-  letter-spacing: -0.01em;
-  margin: 0 0 var(--space-3xs);
-}
-
-.sectionNote {
-  font-size: 0.8rem;
-  color: var(--ink-2);
-  line-height: 1.55;
-  margin: 0;
-}
-
-.configRow {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-md);
-  margin-bottom: var(--space-md);
-}
-
-.configRow .field { margin-bottom: 0; }
+/* ---------- Statement dropzone ---------- */
 
 .dropzone {
   margin-top: var(--space-2xs);
@@ -130,6 +336,8 @@
   margin: 0;
 }
 
+.dropzoneCompact { margin-top: 0; padding: var(--space-sm) var(--space-md); border-width: 1.5px; }
+
 .fileInput { display: none; }
 
 /* ---------- Model pills ---------- */
@@ -162,34 +370,6 @@
 }
 
 .modelPill:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-/* ---------- HubSpot deep-link indicator ---------- */
-
-.hubspotBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2xs);
-  font-size: 0.78rem;
-  color: var(--ink-2);
-  background: var(--paper-2);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2xs) var(--space-sm);
-  margin-bottom: var(--space-lg);
-}
-
-.hubspotBadgeClear {
-  border: none;
-  background: none;
-  color: var(--ink-3);
-  font-size: 0.95rem;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 0 0 var(--space-2xs);
-}
-
-.hubspotBadgeClear:hover { color: var(--ink); }
-.hubspotBadgeClear:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- Prefill provenance ---------- */
 
@@ -330,125 +510,12 @@
 
 @media (max-width: 30rem) {
   .modelRow { grid-template-columns: 1fr; }
-  .configRow { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .modelPill, .btnPrimary, .btnGhost, .btnCopy, .input, .dropzone {
     transition-duration: 1ms;
   }
-}
-
-/* Splits one panel into two halves that belong together but aren't the same
-   decision: what the merchant is charged, and what it's charged on. The rule
-   is what lets the "(optional)" sit on the second half only — it applies to
-   the ticket/volume/statement basis, never to the rates. */
-.subhead {
-  margin: var(--space-lg) 0 var(--space-md);
-  padding-top: var(--space-lg);
-  border-top: 1px solid var(--rule);
-}
-
-.subheadTitle {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 0.9rem;
-  letter-spacing: -0.01em;
-  margin: 0 0 var(--space-3xs);
-}
-
-/* ---------- The deal, as a disclosure ---------- */
-/* NOT a card. It was one, and a card is a thing on the page whether or not it
-   has anything to say — this has nothing to say on the normal path, where the
-   rep arrived from the EasyOB Link and the deal is already resolved. So it
-   carries no surface, no border and no shadow of its own: collapsed, it is one
-   line of text. The card chrome appears only when it is open and there is
-   something in it.
-
-   A <details> rather than a button and a flag: the browser already does the
-   toggling, the keyboard handling and the semantics. */
-.dealPanel {
-  margin-bottom: var(--space-lg);
-  border-radius: var(--radius-lg);
-}
-
-.dealPanel[open] {
-  background: var(--paper-2);
-  border: 1px solid var(--rule);
-  box-shadow: var(--shadow-whisper);
-  padding: var(--space-md) var(--space-xl);
-}
-
-/* Has to read as a control, not as a heading that happens to move. Hence the
-   hover surface, the inset padding and a chevron big enough to see — it is the
-   only affordance on a row that otherwise looks exactly like the section
-   headings around it. */
-.dealSummary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  cursor: pointer;
-  list-style: none;
-  padding: var(--space-xs) var(--space-md);
-  margin: 0 calc(-1 * var(--space-md));
-  border-radius: var(--radius-sm);
-  transition: background 150ms var(--ease-out);
-}
-
-.dealSummary:hover { background: var(--paper-2); }
-.dealPanel[open] .dealSummary:hover { background: transparent; }
-
-/* Safari still draws its own disclosure triangle without this. */
-.dealSummary::-webkit-details-marker { display: none; }
-.dealSummary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-
-/* Reads the same folded or open: this is the section's heading either way,
-   and dimming it while collapsed made the row look disabled rather than
-   closed. */
-.dealSummaryTitle {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 1.15rem;
-  letter-spacing: -0.01em;
-  color: var(--ink);
-  flex-shrink: 0;
-}
-
-/* The deal and company, so a collapsed panel still answers "which deal is
-   this quote on" without being opened. Truncates rather than wrapping — the
-   full name is in the badge inside. */
-.dealSummaryValue {
-  flex: 1;
-  min-width: 0;
-  margin-left: var(--space-sm);
-  font-size: 0.8rem;
-  color: var(--ink-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.dealSummaryChevron {
-  flex-shrink: 0;
-  width: 1.6rem;
-  height: 1.6rem;
-  color: var(--accent-text);
-  transition: transform 150ms var(--ease-out);
-}
-
-.dealPanel[open] .dealSummaryChevron { transform: rotate(180deg); }
-
-/* No deal on the quote yet — the one case where this row is the thing the rep
-   has to act on, so it says so rather than sitting quiet in grey. */
-.dealSummaryValue[data-empty="true"] {
-  color: var(--accent-text);
-  font-weight: 600;
-}
-
-.dealBody { margin-top: var(--space-md); }
-
-@media (prefers-reduced-motion: reduce) {
-  .dealSummaryChevron { transition-duration: 1ms; }
 }
 
 /* A smaller button for actions inside a panel, as opposed to the page's own

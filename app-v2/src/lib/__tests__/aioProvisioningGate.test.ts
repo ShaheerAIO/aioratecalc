@@ -82,18 +82,25 @@ describe("isReadyForAioProvisioning", () => {
     }
   });
 
-  it("provisions a marketing merchant who bought the Website", () => {
+  it("provisions a marketing merchant whose Website takes online orders", () => {
     // They sell through it, so the card payments run through AIO and the
     // tenant has to exist. Gating on the plan alone would take their money for
-    // processing and never open an account to process it.
-    const withSite = app({
-      quoteType: "marketing_only",
-      quoteLines: [{
-        hubspotProductId: "333275576048", name: "Website",
-        qty: 1, unitPrice: 50, billingFrequency: "monthly", productType: "",
-      }],
-    });
-    expect(isReadyForAioProvisioning(withSite, NOW)).toEqual({ ready: true });
+    // processing and never open an account to process it. Online ordering is
+    // saved as the $0 card-rate line.
+    const site = {
+      hubspotProductId: "333275576048", name: "Website",
+      qty: 1, unitPrice: 50, billingFrequency: "monthly" as const, productType: "",
+    };
+    const rateLine = {
+      hubspotProductId: "260559288040", name: "AIO Processing Two Tiered Rate",
+      qty: 1, unitPrice: 0, billingFrequency: "one_time" as const, productType: "AIO Payment Processing",
+    };
+    const ordering = app({ quoteType: "marketing_only", quoteLines: [rateLine, site] });
+    expect(isReadyForAioProvisioning(ordering, NOW)).toEqual({ ready: true });
+
+    // A plain website takes no payments, so there is nothing to provision.
+    const plain = app({ quoteType: "marketing_only", quoteLines: [site] });
+    expect(isReadyForAioProvisioning(plain, NOW).ready).toBe(false);
   });
 
   it("skips a closed-lost deal", () => {

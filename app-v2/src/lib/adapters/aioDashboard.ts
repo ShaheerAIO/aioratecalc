@@ -25,6 +25,7 @@
 // Contract facts below were verified live against internal dev on 2026-09-23;
 // see app-v2/AIO-DASHBOARD-API-TRANSCRIPT.md for the raw session.
 
+import { locationAddress } from "@/types/merchant";
 import type { MerchantApplication, OwnerContact } from "@/types/merchant";
 import { toE164Phone } from "@/lib/utils";
 
@@ -319,13 +320,16 @@ export async function createAioLocation(
   const biz = app.business;
   if (!biz) throw new Error("AIO dashboard location create requires app.business");
 
+  // The LOCATION is where the restaurant physically is, so it takes the DBA
+  // address when there is one. The tenant above keeps the legal address.
+  const loc = locationAddress(biz);
   const body = {
     businessId: args.businessId,
     companyId: args.companyId,
     restaurant: {
       businessId: args.businessId,
       name: (biz.dba || biz.legalName || "").trim(),
-      address: biz.address ?? "",
+      address: loc.address,
       image: "",
       orderDelayedTime: 0,
       onlineOrder: false,
@@ -339,15 +343,15 @@ export async function createAioLocation(
       phoneNo: toE164Phone(biz.phone) ?? "",
       otherMode: "",
       building: "",
-      state: biz.state ?? "",
-      city: biz.city ?? "",
-      zipCode: biz.zip ?? "",
+      state: loc.state,
+      city: loc.city,
+      zipCode: loc.zip,
       status: "closed",
       autoGratuity: false,
       largePartySizeLimit: 1,
       cuisineType: "",
       timezone: "America/Los_Angeles",
-      stateIso: biz.state ?? "",
+      stateIso: loc.state,
       workplaceId: "",
     },
     pocInfo: pocInfo(app),

@@ -18,7 +18,7 @@ import {
 import { resendLeadLinkAction } from "@/lib/actions/prospects";
 import EditQuotePanel from "@/components/rep/EditQuotePanel";
 import DealPicker, { type ResolvedDeal } from "@/components/rep/DealPicker";
-import { fmt$, fmtFrequency } from "@/lib/utils";
+import { fmt$, fmtCycle } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
 import { getOnboardingModules, type ModuleStatus } from "@/lib/onboardingModules";
@@ -935,9 +935,9 @@ function AccountsDashboardInner({
                               <div className={styles.moneyRow}>
                                 {selectedTotals.oneTime > 0 && <span>{fmt$(selectedTotals.oneTime)} one-time</span>}
                                 {selectedTotals.recurring.map(r => (
-                                  <span key={r.frequency}>{fmt$(r.amount)}/{fmtFrequency(r.frequency)}</span>
+                                  <span key={r.frequency}>{fmt$(r.amount)}/{fmtCycle(r.frequency)}</span>
                                 ))}
-                                {selectedTotals.monthlyEquivalent > 0 && (
+                                {selectedTotals.monthlyEquivalent > 0 && !selectedTotals.recurring.every(r => r.frequency === "monthly") && (
                                   <span className={styles.moneyMeta}>
                                     (~{fmt$(selectedTotals.monthlyEquivalent)}/mo recurring)
                                   </span>

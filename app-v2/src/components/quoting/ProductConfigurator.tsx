@@ -1,24 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import { getMaxDiscountPercent } from "@/lib/actions/pricing";
 import {
   AMS1_PRODUCT,
   DEFAULT_MAX_DISCOUNT_PERCENT,
   INCLUDED_SCREEN_COUNT,
+  INCLUDED_SERVICE_PRODUCTS,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
   PLATFORM_PRODUCTS,
   PROCESSING_DISCLOSURE_PRODUCT,
   PRODUCT_GROUP_LABELS,
   QUOTE_TYPES,
+  SOFTWARE_LICENSE_PRODUCT,
   WIFI_PRODUCT_ID,
   amountDueAtCheckout,
   buildQuote,
+  describeBillingStart,
   groupProducts,
   isAllowedForQuoteType,
-  carriesWebsite,
   isCompedService,
   isPreAuthProduct,
   isMarketingQuote,
@@ -29,11 +31,13 @@ import {
   maxQtyFor,
   toQuoteLine,
   unitsFromQuoteLines,
+  websiteTakesOrders,
+  WEBSITE_PRODUCT_ID,
   type BuiltQuote,
 } from "@/lib/quoting";
-import { kitFor, kitPicks } from "@/lib/quotePackages";
+import { coverageLabel, kitFor, kitPicks } from "@/lib/quotePackages";
 import QuoteReceipt from "@/components/quoting/QuoteReceipt";
-import { fmt$, fmtFrequency, monthlyEquivalent } from "@/lib/utils";
+import { fmt$, fmtCycle, fmtRecurring, monthlyEquivalent } from "@/lib/utils";
 import type {
   BillingStart, CatalogProduct, LineAdjustment, QuoteAdjustments, QuoteLine, QuoteType, UnitAdjustment,
 } from "@/types/merchant";
@@ -93,14 +97,31 @@ type Props = {
    * hang into (the statement wizard, EditQuotePanel).
    */
   rail?: "gutter" | "inline";
+  /**
+   * `document` splits the configurator into the decisions (plan, hardware,
+   * channels) and a live copy of the quote the merchant will open, where every
+   * derived line — platform fee, included services, licenses, packages — sits
+   * as a tagged line with its adjust control, instead of a panel of its own.
+   * The slots below are the host's own pieces, placed inside that split.
+   */
+  layout?: "panels" | "document";
+  /** document layout: rendered in the build column, under the plan cards. */
+  buildSlot?: ReactNode;
+  /** document layout: the quote document's heading. */
+  documentHeader?: ReactNode;
+  /** document layout: the card-rate line, above the charges. */
+  documentRate?: ReactNode;
+  /** document layout: under the totals — the host's send controls. */
+  documentFooter?: ReactNode;
 };
 
-// A recurring line always shows BOTH figures: the charge as it actually bills
-// and the monthly equivalent. AIO's platform fees bill weekly, so "$99/mo" is
-// wrong by 4.33x and "$99" alone is ambiguous.
+// Recurring prices read monthly (see fmtRecurring): everything AIO sells bills
+// monthly now. A line still on another cycle shows its monthly equivalent AND
+// the cycle it really bills on — "$99/mo" for a weekly $99 would be wrong by
+// 4.33x, so the true cycle is never dropped.
 function priceLabel(unitPrice: number, frequency: QuoteLine["billingFrequency"]) {
   if (frequency === "one_time") return `${fmt$(unitPrice)} one-time`;
-  return `${fmt$(unitPrice)}/${fmtFrequency(frequency)} (~${fmt$(monthlyEquivalent(unitPrice, frequency))}/mo)`;
+  return fmtRecurring(unitPrice, frequency);
 }
 
 /** The default a rep is offered for a custom billing start — what the portal's own delayed lines use. */
@@ -121,6 +142,8 @@ export default function ProductConfigurator({
   adjustments = NO_ADJUSTMENTS, onAdjustmentsChange,
   selectableTypes,
   rail = "gutter",
+  layout = "panels",
+  buildSlot, documentHeader, documentRate, documentFooter,
 }: Props) {
   // The catalog is read from HubSpot server-side and cached there, so this is
   // one call per mount, not one per keystroke. It lives in here rather than in
@@ -208,12 +231,12 @@ export default function ProductConfigurator({
     processingDisclosure, packages, totals, quoteLines,
   } = built;
 
-  // Whether the Website is on the quote. `rated` above is the PLAN's answer and
-  // stays that way — the install services and the ordering-point count follow
-  // the plan, and a website merchant has nothing on site to install and no
-  // ordering point we count. This is the other question: does AIO touch their
-  // money.
-  const websiteOn = carriesWebsite(pickedLines);
+  // Whether the Website takes online orders. `rated` above is the PLAN's answer
+  // and stays that way — the install services and the ordering-point count
+  // follow the plan, and a website merchant has nothing on site to install and
+  // no ordering point we count. This is the other question: does AIO touch
+  // their money.
+  const websiteOn = websiteTakesOrders(pickedLines, adjustments);
 
   // Each plan's monthly price, read off the live catalog entry for its
   // platform product rather than written into QUOTE_TYPES. The four notes used
@@ -399,6 +422,10 @@ export default function ProductConfigurator({
         .filter(p => wanted.has(p.hubspotProductId))
         .map(p => ({ hubspotProductId: p.hubspotProductId, qty: wanted.get(p.hubspotProductId)! }))
     );
+    // Re-adding the Website starts it as a plain site again.
+    if (id === WEBSITE_PRODUCT_ID && qty === 0 && adjustments[id]?.onlineOrdering) {
+      setAdjustment(id, { onlineOrdering: null });
+    }
   };
 
   const toggleChannel = (id: string) =>
@@ -429,6 +456,7 @@ export default function ProductConfigurator({
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
       if (!merged.removed) delete merged.removed;
+      if (!merged.onlineOrdering) delete merged.onlineOrdering;
       if (Object.keys(merged).length) next[id] = merged;
       else delete next[id];
     }
@@ -583,7 +611,7 @@ export default function ProductConfigurator({
       <>
         <span className={styles.strike}>{fmt$(lineListAmount(l))}</span>{" "}
         <strong>{fmt$(lineNetAmount(l))}</strong>
-        {l.billingFrequency !== "one_time" && `/${fmtFrequency(l.billingFrequency)}`}
+        {l.billingFrequency !== "one_time" && `/${fmtCycle(l.billingFrequency)}`}
       </>
     ) : (
       priceLabel(l.unitPrice, l.billingFrequency)
@@ -797,8 +825,8 @@ export default function ProductConfigurator({
             )}
 
             <p className={styles.adjustNote}>
-              A discount on a recurring line is permanent — {maxDiscountPercent}% off a weekly fee is
-              that much off every week, for good. To give something away temporarily, delay when
+              A discount on a recurring line is permanent — {maxDiscountPercent}% off a monthly fee is
+              that much off every month, for good. To give something away temporarily, delay when
               billing starts instead.
             </p>
           </div>
@@ -806,6 +834,473 @@ export default function ProductConfigurator({
       </div>
     );
   };
+
+  // Shared by both layouts — the panels host and the document host render
+  // the same controls, so neither can drift from the other.
+  const planCards = (
+    <div className={styles.typeRow}>
+      {types.map(t => {
+        const price = planPrice(t.id);
+        return (
+          <button
+            key={t.id}
+            type="button"
+            className={styles.typeCard}
+            data-active={quoteType === t.id}
+            onClick={() => changeType(t.id)}
+          >
+            <span className={styles.typeLabel}>{t.label}</span>
+            <span className={styles.typeNote}>{t.note}</span>
+            {/* Last, and pushed to the bottom edge, so the four prices
+                sit on one line however long each note runs. Rendered
+                only once the catalog has loaded — a plan whose product
+                is missing shows no price rather than a $0 one. */}
+            {price && <span className={styles.typePrice}>{price}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const globalControls = (
+    <div className={styles.globalGrid}>
+      <label className={styles.adjustField}>
+        <span className={styles.adjustLabel}>Discount</span>
+        <span className={styles.pctWrap}>
+          <input
+            type="number" min={0} max={100} step={1}
+            className={styles.adjustInput}
+            value={sharedDiscount.pct ?? ""}
+            placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
+            disabled={discountIds.length === 0}
+            onChange={e => setGlobalDiscount(e.target.value)}
+            aria-label="Discount percent for every line on the quote"
+          />
+          <span className={styles.pctSign}>%</span>
+        </span>
+      </label>
+
+      <label className={styles.adjustField}>
+        <span className={styles.adjustLabel}>Billing starts</span>
+        <span className={styles.startWrap}>
+          <select
+            className={styles.adjustSelect}
+            value={globalMode}
+            disabled={recurringIds.length === 0}
+            onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
+            aria-label="When billing starts for every recurring line"
+          >
+            {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
+            <option value="now">At checkout</option>
+            <option value="date">On a date</option>
+            <option value="days">After N days</option>
+          </select>
+          {sharedStart.start?.mode === "date" && (
+            <input
+              type="date"
+              className={styles.adjustInput}
+              value={sharedStart.start.date}
+              onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
+              aria-label="Billing start date for every recurring line"
+            />
+          )}
+          {sharedStart.start?.mode === "days" && (
+            <span className={styles.pctWrap}>
+              <input
+                type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
+                className={styles.adjustInput}
+                value={sharedStart.start.days}
+                onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
+                aria-label="Billing start delay in days for every recurring line"
+              />
+              <span className={styles.pctSign}>days</span>
+            </span>
+          )}
+        </span>
+      </label>
+    </div>
+  );
+
+  const productRow = (p: CatalogProduct, withAdjust: boolean) => {
+    const n = qtyOf(p.hubspotProductId);
+    // Capped in the picker AND refused by buildQuote. The cap is
+    // the courtesy; the blocker is the authority, since the server
+    // re-derives from the picks and never trusts the browser.
+    const max = maxQtyFor(p.hubspotProductId);
+    const covered = coveredQty.get(p.hubspotProductId) ?? 0;
+    const planCovered = planCoveredQty.get(p.hubspotProductId) ?? 0;
+    // What the quote carries, which is NOT always what the stepper
+    // shows: the AMS1 terminals are derived (one per POS), so they
+    // sit on the quote and in `covered` while `n` — the rep's own
+    // picks — reads 0. Comparing `covered` to `n` printed "1 of 0".
+    const derivedQty = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? built.requiredTerminals.qty : 0;
+    const onQuote = n + derivedQty;
+    return (
+      <div key={p.hubspotProductId} className={styles.productRow} data-picked={n > 0}>
+        <div className={styles.productMain}>
+          <div className={styles.productName}>{p.name}</div>
+          <div className={styles.productPrice}>{priceLabel(p.price, p.billingFrequency)}</div>
+          {covered > 0 && (
+            <div className={styles.coveredTag}>
+              {coverageLabel(covered, onQuote, "the package")}
+            </div>
+          )}
+          {planCovered > 0 && (
+            <div className={styles.coveredTag}>
+              {planCovered >= onQuote
+                ? "Included in the plan"
+                : `${planCovered} of ${onQuote} included in the plan`}
+            </div>
+          )}
+          {p.hubspotProductId === AMS1_PRODUCT.hubspotProductId && built.requiredTerminals.qty > 0 && (
+            <div className={styles.coveredTag}>
+              {built.requiredTerminals.qty} added automatically with your POS{" "}
+              {built.requiredTerminals.qty === 1 ? "unit" : "units"}
+            </div>
+          )}
+        </div>
+        <div className={styles.stepper}>
+          <button
+            type="button" className={styles.stepBtn} disabled={n === 0}
+            onClick={() =>
+              // Taking off a unit the kit is currently covering
+              // gives hardware back — ask first, since it is
+              // the easiest thing on this screen to do by accident.
+              covered > onQuote - 1
+                ? setConfirmKitRemove(p.hubspotProductId)
+                : setQtyFor(p.hubspotProductId, n - 1)
+            }
+            aria-label={`Remove one ${p.name}`}
+          >−</button>
+          <span className={styles.stepQty}>{n}</span>
+          <button
+            type="button" className={styles.stepBtn}
+            disabled={max != null && n >= max}
+            onClick={() => setQtyFor(p.hubspotProductId, n + 1)}
+            aria-label={`Add one ${p.name}`}
+          >+</button>
+        </div>
+        {p.hubspotProductId === WEBSITE_PRODUCT_ID && n > 0 && isMarketingQuote(quoteType) && onAdjustmentsChange && (
+          <label className={`${styles.channel} ${styles.fullRow}`} data-on={websiteOn}>
+            <input
+              type="checkbox"
+              className={styles.channelBox}
+              checked={websiteOn}
+              onChange={e => setAdjustment(WEBSITE_PRODUCT_ID, { onlineOrdering: e.target.checked || null })}
+            />
+            <span className={styles.channelLabel}>Online ordering</span>
+            <span className={styles.channelNote}>
+              Optional. When on, the site takes orders and AIO processes the card payments.
+            </span>
+          </label>
+        )}
+        {confirmKitRemove === p.hubspotProductId && (
+          <div className={styles.confirmBox} role="alertdialog" aria-label={`Remove ${p.name}?`}>
+            <p>
+              <strong>{p.name}</strong> comes free with the {packages.applied[0]?.name ?? "kit"}.
+              Take it off and this merchant won&apos;t get it.
+            </p>
+            <div className={styles.confirmActions}>
+              <button
+                type="button"
+                className={styles.linkBtn}
+                onClick={() => {
+                  setQtyFor(p.hubspotProductId, n - 1);
+                  setConfirmKitRemove(null);
+                }}
+              >
+                Remove it
+              </button>
+              <button type="button" className={styles.linkBtn} onClick={() => setConfirmKitRemove(null)}>
+                Keep it
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Wraps onto its own line under the row. Returns null
+            until the product is actually on the quote. */}
+        {withAdjust && lineAdjust(p.hubspotProductId)}
+      </div>
+    );
+  };
+
+  if (layout === "document") {
+    // Why a line is on the quote, said once beside the line rather than in a
+    // panel of its own. Keyed off ids and `coveredByPackage`, never off object
+    // identity: buildQuote rebuilds every line as it adjusts and packs them.
+    const docTag = (l: QuoteLine): { tag?: string; why?: string } => {
+      if (l.coveredByPackage) {
+        return l.coveredByPackage === planName ? { tag: "In plan" } : { tag: "In package", why: l.coveredByPackage };
+      }
+      if (platform.line && l.hubspotProductId === platform.line.hubspotProductId) return { tag: "Plan" };
+      if (isPreAuthProduct(l.hubspotProductId, l.name)) {
+        return { tag: "Pre-auth", why: "Nothing else is due at checkout, so the card is pre-authorized. Can't be removed." };
+      }
+      if (l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) return { tag: "Card rates" };
+      if (l.hubspotProductId === SOFTWARE_LICENSE_PRODUCT.hubspotProductId) {
+        return { tag: "Auto", why: `${built.softwareLicense.screens} screens, ${INCLUDED_SCREEN_COUNT} included in the plan` };
+      }
+      if (l.hubspotProductId === AMS1_PRODUCT.hubspotProductId && built.requiredTerminals.qty > 0) {
+        return { tag: "Required", why: `One per POS unit — ${built.requiredTerminals.qty} added automatically` };
+      }
+      if (INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === l.hubspotProductId)) {
+        return { tag: isCompedService(l) && lineNetAmount(l) === 0 ? "Comped" : "Included" };
+      }
+      return {};
+    };
+
+    // A split line (a scoped discount, or a package covering part of it) is
+    // two lines of one product; its adjust control belongs on the first only.
+    const adjustShown = new Set<string>();
+    const docLine = (l: QuoteLine, i: number) => {
+      const { tag, why } = docTag(l);
+      const list = lineListAmount(l);
+      const net = lineNetAmount(l);
+      const cycle = l.billingFrequency === "one_time" ? "" : `/${fmtCycle(l.billingFrequency)}`;
+      const first = !adjustShown.has(l.hubspotProductId);
+      adjustShown.add(l.hubspotProductId);
+      const isWifi = l.hubspotProductId === WIFI_PRODUCT_ID && !l.coveredByPackage;
+      return (
+        <div key={`${l.hubspotProductId}-${i}`} className={styles.docLine}>
+          <div className={styles.docLineMain}>
+            <div className={styles.docLineName}>
+              {l.qty > 1 && <span className={styles.docQty}>{l.qty} ×</span>}
+              {l.name.trim()}
+              {tag && <span className={styles.docTag} data-tag={tag}>{tag}</span>}
+            </div>
+            {why && <div className={styles.docWhy}>{why}</div>}
+            {l.billingStart && <div className={styles.docWhy}>{describeBillingStart(l.billingStart)}</div>}
+          </div>
+          <div className={styles.docAmount}>
+            {list > net && <span className={styles.strike}>{fmt$(list)}</span>}{" "}
+            <strong>{fmt$(net)}</strong>{cycle}
+          </div>
+          {isWifi && first && onAdjustmentsChange && !confirmWifi && (
+            <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(true)}>Remove</button>
+          )}
+          {isWifi && first && confirmWifi && (
+            <div className={styles.confirmBox}>
+              <p>Remove the WiFi package? This merchant won&apos;t get a network quoted.</p>
+              <div className={styles.confirmActions}>
+                <button
+                  type="button"
+                  className={styles.linkBtn}
+                  onClick={() => { setAdjustment(WIFI_PRODUCT_ID, { removed: true }); setConfirmWifi(false); }}
+                >
+                  Remove
+                </button>
+                <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {first && lineAdjust(l.hubspotProductId)}
+        </div>
+      );
+    };
+
+    const recurringDoc = quoteLines.filter(l => l.billingFrequency !== "one_time");
+    // The merchant's own picks first, then what came with them.
+    const oneTimeDoc = quoteLines
+      .filter(l => l.billingFrequency === "one_time")
+      .map((l, i) => ({ l, i, derived: docTag(l).tag ? 1 : 0 }))
+      .sort((a, b) => a.derived - b.derived || a.i - b.i)
+      .map(x => x.l);
+
+    const missingNames = catalogLoading ? [] : [
+      ...(platform.status === "unresolved" ? [platform.productName] : []),
+      ...includedServices.missing,
+      ...planHardware.missing,
+      ...processingDisclosure.missing,
+      ...built.softwareLicense.missing,
+      ...built.requiredTerminals.missing,
+    ];
+
+    return (
+      <div className={styles.docLayout}>
+        <div className={styles.buildCol}>
+          {types.length > 1 && (
+            <section>
+              <h3 className={styles.buildHead}>Plan</h3>
+              {planCards}
+            </section>
+          )}
+
+          {buildSlot}
+
+          <section>
+            <div className={styles.buildHeadRow}>
+              <h3 className={styles.buildHead}>{rated ? "Hardware" : "Products"}</h3>
+              {rated && built.softwareLicense.screens > 0 && (
+                <span className={styles.buildMeta}>
+                  {built.softwareLicense.screens} screens · {INCLUDED_SCREEN_COUNT} included
+                </span>
+              )}
+            </div>
+            {catalogLoading && <p className={styles.sectionNote}>Loading catalog…</p>}
+            {catalogError && (
+              <div className={styles.error}>
+                Product catalog unavailable ({catalogError}). You can still send the rate quote — add
+                hardware later.
+              </div>
+            )}
+            {groups.map(group => (
+              <div key={group.type} className={styles.group}>
+                <div className={styles.groupTitle}>{group.label}</div>
+                <div className={styles.tileGrid}>
+                  {group.products.map(p => productRow(p, false))}
+                </div>
+              </div>
+            ))}
+          </section>
+
+          {rated && (
+            <section>
+              <div className={styles.buildHeadRow}>
+                <h3 className={styles.buildHead}>Ordering channels</h3>
+                <span className={styles.buildMeta}>{orderPoints.total} ordering points</span>
+              </div>
+              <div className={styles.chipRow}>
+                {ORDER_POINT_CHANNELS.map(c => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={styles.chip}
+                    data-on={channels.includes(c.id)}
+                    aria-pressed={channels.includes(c.id)}
+                    title={c.note ?? undefined}
+                    onClick={() => toggleChannel(c.id)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              {breakdown.needsReview.map(r => (
+                <div key={r.name} className={styles.reviewNote}>
+                  <strong>Needs review:</strong> {r.name} ×{r.qty} — {r.reason} Counted as 0 for now.
+                </div>
+              ))}
+              {breakdown.unclassified.length > 0 && (
+                <div className={styles.reviewNote}>
+                  <strong>Unclassified hardware:</strong>{" "}
+                  {breakdown.unclassified.map(u => `${u.name} ×${u.qty}`).join(", ")} — not in the
+                  ordering-point rules, counted as 0. Check before sending.
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+
+        <aside className={styles.docCol}>
+          <div className={styles.doc}>
+            {documentHeader}
+
+            {onAdjustmentsChange && quoteLines.length > 0 && (
+              <div className={styles.docControls}>{globalControls}</div>
+            )}
+
+            {documentRate}
+
+            {recurringDoc.length > 0 && (
+              <div className={styles.docGroup}>
+                <div className={styles.docGroupHead}>
+                  <span>Monthly</span>
+                  <span>{fmt$(totals.monthlyEquivalent)}/mo</span>
+                </div>
+                {recurringDoc.map(docLine)}
+              </div>
+            )}
+
+            {(oneTimeDoc.length > 0 || adjustments[WIFI_PRODUCT_ID]?.removed) && (
+              <div className={styles.docGroup}>
+                <div className={styles.docGroupHead}>
+                  <span>One-time</span>
+                  <span>{fmt$(totals.oneTime)}</span>
+                </div>
+                {oneTimeDoc.map(docLine)}
+                {adjustments[WIFI_PRODUCT_ID]?.removed && (
+                  <div className={styles.docLine} data-pending="true">
+                    <div className={styles.docLineMain}>
+                      <div className={styles.docLineName}>AIO WiFi Network Package</div>
+                      <div className={styles.docWhy}>Removed from this quote</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.linkBtn}
+                      onClick={() => setAdjustment(WIFI_PRODUCT_ID, { removed: null })}
+                    >
+                      Add back
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isMarketingQuote(quoteType) && !websiteOn && (
+              <div className={styles.docLine} data-pending="true">
+                <div className={styles.docLineMain}>
+                  <div className={styles.docLineName}>{PROCESSING_DISCLOSURE_PRODUCT.name}</div>
+                  <div className={styles.docWhy}>Add the Website with online ordering and AIO processes the card payments it takes</div>
+                </div>
+              </div>
+            )}
+
+            {packages.applied.map(a => (
+              <p key={a.packageId} className={styles.docWhy}>
+                <strong>{a.name}{a.count > 1 && ` ×${a.count}`}</strong> covers {coveredSummary}.
+              </p>
+            ))}
+
+            {quoteLines.length === 0 && !catalogLoading && (
+              <p className={styles.sectionNote}>
+                {rated
+                  ? "Rate-only so far. Add hardware or an ordering channel and the plan fee, install and training appear here."
+                  : "Add a marketing product to start the quote."}
+              </p>
+            )}
+
+            {missingNames.length > 0 && (
+              <div className={styles.error}>
+                <strong>Can&apos;t price {missingNames.join(", ")}.</strong> Missing from the HubSpot
+                catalog (renamed, archived, or it didn&apos;t load) — this quote can&apos;t be sent until
+                that&apos;s fixed.
+              </div>
+            )}
+
+            {quoteLines.length > 0 && (
+              <div className={styles.docTotals}>
+                {packages.savings > 0 && (
+                  <div className={styles.totalRow}>
+                    <span className={styles.totalLabel}>Package savings</span>
+                    <span className={styles.totalValue} data-tone="discount">−{fmt$(packages.savings)}</span>
+                  </div>
+                )}
+                {totalDiscount > 0 && (
+                  <div className={styles.totalRow}>
+                    <span className={styles.totalLabel}>Discounts</span>
+                    <span className={styles.totalValue} data-tone="discount">−{fmt$(totalDiscount)}</span>
+                  </div>
+                )}
+                <div className={styles.docTotalGrid}>
+                  <div>
+                    <div className={styles.docTotalValue}>{fmt$(amountDueAtCheckout(quoteLines))}</div>
+                    <div className={styles.docTotalLabel}>Due at checkout</div>
+                  </div>
+                  {recurringDoc.length > 0 && (
+                    <div>
+                      <div className={styles.docTotalValue}>{fmt$(totals.monthlyEquivalent)}</div>
+                      <div className={styles.docTotalLabel}>Per month</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {documentFooter}
+          </div>
+        </aside>
+      </div>
+    );
+  }
 
   return (
     // One roomy column of decisions. The running total hangs OUTSIDE that
@@ -828,28 +1323,7 @@ export default function ProductConfigurator({
                 and whether there&apos;s a processing rate at all.
               </p>
             </div>
-            <div className={styles.typeRow}>
-              {types.map(t => {
-                const price = planPrice(t.id);
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={styles.typeCard}
-                    data-active={quoteType === t.id}
-                    onClick={() => changeType(t.id)}
-                  >
-                    <span className={styles.typeLabel}>{t.label}</span>
-                    <span className={styles.typeNote}>{t.note}</span>
-                    {/* Last, and pushed to the bottom edge, so the four prices
-                        sit on one line however long each note runs. Rendered
-                        only once the catalog has loaded — a plan whose product
-                        is missing shows no price rather than a $0 one. */}
-                    {price && <span className={styles.typePrice}>{price}</span>}
-                  </button>
-                );
-              })}
-            </div>
+            {planCards}
           </div>
         )}
 
@@ -871,62 +1345,7 @@ export default function ProductConfigurator({
                 </p>
               </div>
 
-              <div className={styles.globalGrid}>
-                <label className={styles.adjustField}>
-                  <span className={styles.adjustLabel}>Discount</span>
-                  <span className={styles.pctWrap}>
-                    <input
-                      type="number" min={0} max={100} step={1}
-                      className={styles.adjustInput}
-                      value={sharedDiscount.pct ?? ""}
-                      placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
-                      disabled={discountIds.length === 0}
-                      onChange={e => setGlobalDiscount(e.target.value)}
-                      aria-label="Discount percent for every line on the quote"
-                    />
-                    <span className={styles.pctSign}>%</span>
-                  </span>
-                </label>
-
-                <label className={styles.adjustField}>
-                  <span className={styles.adjustLabel}>Billing starts</span>
-                  <span className={styles.startWrap}>
-                    <select
-                      className={styles.adjustSelect}
-                      value={globalMode}
-                      disabled={recurringIds.length === 0}
-                      onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
-                      aria-label="When billing starts for every recurring line"
-                    >
-                      {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
-                      <option value="now">At checkout</option>
-                      <option value="date">On a date</option>
-                      <option value="days">After N days</option>
-                    </select>
-                    {sharedStart.start?.mode === "date" && (
-                      <input
-                        type="date"
-                        className={styles.adjustInput}
-                        value={sharedStart.start.date}
-                        onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
-                        aria-label="Billing start date for every recurring line"
-                      />
-                    )}
-                    {sharedStart.start?.mode === "days" && (
-                      <span className={styles.pctWrap}>
-                        <input
-                          type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
-                          className={styles.adjustInput}
-                          value={sharedStart.start.days}
-                          onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
-                          aria-label="Billing start delay in days for every recurring line"
-                        />
-                        <span className={styles.pctSign}>days</span>
-                      </span>
-                    )}
-                  </span>
-                </label>
-              </div>
+              {globalControls}
 
               <p className={styles.adjustNote}>
                 The discount skips install and training, which are already comped to $0, and is
@@ -966,88 +1385,8 @@ export default function ProductConfigurator({
 
           {groups.map(group => (
             <div key={group.type} className={styles.group}>
-              <div className={styles.groupTitle}>{group.label}</div>              {group.products.map(p => {
-                const n = qtyOf(p.hubspotProductId);
-                // Capped in the picker AND refused by buildQuote. The cap is
-                // the courtesy; the blocker is the authority, since the server
-                // re-derives from the picks and never trusts the browser.
-                const max = maxQtyFor(p.hubspotProductId);
-                const covered = coveredQty.get(p.hubspotProductId) ?? 0;
-                const planCovered = planCoveredQty.get(p.hubspotProductId) ?? 0;
-                return (
-                  <div key={p.hubspotProductId} className={styles.productRow} data-picked={n > 0}>
-                    <div className={styles.productMain}>
-                      <div className={styles.productName}>{p.name}</div>
-                      <div className={styles.productPrice}>{priceLabel(p.price, p.billingFrequency)}</div>
-                      {covered > 0 && (
-                        <div className={styles.coveredTag}>
-                          {covered === n ? "In the package" : `${covered} of ${n} in the package`}
-                        </div>
-                      )}
-                      {planCovered > 0 && (
-                        <div className={styles.coveredTag}>
-                          {planCovered === n
-                            ? "Included in the plan"
-                            : `${planCovered} of ${n} included in the plan`}
-                        </div>
-                      )}
-                      {p.hubspotProductId === AMS1_PRODUCT.hubspotProductId && built.requiredTerminals.qty > 0 && (
-                        <div className={styles.coveredTag}>
-                          {built.requiredTerminals.qty} added automatically with your POS{" "}
-                          {built.requiredTerminals.qty === 1 ? "unit" : "units"}
-                        </div>
-                      )}
-                    </div>
-                    <div className={styles.stepper}>
-                      <button
-                        type="button" className={styles.stepBtn} disabled={n === 0}
-                        onClick={() =>
-                          // Taking off a unit the kit is currently covering
-                          // gives hardware back — ask first, since it is
-                          // the easiest thing on this screen to do by accident.
-                          covered > n - 1
-                            ? setConfirmKitRemove(p.hubspotProductId)
-                            : setQtyFor(p.hubspotProductId, n - 1)
-                        }
-                        aria-label={`Remove one ${p.name}`}
-                      >−</button>
-                      <span className={styles.stepQty}>{n}</span>
-                      <button
-                        type="button" className={styles.stepBtn}
-                        disabled={max != null && n >= max}
-                        onClick={() => setQtyFor(p.hubspotProductId, n + 1)}
-                        aria-label={`Add one ${p.name}`}
-                      >+</button>
-                    </div>
-                    {confirmKitRemove === p.hubspotProductId && (
-                      <div className={styles.confirmBox} role="alertdialog" aria-label={`Remove ${p.name}?`}>
-                        <p>
-                          <strong>{p.name}</strong> comes free with the {packages.applied[0]?.name ?? "kit"}.
-                          Take it off and this merchant won&apos;t get it.
-                        </p>
-                        <div className={styles.confirmActions}>
-                          <button
-                            type="button"
-                            className={styles.linkBtn}
-                            onClick={() => {
-                              setQtyFor(p.hubspotProductId, n - 1);
-                              setConfirmKitRemove(null);
-                            }}
-                          >
-                            Remove it
-                          </button>
-                          <button type="button" className={styles.linkBtn} onClick={() => setConfirmKitRemove(null)}>
-                            Keep it
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {/* Wraps onto its own line under the row. Returns null
-                        until the product is actually on the quote. */}
-                    {lineAdjust(p.hubspotProductId)}
-                  </div>
-                );
-              })}
+              <div className={styles.groupTitle}>{group.label}</div>
+              {group.products.map(p => productRow(p, true))}
             </div>
           ))}
         </div>
@@ -1096,7 +1435,8 @@ export default function ProductConfigurator({
             aren't comped services a rep may decide to charge for.
 
             The payments row renders on EVERY marketing quote, not only the
-            ones that have a Website, and is greyed until one is picked: a rep
+            ones that have a Website, and is greyed until the Website is picked
+            with online ordering on: a rep
             is looking at this screen with the merchant, so "add a website and
             you can take card payments" is the conversation. The whole panel
             disappears on a POS quote, where none of this is a question. */}
@@ -1128,11 +1468,11 @@ export default function ProductConfigurator({
                 <div className={styles.productPrice}>
                   {websiteOn
                     ? "Card rates, stated on the quote — bills nothing by itself"
-                    : "Add the Website above and AIO processes the card payments it takes"}
+                    : "Add the Website above with online ordering and AIO processes the card payments it takes"}
                 </div>
               </div>
               <span className={styles.includedTag}>
-                {websiteOn ? "Included ×1" : "Needs the Website"}
+                {websiteOn ? "Included ×1" : "Needs online ordering"}
               </span>
             </div>
 
@@ -1244,7 +1584,7 @@ export default function ProductConfigurator({
                 {built.softwareLicense.lines[0]
                   ? `, ${built.softwareLicense.lines[0].qty} × ${fmt$(built.softwareLicense.lines[0].unitPrice)}/mo added`
                   : ", so no additional license is added"}
-                . A screen is a POS, KDS, kiosk, menu board or mPOS.
+                . A screen is a POS, KDS, kiosk, menu board, mPOS or tablet.
               </p>
             </div>
             {built.softwareLicense.lines.map(l => (

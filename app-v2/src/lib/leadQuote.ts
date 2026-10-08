@@ -57,8 +57,8 @@ const NO_FEE_OVERRIDES: FeeOverrides = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFe
 function quotableAnalysis(basis: QuoteBasis): StatementAnalysis | null {
   // A marketing quote has no processing behind it, so there is no rate to
   // derive and nothing to derive it from — its lines are the whole quote.
-  // UNLESS it carries the Website: that merchant sells through it, and the
-  // rate on those sales is as real as a POS merchant's.
+  // UNLESS its Website takes online orders: that merchant sells through it,
+  // and the rate on those sales is as real as a POS merchant's.
   if (!quoteHasProcessing(quoteTypeOf(basis.quoteType), basis.quoteLines)) return null;
   const analysis = basis.analysis ?? (basis.quoteConfig ? analysisFromQuoteConfig(basis.quoteConfig) : null);
   if (!analysis || !(analysis.totalVolume > 0)) return null;

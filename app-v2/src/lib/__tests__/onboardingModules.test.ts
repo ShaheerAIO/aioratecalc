@@ -352,19 +352,25 @@ describe("adyenModule (regression net)", () => {
     }
   });
 
-  it("APPEARS for a marketing merchant who bought the Website", () => {
+  it("APPEARS for a marketing merchant whose Website takes online orders", () => {
     // They take card payments on it, so they need the Adyen account. Reading
     // the plan alone here would bill them for processing they can never be
-    // onboarded for — the row would simply never exist.
-    const withSite = {
-      ...BASE_APP,
-      quoteType: "marketing_only" as const,
-      quoteLines: [{
-        hubspotProductId: "333275576048", name: "Website",
-        qty: 1, unitPrice: 50, billingFrequency: "monthly" as const, productType: "",
-      }],
+    // onboarded for — the row would simply never exist. Online ordering is
+    // saved as the $0 card-rate line.
+    const site = {
+      hubspotProductId: "333275576048", name: "Website",
+      qty: 1, unitPrice: 50, billingFrequency: "monthly" as const, productType: "",
     };
-    expect(getOnboardingModules(withSite).find(m => m.key === "adyen")).toBeTruthy();
+    const rateLine = {
+      hubspotProductId: "260559288040", name: "AIO Processing Two Tiered Rate",
+      qty: 1, unitPrice: 0, billingFrequency: "one_time" as const, productType: "AIO Payment Processing",
+    };
+    const ordering = { ...BASE_APP, quoteType: "marketing_only" as const, quoteLines: [rateLine, site] };
+    expect(getOnboardingModules(ordering).find(m => m.key === "adyen")).toBeTruthy();
+
+    // A plain website takes no payments.
+    const plain = { ...BASE_APP, quoteType: "marketing_only" as const, quoteLines: [site] };
+    expect(getOnboardingModules(plain).find(m => m.key === "adyen")).toBeUndefined();
   });
 
   it("still appears for a quote type that carries a processing rate", () => {

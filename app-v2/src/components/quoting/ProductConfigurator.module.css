@@ -186,7 +186,8 @@
 }
 
 .productRow > .adjustWrap,
-.includedRow > .adjustWrap { flex-basis: 100%; }
+.includedRow > .adjustWrap,
+.productRow > .fullRow { flex-basis: 100%; }
 
 .productRow[data-picked="true"] { background: oklch(69% 0.17 32 / 0.07); }
 
@@ -718,4 +719,235 @@
 .includedRow[data-pending="true"] {
   background: oklch(69% 0.17 32 / 0.03);
   opacity: 0.55;
+}
+
+/* ---------- Document layout ----------
+ * The decisions on the left, the quote the merchant will open on the right.
+ * Every derived line lives on the document as a tagged line, so there are no
+ * read-only panels. The document is sticky and scrolls on its own once it is
+ * taller than the viewport — it is the thing the rep keeps glancing at while
+ * they pick. Below 72rem the two stack, document last. */
+
+.docLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-xl);
+  align-items: start;
+}
+
+@media (min-width: 72rem) {
+  .docLayout { grid-template-columns: minmax(0, 1.25fr) minmax(24rem, 1fr); }
+
+  .docCol {
+    position: sticky;
+    top: var(--configurator-sticky-top, calc(var(--nav-offset) + var(--space-md)));
+    max-height: calc(100vh - var(--configurator-sticky-top, calc(var(--nav-offset) + var(--space-md))) - var(--space-md));
+    overflow-y: auto;
+    border-radius: var(--radius-lg);
+  }
+}
+
+.buildCol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+  min-width: 0;
+}
+
+.buildHeadRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.buildHead {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 0 0 var(--space-sm);
+}
+
+.buildMeta {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.docLayout .group { margin-top: var(--space-md); }
+.docLayout .groupTitle { border-bottom: none; margin-bottom: var(--space-xs); padding-bottom: 0; }
+
+.tileGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--space-xs);
+}
+
+.tileGrid .productRow {
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  padding: var(--space-xs) var(--space-sm);
+  gap: var(--space-sm);
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.tileGrid .productRow:has(.confirmBox) { flex-wrap: wrap; }
+.tileGrid .productRow[data-picked="true"] { border-color: var(--accent); }
+.tileGrid .productMain { flex: 1; }
+
+.chipRow { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+
+.chip {
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2xs) var(--space-md);
+  cursor: pointer;
+  transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out);
+}
+
+.chip[data-on="true"] {
+  border-color: var(--accent);
+  background: oklch(69% 0.17 32 / 0.1);
+  color: var(--accent-text);
+}
+
+.chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* The document reads as paper on the page, not as one more panel. */
+.doc {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-lg);
+}
+
+.docControls {
+  padding: var(--space-sm) 0;
+  margin-bottom: var(--space-sm);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.docControls .globalGrid { margin-bottom: 0; }
+
+.docGroup { margin-top: var(--space-md); }
+
+.docGroupHead {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  padding-bottom: var(--space-2xs);
+  border-bottom: 1px solid var(--rule);
+}
+
+.docLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  column-gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.docLine[data-pending="true"] { opacity: 0.55; }
+.docLine > .adjustWrap,
+.docLine > .confirmBox { flex-basis: 100%; }
+.docLine > .linkBtn { order: 3; }
+.docLine > .adjustWrap { margin-top: var(--space-3xs); }
+
+.docLineMain { flex: 1; min-width: 0; }
+
+.docLineName {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs);
+}
+
+.docQty { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.docTag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  background: oklch(69% 0.17 32 / 0.1);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-xs);
+}
+
+.docTag[data-tag="Comped"],
+.docTag[data-tag="In plan"],
+.docTag[data-tag="In package"] {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.docWhy {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  line-height: 1.45;
+  margin: var(--space-3xs) 0 0;
+}
+
+.docAmount {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.docAmount strong { color: var(--ink); }
+
+.docTotals {
+  margin-top: var(--space-lg);
+}
+
+.docTotalGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+  margin-top: var(--space-sm);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--rule);
+}
+
+.docTotalValue {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.docTotalLabel {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  margin-top: var(--space-3xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chip { transition-duration: 1ms; }
 }

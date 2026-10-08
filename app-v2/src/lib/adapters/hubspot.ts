@@ -832,6 +832,8 @@ export type HubspotContact = {
   phone: string | null;
   /** Which association label this contact was chosen on. Null when unlabelled. */
   associationLabel: string | null;
+  /** Where the contact was found. The dropdown groups on it: deal first, company underneath. */
+  source?: "deal" | "company";
 };
 
 // Best first. Anything not listed still qualifies (it's a real association),
@@ -906,19 +908,55 @@ const CONTACT_BATCH_LIMIT = 100;
  * are still returned with their id and label — partial data beats none.
  */
 export async function listCompanyContacts(companyId: string): Promise<HubspotContact[]> {
+  const contacts = await listAssociatedContacts("companies", companyId, () => headers());
+  return contacts.map(c => ({ ...c, source: "company" as const }));
+}
+
+/**
+ * Every contact associated with a DEAL, best association label first. These are
+ * the people the rep actually attached to THIS deal, so they lead the contact
+ * dropdown ahead of the company's wider roster. Same never-throws contract as
+ * `listCompanyContacts`. The association read goes out on the billing token
+ * because the general app has no deals scope at all.
+ */
+export async function listDealContacts(dealId: string): Promise<HubspotContact[]> {
+  const contacts = await listAssociatedContacts("deals", dealId, () => billingHeaders());
+  return contacts.map(c => ({ ...c, source: "deal" as const }));
+}
+
+/**
+ * Pure: the deal's contacts first, then the company's that aren't already
+ * there. A person on both is listed once, under the deal — that is the more
+ * specific of the two, and a duplicate row would offer the rep the same human
+ * twice. Deduped on the contact id.
+ */
+export function mergeDealAndCompanyContacts(
+  dealContacts: HubspotContact[],
+  companyContacts: HubspotContact[]
+): HubspotContact[] {
+  const onDeal = new Set(dealContacts.map(c => c.id));
+  return [...dealContacts, ...companyContacts.filter(c => !onDeal.has(c.id))];
+}
+
+async function listAssociatedContacts(
+  objectType: "companies" | "deals",
+  objectId: string,
+  authHeaders: () => Record<string, string>
+): Promise<HubspotContact[]> {
+  const tag = `list${objectType === "deals" ? "Deal" : "Company"}Contacts`;
   let ranked: Array<{ contactId: string; label: string | null }>;
   try {
-    const res = await fetch(`${BASE}/crm/v4/objects/companies/${companyId}/associations/contacts`, {
-      headers: headers(),
+    const res = await fetch(`${BASE}/crm/v4/objects/${objectType}/${objectId}/associations/contacts`, {
+      headers: authHeaders(),
     });
     if (!res.ok) {
-      console.warn("listCompanyContacts: association read failed", companyId, res.status);
+      console.warn(`${tag}: association read failed`, objectId, res.status);
       return [];
     }
     const data = await res.json() as { results?: CompanyAssociation[] };
     ranked = rankContactAssociations(data.results ?? []).slice(0, CONTACT_BATCH_LIMIT);
   } catch (err) {
-    console.warn("listCompanyContacts: association read errored", companyId, err);
+    console.warn(`${tag}: association read errored`, objectId, err);
     return [];
   }
   if (ranked.length === 0) return [];
@@ -939,13 +977,13 @@ export async function listCompanyContacts(companyId: string): Promise<HubspotCon
       }),
     });
     if (!res.ok) {
-      console.warn("listCompanyContacts: contact read failed", companyId, res.status);
+      console.warn(`${tag}: contact read failed`, objectId, res.status);
     } else {
       const data = await res.json() as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
       props = new Map((data.results ?? []).map(r => [String(r.id), r.properties ?? {}]));
     }
   } catch (err) {
-    console.warn("listCompanyContacts: contact read errored", companyId, err);
+    console.warn(`${tag}: contact read errored`, objectId, err);
   }
 
   return ranked.map(c => {

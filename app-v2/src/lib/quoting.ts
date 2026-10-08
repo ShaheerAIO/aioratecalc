@@ -116,6 +116,18 @@ export function carriesWebsite(items: Array<{ hubspotProductId: string }> | null
 }
 
 /**
+ * Whether the Website on a marketing quote takes online orders. Optional
+ * (Shaheer, 2026-10-08): a website can be just a website, and only one that
+ * takes orders puts card payments through AIO. Off unless the rep turns it on.
+ */
+export function websiteTakesOrders(
+  items: Array<{ hubspotProductId: string }> | null | undefined,
+  adjustments: QuoteAdjustments | null | undefined
+): boolean {
+  return carriesWebsite(items) && adjustments?.[WEBSITE_PRODUCT_ID]?.onlineOrdering === true;
+}
+
+/**
  * Does this quote carry a processing rate at all?
  *
  * Deliberately NOT the same question as `isProcessingQuote`, and the two are
@@ -125,18 +137,28 @@ export function carriesWebsite(items: Array<{ hubspotProductId: string }> | null
  * AIO processes money for this merchant, which decides whether there is a rate
  * to quote, a statement worth reading, and an Adyen account to open.
  *
- * They came apart on 2026-10-06: a marketing merchant who buys the Website
- * sells through it, so they process — but they still have nothing on site to
- * install, no ordering points to count and no POS hardware to pick. Answering
- * either question with the other's predicate is how a website merchant ends up
- * quoted a $999 onsite installation, or billed for card processing with no
- * Adyen account behind it.
+ * They came apart on 2026-10-06: a marketing merchant whose Website takes
+ * online orders sells through it, so they process — but they still have
+ * nothing on site to install, no ordering points to count and no POS hardware
+ * to pick. Answering either question with the other's predicate is how a
+ * website merchant ends up quoted a $999 onsite installation, or billed for
+ * card processing with no Adyen account behind it.
+ *
+ * Two inputs, because callers hold one of two things. The configurator hosts
+ * hold PICKS plus the rep's adjustments, where the online-ordering toggle
+ * lives. Everything downstream holds SAVED lines, where the toggle has become
+ * the card-rate disclosure line — present exactly when the Website takes
+ * orders, and on every website quote saved before the toggle existed, which
+ * is what keeps those rows processing.
  */
 export function quoteHasProcessing(
   quoteType: QuoteType,
-  items: Array<{ hubspotProductId: string }> | null | undefined
+  items: Array<{ hubspotProductId: string }> | null | undefined,
+  adjustments?: QuoteAdjustments | null
 ): boolean {
-  return isProcessingQuote(quoteType) || carriesWebsite(items);
+  if (isProcessingQuote(quoteType)) return true;
+  if ((items ?? []).some(i => i.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId)) return true;
+  return websiteTakesOrders(items, adjustments);
 }
 
 // ── The rep-facing picker ───────────────────────────────────────────────────
@@ -324,6 +346,10 @@ export const SCREEN_PRODUCT_IDS = [
   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
   "223511653103", // Menu Board Computer
+  // Both tablets run an AIO app, so each one takes a license like any other
+  // screen (Shaheer, 2026-10-08). They still count 0 ordering points.
+  "276751313619", // Orders Hub Tablet
+  "276754193118", // Clock in Tablet
 ] as const;
 
 /** $19/mo in the catalog, derived at one per screen past INCLUDED_SCREEN_COUNT. */
@@ -766,7 +792,8 @@ export const PROCESSING_DISCLOSURE_PRODUCT = {
 } as const;
 
 /**
- * The rate-disclosure line, on a marketing quote that sells through a website.
+ * The rate-disclosure line, on a marketing quote whose website takes online
+ * orders. A website without online ordering takes no payments, so it gets none.
  *
  * ONLY there. A POS quote processes too and has never carried this line, and
  * adding it would rewrite the line items on every quote AIO sends — onto
@@ -781,9 +808,10 @@ export const PROCESSING_DISCLOSURE_PRODUCT = {
 export function resolveProcessingDisclosure(
   quoteType: QuoteType,
   pickedLines: QuoteLine[],
-  catalog: CatalogProduct[]
+  catalog: CatalogProduct[],
+  adjustments: QuoteAdjustments = {}
 ): IncludedServicesResult {
-  if (!isMarketingQuote(quoteType) || !carriesWebsite(pickedLines)) return { lines: [], missing: [] };
+  if (!isMarketingQuote(quoteType) || !websiteTakesOrders(pickedLines, adjustments)) return { lines: [], missing: [] };
 
   const product =
     catalog.find(p => p.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) ??
@@ -1515,6 +1543,12 @@ export function adjustmentsFromQuoteLines(
       out[WIFI_PRODUCT_ID] = { ...out[WIFI_PRODUCT_ID], removed: true };
     }
   }
+
+  // The online-ordering toggle is saved as the disclosure line it produces.
+  // Without this, reopening a website quote that takes orders turns it off.
+  if ((lines ?? []).some(l => l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId)) {
+    out[WEBSITE_PRODUCT_ID] = { ...out[WEBSITE_PRODUCT_ID], onlineOrdering: true };
+  }
   return out;
 }
 
@@ -1548,7 +1582,7 @@ export type BuiltQuote = {
   requiredTerminals: RequiredTerminalsResult;
   /** Additional software licenses past the four screens the plan includes. */
   softwareLicense: SoftwareLicenseResult;
-  /** The $0 card-rate disclosure, on a marketing quote that sells through a website. */
+  /** The $0 card-rate disclosure, on a marketing quote whose website takes online orders. */
   processingDisclosure: IncludedServicesResult;
   /** The $0.50 checkout charge, present only when nothing else is due at checkout. Never editable. */
   preAuth: IncludedServicesResult;
@@ -1610,7 +1644,7 @@ export function buildQuote(
   const requiredTerminals = resolveRequiredAms1(quoteType, picks, catalog);
   const softwareLicense = resolveSoftwareLicense(quoteType, picks, catalog);
   const planHardware = resolveMarketingHardware(quoteType, catalog);
-  const processingDisclosure = resolveProcessingDisclosure(quoteType, picks, catalog);
+  const processingDisclosure = resolveProcessingDisclosure(quoteType, picks, catalog, adjustments);
 
   // The 2-year term's included kiosk, taken out of what the rep picked before
   // anything else runs: the comp is a line SPLIT, so it has to happen while
@@ -1698,7 +1732,7 @@ export function buildQuote(
   }
   for (const name of processingDisclosure.missing) {
     blockers.push(
-      `This quote sells through a website, so it has to state the card rates — but "${name}" ` +
+      `This quote's website takes online orders, so it has to state the card rates — but "${name}" ` +
       `isn't in the HubSpot catalog (renamed, archived, or the catalog didn't load). The merchant ` +
       `would be signed up for card processing with no rates written on the document.`
     );

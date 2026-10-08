@@ -1,0 +1,140 @@
+/* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
+
+/* One surface, a row per topic. Wide, each row's name sits in a gutter on the
+   left so the fields line up in a single column of grids; narrow, the name
+   goes above and the 12-column grid folds to 6. */
+.form {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm) var(--space-lg) var(--space-md);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin: 0;
+  padding: var(--space-xs) 0;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+.group {
+  margin: 0;
+  padding: var(--space-md) 0;
+  border-top: 1px solid var(--rule);
+  min-width: 0;
+}
+
+.groupLabel {
+  margin: 0 0 var(--space-xs);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-sm) var(--space-md);
+}
+
+.grid + .grid, .check + .grid { margin-top: var(--space-sm); }
+
+.field { display: flex; flex-direction: column; min-width: 0; }
+
+.field[data-span="1"]  { grid-column: span 1; }
+.field[data-span="2"]  { grid-column: span 2; }
+.field[data-span="3"]  { grid-column: span 3; }
+.field[data-span="4"]  { grid-column: span 4; }
+.field[data-span="6"]  { grid-column: span 6; }
+.field[data-span="12"] { grid-column: 1 / -1; }
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3xs);
+  margin-bottom: var(--space-3xs);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 150ms var(--ease-out);
+}
+
+.input::placeholder { color: var(--ink-3); opacity: 0.7; }
+
+.input:focus-visible {
+  border-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.textarea { resize: vertical; min-height: 3.5rem; line-height: 1.45; }
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.check input { accent-color: var(--accent); margin: 0; }
+
+@media (min-width: 64rem) {
+  .group {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    column-gap: var(--space-lg);
+    align-items: start;
+  }
+
+  .groupLabel { grid-column: 1; grid-row: 1 / span 3; margin: 0; padding-top: 1.45rem; }
+  .group > :not(.groupLabel) { grid-column: 2; }
+  .check { justify-self: start; }
+}
+
+@media (max-width: 48rem) {
+  .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .field[data-span="1"], .field[data-span="2"] { grid-column: span 2; }
+  .field[data-span="3"], .field[data-span="4"] { grid-column: span 3; }
+  .field[data-span="6"] { grid-column: 1 / -1; }
+}
+
+@media (max-width: 32rem) {
+  .field[data-span] { grid-column: 1 / -1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input { transition-duration: 1ms; }
+}

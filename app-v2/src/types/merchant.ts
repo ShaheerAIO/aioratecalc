@@ -345,6 +345,12 @@ export type LineAdjustment = {
    * Absent means the line stays, which is the default.
    */
   removed?: boolean | null;
+  /**
+   * The Website takes online orders, so AIO processes the card payments it
+   * takes. Only the Website line on a marketing quote honors this. Absent
+   * means a plain website with no payments, which is the default.
+   */
+  onlineOrdering?: boolean | null;
 };
 
 /** The two things a rep can set on one unit of a multi-unit line. */
@@ -549,11 +555,44 @@ export type BusinessInfo = {
   city: string;
   state: string;
   zip: string;
+  /**
+   * The DBA address — where the business actually operates (the location),
+   * as opposed to `address`/`city`/`state`/`zip` above, which are the legal
+   * (registered) address Adyen/Check/Foodbuy want. Often the same, which is why
+   * these are all optional: a blank DBA address means "same as the legal one",
+   * and every consumer falls back (see `locationAddress`). Optional also means
+   * rows saved before this existed still parse — `business` is a jsonb column,
+   * so there is no migration.
+   */
+  dbaAddress?: string;
+  dbaCity?: string;
+  dbaState?: string;
+  dbaZip?: string;
   phone: string;
   website: string;
   yearsInBusiness: string;
   annualRevenue: string;
 };
+
+/**
+ * The address the business OPERATES from: the DBA address when one was given,
+ * otherwise the legal address. Per-consumer fallback is on the street line —
+ * a half-filled DBA address (city but no street) is not a location, so it
+ * doesn't override anything.
+ */
+export function locationAddress(
+  biz: Pick<BusinessInfo, "address" | "city" | "state" | "zip"> & Partial<Pick<BusinessInfo, "dbaAddress" | "dbaCity" | "dbaState" | "dbaZip">>
+): { address: string; city: string; state: string; zip: string } {
+  if ((biz.dbaAddress ?? "").trim()) {
+    return {
+      address: biz.dbaAddress!.trim(),
+      city: (biz.dbaCity ?? "").trim(),
+      state: (biz.dbaState ?? "").trim(),
+      zip: (biz.dbaZip ?? "").trim(),
+    };
+  }
+  return { address: biz.address ?? "", city: biz.city ?? "", state: biz.state ?? "", zip: biz.zip ?? "" };
+}
 
 export type OwnerContact = {
   firstName: string;

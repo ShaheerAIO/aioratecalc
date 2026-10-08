@@ -48,6 +48,8 @@ export default function ReviewSection({
   onBusinessChange, onOwnerChange, onProcessingChange,
   contacts, selectedContactId, onContactSelect,
 }: Props) {
+  const dealContacts = contacts.filter(c => c.source === "deal");
+  const companyContacts = contacts.filter(c => c.source !== "deal");
   const field = (
     path: string,
     labelText: string,
@@ -98,7 +100,7 @@ export default function ReviewSection({
           </select>
         </div>
         <div className={styles.row}>
-          {field("business.address", "Street Address", business.address, v => onBusinessChange({ ...business, address: v }))}
+          {field("business.address", "Legal Street Address", business.address, v => onBusinessChange({ ...business, address: v }))}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           {field("business.city", "City", business.city, v => onBusinessChange({ ...business, city: v }))}
@@ -107,6 +109,18 @@ export default function ReviewSection({
         <div className={`${styles.grid2} ${styles.row}`}>
           {field("business.zip", "ZIP", business.zip, v => onBusinessChange({ ...business, zip: v }), { placeholder: "90210" })}
           {field("business.phone", "Business Phone", business.phone, v => onBusinessChange({ ...business, phone: v }), { placeholder: "555-000-0000" })}
+        </div>
+        {/* The address above is the LEGAL one. This is where the business actually
+            operates; blank means "same as the legal address". */}
+        <div className={styles.row}>
+          {field("business.dbaAddress", "DBA Street Address (if different from above)", business.dbaAddress ?? "", v => onBusinessChange({ ...business, dbaAddress: v }))}
+        </div>
+        <div className={`${styles.grid2} ${styles.row}`}>
+          {field("business.dbaCity", "DBA City", business.dbaCity ?? "", v => onBusinessChange({ ...business, dbaCity: v }))}
+          {field("business.dbaState", "DBA State", business.dbaState ?? "", v => onBusinessChange({ ...business, dbaState: v }), { placeholder: "CA" })}
+        </div>
+        <div className={`${styles.grid2} ${styles.row}`}>
+          {field("business.dbaZip", "DBA ZIP", business.dbaZip ?? "", v => onBusinessChange({ ...business, dbaZip: v }), { placeholder: "90210" })}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           {field("business.website", "Website", business.website, v => onBusinessChange({ ...business, website: v }), { placeholder: "https://" })}
@@ -131,9 +145,24 @@ export default function ReviewSection({
               <option value="">
                 {contacts.length > 1 ? "Select a contact…" : "Enter manually"}
               </option>
-              {contacts.map(c => (
-                <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>
-              ))}
+              {dealContacts.length > 0 && companyContacts.length > 0 ? (
+                <>
+                  <optgroup label="On this deal">
+                    {dealContacts.map(c => (
+                      <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="On the company">
+                    {companyContacts.map(c => (
+                      <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>
+                    ))}
+                  </optgroup>
+                </>
+              ) : (
+                contacts.map(c => (
+                  <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>
+                ))
+              )}
             </select>
           </div>
         )}
@@ -153,7 +182,7 @@ export default function ReviewSection({
       {showProcessing && (
         <div className={styles.panel}>
           <h2 className={styles.sectionTitle}>Processing Details</h2>
-          <div className={styles.grid2}>
+          <div className={`${styles.grid2} ${styles.row}`}>
             {field("processing.monthlyVolume", "Monthly Volume ($)", processing.monthlyVolume, v => onProcessingChange({ ...processing, monthlyVolume: v }), { placeholder: "100000", type: "number" })}
             {field("processing.avgTicket", "Average Ticket ($)", processing.avgTicket, v => onProcessingChange({ ...processing, avgTicket: v }), { placeholder: "45", type: "number" })}
           </div>

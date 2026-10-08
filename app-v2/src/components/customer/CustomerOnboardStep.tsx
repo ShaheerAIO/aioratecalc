@@ -250,7 +250,7 @@ export default function CustomerOnboardStep({ app }: Props) {
           </select>
         </div>
         <div className={styles.row}>
-          {input("Street Address", "business.address", biz.address || "", setBizF("address") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("Legal Street Address", "business.address", biz.address || "", setBizF("address") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           {input("City", "business.city", biz.city || "", setBizF("city") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
@@ -259,6 +259,16 @@ export default function CustomerOnboardStep({ app }: Props) {
         <div className={`${styles.grid2} ${styles.row}`}>
           {input("ZIP", "business.zip", biz.zip || "", setBizF("zip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
           {input("Business Phone", "business.phone", biz.phone || "", setBizF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+        </div>
+        <div className={styles.row}>
+          {input("DBA Street Address (if different from above)", "business.dbaAddress", biz.dbaAddress || "", setBizF("dbaAddress") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+        </div>
+        <div className={`${styles.grid2} ${styles.row}`}>
+          {input("DBA City", "business.dbaCity", biz.dbaCity || "", setBizF("dbaCity") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("DBA State", "business.dbaState", biz.dbaState || "", setBizF("dbaState") as (e: React.ChangeEvent<HTMLInputElement>) => void, "CA")}
+        </div>
+        <div className={`${styles.grid2} ${styles.row}`}>
+          {input("DBA ZIP", "business.dbaZip", biz.dbaZip || "", setBizF("dbaZip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           {input("Website", "business.website", biz.website || "", setBizF("website") as (e: React.ChangeEvent<HTMLInputElement>) => void, "https://")}

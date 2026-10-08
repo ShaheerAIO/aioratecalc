@@ -72,10 +72,10 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   // Whether this quote carries a RATE — which on a marketing plan depends on
-  // whether the Website is on it, not on the plan alone. Everything below
-  // hangs off this: the margin control, the rate preview, and whether an empty
-  // picker is a legitimate quote.
-  const rated = quoteHasProcessing(quoteType, picks);
+  // whether its Website takes online orders, not on the plan alone. Everything
+  // below hangs off this: the margin control, the rate preview, and whether an
+  // empty picker is a legitimate quote.
+  const rated = quoteHasProcessing(quoteType, picks, adjustments);
 
   // Whether there's ANY volume basis to preview or floor-check a margin
   // against — a statement, or a rep-entered volume/ticket config. Neither

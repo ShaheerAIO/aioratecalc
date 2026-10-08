@@ -441,10 +441,15 @@ describe("buildCustomerSafeQuote — marketing with a website", () => {
     hubspotProductId: "332609247965", name: "AIO Marketing Platform",
     qty: 1, unitPrice: 199, billingFrequency: "monthly" as const, productType: "Software",
   };
+  // Online ordering on the Website is saved as this $0 card-rate line.
+  const RATE_LINE = {
+    hubspotProductId: "260559288040", name: "AIO Processing Two Tiered Rate",
+    qty: 1, unitPrice: 0, billingFrequency: "one_time" as const, productType: "AIO Payment Processing",
+  };
   const basis = {
     quoteType: "marketing_only" as const,
     analysis: null, quoteConfig: null, quoteRates: null, targetMargin: null, pricingModel: null,
-    quoteLines: [PLATFORM, WEBSITE],
+    quoteLines: [PLATFORM, RATE_LINE, WEBSITE],
     orderPoints: null,
   };
 
@@ -454,7 +459,7 @@ describe("buildCustomerSafeQuote — marketing with a website", () => {
     expect(quote.monthlyVolume).toBe(CONFIG.monthlyVolume);
     expect(quote.effectiveRate).toBeGreaterThan(0);
     // And the lines are still there — this merchant buys both.
-    expect(quote.lines).toEqual([PLATFORM, WEBSITE]);
+    expect(quote.lines).toEqual([PLATFORM, RATE_LINE, WEBSITE]);
     expect(quote.lineTotals!.recurring).toEqual([{ frequency: "monthly", amount: 249 }]);
   });
 
@@ -474,7 +479,15 @@ describe("buildCustomerSafeQuote — marketing with a website", () => {
     // they're buying beats showing nothing while the rep chases a statement.
     const quote = buildCustomerSafeQuote(basis)!;
     expect(quote.basis).toBe("products");
-    expect(quote.lines).toEqual([PLATFORM, WEBSITE]);
+    expect(quote.lines).toEqual([PLATFORM, RATE_LINE, WEBSITE]);
+    expect(quote).not.toHaveProperty("effectiveRate");
+  });
+
+  it("quotes no rate for a website without online ordering, whatever the volume", () => {
+    const quote = buildCustomerSafeQuote({
+      ...basis, quoteLines: [PLATFORM, WEBSITE], quoteConfig: CONFIG, targetMargin: 0.008, pricingModel: "2-tier",
+    })!;
+    expect(quote.basis).toBe("products");
     expect(quote).not.toHaveProperty("effectiveRate");
   });
 

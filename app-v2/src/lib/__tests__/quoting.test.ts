@@ -754,22 +754,28 @@ describe("marketing plans", () => {
 });
 
 // ── The website unlock ──────────────────────────────────────────────────────
-// A marketing merchant who buys the $50 Website sells through it, so AIO
-// processes those card payments. That makes them a PROCESSING merchant without
-// making them a POS merchant, and these tests exist to keep those two apart.
+// A marketing merchant whose $50 Website takes online orders sells through it,
+// so AIO processes those card payments. That makes them a PROCESSING merchant
+// without making them a POS merchant, and these tests exist to keep those two
+// apart. Online ordering is optional: a plain website takes no payments.
 describe("website on a marketing quote", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
   const RATE_LINE = PROCESSING_DISCLOSURE_PRODUCT.name;
+  const SITE_ID = find("Website").hubspotProductId;
+  const ORDERING = { [SITE_ID]: { onlineOrdering: true } };
 
   it("separates 'is this a POS deal' from 'does AIO touch their money'", () => {
-    const withSite = [{ hubspotProductId: find("Website").hubspotProductId }];
+    const withSite = [{ hubspotProductId: SITE_ID }];
 
     for (const plan of ["marketing_only", "marketing_term"] as const) {
       // The plan alone: no processing.
       expect(isProcessingQuote(plan)).toBe(false);
       expect(quoteHasProcessing(plan, [])).toBe(false);
-      // Add the website and they process — but it is still not a POS deal.
-      expect(quoteHasProcessing(plan, withSite)).toBe(true);
+      // A plain website takes no payments.
+      expect(quoteHasProcessing(plan, withSite)).toBe(false);
+      expect(quoteHasProcessing(plan, withSite, {})).toBe(false);
+      // With online ordering they process — but it is still not a POS deal.
+      expect(quoteHasProcessing(plan, withSite, ORDERING)).toBe(true);
       expect(isProcessingQuote(plan)).toBe(false);
     }
 
@@ -777,8 +783,28 @@ describe("website on a marketing quote", () => {
     expect(quoteHasProcessing("all_in_one", [])).toBe(true);
   });
 
-  it("states the card rates on the quote once the website is on it", () => {
+  it("reads processing off SAVED lines by the rate line, which legacy website quotes all carry", () => {
+    const saved = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING).quoteLines;
+    expect(quoteHasProcessing("marketing_only", saved)).toBe(true);
+    const plain = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG).quoteLines;
+    expect(quoteHasProcessing("marketing_only", plain)).toBe(false);
+  });
+
+  it("adds no rate line for a website without online ordering", () => {
     const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG);
+    expect(built.blockers).toEqual([]);
+    expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
+  });
+
+  it("keeps online ordering on when a saved quote is reopened", () => {
+    const saved = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING).quoteLines;
+    expect(adjustmentsFromQuoteLines(saved, "marketing_only")[SITE_ID]).toEqual({ onlineOrdering: true });
+    const plain = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG).quoteLines;
+    expect(adjustmentsFromQuoteLines(plain, "marketing_only")[SITE_ID]).toBeUndefined();
+  });
+
+  it("states the card rates on the quote once online ordering is on", () => {
+    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING);
     expect(built.blockers).toEqual([]);
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "AIO Marketing Platform",
@@ -800,7 +826,7 @@ describe("website on a marketing quote", () => {
     // Every POS quote AIO has ever sent carries no rate line, and those
     // documents can't be amended once published. The marketing case is
     // different because nothing else on that quote says AIO touches the money.
-    const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Website", 1]]), [], CATALOG);
+    const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Website", 1]]), [], CATALOG, ORDERING);
     expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
   });
 
@@ -817,13 +843,13 @@ describe("website on a marketing quote", () => {
 
   it("blocks the quote when the rate product is missing from the catalog", () => {
     const stripped = CATALOG.filter(c => c.name !== RATE_LINE);
-    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], stripped);
+    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], stripped, ORDERING);
     expect(built.blockers).toHaveLength(1);
     expect(built.blockers[0]).toContain("state the card rates");
   });
 
   it("never hands the rate line back as a pick — no rep may put it on by hand", () => {
-    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG);
+    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING);
     expect(isPickable(find(RATE_LINE))).toBe(false);
     expect(picksFromQuoteLines(built.quoteLines, "marketing_only"))
       .toEqual([{ hubspotProductId: find("Website").hubspotProductId, qty: 1 }]);
@@ -886,6 +912,19 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     const built = buildQuote("order_pay_only", picked([["Kiosk 27\" + Payment Terminal (AMS1) and Mount", 2]]), [], CATALOG);
     expect(ams1Qty(built.quoteLines)).toBe(0);
     expect(built.requiredTerminals.qty).toBe(0);
+  });
+
+  it("counts both tablets as screens toward the software license", () => {
+    const built = buildQuote(
+      "all_in_one",
+      picked([["POS Unit", 2], ["Orders Hub Tablet", 2], ["Clock in Tablet", 1]]),
+      [],
+      CATALOG
+    );
+    expect(built.softwareLicense.screens).toBe(5);
+    expect(built.softwareLicense.lines.map(l => [l.name, l.qty])).toEqual([["Additional Software License", 1]]);
+    // Still not ordering points.
+    expect(built.orderPoints.total).toBe(2);
   });
 
   it("adds a software license only past four screens", () => {

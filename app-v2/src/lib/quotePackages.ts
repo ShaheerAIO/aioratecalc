@@ -217,6 +217,25 @@ export const PACKAGES: QuotePackage[] = [
   },
 ];
 
+// ── Wording ─────────────────────────────────────────────────────────────────
+
+/**
+ * "In the package" / "1 of 3 in the package" — the tag on a picker row.
+ *
+ * `onQuote` is how many units of the product are on the QUOTE, not how many the
+ * rep picked. They differ for any product that is also derived: each POS brings
+ * its own AMS1 (`resolveRequiredAms1`), so a rep who picked a POS and no
+ * terminal has AMS1 covered 1× on a quote carrying 1× while the row's stepper
+ * reads 0 — which printed "1 of 0 in the package". Callers pass the quote's
+ * figure; this also clamps, so a mismatch can never print more than the whole.
+ * Returns null when nothing is covered.
+ */
+export function coverageLabel(covered: number, onQuote: number, where: string): string | null {
+  if (!(covered > 0)) return null;
+  if (covered >= onQuote) return `In ${where}`;
+  return `${covered} of ${onQuote} in ${where}`;
+}
+
 // ── Preselecting the kit ────────────────────────────────────────────────────
 
 /**

@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import {
   describeBillingStart, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
-import { fmt$, fmt$0, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
+import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafeQuote, QuoteLine } from "@/types/merchant";
 import styles from "./QuoteSummary.module.css";
 
@@ -126,23 +126,32 @@ export default function QuoteSummary({ quote, basisAction }: Props) {
                       {isDiscounted(l) && (
                         <span className={styles.lineStrike}>{fmt$(lineListAmount(l))}</span>
                       )}
-                      {fmt$(lineTotal(l))}/{fmtFrequency(l.billingFrequency)}
+                      {fmt$(lineTotal(l))}/{fmtCycle(l.billingFrequency)}
                     </div>
-                    <div className={styles.linePriceAlt}>
-                      {isDiscounted(l) && <span className={styles.lineSaved}>{l.discountPercent}% off · </span>}
-                      ~{fmt$(monthlyEquivalent(lineTotal(l), l.billingFrequency))}/mo
-                    </div>
+                    {/* A monthly line IS its own monthly figure, so the "~$X/mo"
+                        restatement only appears for a line on another cycle. */}
+                    {(isDiscounted(l) || l.billingFrequency !== "monthly") && (
+                      <div className={styles.linePriceAlt}>
+                        {isDiscounted(l) && <span className={styles.lineSaved}>{l.discountPercent}% off</span>}
+                        {isDiscounted(l) && l.billingFrequency !== "monthly" && " · "}
+                        {l.billingFrequency !== "monthly" &&
+                          `~${fmt$(monthlyEquivalent(lineTotal(l), l.billingFrequency))}/mo`}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
-              {quote.lineTotals.recurring.map(r => (
-                <div key={r.frequency} className={styles.lineTotalRow}>
-                  <span>Total per {fmtFrequency(r.frequency)}</span>
-                  <span className={styles.lineTotalValue}>{fmt$(r.amount)}/{fmtFrequency(r.frequency)}</span>
-                </div>
-              ))}
+              {/* When everything recurring is monthly, the per-cycle total and
+                  the monthly total are the same number — show it once. */}
+              {!quote.lineTotals.recurring.every(r => r.frequency === "monthly") &&
+                quote.lineTotals.recurring.map(r => (
+                  <div key={r.frequency} className={styles.lineTotalRow}>
+                    <span>Total per {fmtFrequency(r.frequency)}</span>
+                    <span className={styles.lineTotalValue}>{fmt$(r.amount)}/{fmtCycle(r.frequency)}</span>
+                  </div>
+                ))}
               <div className={styles.lineTotalRow} data-emphasis="true">
-                <span>Monthly equivalent</span>
+                <span>{quote.lineTotals.recurring.every(r => r.frequency === "monthly") ? "Monthly total" : "Monthly equivalent"}</span>
                 <span className={styles.lineTotalValue}>{fmt$(quote.lineTotals.monthlyEquivalent)}/mo</span>
               </div>
             </section>

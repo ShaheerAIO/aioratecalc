@@ -50,6 +50,25 @@ const FREQUENCY_LABELS: Record<BillingFrequency, string> = {
 
 export const fmtFrequency = (frequency: BillingFrequency) => FREQUENCY_LABELS[frequency];
 
+/**
+ * A recurring amount as the rep and the customer read it: MONTHLY first.
+ * Everything AIO sells now bills monthly (the weekly platform SKUs are retired),
+ * so a monthly line is just "$399.00/mo" — no per-cycle figure beside it, and
+ * no "~" monthly restatement of itself. A line on any other cycle (a legacy
+ * weekly row, say) still leads with its monthly equivalent but names the cycle
+ * it ACTUALLY bills on in brackets, so the figure is never mistaken for what
+ * HubSpot will charge. Presentation only: stored amounts and billing cycles are
+ * never changed here.
+ */
+export const fmtRecurring = (amount: number, frequency: BillingFrequency): string =>
+  frequency === "monthly"
+    ? `${fmt$(amount)}/mo`
+    : `~${fmt$(monthlyEquivalent(amount, frequency))}/mo (${fmt$(amount)}/${FREQUENCY_LABELS[frequency]})`;
+
+/** The short cycle for a "$X/…" suffix: "mo" for monthly, the full label otherwise. */
+export const fmtCycle = (frequency: BillingFrequency): string =>
+  frequency === "monthly" ? "mo" : FREQUENCY_LABELS[frequency];
+
 // Adyen requires the 2-letter USPS code for US stateOrProvince and 422s on the
 // full name — merchants routinely type "California", and HubSpot Company
 // records hold free text too ("Ca", "CA "), so normalize best-effort. Lives

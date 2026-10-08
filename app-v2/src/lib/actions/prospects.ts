@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import {
-  listCompanyContacts, getCompanyProfile, getDealById,
+  listCompanyContacts, listDealContacts, mergeDealAndCompanyContacts, getCompanyProfile, getDealById,
   type HubspotCompanyProfile, type HubspotContact, type HubspotDeal, type TenantCompany,
 } from "@/lib/adapters/hubspot";
 import { buildProspectPrefillForContact, initialContactChoice, type ProspectPrefill } from "@/lib/hubspotPrefill";
@@ -120,7 +120,7 @@ export type ProspectFromDeal =
       ok: true;
       deal: HubspotDeal;
       company: HubspotCompanyProfile;
-      /** Every contact on the company, best association label first. The rep picks one. */
+      /** The deal's contacts first, then the company's, each best association label first. The rep picks one. */
       contacts: HubspotContact[];
       /** Preselected only when the company has exactly one contact. */
       selectedContactId: string | null;
@@ -174,7 +174,12 @@ export async function openProspectFromDealAction(dealIdOrUrl: string): Promise<P
         message: `Deal '${deal.name}' points at HubSpot company ${companyId}, which couldn't be read back (deleted, merged, or out of this token's reach).`,
       };
     }
-    const contacts = await listCompanyContacts(companyId);
+    // The deal's own contacts lead; the company's follow underneath.
+    const [dealContacts, companyContacts] = await Promise.all([
+      listDealContacts(resolution.deal.id),
+      listCompanyContacts(companyId),
+    ]);
+    const contacts = mergeDealAndCompanyContacts(dealContacts, companyContacts);
     const selectedContactId = initialContactChoice(contacts);
     return {
       ok: true,
@@ -417,11 +422,11 @@ export async function createProspectAction(input: {
   // target on such a row would render as a rate we never quoted. The rep form
   // hides those inputs; this is the enforcement.
   //
-  // Read off the PICKS, not the plan alone. A marketing quote carrying the
-  // Website sells through it, so its rate half is real and must be kept — the
-  // rep form shows those inputs for exactly the same reason.
+  // Read off the PICKS, not the plan alone. A marketing quote whose Website
+  // takes online orders sells through it, so its rate half is real and must be
+  // kept — the rep form shows those inputs for exactly the same reason.
   const quoteType: QuoteType = quoteTypeOf(input.quoteType);
-  const rated = quoteHasProcessing(quoteType, input.picks ?? []);
+  const rated = quoteHasProcessing(quoteType, input.picks ?? [], input.adjustments);
 
   const quoteConfig =
     rated && input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0

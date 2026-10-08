@@ -7,7 +7,7 @@ import ProductConfigurator, {
   type ConfiguredQuote,
   type ProductPick,
 } from "@/components/quoting/ProductConfigurator";
-import ReviewSection from "@/components/rep/ReviewSection";
+import MerchantDetailsForm from "@/components/rep/MerchantDetailsForm";
 import RateFields from "@/components/rep/RateFields";
 import {
   mergeChannels,
@@ -17,12 +17,16 @@ import {
 } from "@/lib/prefillMerge";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
+import { fmt$ } from "@/lib/utils";
 import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
-import { buildProspectPrefillForContact } from "@/lib/hubspotPrefill";
+import { buildProspectPrefillForContact, contactOptionLabel } from "@/lib/hubspotPrefill";
 import type { HubspotCompanyProfile, HubspotContact, HubspotDeal } from "@/lib/adapters/hubspot";
 import styles from "./prospects-new.module.css";
+
+// A stored fraction as the percent a rep types: 0.029 → "2.9".
+const pct = (f: number) => (f * 100).toFixed(2).replace(/\.?0+$/, "");
 
 const BLANK_BUSINESS: BusinessInfo = {
   legalName: "", dba: "", bizType: "llc", address: "", city: "", state: "", zip: "",
@@ -42,12 +46,13 @@ function NewProspectFlow() {
   // this still carries ?hubspotCompanyId= — harmless and ignored.
   const hubspotDealId = searchParams.get("hubspotDealId");
 
-  const [avgTicket, setAvgTicket]       = useState("");
-  const [monthlyVolume, setMonthlyVolume] = useState("");
   const [quoteRates, setQuoteRates] = useState<QuoteRates>(DEFAULT_QUOTE_RATES);
   const [pricingModel, setPricingModel] = useState<PricingModel>("2-tier");
-  // Shoulder-surfing guard: the margin target is AIO-internal, so it stays shut
-  // until the rep opens it. The default above still applies while collapsed.
+  // The four lanes collapse to one "x% + $y on every card" line until the rep
+  // asks for them, or until they stop agreeing — then the grid stays open so a
+  // lane that differs is never hidden behind a single figure.
+  const [perCardOpen, setPerCardOpen]   = useState(false);
+  const [detailsOpen, setDetailsOpen]   = useState(false);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
   const [smsSent, setSmsSent]           = useState(false);
@@ -70,10 +75,11 @@ function NewProspectFlow() {
   // target, no statement, no processing details in Review. The server drops
   // those fields for this type too — this is just not asking for them.
   // Whether this quote carries a RATE. Not the same as "is this a POS deal":
-  // a marketing merchant who adds the Website sells through it, so they get
-  // the ticket/volume inputs, the statement upload and a quoted rate — while
-  // still getting none of the POS hardware, install lines or ordering points.
-  const rated = quoteHasProcessing(quoteType, picks);
+  // a marketing merchant whose Website takes online orders sells through it,
+  // so they get the ticket/volume inputs, the statement upload and a quoted
+  // rate — while still getting none of the POS hardware, install lines or
+  // ordering points.
+  const rated = quoteHasProcessing(quoteType, picks, adjustments);
 
   // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
   // prefilled from the company on the deal — see prospects.ts's
@@ -265,13 +271,15 @@ function NewProspectFlow() {
   hardBlocks.push(...malformedMessages);
   hardBlocks.push(...quoteBlockers);
 
+  // ONE copy of the volume and the ticket: the processing record's. They used
+  // to be asked twice — once under Processing Details, once as the quote basis
+  // — and stored apart. A basis needs both; one alone (HubSpot often has the
+  // volume and never the ticket) just means the customer uploads a statement.
+  const ticket = rated ? parseFloat(processing.avgTicket) || 0 : 0;
+  const volume = rated ? parseFloat(processing.monthlyVolume) || 0 : 0;
+  const basisHalfSet = (ticket > 0) !== (volume > 0);
+
   const submit = async () => {
-    const ticket = rated ? parseFloat(avgTicket) || 0 : 0;
-    const volume = rated ? parseFloat(monthlyVolume) || 0 : 0;
-    if ((ticket > 0) !== (volume > 0)) {
-      setError("Enter both average ticket and monthly volume, or neither.");
-      return;
-    }
     if (hardBlocks.length) {
       setError(hardBlocks.join(" "));
       return;
@@ -310,7 +318,7 @@ function NewProspectFlow() {
 
   const reset = () => {
     setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier");
-    setAvgTicket(""); setMonthlyVolume(""); setFile(null); setAnalysis(null);
+    setFile(null); setAnalysis(null); setPerCardOpen(false); setDetailsOpen(false);
     setQuoteType("all_in_one"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
@@ -323,13 +331,14 @@ function NewProspectFlow() {
   // volume is not a quote, so don't promise the customer one. On a
   // marketing-only quote the lines are the quote — there's no rate to have.
   const hasQuote = rated
-    ? (analysis?.totalVolume ?? 0) > 0 || (parseFloat(avgTicket) > 0 && parseFloat(monthlyVolume) > 0)
+    ? (analysis?.totalVolume ?? 0) > 0 || (ticket > 0 && volume > 0)
     : picks.length > 0;
 
   const merchantName = business.dba || business.legalName;
   const prefilledChannels = channelsApplied.map(
     id => ORDER_POINT_CHANNELS.find(c => c.id === id)?.label ?? id
   );
+
 
   if (linkUrl) {
     return (
@@ -374,76 +383,239 @@ function NewProspectFlow() {
     );
   }
 
-  return (
-    <div className={styles.main}>
-      <h1 className={styles.headerTitle}>Send Customer a Quote Link</h1>
-      <p className={styles.headerSubtitle}>
-        Confirm what HubSpot already knows about this merchant, then set a margin target and either
-        prepare the quote yourself or send the link bare and let them upload their own statement.
-        Either way they see a quote at exactly this margin, with no cost breakdown and no account
-        required.
-      </p>
+  // The rate line reads as one figure while all four lanes agree, which is
+  // the normal 2-tier quote. Once they differ the per-card grid stays open:
+  // collapsing it would show one number and charge four.
+  const ratesUniform =
+    quoteRates.cardNotPresentRate === quoteRates.cardPresentRate &&
+    quoteRates.amexCardPresentRate === quoteRates.cardPresentRate &&
+    quoteRates.amexCardNotPresentRate === quoteRates.cardPresentRate;
+  const perCardShown = perCardOpen || !ratesUniform;
+  const setEveryLane = (raw: string) => {
+    const r = (parseFloat(raw) || 0) / 100;
+    setQuoteRates({ ...quoteRates, cardPresentRate: r, cardNotPresentRate: r, amexCardPresentRate: r, amexCardNotPresentRate: r });
+  };
+  const oneRate = () => {
+    setEveryLane(pct(quoteRates.cardPresentRate));
+    setPerCardOpen(false);
+  };
 
-      {/* ── Section 1: The deal ──────────────────────────────────────────────
-          A quote belongs to a deal, so the deal is where it starts. There is
-          nothing to choose here on purpose: the company is whatever HubSpot
-          says is on the deal, which is the only answer that can't attach a
-          merchant's quote to a stranger's record.
+  // What the drawer holds, counted so its label says how much of it HubSpot
+  // already answered. bizType and the yes/no questions always carry a value,
+  // so counting them would report a form as further along than it is.
+  const detailFields = [
+    business.legalName, business.dba, business.address, business.city, business.state, business.zip,
+    business.phone, business.website, business.yearsInBusiness,
+    ownerContact.firstName, ownerContact.lastName, ownerContact.title, ownerContact.phone,
+    ...(rated ? [processing.mcc, processing.currentProcessor, processing.businessDescription] : []),
+  ];
+  const knownCount = detailFields.filter(v => v?.trim()).length;
+  const merchantBlocked = !business.legalName.trim() || malformedMessages.length > 0;
+  const openDetails = () => {
+    setDetailsOpen(true);
+    requestAnimationFrame(() => document.getElementById("merchant-details")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
-          COLLAPSED BY DEFAULT. Arriving from the EasyOB Link on the deal is the
-          normal path, and on that path this panel has nothing left to ask — it
-          was taking the top of the page to restate an answer the rep already
-          gave. With no deal on it the summary says so in the accent colour,
-          and the hard block at the bottom of the page names the fix. */}
-      {/* Collapsed by default, and uncontrolled — no `open` prop and no state.
-          The normal path arrives from the EasyOB Link with the deal already
-          resolved, so there is nothing to ask; the summary says which deal it
-          is, and the rep opens the row on the rare occasion they need to
-          change it. */}
-      <details className={styles.dealPanel}>
-        {/* The heading IS the control — clicking anywhere on this row opens
-            the card. The chevron sits against the title rather than out at the
-            far edge, so the two read as one thing to click. */}
-        <summary className={styles.dealSummary}>
-          <span className={styles.dealSummaryTitle}>HubSpot Deal</span>
-          {/* An SVG rather than a "▾" glyph: the character renders far smaller
-              than its font-size implies and sits off the baseline, so it can't
-              be scaled up to the size this affordance needs. */}
-          <svg
-            className={styles.dealSummaryChevron}
-            viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M5 9l7 7 7-7" />
-          </svg>
-          <span className={styles.dealSummaryValue} data-empty={!dealLoading && !deal ? "true" : undefined}>
-            {dealLoading
-              ? "Loading…"
-              : deal && hubspotCompany
-                ? `${deal.name} · ${hubspotCompany.name}`
-                : "Not linked yet"}
+  const dealContacts = contacts.filter(c => c.source === "deal");
+  const companyContacts = contacts.filter(c => c.source !== "deal");
+  const displayName = merchantName || hubspotCompany?.name || "";
+
+  const statement = (
+    <div
+      className={`${styles.dropzone} ${styles.dropzoneCompact}`}
+      data-state={analyzing ? "busy" : analysis ? "done" : dragOver ? "dragging" : undefined}
+      onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+      onClick={() => { if (!analyzing) fileRef.current?.click(); }}
+    >
+      <input
+        ref={fileRef} type="file" accept=".pdf,image/*" className={styles.fileInput}
+        onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+      />
+      {analyzing ? (
+        <p className={styles.dropzoneTitle}>Reading {file?.name}…</p>
+      ) : analysis ? (
+        <>
+          <p className={styles.dropzoneTitle} data-state="done">✓ {file?.name}</p>
+          <p className={styles.dropzoneSubtitle}>Quote priced on this statement · click to replace</p>
+        </>
+      ) : (
+        <>
+          <p className={styles.dropzoneTitle}>Or drop their statement</p>
+          <p className={styles.dropzoneSubtitle}>PDF or image — overrides the numbers</p>
+        </>
+      )}
+    </div>
+  );
+
+  // Sits under the plan cards: a processing quote's rate is part of the plan
+  // being sold, so it's set where the plan is, not in a panel of its own.
+  const ratePanel = rated && (
+    <section className={styles.rateBlock} aria-labelledby="rate-head">
+      <h3 id="rate-head" className={styles.blockHead}>Card rate</h3>
+
+      {/* Nothing to pick while 2-tier is the only sellable model. The picker
+          comes back on its own if SELECTABLE_PRICING_MODELS ever grows. */}
+      {SELECTABLE_PRICING_MODELS.length > 1 && (
+        <div className={styles.modelRow}>
+          {SELECTABLE_PRICING_MODELS.map(m => (
+            <button key={m} onClick={() => setPricingModel(m)} className={styles.modelPill} data-active={pricingModel === m}>
+              {m.replace("-", " ")}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className={styles.rateLine}>
+        {perCardShown ? (
+          <span className={styles.rateHint}>Set per card type</span>
+        ) : (
+          <>
+            <span className={styles.affix}>
+              <input
+                type="number" min="0" step="0.01" inputMode="decimal"
+                value={pct(quoteRates.cardPresentRate)}
+                onChange={e => setEveryLane(e.target.value)}
+                className={styles.rateInput}
+                aria-label="Rate on every card, percent"
+              />
+              <span aria-hidden="true">%</span>
+            </span>
+            <span className={styles.rateHint}>+</span>
+            <span className={styles.affix}>
+              <span aria-hidden="true">$</span>
+              <input
+                type="number" min="0" step="0.01" inputMode="decimal"
+                value={quoteRates.perTransactionFee}
+                onChange={e => setQuoteRates({ ...quoteRates, perTransactionFee: parseFloat(e.target.value) || 0 })}
+                className={styles.rateInput}
+                aria-label="Per-transaction fee, dollars"
+              />
+            </span>
+            <span className={styles.rateHint}>on every card</span>
+          </>
+        )}
+        <button
+          type="button"
+          className={styles.linkBtn}
+          onClick={() => (perCardShown ? oneRate() : setPerCardOpen(true))}
+        >
+          {perCardShown ? "Use one rate for every card" : "Set per card type"}
+        </button>
+      </div>
+      {perCardShown && <RateFields value={quoteRates} onChange={setQuoteRates} hideNote />}
+
+      <div className={styles.basisRow}>
+        <label className={styles.field}>
+          <span className={styles.label}>Monthly volume</span>
+          <span className={styles.affix}>
+            <span aria-hidden="true">$</span>
+            <input
+              type="number" min="0" step="100" inputMode="decimal"
+              value={processing.monthlyVolume}
+              onChange={e => setProcessing({ ...processing, monthlyVolume: e.target.value })}
+              placeholder="100000" className={styles.rateInput}
+            />
           </span>
-        </summary>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Average ticket</span>
+          <span className={styles.affix}>
+            <span aria-hidden="true">$</span>
+            <input
+              type="number" min="0" step="0.01" inputMode="decimal"
+              value={processing.avgTicket}
+              onChange={e => setProcessing({ ...processing, avgTicket: e.target.value })}
+              placeholder="35.00" className={styles.rateInput}
+            />
+          </span>
+        </label>
+        {statement}
+      </div>
+      <p className={styles.prefillNote}>
+        {analysis
+          ? "The statement sets the volume their savings are figured on."
+          : basisHalfSet
+            ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — until both are set, the customer uploads a statement before they see a quote.`
+            : hasQuote
+              ? "The customer opens the link straight to this quote."
+              : "Optional. Leave blank and the customer uploads a statement before they see a quote."}
+      </p>
+    </section>
+  );
 
-        <div className={styles.dealBody}>
-          <p className={styles.sectionNote}>
-            Open this page from the <strong>EasyOB Link</strong> on the deal in HubSpot. The
-            customer link rides on that deal, and the company on it is what ties the merchant to
-            their AIO tenant.
+  const documentRate = rated && (
+    <div className={styles.docRate}>
+      <span className={styles.docRateLabel}>Card processing</span>
+      <span className={styles.docRateValue}>
+        {ratesUniform
+          ? `${pct(quoteRates.cardPresentRate)}% + ${fmt$(quoteRates.perTransactionFee)} per transaction`
+          : `${pct(quoteRates.cardPresentRate)}% in person · ${pct(quoteRates.cardNotPresentRate)}% online · Amex ${pct(quoteRates.amexCardPresentRate)}% / ${pct(quoteRates.amexCardNotPresentRate)}% · + ${fmt$(quoteRates.perTransactionFee)}`}
+      </span>
+      <span className={styles.docRateNote}>
+        {analysis && (analysis.totalVolume ?? 0) > 0
+          ? `Savings figured on their statement (${fmt$(analysis.totalVolume)}/mo)`
+          : hasQuote
+            ? `On about ${fmt$(volume)}/mo at a ${fmt$(ticket)} average ticket`
+            : "They upload a statement to see their savings"}
+      </span>
+    </div>
+  );
+
+  const documentFooter = (
+    <div className={styles.sendBlock}>
+      {hardBlocks.length > 0 && (
+        <div className={styles.blocks}>
+          <p className={styles.blocksTitle}>Before you can send</p>
+          <ul>
+            {hardBlocks.map(b => <li key={b}>{b}</li>)}
+          </ul>
+          {merchantBlocked && (
+            <button type="button" className={styles.linkBtn} onClick={openDetails}>
+              Open merchant details
+            </button>
+          )}
+        </div>
+      )}
+      {error && <div className={styles.error}>{error}</div>}
+      <button onClick={submit} disabled={saving || analyzing || hardBlocks.length > 0} className={`${styles.btnPrimary} ${styles.btnBlock}`}>
+        {saving ? "Creating…" : hasQuote ? "Create Quote Link →" : "Create Link →"}
+      </button>
+      {ownerContact.email.trim() && (
+        <p className={styles.sendNote}>
+          Emailed to {ownerContact.email.trim()}
+          {ownerContact.phone.trim() ? ` and texted to ${ownerContact.phone.trim()}` : ""}.
+        </p>
+      )}
+    </div>
+  );
+
+  return (
+    <div className={styles.workspace}>
+      {/* The merchant, reduced to what the quote needs: who it's for and where
+          it goes. Everything else HubSpot knows (or doesn't) is in the drawer
+          below, because the customer completes it on their own onboarding
+          form and none of it changes the price. */}
+      <header className={styles.merchantBar}>
+        <div className={styles.identity}>
+          <p className={styles.eyebrow} data-empty={!dealLoading && !deal ? "true" : undefined}>
+            {dealLoading
+              ? "Loading HubSpot deal…"
+              : deal && hubspotCompany
+                ? `HubSpot deal · ${deal.name} · ${deal.stageLabel ?? "no stage"}`
+                : "No HubSpot deal linked"}
+            {deal && (
+              <button type="button" className={styles.linkBtn} onClick={clearDeal}>Change</button>
+            )}
           </p>
+          <h1 className={styles.merchantName}>{displayName || "New quote link"}</h1>
+        </div>
 
-          {deal && hubspotCompany ? (
-            <p className={styles.hubspotBadge}>
-              <strong>{deal.name}</strong> · {deal.stageLabel ?? "no stage"} — {hubspotCompany.name}{" "}
-              ({hubspotCompany.id})
-              <button type="button" className={styles.hubspotBadgeClear} onClick={clearDeal} aria-label="Use a different deal">
-                ×
-              </button>
-            </p>
-          ) : !dealLoading && (
-            <div className={styles.field}>
-              <label className={styles.label}>Paste the HubSpot deal link or id</label>
+        {!deal && !dealLoading && (
+          <div className={styles.dealPaste}>
+            <label className={styles.field}>
+              <span className={styles.label}>Open from the EasyOB Link on the deal, or paste it here</span>
               <input
                 value={dealInput}
                 onChange={e => setDealInput(e.target.value)}
@@ -451,150 +623,104 @@ function NewProspectFlow() {
                 placeholder="https://app.hubspot.com/…/record/0-3/12345 or 12345"
                 className={styles.input}
               />
-              <button
-                type="button"
-                className={`${styles.btnGhost} ${styles.btnSm}`}
-                disabled={!dealInput.trim()}
-                onClick={() => loadDeal(dealInput)}
-              >
-                Open this deal
-              </button>
-            </div>
-          )}
-
-          {dealNotice && <div className={styles.error}>{dealNotice}</div>}
-        </div>
-      </details>
-
-      {/* ── Section 2: Review What We Know ───────────────────────────────── */}
-      <div className={styles.sectionHead}>
-        <h2 className={styles.sectionTitle}>Review What We Know</h2>
-        <p className={styles.sectionNote}>
-          Prefilled from HubSpot where a field is badged &ldquo;from HubSpot&rdquo; — everything here
-          is editable, and whatever you change wins.
-        </p>
-      </div>
-      <ReviewSection
-        business={business}
-        ownerContact={ownerContact}
-        processing={processing}
-        applied={reviewApplied}
-        showProcessing={rated}
-        onBusinessChange={setBusiness}
-        onOwnerChange={setOwnerContact}
-        onProcessingChange={setProcessing}
-        contacts={contacts}
-        selectedContactId={selectedContactId}
-        onContactSelect={selectContact}
-      />
-      {missingWarnings.length > 0 && (
-        <p className={styles.prefillNote}>
-          The customer will have to fill these in themselves: {missingWarnings.join(", ")}.
-        </p>
-      )}
-
-      {/* ── Section 3: Quote ─────────────────────────────────────────────── */}
-      {/* A marketing-only quote has no processing behind it, so there
-          is nothing to price against a statement — the products ARE the quote.
-
-          The rates and the ticket/volume basis are ONE panel as of 2026-10-06.
-          They were two, with the whole product configurator between them, so a
-          rep set a rate on one screen and the volume it applies to on another
-          and never saw the two together. The rule inside is what keeps
-          "(optional)" attached to the basis alone: the rates always apply. */}
-      {rated && (
-      <div className={styles.panel}>
-        <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>Pricing</h2>
-          <p className={styles.sectionNote}>
-            What this merchant is charged, and what it&apos;s charged on.
-          </p>
-        </div>
-
-        {/* Nothing to pick while 2-tier is the only sellable model, and a
-            grid holding one option reads as a control that's broken rather
-            than a decision already made. The rate fields below ARE the two
-            tiers, so the model needs no separate statement. The picker comes
-            back on its own if SELECTABLE_PRICING_MODELS ever grows. */}
-        {SELECTABLE_PRICING_MODELS.length > 1 && (
-          <>
-            <label className={styles.label}>Pricing Model</label>
-            <div className={styles.modelRow}>
-              {SELECTABLE_PRICING_MODELS.map(m => (
-                <button key={m} onClick={() => setPricingModel(m)} className={styles.modelPill} data-active={pricingModel === m}>
-                  {m.replace("-", " ")}
-                </button>
-              ))}
-            </div>
-          </>
+            </label>
+            <button
+              type="button"
+              className={`${styles.btnGhost} ${styles.btnSm}`}
+              disabled={!dealInput.trim()}
+              onClick={() => loadDeal(dealInput)}
+            >
+              Open deal
+            </button>
+          </div>
         )}
-
-        {/* The quoted rates. Outside any AIO-internal disclosure, unlike the
-            margin slider they replaced on 2026-10-06: a margin is an AIO
-            number, a rate is what the merchant is quoted and will read on
-            their own statement. */}
-        <RateFields value={quoteRates} onChange={setQuoteRates} />
-
-        <div className={styles.subhead}>
-          <h3 className={styles.subheadTitle}>Quote basis (optional)</h3>
-          <p className={styles.sectionNote}>
-            Give us either the numbers or the statement and the customer opens the link straight to their
-            quote. Leave both blank and they&apos;ll be asked to upload a statement first.
-          </p>
-        </div>
-
-        <div className={styles.configRow}>
-          <div className={styles.field}>
-            <label className={styles.label}>Average Ticket</label>
-            <input
-              type="number" min="0" step="0.01" inputMode="decimal"
-              value={avgTicket} onChange={e => setAvgTicket(e.target.value)}
-              placeholder="35.00" className={styles.input}
-            />
+          <div className={styles.recipient}>
+            {contacts.length > 0 && (
+              <label className={styles.field}>
+                <span className={styles.label}>Quote for</span>
+                <select
+                  value={selectedContactId ?? ""}
+                  onChange={e => selectContact(e.target.value || null)}
+                  className={styles.input}
+                >
+                  <option value="">{contacts.length > 1 ? "Select a contact…" : "Enter manually"}</option>
+                  {dealContacts.length > 0 && companyContacts.length > 0 ? (
+                    <>
+                      <optgroup label="On this deal">
+                        {dealContacts.map(c => <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>)}
+                      </optgroup>
+                      <optgroup label="On the company">
+                        {companyContacts.map(c => <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>)}
+                      </optgroup>
+                    </>
+                  ) : (
+                    contacts.map(c => <option key={c.id} value={c.id}>{contactOptionLabel(c)}</option>)
+                  )}
+                </select>
+              </label>
+            )}
+            <label className={styles.field}>
+              <span className={styles.label}>Send to</span>
+              <input
+                type="email"
+                value={ownerContact.email}
+                onChange={e => setOwnerContact({ ...ownerContact, email: e.target.value })}
+                placeholder="owner@business.com"
+                className={styles.input}
+              />
+            </label>
           </div>
-          <div className={styles.field}>
-            <label className={styles.label}>Monthly Volume</label>
-            <input
-              type="number" min="0" step="100" inputMode="decimal"
-              value={monthlyVolume} onChange={e => setMonthlyVolume(e.target.value)}
-              placeholder="100000" className={styles.input}
-            />
-          </div>
-        </div>
+      </header>
 
-        <label className={styles.label}>Statement (optional — overrides the numbers above)</label>
-        <div
-          className={styles.dropzone}
-          data-state={analyzing ? "busy" : analysis ? "done" : dragOver ? "dragging" : undefined}
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-          onClick={() => { if (!analyzing) fileRef.current?.click(); }}
+      {dealNotice && <div className={styles.error}>{dealNotice}</div>}
+
+      <section id="merchant-details" className={styles.details}>
+        <button
+          type="button"
+          className={styles.detailsToggle}
+          aria-expanded={detailsOpen}
+          aria-controls="merchant-details-body"
+          onClick={() => setDetailsOpen(o => !o)}
         >
-          <input
-            ref={fileRef} type="file" accept=".pdf,image/*" className={styles.fileInput}
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-          />
-          {analyzing ? (
-            <p className={styles.dropzoneTitle}>Analyzing {file?.name}…</p>
-          ) : analysis ? (
-            <>
-              <p className={styles.dropzoneTitle} data-state="done">✓ {file?.name}</p>
-              <p className={styles.dropzoneSubtitle}>
-                {analysis.merchantName || "Statement"} · read successfully · click to replace
+          <svg
+            className={styles.detailsChevron}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9 5l7 7-7 7" />
+          </svg>
+          <span className={styles.detailsTitle}>Merchant details</span>
+          <span className={styles.detailsMeta} data-warn={merchantBlocked ? "true" : undefined}>
+            {merchantBlocked && !business.legalName.trim()
+              ? "Legal name needed"
+              : `${knownCount} of ${detailFields.length} known`}
+          </span>
+          <span className={styles.detailsNote}>The customer completes the rest on their onboarding form.</span>
+        </button>
+        {detailsOpen && (
+          <div id="merchant-details-body" className={styles.detailsBody}>
+            <MerchantDetailsForm
+              business={business}
+              ownerContact={ownerContact}
+              processing={processing}
+              applied={reviewApplied}
+              showProcessing={rated}
+              onBusinessChange={setBusiness}
+              onOwnerChange={setOwnerContact}
+              onProcessingChange={setProcessing}
+            />
+            {missingWarnings.length > 0 && (
+              <p className={styles.prefillNote}>
+                The customer will have to fill these in themselves: {missingWarnings.join(", ")}.
               </p>
-            </>
-          ) : (
-            <>
-              <p className={styles.dropzoneTitle}>Drop their statement here or click to browse</p>
-              <p className={styles.dropzoneSubtitle}>PDF or image · any processor format</p>
-            </>
-          )}
-        </div>
-      </div>
-      )}
+            )}
+          </div>
+        )}
+      </section>
 
       <ProductConfigurator
+        layout="document"
         quoteType={quoteType}
         picks={picks}
         channels={channels}
@@ -604,22 +730,21 @@ function NewProspectFlow() {
         onDerivedChange={setQuote}
         adjustments={adjustments}
         onAdjustmentsChange={setAdjustments}
+        buildSlot={ratePanel || undefined}
+        documentHeader={
+          <div className={styles.docHead}>
+            <p className={styles.eyebrow}>Live quote · what {ownerContact.firstName.trim() || "the customer"} will see</p>
+            <p className={styles.docTitle}>{displayName || "Merchant"}</p>
+          </div>
+        }
+        documentRate={documentRate || undefined}
+        documentFooter={documentFooter}
       />
       {prefilledChannels.length > 0 && (
         <p className={styles.prefillNote}>
-          Ordering channels ticked above from HubSpot: {prefilledChannels.join(", ")}.
+          Ordering channels ticked from HubSpot: {prefilledChannels.join(", ")}.
         </p>
       )}
-
-      {error && (
-        <div className={styles.error}>
-          {error}
-        </div>
-      )}
-
-      <button onClick={submit} disabled={saving || analyzing || hardBlocks.length > 0} className={styles.btnPrimary}>
-        {saving ? "Creating…" : hasQuote ? "Create Quote Link →" : "Create Link →"}
-      </button>
     </div>
   );
 }

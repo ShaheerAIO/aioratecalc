@@ -224,6 +224,22 @@ export function buildProspectPrefill(
     website: (company.website ?? "").trim() || (company.domain ?? "").trim() || undefined,
   });
 
+  // The HubSpot Company IS the restaurant, so its address is where the business
+  // operates — the DBA address. HubSpot has no separate legal address (the
+  // legal_*_address_* properties are empty portal-wide), so the same address
+  // also seeds the legal one above; the rep edits whichever differs. Only ever
+  // filled as a WHOLE: a city with no street is not a location, and a half
+  // DBA address would read as a deliberate override of the legal one.
+  const dbaStreet = streetLine(company.address, company.city);
+  if (dbaStreet) {
+    Object.assign(business, compact<BusinessInfo>({
+      dbaAddress: dbaStreet,
+      dbaCity: (company.city ?? "").trim() || undefined,
+      dbaState: usStateCode(company.state ?? undefined),
+      dbaZip: (company.zip ?? "").trim() || undefined,
+    }));
+  }
+
   const ownerContact = compact<OwnerContact>({
     firstName: contact?.firstName ?? undefined,
     lastName: contact?.lastName ?? undefined,
@@ -271,9 +287,16 @@ export function buildProspectPrefill(
 // enough to be a problem, so the rep chooses. The one case with no choice to
 // make is a company with exactly one contact.
 
-/** The contact to preselect: only ever when there is nothing to choose between. */
+/**
+ * The contact to preselect: only ever when there is nothing to choose between.
+ * That is a lone contact overall, or a lone contact on the DEAL — the person
+ * the rep attached to this very deal is the answer even when the company's
+ * wider roster sits underneath. Two or more on the deal is a real choice.
+ */
 export function initialContactChoice(contacts: HubspotContact[]): string | null {
-  return contacts.length === 1 ? contacts[0].id : null;
+  if (contacts.length === 1) return contacts[0].id;
+  const onDeal = contacts.filter(c => c.source === "deal");
+  return onDeal.length === 1 ? onDeal[0].id : null;
 }
 
 /**

@@ -4,7 +4,7 @@ import {
   contactOptionLabel, initialContactChoice,
   monthlyVolumeFromCompany, normalizeCountry, normalizePhone, processorFromPos, streetLine,
 } from "@/lib/hubspotPrefill";
-import { pickOwnerAssociation, rankContactAssociations, type CompanyAssociation, type HubspotCompanyProfile, type HubspotContact } from "@/lib/adapters/hubspot";
+import { mergeDealAndCompanyContacts, pickOwnerAssociation, rankContactAssociations, type CompanyAssociation, type HubspotCompanyProfile, type HubspotContact } from "@/lib/adapters/hubspot";
 
 // A company with everything HubSpot could plausibly hold, using real observed
 // value shapes (E.164 phone, free-text state, "USA" country, the `moduels`
@@ -254,6 +254,25 @@ describe("choosing among several contacts", () => {
     expect(initialContactChoice([person("1", "Ann", "a@x.com"), person("2", "Bo", "b@x.com")])).toBeNull();
   });
 
+  it("lists the deal's contacts first and drops a company duplicate of one", () => {
+    const d = (c: HubspotContact): HubspotContact => ({ ...c, source: "deal" });
+    const co = (c: HubspotContact): HubspotContact => ({ ...c, source: "company" });
+    const merged = mergeDealAndCompanyContacts(
+      [d(person("2", "Bo", "b@x.com"))],
+      [co(person("1", "Ann", "a@x.com")), co(person("2", "Bo", "b@x.com"))]
+    );
+    expect(merged.map(c => c.id)).toEqual(["2", "1"]);
+    expect(merged[0].source).toBe("deal");
+  });
+
+  it("preselects a lone deal contact even with company contacts underneath", () => {
+    const d = { ...person("2", "Bo", "b@x.com"), source: "deal" as const };
+    const c1 = { ...person("1", "Ann", "a@x.com"), source: "company" as const };
+    const c3 = { ...person("3", "Cy", "c@x.com"), source: "company" as const };
+    expect(initialContactChoice([d, c1, c3])).toBe("2");
+    expect(initialContactChoice([d, { ...d, id: "4" }, c1])).toBeNull();
+  });
+
   it("leaves the owner fields blank until one of several contacts is picked", () => {
     const contacts = [person("1", "Ann", "a@x.com"), person("2", "Bo", "b@x.com")];
     const p = buildProspectPrefillForContact(company, contacts, null);
@@ -301,6 +320,11 @@ describe("buildProspectPrefill", () => {
       zip: "92804",
       phone: "714-833-5760",
       website: "https://littlearabiarestaurant.com",
+      // The company's address doubles as the DBA (operating-location) address.
+      dbaAddress: "638 South Brookhurst Street",
+      dbaCity: "Anaheim",
+      dbaState: "CA",
+      dbaZip: "92804",
     });
     expect(p.ownerContact).toEqual({
       firstName: "Angie", lastName: "Johnson", title: "Owner",
@@ -339,12 +363,24 @@ describe("buildProspectPrefill", () => {
     expect(p.fromHubspot).toEqual([
       "business.legalName", "business.dba", "business.address", "business.city",
       "business.state", "business.zip", "business.phone", "business.website",
+      "business.dbaAddress", "business.dbaCity", "business.dbaState", "business.dbaZip",
       "ownerContact.firstName", "ownerContact.lastName", "ownerContact.title",
       "ownerContact.email", "ownerContact.phone",
       "processing.currentProcessor", "processing.businessDescription",
       "processing.monthlyVolume",
       "channels",
     ]);
+  });
+
+  it("prefills the DBA address from the company's own address, only as a whole", () => {
+    const p = buildProspectPrefill(FULL, CONTACT);
+    expect(p.business.dbaAddress).toBe(p.business.address);
+    expect(p.business.dbaCity).toBe(p.business.city);
+    expect(p.business.dbaState).toBe(p.business.state);
+    expect(p.business.dbaZip).toBe(p.business.zip);
+    // A city with no street is not a location: no DBA fields at all.
+    const cityOnly = buildProspectPrefill({ ...FULL, address: null }, CONTACT);
+    expect(Object.keys(cityOnly.business).filter(k => k.startsWith("dba") && k !== "dba")).toEqual([]);
   });
 
   it("returns empty, key-free partials for an empty company", () => {

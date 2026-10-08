@@ -4,6 +4,7 @@ import {
   PRODUCT_PARTS,
   SHEET_ITEMS,
   SWAP_TOLERANCE,
+  coverageLabel,
   decomposePackages,
   kitFor,
   kitPicks,
@@ -400,9 +401,14 @@ describe("buildQuote with the kit on it", () => {
   afterEach(() => { restore?.(); restore = null; });
 
   const withKit = (active: boolean) => {
-    const was = KIT.active;
+    // Remember the ORIGINAL value only once: a test that calls this twice
+    // (off, then on) would otherwise capture the first call's "off" as what to
+    // restore, and leave the kit inactive for every test after it.
+    if (!restore) {
+      const was = KIT.active;
+      restore = () => { KIT.active = was; };
+    }
     KIT.active = active;
-    restore = () => { KIT.active = was; };
   };
 
   const picks = () => [
@@ -513,5 +519,28 @@ describe("buildQuote with the kit on it", () => {
     expect(reopened[ID.ams1]).toBeUndefined();
     // The standing comps on install and training still come back.
     expect(reopened[ID.install]).toEqual({ discountPercent: 100 });
+  });
+});
+
+describe("coverageLabel — the picker row's coverage tag", () => {
+  it("never prints 'N of 0': the derived AMS1 is covered while the rep picked none", () => {
+    // Reproduces the bug: a POS pick derives an AMS1 line the kit covers, but
+    // the row's stepper (the rep's own picks) reads 0.
+    const built = buildQuote("all_in_one", [toQuoteLine(product(ID.pos), 1)], [], CATALOG, {});
+    const covered = built.packages.lines
+      .filter(l => l.hubspotProductId === ID.ams1 && l.coveredByPackage)
+      .reduce((n, l) => n + l.qty, 0);
+    expect(covered).toBeGreaterThan(0);
+    expect(built.requiredTerminals.qty).toBe(1);
+    // What the old code compared against: picks only.
+    expect(coverageLabel(covered, 0, "the package")).toBe("In the package");
+    // What the picker now passes: picks + derived.
+    expect(coverageLabel(covered, 0 + built.requiredTerminals.qty, "the package")).toBe("In the package");
+  });
+
+  it("says 'N of M' only for a real partial cover, and nothing when none is", () => {
+    expect(coverageLabel(1, 3, "the package")).toBe("1 of 3 in the package");
+    expect(coverageLabel(3, 3, "the package")).toBe("In the package");
+    expect(coverageLabel(0, 3, "the package")).toBeNull();
   });
 });

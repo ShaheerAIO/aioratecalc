@@ -84,6 +84,16 @@ export function validateOnboardingFields(input: OnboardingValidationInput): Onbo
   if (!zip) errors["business.zip"] = "Enter the ZIP code.";
   else if (!ZIP.test(zip)) errors["business.zip"] = "Use a 5-digit ZIP, e.g. 90210.";
 
+  // The DBA address is optional (blank = same as the legal address above), so
+  // nothing here is REQUIRED — and a blank piece is not flagged, which also
+  // keeps stripBlanks' "malformed only" contract without a placeholder. But a
+  // value that IS given has to be usable, since it becomes the location AIO
+  // creates. (A DBA street with no city/state/zip is the customer's to finish.)
+  const dbaState = s(biz.dbaState);
+  if (dbaState && !isUsStateCode(dbaState)) errors["business.dbaState"] = "Use a US state — e.g. CA or California.";
+  const dbaZip = s(biz.dbaZip);
+  if (dbaZip && !ZIP.test(dbaZip)) errors["business.dbaZip"] = "Use a 5-digit ZIP, e.g. 90210.";
+
   // Optional, but must be usable if given.
   const phone = s(biz.phone);
   if (phone && !isE164Convertible(phone)) {
