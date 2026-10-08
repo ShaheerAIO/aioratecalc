@@ -16,6 +16,7 @@ import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidatio
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
+import { deleteQuoteLineItem, getQuoteSnapshot } from "@/lib/adapters/hubspot";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
 import { getMaxDiscountPercent } from "@/lib/actions/pricing";
 import { buildQuote, isAllowedForQuoteType, isProcessingQuote, quoteHasProcessing, quoteTypeOf, toQuoteLine } from "@/lib/quoting";
@@ -593,8 +594,48 @@ export async function saveQuoteConfigurationAction(input: {
       ? input.quoteConfig
       : app.quoteConfig;
 
+  // A draft HubSpot quote from an earlier, failed publish is now describing a
+  // quote that no longer exists. `buildAndPublishBillingQuote` pairs its saved
+  // line-item ids with the CURRENT lines by position, so leaving them in place
+  // would publish the old prices under the new quote. Forget them — and the
+  // draft they hang off — so the next publish builds from what was just saved.
+  let hubspotIds = app.hubspotIds;
+  const staleDraft = hubspotIds && (hubspotIds.quoteId || hubspotIds.lineItemIds?.length);
+  if (hubspotIds && staleDraft && JSON.stringify(quoteLines) !== JSON.stringify(app.quoteLines ?? [])) {
+    // `publishedAt` being null does not prove the quote is a draft (a crash
+    // between HubSpot's ack and our write leaves exactly that), so ask HubSpot.
+    // Unknown is treated like "not a draft": abandoning a quote that might be
+    // live is how a merchant ends up with two.
+    if (hubspotIds.quoteId) {
+      let status: string | null;
+      try {
+        const snapshot = await getQuoteSnapshot(hubspotIds.quoteId);
+        status = snapshot ? snapshot.status : "DRAFT";
+      } catch {
+        throw new Error(
+          "Couldn't confirm with HubSpot that this quote is still a draft, so it can't be edited right now. Try again in a moment."
+        );
+      }
+      if (status && status !== "DRAFT") {
+        throw new Error(
+          `This quote already exists in HubSpot as ${status} and can't be edited from here. Check it in HubSpot before changing anything.`
+        );
+      }
+    }
+    for (const id of hubspotIds.lineItemIds ?? []) {
+      try {
+        await deleteQuoteLineItem(id);
+      } catch (err) {
+        // Orphaned line items are litter, not a hazard — they belong to no quote.
+        console.error("saveQuoteConfigurationAction: could not delete stale line item", id, err);
+      }
+    }
+    hubspotIds = { ...hubspotIds, quoteId: null, quoteTemplateId: null, lineItemIds: null, lastSyncError: null, lastSyncErrorAt: null };
+  }
+
   const updated: MerchantApplication = {
     ...app,
+    hubspotIds,
     quoteType,
     quoteConfig,
     quoteLines,

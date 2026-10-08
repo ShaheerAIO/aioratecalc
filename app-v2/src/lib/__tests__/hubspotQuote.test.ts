@@ -90,6 +90,25 @@ describe("toLineItemProperties", () => {
       price: "999",
     });
   });
+
+  it("says why a covered line is free, in the line item's description", () => {
+    const props = toLineItemProperties(
+      line({ billingFrequency: "one_time", unitPrice: 949, discountPercent: 100, coveredByPackage: "QSR Kit" })
+    );
+    expect(props.hs_discount_percentage).toBe("100");
+    expect(props.description).toBe("Included with QSR Kit");
+  });
+
+  it("writes no description on an ordinary line or a rep-typed discount", () => {
+    expect(toLineItemProperties(line())).not.toHaveProperty("description");
+    expect(toLineItemProperties(line({ discountPercent: 25 }))).not.toHaveProperty("description");
+  });
+
+  it("does not claim 'included' for a tagged line that isn't actually free", () => {
+    expect(
+      toLineItemProperties(line({ coveredByPackage: "QSR Kit", discountPercent: 50 }))
+    ).not.toHaveProperty("description");
+  });
 });
 
 describe("draftQuoteProperties", () => {

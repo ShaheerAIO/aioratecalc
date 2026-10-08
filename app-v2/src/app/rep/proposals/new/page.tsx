@@ -14,7 +14,7 @@ import PricingStep, { type PricingOutcome } from "@/components/rep/PricingStep";
 import ProposalStep   from "@/components/rep/ProposalStep";
 import ApplyStep      from "@/components/rep/ApplyStep";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
-import { picksFromQuoteLines, quoteTypeOf } from "@/lib/quoting";
+import { adjustmentsFromQuoteLines, picksFromQuoteLines, quoteTypeOf } from "@/lib/quoting";
 import type {
   MerchantApplication, StatementAnalysis, Processor, ProcessorTier, AppSettings, QuoteAdjustments,
   QuoteConfig, QuoteType,
@@ -128,6 +128,7 @@ function NewProposalFlow() {
           const existingType = quoteTypeOf(existing.quoteType);
           setQuoteType(existingType);
           setPicks(picksFromQuoteLines(existing.quoteLines, existingType));
+          setAdjustments(adjustmentsFromQuoteLines(existing.quoteLines, existingType));
           setChannels(existing.orderPoints?.channels ?? []);
         }
       })

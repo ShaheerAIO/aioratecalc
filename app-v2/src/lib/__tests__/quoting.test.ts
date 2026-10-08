@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
+import { PACKAGES } from "@/lib/quotePackages";
 import {
+  AMS1_PRODUCT,
+  INCLUDED_SCREEN_COUNT,
   INCLUDED_SERVICE_PRODUCTS,
+  WIFI_PRODUCT_ID,
   MARKETING_PRODUCTS,
   MARKETING_INCLUDED_HARDWARE,
   MARKETING_TERM_KIOSK_IDS,
@@ -17,6 +21,7 @@ import {
   isAllowedForQuoteType,
   isPickable,
   isProcessingQuote,
+  adjustmentsFromQuoteLines,
   picksFromQuoteLines,
   quoteHasProcessing,
   quoteTotals,
@@ -27,6 +32,11 @@ import {
   toQuoteLine,
 } from "@/lib/quoting";
 import type { CatalogProduct, QuoteLine, QuoteType } from "@/types/merchant";
+
+// The free hardware kit is switched off for this file: these tests assert what
+// a plain quote derives, and left on the kit would zero its hardware lines. It
+// has its own file (quotePackages.test.ts).
+beforeAll(() => { for (const pkg of PACKAGES) pkg.active = false; });
 
 // Fixture catalog mirroring the live HubSpot records (names and prices as they
 // actually are, post-trim). No network anywhere in this file.
@@ -95,9 +105,11 @@ describe("picker exclusions", () => {
       "AIO Pre Auth",
       "AIO Processing Two Tiered Rate",
       "AIO WiFi Network Package",
+      "Additional Software License",
       "All-in-One (Order & Pay only)",
       "All-in-One Platform",
       "Onsite Installation",
+      "QSR POS Hardware Bundle",
       "System Onboarding and Training",
     ]);
   });
@@ -118,7 +130,10 @@ describe("picker exclusions", () => {
 
   it("keeps ordinary hardware and software quotable", () => {
     expect(isPickable(find("POS Unit"))).toBe(true);
-    expect(isPickable(find("Additional Software License"))).toBe(true);
+    // Extras a rep adds by hand. The one-per-POS terminals are derived on top.
+    expect(isPickable(find("Payment Terminal - AMS1"))).toBe(true);
+    // Derived from the screen count, so a hand-added line would bill it twice.
+    expect(isPickable(find("Additional Software License"))).toBe(false);
     // Hardware a marketing plan includes stays ordinary pickable hardware on a
     // POS quote — `isPickable` is about the product, and only the quote type
     // knows whether a line of it was derived or chosen.
@@ -144,9 +159,12 @@ describe("quote types", () => {
   });
 
   it("lets a POS quote carry marketing products, but not the reverse", () => {
-    // A restaurant buying marketing alongside its POS is one deal, not two
-    // quotes — so only marketing-only restricts anything.
-    expect(isAllowedForQuoteType(find("Marketing Kit - Mega Kiosk"), "all_in_one")).toBe(true);
+    // The Website can sit on a POS quote. The kits cannot — they belong to the
+    // marketing plans, and a processing quote sells its own hardware.
+    expect(isAllowedForQuoteType(find("Website"), "all_in_one")).toBe(true);
+    expect(isAllowedForQuoteType(find("Marketing Kit - Mega Kiosk"), "all_in_one")).toBe(false);
+    expect(isAllowedForQuoteType(find("Marketing Kit - 27\" Kiosk"), "all_in_one")).toBe(false);
+    expect(isAllowedForQuoteType(find("QSR POS Hardware Bundle"), "all_in_one")).toBe(false);
     for (const plan of ["marketing_only", "marketing_term"] as const) {
       expect(isAllowedForQuoteType(find("POS Unit"), plan)).toBe(false);
       expect(isAllowedForQuoteType(find("Mega Kiosk"), plan)).toBe(false);
@@ -163,9 +181,9 @@ describe("quote types", () => {
     }
   });
 
-  it("does not treat an ordinary software add-on as marketing", () => {
+  it("derives the software license instead of offering it as a pick", () => {
     expect(isAllowedForQuoteType(find("Additional Software License"), "marketing_only")).toBe(false);
-    expect(isAllowedForQuoteType(find("Additional Software License"), "all_in_one")).toBe(true);
+    expect(isAllowedForQuoteType(find("Additional Software License"), "all_in_one")).toBe(false);
   });
 });
 
@@ -542,11 +560,12 @@ describe("buildQuote — the one derivation", () => {
       "System Onboarding and Training",
       "POS Unit",
       "Cash Drawer",
+      // One per POS unit, charged, on top of anything the rep picked.
+      "Payment Terminal - AMS1",
     ]);
-    // 999 + 2×749 + 69 = $2,566 due once. The install ($999) and the training
-    // ($499) are on the quote but comped to $0, so they add nothing — the
-    // list total would be $4,064.
-    expect(built.totals.oneTime).toBe(2566);
+    // 999 + 2×749 + 69 + 2×300 = $3,166 due once. The install ($999) and the
+    // training ($499) are on the quote but comped to $0, so they add nothing.
+    expect(built.totals.oneTime).toBe(3166);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
@@ -842,5 +861,141 @@ describe("one website per merchant", () => {
     );
     expect(built.quoteLines.filter(l => l.hubspotProductId === id)).toHaveLength(2);
     expect(built.blockers.some(b => b.includes("only have 1"))).toBe(true);
+  });
+});
+
+describe("derived terminals, licenses, and the lines a processing quote no longer sells", () => {
+  const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
+  const ams1Qty = (lines: QuoteLine[]) =>
+    lines.filter(l => l.hubspotProductId === AMS1_PRODUCT.hubspotProductId)
+      .reduce((n, l) => n + l.qty, 0);
+
+  it("charges one AMS1 per POS unit, on top of any the rep picked", () => {
+    const built = buildQuote(
+      "all_in_one",
+      picked([["POS Unit", 2], ["POS Unit - With Customer Facing Display", 1], ["Payment Terminal - AMS1", 1]]),
+      [],
+      CATALOG
+    );
+    expect(built.blockers).toEqual([]);
+    expect(ams1Qty(built.quoteLines)).toBe(4);
+    expect(built.requiredTerminals.qty).toBe(3);
+  });
+
+  it("does not add an AMS1 for a kiosk that already includes one", () => {
+    const built = buildQuote("order_pay_only", picked([["Kiosk 27\" + Payment Terminal (AMS1) and Mount", 2]]), [], CATALOG);
+    expect(ams1Qty(built.quoteLines)).toBe(0);
+    expect(built.requiredTerminals.qty).toBe(0);
+  });
+
+  it("adds a software license only past four screens", () => {
+    const four = buildQuote(
+      "all_in_one",
+      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["Menu Board Computer", 1]]),
+      [],
+      CATALOG
+    );
+    expect(four.softwareLicense.screens).toBe(INCLUDED_SCREEN_COUNT);
+    expect(four.softwareLicense.lines).toEqual([]);
+    expect(four.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
+
+    const five = buildQuote(
+      "all_in_one",
+      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["Menu Board Computer", 1], ["mPOS", 1]]),
+      [],
+      CATALOG
+    );
+    expect(five.softwareLicense.lines.map(l => [l.name, l.qty, l.unitPrice])).toEqual([
+      ["Additional Software License", 1, 19],
+    ]);
+    expect(five.totals.recurring).toEqual([{ frequency: "monthly", amount: 418 }]);
+
+    const seven = buildQuote(
+      "order_pay_only",
+      picked([
+        ["POS Unit", 2],
+        ["POS Unit - With Customer Facing Display", 1],
+        ["Mega Kiosk", 1],
+        ["Menu Board Computer", 1],
+        ["mPOS", 1],
+        ["Kiosk 27\" + Payment Terminal (AMS1) and Mount", 1],
+      ]),
+      [],
+      CATALOG
+    );
+    expect(seven.softwareLicense.screens).toBe(7);
+    expect(seven.softwareLicense.lines[0].qty).toBe(3);
+    // 299 platform + 3 × 19.
+    expect(seven.totals.recurring).toEqual([{ frequency: "monthly", amount: 356 }]);
+  });
+
+  it("leaves a rate-only quote without a terminal, a license, or WiFi", () => {
+    const built = buildQuote("all_in_one", [], [], CATALOG);
+    expect(built.quoteLines).toEqual([]);
+    expect(built.requiredTerminals).toEqual({ lines: [], missing: [], qty: 0 });
+    expect(built.softwareLicense).toEqual({ lines: [], missing: [], screens: 0 });
+  });
+
+  it("does not treat a channel-only quote as having removed WiFi", () => {
+    const built = buildQuote("all_in_one", [], ["website"], CATALOG);
+    expect(adjustmentsFromQuoteLines(built.quoteLines, "all_in_one")[WIFI_PRODUCT_ID]).toBeUndefined();
+  });
+
+  it("keeps a removed WiFi package off through a reopen", () => {
+    const adjustments = { [WIFI_PRODUCT_ID]: { removed: true as const } };
+    const first = buildQuote("all_in_one", picked([["POS Unit", 1]]), [], CATALOG, adjustments);
+    expect(first.quoteLines.map(l => l.name)).not.toContain("AIO WiFi Network Package");
+    expect(first.includedServices.missing).toEqual([]);
+    expect(first.quoteLines.map(l => l.name)).toContain("Onsite Installation");
+
+    const reopened = adjustmentsFromQuoteLines(first.quoteLines, "all_in_one");
+    expect(reopened[WIFI_PRODUCT_ID]).toEqual({ removed: true });
+    const picks = picksFromQuoteLines(first.quoteLines, "all_in_one");
+    expect(picks).toEqual([{ hubspotProductId: find("POS Unit").hubspotProductId, qty: 1 }]);
+
+    const second = buildQuote(
+      "all_in_one",
+      picks.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
+      [],
+      CATALOG,
+      reopened
+    );
+    expect(second.quoteLines).toEqual(first.quoteLines);
+  });
+
+  it("blocks when the AMS1 or the license is missing from the catalog", () => {
+    const noTerminal = CATALOG.filter(c => c.hubspotProductId !== AMS1_PRODUCT.hubspotProductId);
+    const terminal = buildQuote("all_in_one", picked([["POS Unit", 1]]), [], noTerminal);
+    expect(terminal.blockers.join(" ")).toContain(AMS1_PRODUCT.name);
+
+    const noLicense = CATALOG.filter(c => c.name !== "Additional Software License");
+    const license = buildQuote(
+      "all_in_one",
+      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["Menu Board Computer", 1], ["mPOS", 1]]),
+      [],
+      noLicense
+    );
+    expect(license.blockers.join(" ")).toContain("Additional Software License");
+  });
+
+  it("drops kits, the hardware bundle, and derived AMS1 when a processing quote is reopened", () => {
+    const lines = [
+      line("POS Unit", 2),
+      line("Payment Terminal - AMS1", 3),
+      line("Marketing Kit - Mega Kiosk", 1),
+      line("QSR POS Hardware Bundle", 1),
+      line("Additional Software License", 2),
+    ];
+    expect(picksFromQuoteLines(lines, "all_in_one")).toEqual([
+      { hubspotProductId: find("POS Unit").hubspotProductId, qty: 2 },
+      { hubspotProductId: AMS1_PRODUCT.hubspotProductId, qty: 1 },
+    ]);
+  });
+
+  it("leaves a marketing quote's kit as a pick", () => {
+    const lines = [line("Marketing Kit - Mega Kiosk", 1)];
+    expect(picksFromQuoteLines(lines, "marketing_only")).toEqual([
+      { hubspotProductId: find("Marketing Kit - Mega Kiosk").hubspotProductId, qty: 1 },
+    ]);
   });
 });

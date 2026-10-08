@@ -1324,6 +1324,16 @@ const QUOTABLE_FREQUENCY = {
 } satisfies Record<BillingFrequency, boolean>;
 
 /**
+ * Pure: the customer-facing reason a covered line is free, or null. Needs both
+ * the tag and the 100% — a tagged line with no discount (it can't happen
+ * today, `applyPackageComp` forces it) must not claim to be included.
+ */
+export function coveredLineDescription(line: QuoteLine): string | null {
+  if (!line.coveredByPackage || line.discountPercent !== 100) return null;
+  return `Included with ${line.coveredByPackage}`;
+}
+
+/**
  * Pure: one QuoteLine → the line-item property bag. Throws on any frequency
  * outside AIO's quotable catalog — an unexamined frequency on a quote that
  * cannot be edited after publish is worse than refusing to build the quote.
@@ -1363,6 +1373,14 @@ export function toLineItemProperties(line: QuoteLine): Record<string, string> {
   if (line.discountPercent) {
     props.hs_discount_percentage = String(line.discountPercent);
   }
+
+  // WHY a covered line is free. A bare "100% off" on a $949 POS reads as a
+  // promo code; "Included with QSR Kit" reads as what it is. The name can't
+  // carry it (HubSpot takes the line's name from the product), so it rides in
+  // the line item's own `description`. Only covered lines — a rep-typed
+  // discount has no reason we know of, and inventing one would be wrong.
+  const label = coveredLineDescription(line);
+  if (label) props.description = label;
 
   // Delayed billing start. `hs_billing_start_delay_type` is the DISCRIMINATOR —
   // it names which of the sibling properties HubSpot reads, so the value and
@@ -1473,6 +1491,9 @@ function lineItemKey(line: QuoteLine): string {
   return [
     line.hubspotProductId, line.qty, line.unitPrice, line.billingFrequency,
     line.discountPercent ?? 0, start,
+    // The label is a property of the line item too, and a draft saved before
+    // labels existed would otherwise keep its unlabeled line items on re-save.
+    coveredLineDescription(line) ?? "",
   ].join("|");
 }
 

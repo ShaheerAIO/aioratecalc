@@ -1,6 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/merchant";
 import { picksFromQuoteLines, toQuoteLine } from "@/lib/quoting";
+import { PACKAGES } from "@/lib/quotePackages";
+
+// The free hardware kit is switched off for this file: these tests are about
+// re-derivation and the discount cap, and left on the kit would cover the very
+// hardware lines they discount. It has its own file (quotePackages.test.ts).
+beforeAll(() => { for (const pkg of PACKAGES) pkg.active = false; });
 import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
 
 // saveQuoteConfigurationAction — the one write path for the quoting half of an
@@ -57,6 +63,7 @@ const FULL_CATALOG: CatalogProduct[] = [
   p("335283119838", "All-in-One Platform", 399, "monthly", ""),
   p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p("217445755632", "POS Unit", 749, "one_time", "inventory"),
+  p("223511653105", "Payment Terminal - AMS1", 300, "one_time", "inventory"),
   p("281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"),
   p("223452690133", "Onsite Installation", 999, "one_time", "Service"),
   p("223152695032", "System Onboarding and Training", 499, "one_time", "Service"),
@@ -168,6 +175,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       "All-in-One Platform",
       "Onsite Installation",
       "POS Unit",
+      "Payment Terminal - AMS1",
       "System Onboarding and Training",
     ].sort());
     // One ordering point (one POS Unit). Reported, not priced on.
@@ -285,7 +293,8 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     expect(installLines).toHaveLength(1);
     expect(wifiLines).toHaveLength(1);
     expect(trainingLines).toHaveLength(1);
-    expect(updated.quoteLines).toHaveLength(5);
+    expect(updated.quoteLines).toHaveLength(6);
+    expect(updated.quoteLines!.filter(l => l.name === "Payment Terminal - AMS1")).toHaveLength(1);
   });
 });
 

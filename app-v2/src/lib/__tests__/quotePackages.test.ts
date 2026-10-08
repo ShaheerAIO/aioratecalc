@@ -1,36 +1,49 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
   PACKAGES,
+  PRODUCT_PARTS,
+  SHEET_ITEMS,
+  SWAP_TOLERANCE,
   decomposePackages,
-  isPackageProduct,
+  kitFor,
+  kitPicks,
+  sheetMsrpOf,
   type QuotePackage,
 } from "@/lib/quotePackages";
 import {
   adjustmentBlockers,
   adjustmentsFromQuoteLines,
   buildQuote,
+  isAllowedForQuoteType,
   isPickable,
-  orderPointsPerUnit,
+  PLATFORM_PRODUCTS,
   picksFromQuoteLines,
   toQuoteLine,
 } from "@/lib/quoting";
-import type { CatalogProduct, QuoteLine } from "@/types/merchant";
+import type { CatalogProduct, QuoteLine, QuoteType } from "@/types/merchant";
 
-// Live HubSpot ids and prices, so a fixture that stops matching the portal is
-// a fixture someone has to look at.
+// Live HubSpot ids, so a fixture that stops matching the portal is a fixture
+// someone has to look at. Prices are HubSpot's today; the kit goes by SHEET
+// MSRP, which is a different (and higher) number — nothing here may depend on
+// the two agreeing.
 const ID = {
-  posCfd:   "223452690130", // POS Unit - With Customer Facing Display, $899, 1 point
-  pos:      "217445755632", // POS Unit, $749, 1 point
-  mega:     "260674226888", // Mega Kiosk, $2,459, 1 point
-  kds:      "223452690132", // KDS, $499, 0 points
-  printer:  "223511653104", // Thermal Printer, $249, 0 points
-  wifi:     "281351401209", // AIO WiFi Network Package, $999, 0 points
-  install:  "223452690133", // Onsite Installation, $999 — comped
-  training: "223152695032", // System Onboarding and Training, $499 — comped
-  platform: "335283119838", // All-in-One Platform, $399/mo
-  review:   "335280960199", // Additional Software License, $19/mo
-  // Not a real product: the fixture package SKU.
-  kit:      "900000000001",
+  pos:       "217445755632", // POS Unit
+  posCfd:    "223452690130", // POS Unit - With Customer Facing Display
+  cfd:       "318736467644", // Customer Facing Display
+  ams1:      "223511653105", // Payment Terminal - AMS1
+  kiosk27:   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
+  kioskMini: "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+  mega:      "260674226888", // Mega Kiosk
+  tableside: "335279520447", // AIO Tableside POS
+  kds:       "223452690132", // KDS
+  printer:   "223511653104", // Thermal Printer
+  drawer:    "222497165011", // Cash Drawer
+  menuboard: "223511653103", // Menu Board Computer
+  wifi:      "281351401209", // AIO WiFi Network Package
+  mpos:      "223511653101", // mPOS — in no sheet row, so never covered
+  install:   "223452690133", // Onsite Installation — comped
+  training:  "223152695032", // System Onboarding and Training — comped
+  platform:  "335283119838", // All-in-One Platform, $399/mo
 };
 
 const p = (
@@ -39,255 +52,465 @@ const p = (
 ): CatalogProduct => ({ hubspotProductId, name, price, billingFrequency, productType });
 
 const CATALOG: CatalogProduct[] = [
-  p(ID.posCfd,   "POS Unit - With Customer Facing Display", 899, "one_time", "inventory"),
-  p(ID.pos,      "POS Unit", 749, "one_time", "inventory"),
-  p(ID.mega,     "Mega Kiosk", 2459, "one_time", "inventory"),
-  p(ID.kds,      "KDS (Kitchen Display System)", 499, "one_time", "inventory"),
-  p(ID.printer,  "Thermal Printer", 249, "one_time", "inventory"),
-  p(ID.wifi,     "AIO WiFi Network Package", 999, "one_time", "inventory"),
-  p(ID.install,  "Onsite Installation", 999, "one_time", "Service"),
-  p(ID.training, "System Onboarding and Training", 499, "one_time", "Service"),
-  p(ID.platform, "All-in-One Platform", 399, "monthly", ""),
-  p(ID.review,   "Additional Software License", 19, "monthly", "Software"),
-  p(ID.kit,      "Test Kit", 1500, "one_time", "inventory"),
+  p(ID.pos,       "POS Unit", 749, "one_time", "inventory"),
+  p(ID.posCfd,    "POS Unit - With Customer Facing Display", 899, "one_time", "inventory"),
+  p(ID.cfd,       "Customer Facing Display", 150, "one_time", "inventory"),
+  p(ID.ams1,      "Payment Terminal - AMS1", 300, "one_time", "inventory"),
+  p(ID.kiosk27,   "Kiosk 27\" + Payment Terminal (AMS1) and Mount", 999, "one_time", "inventory"),
+  p(ID.kioskMini, "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount", 799, "one_time", "inventory"),
+  p(ID.mega,      "Mega Kiosk", 2459, "one_time", "inventory"),
+  p(ID.tableside, "AIO Tableside POS", 399, "one_time", "inventory"),
+  p(ID.kds,       "KDS (Kitchen Display System)", 499, "one_time", "inventory"),
+  p(ID.printer,   "Thermal Printer", 249, "one_time", "inventory"),
+  p(ID.drawer,    "Cash Drawer", 69, "one_time", "inventory"),
+  p(ID.menuboard, "Menu Board Computer", 99, "one_time", "inventory"),
+  p(ID.wifi,      "AIO WiFi Network Package", 999, "one_time", "inventory"),
+  p(ID.mpos,      "mPOS", 599, "one_time", "inventory"),
+  p(ID.install,   "Onsite Installation", 999, "one_time", "Service"),
+  p(ID.training,  "System Onboarding and Training", 499, "one_time", "Service"),
+  p(ID.platform,  "All-in-One Platform", 399, "monthly", ""),
 ];
 
 const product = (id: string) => CATALOG.find(c => c.hubspotProductId === id)!;
-const line = (id: string, qty: number): QuoteLine => toQuoteLine(product(id), qty);
+const line = (id: string, qty = 1): QuoteLine => toQuoteLine(product(id), qty);
 
-const pkg = (over: Partial<QuotePackage> = {}): QuotePackage => ({
-  id: "test_kit",
-  name: "Test Kit",
-  hubspotProductId: ID.kit,
-  active: true,
-  slots: [{ kind: "order_point", qty: 2 }],
-  ...over,
+const run = (lines: QuoteLine[], over: { quoteType?: QuoteType; packages?: QuotePackage[] } = {}) =>
+  decomposePackages({ lines, quoteType: over.quoteType ?? "all_in_one", packages: over.packages });
+
+const KIT = PACKAGES[0];
+const listOf = (lines: QuoteLine[]) => lines.reduce((n, l) => n + l.unitPrice * l.qty, 0);
+const covered = (lines: QuoteLine[]) => lines.filter(l => l.coveredByPackage);
+const qtyOf = (lines: QuoteLine[], id: string) =>
+  lines.filter(l => l.hubspotProductId === id).reduce((n, l) => n + l.qty, 0);
+const slotsFilled = (out: ReturnType<typeof run>) => out.filled.map(f => f.slot);
+
+describe("the sheet", () => {
+  it("prices a whole HubSpot product as the sum of what it is made of", () => {
+    expect(sheetMsrpOf(ID.pos)).toBe(949);
+    expect(sheetMsrpOf(ID.posCfd)).toBe(949 + 299);
+    expect(sheetMsrpOf(ID.kiosk27)).toBe(999 + 350);
+    expect(sheetMsrpOf(ID.kioskMini)).toBe(799 + 350);
+    expect(sheetMsrpOf(ID.mpos)).toBeNull();
+  });
+
+  it("locks the items that must never be swapped, whatever their MSRP", () => {
+    for (const k of ["cfd", "terminal", "drawer", "menuboard", "wifi"] as const) {
+      expect(SHEET_ITEMS[k].swappable).toBe(false);
+    }
+  });
+
+  it("makes every part of every mapped product a real sheet item", () => {
+    for (const parts of Object.values(PRODUCT_PARTS)) {
+      for (const k of parts) expect(SHEET_ITEMS[k]).toBeDefined();
+    }
+  });
 });
 
-const run = (lines: QuoteLine[], packages: QuotePackage[], catalog = CATALOG) =>
-  decomposePackages({ lines, catalog, orderPointsPerUnit, packages });
+describe("the shipped kit", () => {
+  it("has unique ids, positive slot quantities and real sheet items in every slot", () => {
+    expect(new Set(PACKAGES.map(x => x.id)).size).toBe(PACKAGES.length);
+    for (const pkg of PACKAGES) {
+      expect(pkg.slots.length).toBeGreaterThan(0);
+      for (const s of pkg.slots) {
+        expect(SHEET_ITEMS[s.item]).toBeDefined();
+        expect(Number.isInteger(s.qty) && s.qty > 0).toBe(true);
+      }
+    }
+  });
 
-describe("decomposePackages", () => {
-  it("leaves the cart alone when no package is active", () => {
-    const lines = [line(ID.posCfd, 2), line(ID.kds, 1)];
-    const out = run(lines, [pkg({ active: false })]);
+  it("has a slot an ordering device can fill, or it could never apply", () => {
+    for (const pkg of PACKAGES) expect(pkg.slots.some(s => SHEET_ITEMS[s.item].orders)).toBe(true);
+  });
+
+  it("can be filled: every slot has at least one HubSpot product that lands in it", () => {
+    const reachable = new Set(Object.values(PRODUCT_PARTS).flat());
+    for (const s of KIT.slots) expect(reachable.has(s.item)).toBe(true);
+  });
+
+  it("is worth the $5,200 of sheet MSRP it was specified as", () => {
+    expect(KIT.slots.reduce((n, s) => n + SHEET_ITEMS[s.item].msrp * s.qty, 0)).toBe(5200);
+  });
+
+  it("is on for Order & Pay and All-in-One only, and one per quote", () => {
+    expect(KIT.active).toBe(true);
+    expect(KIT.plans).toEqual(["order_pay_only", "all_in_one"]);
+    expect(KIT.maxPerQuote).toBe(1);
+  });
+});
+
+describe("decomposePackages — what is covered", () => {
+  // One POS + its terminal, a kiosk (which carries its own terminal), and the
+  // rest of the kit. This is the cart the kit was specified against.
+  const FULL = () => [
+    line(ID.pos), line(ID.ams1), line(ID.cfd), line(ID.kiosk27), line(ID.kds),
+    line(ID.printer), line(ID.drawer), line(ID.menuboard), line(ID.wifi),
+  ];
+
+  it("covers a full kit's worth of hardware at 100%, with no package line of its own", () => {
+    const lines = FULL();
+    const out = run(lines);
+
+    expect(out.lines).toHaveLength(lines.length);
+    expect(out.lines.every(l => l.discountPercent === 100 && l.coveredByPackage === "QSR Kit")).toBe(true);
+    // Nothing was added: every output line is one of the inputs.
+    expect(out.lines.map(l => l.hubspotProductId)).toEqual(lines.map(l => l.hubspotProductId));
+    expect(out.applied).toEqual([{ packageId: "qsr_kit", name: "QSR Kit", count: 1, price: 0 }]);
+    expect(out.coveredListAmount).toBe(listOf(lines));
+    expect(out.savings).toBe(out.coveredListAmount);
+  });
+
+  it("covers what the cart has and leaves the empty slots empty — nothing is credited elsewhere", () => {
+    const out = run([line(ID.pos), line(ID.wifi)]);
+    expect(covered(out.lines).map(l => l.hubspotProductId)).toEqual([ID.pos, ID.wifi]);
+    expect(out.coveredListAmount).toBe(749 + 999);
+  });
+
+  it("does not apply without an ordering device: a lone WiFi package and a printer are not a system", () => {
+    const lines = [line(ID.wifi), line(ID.printer), line(ID.drawer)];
+    const out = run(lines);
     expect(out.applied).toEqual([]);
-    expect(out.packageLines).toEqual([]);
     expect(out.lines).toBe(lines);
   });
 
-  it("absorbs a matching cart into one package line plus 100%-off components", () => {
-    const out = run([line(ID.posCfd, 1), line(ID.mega, 1), line(ID.kds, 1)], [
-      pkg({ slots: [{ kind: "order_point", qty: 2 }, { kind: "product", hubspotProductId: ID.kds, name: "KDS", qty: 1 }] }),
-    ]);
-
-    expect(out.applied).toEqual([{ packageId: "test_kit", name: "Test Kit", count: 1, price: 1500 }]);
-    expect(out.packageLines).toHaveLength(1);
-    expect(out.packageLines[0]).toMatchObject({ hubspotProductId: ID.kit, qty: 1, unitPrice: 1500 });
-
-    for (const l of out.lines) {
-      expect(l.discountPercent).toBe(100);
-      expect(l.coveredByPackage).toBe("Test Kit");
+  it("does not apply on a plan the kit isn't part of", () => {
+    const lines = FULL();
+    for (const quoteType of ["marketing_only", "marketing_term"] as const) {
+      expect(run(lines, { quoteType }).lines).toBe(lines);
     }
-    expect(out.coveredListAmount).toBe(899 + 2459 + 499);
-    expect(out.savings).toBe(899 + 2459 + 499 - 1500);
   });
 
-  it("treats ordering points as interchangeable — any mix of the same count is the same package", () => {
-    const slots: QuotePackage["slots"] = [{ kind: "order_point", qty: 3 }];
-    const twoPosOneKiosk = run([line(ID.posCfd, 2), line(ID.mega, 1)], [pkg({ slots })]);
-    const onePosTwoKiosks = run([line(ID.posCfd, 1), line(ID.mega, 2)], [pkg({ slots })]);
-
-    expect(twoPosOneKiosk.applied[0].count).toBe(1);
-    expect(onePosTwoKiosks.applied[0].count).toBe(1);
-    expect(twoPosOneKiosk.lines.every(l => l.coveredByPackage === "Test Kit")).toBe(true);
-    expect(onePosTwoKiosks.lines.every(l => l.coveredByPackage === "Test Kit")).toBe(true);
-  });
-
-  it("fills ordering-point slots with the dearest eligible unit, so the remainder is cheapest", () => {
-    // 3 points on the cart, a 2-point package: the Mega Kiosk and one POS go
-    // in, the second POS is what the merchant still pays for.
-    const out = run([line(ID.posCfd, 2), line(ID.mega, 1)], [pkg()]);
-
-    const covered = out.lines.filter(l => l.coveredByPackage);
-    const remainder = out.lines.filter(l => !l.coveredByPackage);
-    expect(covered.map(l => [l.hubspotProductId, l.qty])).toEqual([[ID.posCfd, 1], [ID.mega, 1]]);
-    expect(remainder.map(l => [l.hubspotProductId, l.qty])).toEqual([[ID.posCfd, 1]]);
-    expect(out.coveredListAmount).toBe(899 + 2459);
+  it("does nothing when the kit is switched off", () => {
+    const lines = FULL();
+    expect(run(lines, { packages: [{ ...KIT, active: false }] }).lines).toBe(lines);
   });
 
   it("splits a partly-covered line rather than blending the discount", () => {
-    const out = run([line(ID.posCfd, 3)], [pkg()]);
+    // Three POS: the pos slot, then a swap into the kiosk slot, then nowhere.
+    const out = run([line(ID.pos, 3)]);
     expect(out.lines).toHaveLength(2);
-    expect(out.lines[0]).toMatchObject({ qty: 2, discountPercent: 100, coveredByPackage: "Test Kit" });
+    expect(out.lines[0]).toMatchObject({ qty: 2, discountPercent: 100, coveredByPackage: "QSR Kit" });
     expect(out.lines[1]).toMatchObject({ qty: 1 });
     expect(out.lines[1].discountPercent).toBeUndefined();
     expect(out.lines[1].coveredByPackage).toBeUndefined();
   });
 
-  it("never covers a recurring line", () => {
-    const out = run([line(ID.review, 2), line(ID.posCfd, 2)], [
-      pkg({ slots: [{ kind: "order_point", qty: 2 }, { kind: "product", hubspotProductId: ID.review, name: "Review Manager", qty: 1 }] }),
-    ]);
-    // The review-manager slot can never be filled, so the package can't apply.
+  it("never covers a recurring line, even of a product the sheet knows", () => {
+    const recurring: QuoteLine = { ...line(ID.pos), billingFrequency: "monthly" };
+    const out = run([recurring, line(ID.wifi)]);
     expect(out.applied).toEqual([]);
-    expect(out.blockers).toEqual([]);
   });
 
-  it("picks the cheapest combination, not the biggest single saving", () => {
-    // Greedy-by-saving takes the 3-point package first (saves $1,197) and
-    // strands the fourth point; two 2-point packages are $399 cheaper.
-    const big = pkg({ id: "big", name: "Big Kit", hubspotProductId: "900000000002", slots: [{ kind: "order_point", qty: 3 }] });
-    const small = pkg({ id: "small", name: "Small Kit", hubspotProductId: "900000000003", slots: [{ kind: "order_point", qty: 2 }] });
-    const catalog = [
-      ...CATALOG,
-      p("900000000002", "Big Kit", 1500, "one_time", "inventory"),
-      p("900000000003", "Small Kit", 1000, "one_time", "inventory"),
-    ];
-
-    const out = decomposePackages({ lines: [line(ID.posCfd, 4)], catalog, orderPointsPerUnit, packages: [big, small] });
-    expect(out.applied).toEqual([{ packageId: "small", name: "Small Kit", count: 2, price: 2000 }]);
-    expect(out.lines.every(l => l.coveredByPackage === "Small Kit")).toBe(true);
+  it("never covers a product that is not in the sheet", () => {
+    const out = run([line(ID.pos), line(ID.mpos)]);
+    expect(covered(out.lines).map(l => l.hubspotProductId)).toEqual([ID.pos]);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.mpos)).toBe(1);
   });
 
-  it("honours maxPerQuote", () => {
-    const out = run([line(ID.posCfd, 4)], [pkg({ maxPerQuote: 1 })]);
-    expect(out.applied[0].count).toBe(1);
-    expect(out.lines.filter(l => !l.coveredByPackage)).toHaveLength(1);
+  it("leaves a line alone that something else already paid for", () => {
+    const planned: QuoteLine = { ...line(ID.menuboard, 3), coveredByPackage: "AIO Marketing Platform", discountPercent: 100 };
+    const out = run([line(ID.pos), planned]);
+    expect(out.lines[1]).toBe(planned);
   });
 
-  it("refuses a $0 package and says so, rather than giving its contents away", () => {
-    const catalog = CATALOG.map(c => (c.hubspotProductId === ID.kit ? { ...c, price: 0 } : c));
-    const out = run([line(ID.posCfd, 2)], [pkg()], catalog);
+  it("honours maxPerQuote, and a larger one covers a second kit", () => {
+    const cart = () => [line(ID.pos, 4), line(ID.ams1, 4)];
 
-    expect(out.applied).toEqual([]);
-    expect(out.lines.every(l => !l.coveredByPackage)).toBe(true);
-    expect(out.blockers).toHaveLength(1);
-    expect(out.blockers[0]).toContain("Test Kit");
-    expect(out.blockers[0]).toContain("priced $0");
-  });
+    const one = run(cart());
+    expect(one.applied[0].count).toBe(1);
+    expect(qtyOf(covered(one.lines), ID.pos)).toBe(2);
 
-  it("reports a package SKU missing from the catalog", () => {
-    const out = run([line(ID.posCfd, 2)], [pkg()], CATALOG.filter(c => c.hubspotProductId !== ID.kit));
-    expect(out.blockers[0]).toContain("isn't in the HubSpot catalog");
-  });
-
-  it("stays quiet about a broken package the cart wouldn't have used anyway", () => {
-    const catalog = CATALOG.map(c => (c.hubspotProductId === ID.kit ? { ...c, price: 0 } : c));
-    // One KDS, no ordering points — the package could never have applied.
-    const out = run([line(ID.kds, 1)], [pkg()], catalog);
-    expect(out.blockers).toEqual([]);
-  });
-
-  it("refuses a package SKU that bills recurring", () => {
-    const catalog = CATALOG.map(c => (c.hubspotProductId === ID.kit ? { ...c, billingFrequency: "monthly" as const } : c));
-    const out = run([line(ID.posCfd, 2)], [pkg()], catalog);
-    expect(out.applied).toEqual([]);
-    expect(out.blockers[0]).toContain("one-time charge");
+    const two = run(cart(), { packages: [{ ...KIT, maxPerQuote: 2 }] });
+    expect(two.applied[0].count).toBe(2);
+    expect(qtyOf(covered(two.lines), ID.pos)).toBe(4);
+    expect(qtyOf(covered(two.lines), ID.ams1)).toBe(4);
   });
 });
 
-describe("the shipped PACKAGES table", () => {
-  it("has unique ids and unique SKUs", () => {
-    expect(new Set(PACKAGES.map(x => x.id)).size).toBe(PACKAGES.length);
-    expect(new Set(PACKAGES.map(x => x.hubspotProductId)).size).toBe(PACKAGES.length);
+describe("decomposePackages — composite products", () => {
+  it("lets a POS with display fill the POS slot and the display slot together", () => {
+    const out = run([line(ID.posCfd)]);
+    expect(out.filled.map(f => [f.part, f.slot])).toEqual([["pos", "pos"], ["cfd", "cfd"]]);
+    expect(out.lines[0]).toMatchObject({ discountPercent: 100, coveredByPackage: "QSR Kit" });
   });
 
-  it("never lists its own SKU as one of its slots", () => {
-    for (const x of PACKAGES) {
-      const slotIds = x.slots.flatMap(s => (s.kind === "product" ? [s.hubspotProductId] : []));
-      expect(slotIds).not.toContain(x.hubspotProductId);
-    }
+  it("lets a kiosk carry its own terminal into the terminal slot", () => {
+    const out = run([line(ID.kiosk27)]);
+    expect(out.filled.map(f => [f.part, f.slot])).toEqual([["kiosk27", "kiosk27"], ["terminal", "terminal"]]);
   });
 
-  it("has at least one slot per package — an empty one would apply to every cart", () => {
-    for (const x of PACKAGES) expect(x.slots.length).toBeGreaterThan(0);
+  it("covers a unit whole or not at all — no credit for part of a POS-with-display", () => {
+    // The display slot is locked and takes one display. The second unit's POS
+    // would swap into the kiosk slot, but its display has nowhere to go, so
+    // the unit is left alone entirely and the kiosk slot stays open.
+    const out = run([line(ID.posCfd, 2)]);
+    expect(qtyOf(covered(out.lines), ID.posCfd)).toBe(1);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.posCfd)).toBe(1);
+    expect(slotsFilled(out)).not.toContain("kiosk27");
+  });
+});
+
+describe("decomposePackages — swaps", () => {
+  it("swaps a device into the slot nearest its MSRP", () => {
+    // The 15.6" kiosk part ($799) fits the KDS slot ($735, 64 away), the POS
+    // slot ($949, 150 away) and the kiosk slot ($999, 200 away). Nearest wins.
+    const out = run([line(ID.kioskMini)]);
+    expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "kds", swapped: true });
+    expect(qtyOf(covered(out.lines), ID.kioskMini)).toBe(1);
   });
 
-  it("keeps package SKUs out of the rep's picker", () => {
-    for (const x of PACKAGES) {
-      expect(isPackageProduct(x.hubspotProductId)).toBe(true);
-      expect(isPickable(p(x.hubspotProductId, x.name, 1500, "one_time", "inventory"))).toBe(false);
+  it("falls to the next-nearest slot when the nearest are taken", () => {
+    const out = run([line(ID.pos), line(ID.kds), line(ID.kioskMini)]);
+    expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "kiosk27", swapped: true });
+    expect(qtyOf(covered(out.lines), ID.kioskMini)).toBe(1);
+  });
+
+  it("places the most constrained device first, so a flexible one can't take its only seat", () => {
+    // The tableside device ($603) can only go in the KDS slot. The kiosk is
+    // nearer the KDS slot too, but has other places to go — so it moves over.
+    const out = run([line(ID.kioskMini), line(ID.tableside)]);
+    expect(out.filled.find(f => f.part === "tableside")).toMatchObject({ slot: "kds" });
+    expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "pos" });
+    expect(out.lines.every(l => l.coveredByPackage === "QSR Kit")).toBe(true);
+  });
+
+  it("swaps a tableside device into the KDS slot when there is no KDS", () => {
+    const out = run([line(ID.pos), line(ID.tableside)]);
+    expect(out.filled.find(f => f.part === "tableside")).toMatchObject({ slot: "kds", swapped: true });
+  });
+
+  it("does not swap past the band — a Mega Kiosk is not a POS", () => {
+    const out = run([line(ID.pos), line(ID.mega)]);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.mega)).toBe(1);
+    expect(SHEET_ITEMS.mega.msrp).toBeGreaterThan(SHEET_ITEMS.kiosk27.msrp * (1 + SWAP_TOLERANCE));
+  });
+
+  it("leaves a second device uncovered rather than stacking it into a taken slot", () => {
+    const out = run([line(ID.pos), line(ID.kds), line(ID.tableside)]);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.tableside)).toBe(1);
+  });
+
+  it("an exact fit always beats a swap, whatever order the lines arrive in", () => {
+    const a = run([line(ID.kioskMini), line(ID.pos), line(ID.kds)]);
+    const b = run([line(ID.kds), line(ID.pos), line(ID.kioskMini)]);
+    for (const out of [a, b]) {
+      expect(out.filled.find(f => f.part === "pos")).toMatchObject({ slot: "pos", swapped: false });
+      expect(out.filled.find(f => f.part === "kds")).toMatchObject({ slot: "kds", swapped: false });
+      expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "kiosk27", swapped: true });
     }
   });
 });
 
-describe("buildQuote with a package on it", () => {
-  const TEST_PACKAGE = pkg({
-    slots: [
-      { kind: "order_point", qty: 2 },
-      { kind: "product", hubspotProductId: ID.wifi, name: "AIO WiFi Network Package", qty: 1 },
-    ],
+describe("decomposePackages — locks", () => {
+  it("never puts a locked item into another slot, even when its MSRP fits", () => {
+    // Two displays: $299 sits inside the printer slot's band ($252–$420), but
+    // the display is locked, so the second one stays a charged line.
+    const out = run([line(ID.pos), line(ID.cfd, 2)]);
+    expect(qtyOf(covered(out.lines), ID.cfd)).toBe(1);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.cfd)).toBe(1);
+    expect(slotsFilled(out)).not.toContain("printer");
   });
 
-  // PACKAGES is the shipped table and buildQuote reads it directly — the same
-  // way COMPED_SERVICE_PRODUCT_IDS is read. Borrow it for the length of a test.
-  const withPackage = () => {
-    PACKAGES.push(TEST_PACKAGE);
-    return () => { PACKAGES.splice(PACKAGES.indexOf(TEST_PACKAGE), 1); };
-  };
+  it("never lets a payment terminal take a swappable slot", () => {
+    // Three terminals, two terminal slots. $350 is inside the printer band.
+    const out = run([line(ID.pos), line(ID.ams1, 3)]);
+    expect(qtyOf(covered(out.lines), ID.ams1)).toBe(2);
+    expect(slotsFilled(out)).not.toContain("printer");
+  });
+
+  it("never lets a swappable device into a locked slot", () => {
+    // Two printers. $336 is inside the display slot's band, but that slot is
+    // locked — and the printer slot only holds one.
+    const out = run([line(ID.pos), line(ID.printer, 2)]);
+    expect(qtyOf(covered(out.lines), ID.printer)).toBe(1);
+    expect(slotsFilled(out)).not.toContain("cfd");
+  });
+});
+
+describe("the retired QSR Kit product", () => {
+  // The $0 package SKU from the design this module replaced. The kit is now the
+  // individual products at 100% off, so this record must never be offered or
+  // sent back as a pick.
+  const KIT_SKU = p("333450361558", "QSR Kit", 0, "one_time", "");
+
+  it("is not offered in the picker", () => {
+    expect(isPickable(KIT_SKU)).toBe(false);
+    expect(isAllowedForQuoteType(KIT_SKU, "all_in_one")).toBe(false);
+  });
+
+  it("is dropped when an old quote that carries it is reopened", () => {
+    const old = [toQuoteLine(KIT_SKU, 1), line(ID.pos)];
+    expect(picksFromQuoteLines(old, "all_in_one")).toEqual([{ hubspotProductId: ID.pos, qty: 1 }]);
+  });
+});
+
+describe("preselecting the kit", () => {
+  const preselected = () =>
+    kitPicks(KIT).map(k => toQuoteLine(product(k.hubspotProductId), k.qty));
+
+  it("offers the kit on both kit plans and nowhere else", () => {
+    expect(kitFor("order_pay_only")).toBe(KIT);
+    expect(kitFor("all_in_one")).toBe(KIT);
+    expect(kitFor("marketing_only")).toBeNull();
+  });
+
+  it("offers nothing when the kit is switched off", () => {
+    const was = KIT.active;
+    KIT.active = false;
+    try { expect(kitFor("all_in_one")).toBeNull(); } finally { KIT.active = was; }
+  });
+
+  it("never picks a derived product by hand — a terminal or WiFi would bill twice", () => {
+    const ids = kitPicks(KIT).map(k => k.hubspotProductId);
+    expect(ids).not.toContain(ID.ams1);
+    expect(ids).not.toContain(ID.wifi);
+  });
+
+  it.each(["order_pay_only", "all_in_one"] as const)(
+    "fills EVERY slot of the kit on %s, derived terminals and WiFi included",
+    quoteType => {
+      // The fixture only carries the All-in-One platform product; each plan
+      // needs its own, or the quote (rightly) refuses to price.
+      const plan = PLATFORM_PRODUCTS[quoteType];
+      const catalog = CATALOG.some(c => c.hubspotProductId === plan.hubspotProductId)
+        ? CATALOG
+        : [...CATALOG, p(plan.hubspotProductId, plan.name, 299, "monthly", "")];
+      const built = buildQuote(quoteType, preselected(), [], catalog, {});
+
+      expect(built.packages.applied).toHaveLength(1);
+      // Slot by slot: nothing the kit specifies is left open.
+      const filled = new Map<string, number>();
+      for (const f of built.packages.filled) filled.set(f.slot, (filled.get(f.slot) ?? 0) + 1);
+      for (const s of KIT.slots) expect(filled.get(s.item) ?? 0, s.item).toBe(s.qty);
+
+      // And so there is no hardware left over to charge for.
+      expect(built.totals.oneTime).toBe(0);
+      expect(built.blockers).toEqual([]);
+      const wifi = built.quoteLines.find(l => l.hubspotProductId === ID.wifi)!;
+      expect(wifi.coveredByPackage).toBe("QSR Kit");
+    }
+  );
+
+  it("names only products the plan is allowed to carry", () => {
+    for (const k of kitPicks(KIT)) expect(CATALOG.some(c => c.hubspotProductId === k.hubspotProductId)).toBe(true);
+  });
+});
+
+describe("buildQuote with the kit on it", () => {
   let restore: (() => void) | null = null;
   afterEach(() => { restore?.(); restore = null; });
 
-  const build = (picks: QuoteLine[], adjustments = {}) => {
-    restore = withPackage();
-    return buildQuote("all_in_one", picks, [], CATALOG, adjustments);
+  const withKit = (active: boolean) => {
+    const was = KIT.active;
+    KIT.active = active;
+    restore = () => { KIT.active = was; };
   };
 
-  it("puts the package line on the quote and covers the WiFi package with it", () => {
-    const built = build([line(ID.posCfd, 2)]);
+  const picks = () => [
+    line(ID.pos), line(ID.kiosk27), line(ID.kds), line(ID.printer), line(ID.drawer), line(ID.menuboard),
+  ];
 
-    expect(built.packages.applied[0]).toMatchObject({ name: "Test Kit", count: 1 });
-    expect(built.quoteLines.find(l => l.hubspotProductId === ID.kit)).toBeDefined();
+  const build = (over: QuoteLine[] = picks(), adjustments = {}, quoteType: QuoteType = "all_in_one") =>
+    buildQuote(quoteType, over, [], CATALOG, adjustments);
 
-    const wifi = built.quoteLines.find(l => l.hubspotProductId === ID.wifi)!;
-    expect(wifi.coveredByPackage).toBe("Test Kit");
-    expect(wifi.discountPercent).toBe(100);
+  it("covers the derived AMS1 and WiFi package along with the picks", () => {
+    const built = build();
+
+    for (const id of [ID.pos, ID.kiosk27, ID.kds, ID.printer, ID.drawer, ID.menuboard, ID.ams1, ID.wifi]) {
+      const l = built.quoteLines.find(x => x.hubspotProductId === id)!;
+      expect(l, id).toBeDefined();
+      expect(l.coveredByPackage, id).toBe("QSR Kit");
+      expect(l.discountPercent, id).toBe(100);
+    }
     expect(built.blockers).toEqual([]);
   });
 
+  it("puts no line of its own on the quote", () => {
+    const built = build();
+    expect(built.quoteLines.some(l => l.name === "QSR Kit")).toBe(false);
+  });
+
+  it("leaves the comped install and training as they were — comps, not kit coverage", () => {
+    const built = build();
+    for (const id of [ID.install, ID.training]) {
+      const l = built.quoteLines.find(x => x.hubspotProductId === id)!;
+      expect(l.discountPercent).toBe(100);
+      expect(l.coveredByPackage).toBeUndefined();
+    }
+  });
+
+  it("charges only the platform fee when the kit covers all of the hardware", () => {
+    const built = build();
+    expect(built.totals.oneTime).toBe(0);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
+  });
+
+  it("charges full price for what the kit doesn't cover", () => {
+    const built = build([...picks(), line(ID.mega)]);
+    const mega = built.quoteLines.find(l => l.hubspotProductId === ID.mega)!;
+    expect(mega.coveredByPackage).toBeUndefined();
+    expect(mega.discountPercent).toBeUndefined();
+    expect(built.totals.oneTime).toBe(2459);
+  });
+
   it("does not refuse the quote over the 100% on a covered line", () => {
-    const built = build([line(ID.posCfd, 2)]);
-    expect(adjustmentBlockers(built.quoteLines, 50)).toEqual([]);
+    expect(adjustmentBlockers(build().quoteLines, 50)).toEqual([]);
   });
 
   it("holds a covered line at 100% when the rep adjusts that product's other half", () => {
-    // Three POS: two covered, one not. The rep delays billing on the product —
-    // applyLineAdjustment clears discountPercent, and only applyPackageComp
-    // puts the covered half back.
-    const built = build([line(ID.posCfd, 3)], {
-      [ID.posCfd]: { billingStart: { mode: "days" as const, days: 60 } },
-    });
+    // Three POS: two covered (the pos slot and a swap), one charged. The rep
+    // discounts the product — applyLineAdjustment would clear the covered
+    // half's 100%, and only applyPackageComp puts it back.
+    const built = build([line(ID.pos, 3)], { [ID.pos]: { discountPercent: 25 } });
+    const pos = built.quoteLines.filter(l => l.hubspotProductId === ID.pos);
 
-    const pos = built.quoteLines.filter(l => l.hubspotProductId === ID.posCfd);
     expect(pos).toHaveLength(2);
-    expect(pos[0]).toMatchObject({ qty: 2, discountPercent: 100, coveredByPackage: "Test Kit" });
-    expect(pos[1].discountPercent).toBeUndefined();
+    expect(pos[0]).toMatchObject({ qty: 2, discountPercent: 100, coveredByPackage: "QSR Kit" });
+    expect(pos[1]).toMatchObject({ qty: 1, discountPercent: 25 });
+    expect(pos[1].coveredByPackage).toBeUndefined();
   });
 
-  it("counts ordering points off the unsplit picks, so splitting can't move the platform tier", () => {
-    const withPkg = build([line(ID.posCfd, 3)]);
-    const withoutPkg = buildQuote("all_in_one", [line(ID.posCfd, 3)], [], CATALOG);
-    expect(withPkg.orderPoints.total).toBe(3);
-    expect(withPkg.orderPoints.total).toBe(withoutPkg.orderPoints.total);
-    expect(withPkg.platform.productName).toBe(withoutPkg.platform.productName);
+  it("does not move the ordering-point count", () => {
+    withKit(false);
+    const without = build();
+    withKit(true);
+    const withKitOn = build();
+    expect(withKitOn.orderPoints.total).toBe(without.orderPoints.total);
   });
 
-  it("round-trips through the configurator: picks merge, the package SKU is dropped", () => {
-    const built = build([line(ID.posCfd, 3), line(ID.kds, 1)]);
-    const picks = picksFromQuoteLines(built.quoteLines, "all_in_one");
-
-    expect(picks).toContainEqual({ hubspotProductId: ID.posCfd, qty: 3 });
-    expect(picks).toContainEqual({ hubspotProductId: ID.kds, qty: 1 });
-    expect(picks.find(x => x.hubspotProductId === ID.kit)).toBeUndefined();
-    expect(picks.find(x => x.hubspotProductId === ID.wifi)).toBeUndefined();
+  it("changes nothing on a quote that is rate-only", () => {
+    const built = build([], {});
+    expect(built.quoteLines).toEqual([]);
+    expect(built.packages.applied).toEqual([]);
   });
 
-  it("does not read a package's 100% back as a rep adjustment", () => {
-    const built = build([line(ID.posCfd, 2)]);
-    const reopened = adjustmentsFromQuoteLines(built.quoteLines);
-    expect(reopened[ID.posCfd]).toBeUndefined();
+  it("changes nothing when the kit is off — the same lines, charged", () => {
+    withKit(false);
+    const built = build();
+    expect(built.packages.applied).toEqual([]);
+    expect(built.quoteLines.filter(l => l.coveredByPackage)).toEqual([]);
+    expect(built.totals.oneTime).toBeGreaterThan(0);
+  });
+
+  it("round-trips through the configurator: picks come back whole, derived lines are dropped", () => {
+    const back = picksFromQuoteLines(build().quoteLines, "all_in_one");
+
+    for (const id of [ID.pos, ID.kiosk27, ID.kds, ID.printer, ID.drawer, ID.menuboard]) {
+      expect(back).toContainEqual({ hubspotProductId: id, qty: 1 });
+    }
+    expect(back.find(x => x.hubspotProductId === ID.wifi)).toBeUndefined();
+    expect(back.find(x => x.hubspotProductId === ID.ams1)).toBeUndefined();
+  });
+
+  it("round-trips a partly-covered line with its quantity summed back together", () => {
+    const back = picksFromQuoteLines(build([line(ID.pos, 3)]).quoteLines, "all_in_one");
+    expect(back).toContainEqual({ hubspotProductId: ID.pos, qty: 3 });
+  });
+
+  it("does not read a covered line's 100% back as a rep adjustment", () => {
+    const reopened = adjustmentsFromQuoteLines(build().quoteLines);
+    expect(reopened[ID.pos]).toBeUndefined();
     expect(reopened[ID.wifi]).toBeUndefined();
+    expect(reopened[ID.ams1]).toBeUndefined();
     // The standing comps on install and training still come back.
     expect(reopened[ID.install]).toEqual({ discountPercent: 100 });
   });

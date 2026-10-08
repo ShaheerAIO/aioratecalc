@@ -323,6 +323,34 @@ export type LineAdjustment = {
    */
   discountQty?: number | null;
   billingStart?: BillingStart | null;
+  /**
+   * Per-UNIT edits, for a line with more than one unit on it: entry `i` is the
+   * discount and billing start of the i-th chargeable unit. Present means the
+   * line is in "adjust each unit" mode, and then it REPLACES the line-level
+   * `discountPercent` / `discountQty` / `billingStart` entirely — two sources
+   * for the same figure is how a quote ends up disagreeing with its own screen.
+   *
+   * `buildQuote` groups units that came out identical back into one line, so
+   * three units with two different billing starts become two lines, never
+   * three. A unit past the end of the array is unadjusted, which is what a
+   * rep who raises the quantity after setting this would expect of the new one.
+   * Like `discountQty` it never reaches HubSpot: the split lines are the
+   * representation, and `adjustmentsFromQuoteLines` reads it back off them.
+   */
+  units?: UnitAdjustment[] | null;
+  /**
+   * Take a derived line off the quote. Only the WiFi package honors this —
+   * `buildQuote` skips that line when it is set, and does not report the
+   * product as missing. Install and training ignore it; they are not optional.
+   * Absent means the line stays, which is the default.
+   */
+  removed?: boolean | null;
+};
+
+/** The two things a rep can set on one unit of a multi-unit line. */
+export type UnitAdjustment = {
+  discountPercent?: number | null;
+  billingStart?: BillingStart | null;
 };
 
 /** hubspotProductId → the rep's edits to that line. */

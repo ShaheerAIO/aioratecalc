@@ -18,7 +18,10 @@
 // resolved by the caller and passed in, so every branch is unit-testable.
 
 import { toLineItemProperties } from "@/lib/adapters/hubspot";
-import { adjustmentBlockers, deriveOrderPoints, quoteTotals, resolvePlatformLine, quoteTypeOf } from "@/lib/quoting";
+import {
+  adjustmentBlockers, checkoutAmountBlockers, deriveOrderPoints,
+  quoteTotals, resolvePlatformLine, quoteTypeOf,
+} from "@/lib/quoting";
 import type { CatalogProduct, MerchantApplication, QuoteTotals } from "@/types/merchant";
 
 /** One thing that has to be fixed, in the language of the person who has to fix it. */
@@ -182,6 +185,20 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   //     real check rather than a restatement.
   for (const message of adjustmentBlockers(lines, maxDiscountPercent)) {
     add("discount_over_policy", message);
+  }
+
+  // 4c. Something is actually due at checkout. HubSpot answers a publish with
+  //     400 MIN_TOTAL_NOT_REACHED when the checkout total is under $0.50, and
+  //     by then the contact, line items and a draft quote already exist. The
+  //     configurator now adds a $0.50 pre-authorization whenever it would
+  //     otherwise happen, but lines saved before that publish verbatim, so the
+  //     saved quote is re-checked here rather than trusted. Skipped for an
+  //     empty line set (`no_quote_lines` already says so).
+  if (checkoutAmountBlockers(lines).length > 0) {
+    add(
+      "nothing_due_at_checkout",
+      "Nothing is due at checkout — every charge is either free or has a delayed billing start — and HubSpot can't publish a quote that collects less than $0.50 up front. Open the quote and save it again: a $0.50 pre-authorization is added automatically, but only to quotes saved after it existed."
+    );
   }
 
   // 5. The plan's platform line resolved. Re-derived from the saved lines

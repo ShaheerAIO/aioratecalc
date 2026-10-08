@@ -4,17 +4,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import { getMaxDiscountPercent } from "@/lib/actions/pricing";
 import {
+  AMS1_PRODUCT,
   DEFAULT_MAX_DISCOUNT_PERCENT,
+  INCLUDED_SCREEN_COUNT,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
   PLATFORM_PRODUCTS,
   PROCESSING_DISCLOSURE_PRODUCT,
+  PRODUCT_GROUP_LABELS,
   QUOTE_TYPES,
+  WIFI_PRODUCT_ID,
+  amountDueAtCheckout,
   buildQuote,
   groupProducts,
   isAllowedForQuoteType,
   carriesWebsite,
   isCompedService,
+  isPreAuthProduct,
   isMarketingQuote,
   isProcessingQuote,
   lineDiscountAmount,
@@ -22,11 +28,14 @@ import {
   lineNetAmount,
   maxQtyFor,
   toQuoteLine,
+  unitsFromQuoteLines,
   type BuiltQuote,
 } from "@/lib/quoting";
+import { kitFor, kitPicks } from "@/lib/quotePackages";
+import QuoteReceipt from "@/components/quoting/QuoteReceipt";
 import { fmt$, fmtFrequency, monthlyEquivalent } from "@/lib/utils";
 import type {
-  BillingStart, CatalogProduct, LineAdjustment, QuoteAdjustments, QuoteLine, QuoteType,
+  BillingStart, CatalogProduct, LineAdjustment, QuoteAdjustments, QuoteLine, QuoteType, UnitAdjustment,
 } from "@/types/merchant";
 import styles from "./ProductConfigurator.module.css";
 
@@ -38,6 +47,14 @@ export type ProductPick = { hubspotProductId: string; qty: number };
 // would be a new reference every render, rebuilding the quote and pushing
 // fresh derived state up to the parent on each one.
 const NO_ADJUSTMENTS: QuoteAdjustments = Object.freeze({});
+
+/** A unit's edits with the blanks removed, so an untouched unit is `{}`. */
+function cleanUnit(unit: UnitAdjustment): UnitAdjustment {
+  const out: UnitAdjustment = {};
+  if (unit.discountPercent) out.discountPercent = unit.discountPercent;
+  if (unit.billingStart) out.billingStart = unit.billingStart;
+  return out;
+}
 
 /**
  * Everything downstream of the picks, recomputed here for the live preview.
@@ -135,7 +152,36 @@ export default function ProductConfigurator({
     () => catalog.filter(p => isAllowedForQuoteType(p, quoteType)),
     [catalog, quoteType]
   );
-  const groups = useMemo(() => groupProducts(selectable), [selectable]);
+  // The kit's products sit together at the top of the ordinary Hardware group,
+  // in the kit's own order, with no label of their own. Static on purpose: the
+  // order comes from the kit definition, never from what is picked, so a row
+  // doesn't jump when its stepper moves and a rep always finds the kit in the
+  // same place. A product at zero stays listed — that is how a removed item
+  // gets added back.
+  const kit = kitFor(quoteType);
+  const groups = useMemo(() => {
+    if (!kit) return groupProducts(selectable);
+
+    // Pulled from WHEREVER they are, not just the Hardware group: HubSpot
+    // carries no product type on the Customer Facing Display, so it would
+    // otherwise sit under "Uncategorized", nowhere near the POS it goes with.
+    const byId = new Map(selectable.map(p => [p.hubspotProductId, p]));
+    const inKit = kitPicks(kit).flatMap(k => byId.get(k.hubspotProductId) ?? []);
+    const kitIds = new Set(inKit.map(p => p.hubspotProductId));
+
+    const rest = groupProducts(selectable.filter(p => !kitIds.has(p.hubspotProductId)));
+    if (inKit.length === 0) return rest;
+
+    const hardware = rest.find(g => g.type === "inventory");
+    if (hardware) {
+      return rest.map(g => (g === hardware ? { ...g, products: [...inKit, ...g.products] } : g));
+    }
+    // No other hardware at all: the kit still gets its Hardware group, first.
+    return [
+      { type: "inventory", label: PRODUCT_GROUP_LABELS.inventory, products: inKit },
+      ...rest,
+    ];
+  }, [selectable, kit]);
 
   // Everything downstream of the picker is derived, never separately stored:
   // the order-point count comes from the lines, the platform tier comes from the
@@ -249,9 +295,13 @@ export default function ProductConfigurator({
   // product that is ONLY covered therefore has no entry, which is exactly how
   // `lineAdjust` knows not to offer a control for it.
   const lineFor = useMemo(() => {
-    const map = new Map<string, QuoteLine & { discountAmount: number }>();
+    const map = new Map<string, QuoteLine & { discountAmount: number; mixedDiscount?: boolean }>();
     for (const l of quoteLines) {
       if (l.coveredByPackage) continue;
+      // The pre-authorization is not the rep's to adjust, so it gets no entry
+      // — which is also what keeps the quote-wide discount and billing-start
+      // sweeps from ever naming it.
+      if (isPreAuthProduct(l.hubspotProductId, l.name)) continue;
       const prev = map.get(l.hubspotProductId);
       const amount = lineDiscountAmount(l);
       if (!prev) {
@@ -266,6 +316,9 @@ export default function ProductConfigurator({
         // Summed off the real lines, so the button states what was actually
         // given away rather than the discount as if it hit every unit.
         discountAmount: prev.discountAmount + amount,
+        // The halves of a split line disagree about the discount. The quote-
+        // wide field reads this to say "Mixed" instead of the first half's figure.
+        mixedDiscount: prev.mixedDiscount || (prev.discountPercent ?? 0) !== (l.discountPercent ?? 0),
       });
     }
     return map;
@@ -274,6 +327,12 @@ export default function ProductConfigurator({
   // Which rows have their adjust drawer open. Local and deliberately not
   // persisted — it is a disclosure, not quote data.
   const [openAdjust, setOpenAdjust] = useState<Set<string>>(new Set());
+  // The WiFi remove confirmation. Local, like the adjust drawers: it is a
+  // disclosure, and the decision itself lives on the adjustment.
+  const [confirmWifi, setConfirmWifi] = useState(false);
+  // Same idea for taking a unit the kit is giving away off the quote: the
+  // product id whose removal is awaiting a yes. One at a time.
+  const [confirmKitRemove, setConfirmKitRemove] = useState<string | null>(null);
   const toggleAdjust = (id: string) =>
     setOpenAdjust(prev => {
       const next = new Set(prev);
@@ -293,12 +352,35 @@ export default function ProductConfigurator({
   // catalog has actually loaded.
   const changeType = (next: QuoteType) => {
     onQuoteTypeChange(next);
+    setConfirmKitRemove(null);
     if (catalog.length) {
       const allowed = new Set(
         catalog.filter(p => isAllowedForQuoteType(p, next)).map(p => p.hubspotProductId)
       );
       const kept = picks.filter(p => allowed.has(p.hubspotProductId));
-      if (kept.length !== picks.length) onPicksChange(kept);
+
+      // Choosing a plan that comes with a kit puts the whole kit on the quote.
+      // ONLY onto an empty quote: a rep who has already picked hardware has
+      // made choices, and swapping between the two kit plans must not pile a
+      // second set of everything on top of them. Clicking the plan that is
+      // already selected counts — that is how a rep re-applies the kit after
+      // clearing it. WiFi isn't a pick (it is derived once there is hardware),
+      // but "preselect everything" includes bringing it back if it was removed.
+      const kit = kitFor(next);
+      if (kit && kept.length === 0) {
+        const inKit = new Map(kitPicks(kit).map(k => [k.hubspotProductId, k.qty]));
+        const seeded = catalog
+          .filter(p => allowed.has(p.hubspotProductId) && inKit.has(p.hubspotProductId))
+          .map(p => ({ hubspotProductId: p.hubspotProductId, qty: inKit.get(p.hubspotProductId)! }));
+        if (seeded.length) {
+          onPicksChange(seeded);
+          if (adjustments[WIFI_PRODUCT_ID]?.removed) setAdjustment(WIFI_PRODUCT_ID, { removed: null });
+        } else if (picks.length) {
+          onPicksChange(kept);
+        }
+      } else if (kept.length !== picks.length) {
+        onPicksChange(kept);
+      }
     }
     if (!isProcessingQuote(next) && channels.length) onChannelsChange([]);
   };
@@ -330,9 +412,23 @@ export default function ProductConfigurator({
     const next: QuoteAdjustments = { ...adjustments };
     for (const id of ids) {
       const merged: LineAdjustment = { ...next[id], ...patch };
+      // A line in "adjust each unit" mode answers to its units, so a quote-wide
+      // sweep has to reach them or it would change nothing on that line. The
+      // patch that SWITCHES a line into unit mode carries `units` itself and
+      // must not be rewritten by its own blanks.
+      if (Array.isArray(merged.units) && !("units" in patch)) {
+        const overlay: UnitAdjustment = {};
+        if ("discountPercent" in patch) overlay.discountPercent = patch.discountPercent;
+        if ("billingStart" in patch) overlay.billingStart = patch.billingStart;
+        if (Object.keys(overlay).length) {
+          merged.units = merged.units.map(u => cleanUnit({ ...u, ...overlay }));
+        }
+      }
+      if (!merged.units) delete merged.units;
       if (!merged.discountPercent) delete merged.discountPercent;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
+      if (!merged.removed) delete merged.removed;
       if (Object.keys(merged).length) next[id] = merged;
       else delete next[id];
     }
@@ -358,6 +454,60 @@ export default function ProductConfigurator({
   const setDiscountQty = (id: string, raw: string) => {
     const qty = raw.trim() === "" ? null : Number(raw);
     setAdjustment(id, { discountQty: qty === null || Number.isNaN(qty) ? null : qty });
+  };
+
+  // ── Per-unit editing ──────────────────────────────────────────────────────
+  // A line with several units can be edited as one ("2 of 3 free") or unit by
+  // unit. The rows are shown for `qty` units whatever the stored array's
+  // length, since a unit past its end is simply unadjusted.
+  const [openUnits, setOpenUnits] = useState<Set<string>>(new Set());
+
+  const unitsOf = (id: string, qty: number): UnitAdjustment[] => {
+    const stored = adjustments[id]?.units;
+    return Array.from({ length: qty }, (_, i) => cleanUnit(stored?.[i] ?? {}));
+  };
+
+  // Switching in seeds every unit from what the line is doing NOW — read off
+  // the built lines rather than the line-level fields, so a "1 of 3 free" or a
+  // service comp carries over exactly as the rep sees it. Line-level values are
+  // cleared: they're ignored in unit mode, and a stale copy left behind would
+  // come back, silently, the moment the rep switched out again.
+  const enterUnitMode = (id: string, qty: number) => {
+    const seed = unitsFromQuoteLines(quoteLines, id).slice(0, qty);
+    while (seed.length < qty) seed.push({});
+    setOpenUnits(prev => new Set(prev).add(id));
+    setAdjustment(id, { units: seed, discountPercent: null, discountQty: null, billingStart: null });
+  };
+
+  const leaveUnitMode = (id: string) => {
+    setOpenUnits(prev => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    setAdjustment(id, { units: null });
+  };
+
+  const setUnit = (id: string, qty: number, index: number, patch: UnitAdjustment) => {
+    const units = unitsOf(id, qty);
+    units[index] = cleanUnit({ ...units[index], ...patch });
+    setAdjustment(id, { units });
+  };
+
+  const setUnitDiscount = (id: string, qty: number, index: number, raw: string) => {
+    const pct = raw.trim() === "" ? null : Number(raw);
+    setUnit(id, qty, index, {
+      discountPercent: pct === null || Number.isNaN(pct) ? null : Math.min(100, Math.max(0, pct)),
+    });
+  };
+
+  const setUnitStartMode = (id: string, qty: number, index: number, mode: "now" | "date" | "days") => {
+    setUnit(id, qty, index, {
+      billingStart:
+        mode === "now" ? null
+        : mode === "date" ? { mode: "date", date: firstOfNextMonth() }
+        : { mode: "days", days: 60 },
+    });
   };
 
   const setStartMode = (ids: string[], mode: "now" | "date" | "days") => {
@@ -409,7 +559,8 @@ export default function ProductConfigurator({
   );
   const sharedDiscount = useMemo(() => {
     if (discountIds.length === 0) return { mixed: false, pct: null as number | null };
-    const pctOf = (id: string) => adjustments[id]?.discountQty ? -1 : (lineFor.get(id)?.discountPercent ?? 0);
+    const pctOf = (id: string) =>
+      adjustments[id]?.discountQty || lineFor.get(id)?.mixedDiscount ? -1 : (lineFor.get(id)?.discountPercent ?? 0);
     const first = pctOf(discountIds[0]);
     const mixed = discountIds.some(id => pctOf(id) !== first);
     return { mixed, pct: mixed || first <= 0 ? null : first };
@@ -460,6 +611,8 @@ export default function ProductConfigurator({
     const mode = start?.mode ?? "now";
     const discounted = (l.discountPercent ?? 0) > 0;
     const delayed = mode !== "now";
+    const unitMode = Array.isArray(adjustments[id]?.units) || openUnits.has(id);
+    const units = unitMode ? unitsOf(id, l.qty) : [];
 
     return (
       <div className={styles.adjustWrap}>
@@ -483,6 +636,73 @@ export default function ProductConfigurator({
 
         {open && (
           <div className={styles.adjustDrawer}>
+            {unitMode && (
+              <div className={styles.unitList}>
+                {units.map((u, i) => {
+                  const us = u.billingStart;
+                  const umode = us?.mode ?? "now";
+                  return (
+                    <div key={i} className={styles.unitRow}>
+                      <span className={styles.unitName}>Unit {i + 1}</span>
+                      <label className={styles.adjustField}>
+                        <span className={styles.adjustLabel}>Discount</span>
+                        <span className={styles.pctWrap}>
+                          <input
+                            type="number" min={0} max={100} step={1}
+                            className={styles.adjustInput}
+                            value={u.discountPercent ?? ""}
+                            placeholder="0"
+                            onChange={e => setUnitDiscount(id, l.qty, i, e.target.value)}
+                            aria-label={`Discount percent for unit ${i + 1} of ${l.name}`}
+                          />
+                          <span className={styles.pctSign}>%</span>
+                        </span>
+                      </label>
+                      {l.billingFrequency !== "one_time" && (
+                        <label className={styles.adjustField}>
+                          <span className={styles.adjustLabel}>Billing starts</span>
+                          <span className={styles.startWrap}>
+                            <select
+                              className={styles.adjustSelect}
+                              value={umode}
+                              onChange={e => setUnitStartMode(id, l.qty, i, e.target.value as "now" | "date" | "days")}
+                              aria-label={`When billing starts for unit ${i + 1} of ${l.name}`}
+                            >
+                              <option value="now">At checkout</option>
+                              <option value="date">On a date</option>
+                              <option value="days">After N days</option>
+                            </select>
+                            {us?.mode === "date" && (
+                              <input
+                                type="date"
+                                className={styles.adjustInput}
+                                value={us.date}
+                                onChange={e => setUnit(id, l.qty, i, { billingStart: { mode: "date", date: e.target.value } })}
+                                aria-label={`Billing start date for unit ${i + 1} of ${l.name}`}
+                              />
+                            )}
+                            {us?.mode === "days" && (
+                              <span className={styles.pctWrap}>
+                                <input
+                                  type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
+                                  className={styles.adjustInput}
+                                  value={us.days}
+                                  onChange={e => setUnit(id, l.qty, i, { billingStart: { mode: "days", days: Number(e.target.value) } })}
+                                  aria-label={`Billing start delay in days for unit ${i + 1} of ${l.name}`}
+                                />
+                                <span className={styles.pctSign}>days</span>
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {!unitMode && (<>
             <label className={styles.adjustField}>
               <span className={styles.adjustLabel}>Discount</span>
               <span className={styles.pctWrap}>
@@ -560,6 +780,21 @@ export default function ProductConfigurator({
                 </span>
               </label>
             )}
+            </>)}
+
+            {/* Several units on one line: the rep may want them treated
+                differently — one free, one started later. Offered on any line
+                with more than one unit, and always while already in the mode so
+                it can be left. */}
+            {(l.qty > 1 || unitMode) && (
+              <button
+                type="button"
+                className={styles.linkBtn}
+                onClick={() => (unitMode ? leaveUnitMode(id) : enterUnitMode(id, l.qty))}
+              >
+                {unitMode ? "Use one setting for all units" : `Adjust each of the ${l.qty} units separately`}
+              </button>
+            )}
 
             <p className={styles.adjustNote}>
               A discount on a recurring line is permanent — {maxDiscountPercent}% off a weekly fee is
@@ -618,6 +853,90 @@ export default function ProductConfigurator({
           </div>
         )}
 
+        {/* One lever for the whole quote, because that is how the concession is
+            actually given. Sits directly above the product list it applies to
+            (moved there 2026-10-08, at the product owner's request — it used to
+            be last on the page). Always rendered, so the panels below don't
+            reflow when the first line lands; with nothing picked yet its
+            controls are disabled. The per-line drawers win for exceptions —
+            these write the same `discountPercent` / `billingStart` they do. */}
+        {onAdjustmentsChange && (
+            <div className={styles.panel}>
+              <div className={styles.sectionHead}>
+                <h2 className={styles.sectionTitle}>Whole-Quote Adjustments</h2>
+                <p className={styles.sectionNote}>
+                  {quoteLines.length === 0
+                    ? "Pick products below, then discount or delay billing for the whole quote here."
+                    : "Sets every line at once. Use a line's own Adjust button for exceptions."}
+                </p>
+              </div>
+
+              <div className={styles.globalGrid}>
+                <label className={styles.adjustField}>
+                  <span className={styles.adjustLabel}>Discount</span>
+                  <span className={styles.pctWrap}>
+                    <input
+                      type="number" min={0} max={100} step={1}
+                      className={styles.adjustInput}
+                      value={sharedDiscount.pct ?? ""}
+                      placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
+                      disabled={discountIds.length === 0}
+                      onChange={e => setGlobalDiscount(e.target.value)}
+                      aria-label="Discount percent for every line on the quote"
+                    />
+                    <span className={styles.pctSign}>%</span>
+                  </span>
+                </label>
+
+                <label className={styles.adjustField}>
+                  <span className={styles.adjustLabel}>Billing starts</span>
+                  <span className={styles.startWrap}>
+                    <select
+                      className={styles.adjustSelect}
+                      value={globalMode}
+                      disabled={recurringIds.length === 0}
+                      onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
+                      aria-label="When billing starts for every recurring line"
+                    >
+                      {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
+                      <option value="now">At checkout</option>
+                      <option value="date">On a date</option>
+                      <option value="days">After N days</option>
+                    </select>
+                    {sharedStart.start?.mode === "date" && (
+                      <input
+                        type="date"
+                        className={styles.adjustInput}
+                        value={sharedStart.start.date}
+                        onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
+                        aria-label="Billing start date for every recurring line"
+                      />
+                    )}
+                    {sharedStart.start?.mode === "days" && (
+                      <span className={styles.pctWrap}>
+                        <input
+                          type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
+                          className={styles.adjustInput}
+                          value={sharedStart.start.days}
+                          onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
+                          aria-label="Billing start delay in days for every recurring line"
+                        />
+                        <span className={styles.pctSign}>days</span>
+                      </span>
+                    )}
+                  </span>
+                </label>
+              </div>
+
+              <p className={styles.adjustNote}>
+                The discount skips install and training, which are already comped to $0, and is
+                capped at {maxDiscountPercent}%. On a recurring line it is permanent — to give time
+                away, delay billing instead. A delay applies to recurring lines only; one-time
+                charges always bill at checkout.
+              </p>
+            </div>
+        )}
+
         <div className={styles.panel}>
           <div className={styles.sectionHead}>
             <h2 className={styles.sectionTitle}>Products &amp; Hardware</h2>
@@ -647,8 +966,7 @@ export default function ProductConfigurator({
 
           {groups.map(group => (
             <div key={group.type} className={styles.group}>
-              <div className={styles.groupTitle}>{group.label}</div>
-              {group.products.map(p => {
+              <div className={styles.groupTitle}>{group.label}</div>              {group.products.map(p => {
                 const n = qtyOf(p.hubspotProductId);
                 // Capped in the picker AND refused by buildQuote. The cap is
                 // the courtesy; the blocker is the authority, since the server
@@ -673,11 +991,24 @@ export default function ProductConfigurator({
                             : `${planCovered} of ${n} included in the plan`}
                         </div>
                       )}
+                      {p.hubspotProductId === AMS1_PRODUCT.hubspotProductId && built.requiredTerminals.qty > 0 && (
+                        <div className={styles.coveredTag}>
+                          {built.requiredTerminals.qty} added automatically with your POS{" "}
+                          {built.requiredTerminals.qty === 1 ? "unit" : "units"}
+                        </div>
+                      )}
                     </div>
                     <div className={styles.stepper}>
                       <button
                         type="button" className={styles.stepBtn} disabled={n === 0}
-                        onClick={() => setQtyFor(p.hubspotProductId, n - 1)}
+                        onClick={() =>
+                          // Taking off a unit the kit is currently covering
+                          // gives hardware back — ask first, since it is
+                          // the easiest thing on this screen to do by accident.
+                          covered > n - 1
+                            ? setConfirmKitRemove(p.hubspotProductId)
+                            : setQtyFor(p.hubspotProductId, n - 1)
+                        }
                         aria-label={`Remove one ${p.name}`}
                       >−</button>
                       <span className={styles.stepQty}>{n}</span>
@@ -688,6 +1019,29 @@ export default function ProductConfigurator({
                         aria-label={`Add one ${p.name}`}
                       >+</button>
                     </div>
+                    {confirmKitRemove === p.hubspotProductId && (
+                      <div className={styles.confirmBox} role="alertdialog" aria-label={`Remove ${p.name}?`}>
+                        <p>
+                          <strong>{p.name}</strong> comes free with the {packages.applied[0]?.name ?? "kit"}.
+                          Take it off and this merchant won&apos;t get it.
+                        </p>
+                        <div className={styles.confirmActions}>
+                          <button
+                            type="button"
+                            className={styles.linkBtn}
+                            onClick={() => {
+                              setQtyFor(p.hubspotProductId, n - 1);
+                              setConfirmKitRemove(null);
+                            }}
+                          >
+                            Remove it
+                          </button>
+                          <button type="button" className={styles.linkBtn} onClick={() => setConfirmKitRemove(null)}>
+                            Keep it
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {/* Wraps onto its own line under the row. Returns null
                         until the product is actually on the quote. */}
                     {lineAdjust(p.hubspotProductId)}
@@ -701,7 +1055,7 @@ export default function ProductConfigurator({
         {/* Derived, exactly like the platform tier: the rep picks the hardware
             and EasyOB works out which pre-made packages that cart adds up to.
             There is nothing to choose here, which is why there is no control. */}
-        {(packages.applied.length > 0 || packages.blockers.length > 0) && (
+        {packages.applied.length > 0 && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
               <h2 className={styles.sectionTitle}>Packages</h2>
@@ -726,14 +1080,9 @@ export default function ProductConfigurator({
 
             {packages.savings > 0 && (
               <p className={styles.sectionNote}>
-                {fmt$(packages.coveredListAmount)} of hardware at list, packaged for{" "}
-                {fmt$(packages.coveredListAmount - packages.savings)} — {fmt$(packages.savings)} off.
+                {fmt$(packages.coveredListAmount)} of hardware at list, included at no charge.
               </p>
             )}
-
-            {packages.blockers.map(b => (
-              <div key={b} className={styles.error}>{b}</div>
-            ))}
           </div>
         )}
 
@@ -809,14 +1158,14 @@ export default function ProductConfigurator({
 
         {/* Every quote that puts the system in a restaurant includes these three.
             Shown, priced, and not a decision — hence no stepper. */}
-        {rated && (includedServices.lines.length > 0 || includedServices.missing.length > 0) && (
+        {rated && (includedServices.lines.length > 0 || includedServices.missing.length > 0 || adjustments[WIFI_PRODUCT_ID]?.removed) && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
               <h2 className={styles.sectionTitle}>Always Included</h2>
               <p className={styles.sectionNote}>
-                One of each, on every quote that has products on it. Not optional — the system
-                doesn&apos;t go live without a network, an install and a training. Remove every product
-                above and they come off too, leaving a rate-only quote.
+                On every quote that has products on it. The install and the training stay. The WiFi
+                package is added too, and can be removed. Take every product off and they come off
+                as well, leaving a rate-only quote.
               </p>
             </div>
             {includedServices.lines.map(l => (
@@ -828,18 +1177,91 @@ export default function ProductConfigurator({
                 <span className={styles.includedTag}>
                   {coveredQty.has(l.hubspotProductId) ? "In the package" : "Included ×1"}
                 </span>
+                {l.hubspotProductId === WIFI_PRODUCT_ID && !confirmWifi && (
+                  <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(true)}>
+                    Remove
+                  </button>
+                )}
+                {l.hubspotProductId === WIFI_PRODUCT_ID && confirmWifi && (
+                  <div className={styles.confirmBox}>
+                    <p>Remove the WiFi package? This merchant won&apos;t get a network quoted.</p>
+                    <div className={styles.confirmActions}>
+                      <button
+                        type="button"
+                        className={styles.linkBtn}
+                        onClick={() => {
+                          setAdjustment(WIFI_PRODUCT_ID, { removed: true });
+                          setConfirmWifi(false);
+                        }}
+                      >
+                        Remove
+                      </button>
+                      <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {/* The install and the training are the two most-discounted
                     lines in AIO's portal, and the picker hides both — so this
                     is the only place a rep can charge for a re-install. */}
                 {lineAdjust(l.hubspotProductId)}
               </div>
             ))}
+            {adjustments[WIFI_PRODUCT_ID]?.removed && (
+              <div className={styles.includedRow} data-pending="true">
+                <div className={styles.productMain}>
+                  <div className={styles.productName}>AIO WiFi Network Package</div>
+                  <div className={styles.productPrice}>Not on this quote</div>
+                </div>
+                <span className={styles.includedTag}>Removed</span>
+                <button
+                  type="button"
+                  className={styles.linkBtn}
+                  onClick={() => setAdjustment(WIFI_PRODUCT_ID, { removed: null })}
+                >
+                  Add back
+                </button>
+              </div>
+            )}
             {includedServices.missing.length > 0 && (
               <div className={styles.error}>
                 <strong>Can&apos;t price a required line.</strong>{" "}
                 {includedServices.missing.join(", ")} {includedServices.missing.length === 1 ? "is" : "are"}{" "}
                 included on every quote but missing from the HubSpot catalog (renamed, archived, or the
                 catalog didn&apos;t load). Fix that before sending this quote.
+              </div>
+            )}
+          </div>
+        )}
+
+        {rated && built.softwareLicense.screens > 0 && (
+          <div className={styles.panel}>
+            <div className={styles.sectionHead}>
+              <h2 className={styles.sectionTitle}>Additional Software</h2>
+              <p className={styles.sectionNote}>
+                {built.softwareLicense.screens} screens on this quote, {INCLUDED_SCREEN_COUNT} included
+                {built.softwareLicense.lines[0]
+                  ? `, ${built.softwareLicense.lines[0].qty} × ${fmt$(built.softwareLicense.lines[0].unitPrice)}/mo added`
+                  : ", so no additional license is added"}
+                . A screen is a POS, KDS, kiosk, menu board or mPOS.
+              </p>
+            </div>
+            {built.softwareLicense.lines.map(l => (
+              <div key={l.hubspotProductId} className={styles.includedRow}>
+                <div className={styles.productMain}>
+                  <div className={styles.productName}>{l.name}</div>
+                  <div className={styles.productPrice}>{priceLabel(l.unitPrice, l.billingFrequency)}</div>
+                </div>
+                <span className={styles.includedTag}>×{l.qty}</span>
+                {lineAdjust(l.hubspotProductId)}
+              </div>
+            ))}
+            {built.softwareLicense.missing.length > 0 && (
+              <div className={styles.error}>
+                <strong>Can&apos;t price the extra screens.</strong>{" "}
+                {built.softwareLicense.missing.join(", ")} isn&apos;t in the HubSpot catalog (renamed,
+                archived, or the catalog didn&apos;t load). This quote can&apos;t be sent until that&apos;s fixed.
               </div>
             )}
           </div>
@@ -889,91 +1311,6 @@ export default function ProductConfigurator({
           </div>
         )}
 
-        {/* One lever for the whole quote, because that is how the concession is
-            actually given. LAST, after everything it applies to: a rep picks
-            the plan, picks the hardware and then decides what to take off, and
-            a discount control above an empty quote is a lever with nothing on
-            the other end of it. Still always rendered, so the panels above
-            don't reflow when the first line lands. The per-line drawers win
-            for exceptions — these write the same `discountPercent` /
-            `billingStart` they do. */}
-        {onAdjustmentsChange && (
-            <div className={styles.panel}>
-              <div className={styles.sectionHead}>
-                <h2 className={styles.sectionTitle}>Whole-Quote Adjustments</h2>
-                <p className={styles.sectionNote}>
-                  {quoteLines.length === 0
-                    ? "Pick products above, then discount or delay billing for the whole quote here."
-                    : "Sets every line at once. Use a line's own Adjust button for exceptions."}
-                </p>
-              </div>
-
-              <div className={styles.globalGrid}>
-                <label className={styles.adjustField}>
-                  <span className={styles.adjustLabel}>Discount</span>
-                  <span className={styles.pctWrap}>
-                    <input
-                      type="number" min={0} max={100} step={1}
-                      className={styles.adjustInput}
-                      value={sharedDiscount.pct ?? ""}
-                      placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
-                      disabled={discountIds.length === 0}
-                      onChange={e => setGlobalDiscount(e.target.value)}
-                      aria-label="Discount percent for every line on the quote"
-                    />
-                    <span className={styles.pctSign}>%</span>
-                  </span>
-                </label>
-
-                <label className={styles.adjustField}>
-                  <span className={styles.adjustLabel}>Billing starts</span>
-                  <span className={styles.startWrap}>
-                    <select
-                      className={styles.adjustSelect}
-                      value={globalMode}
-                      disabled={recurringIds.length === 0}
-                      onChange={e => setStartMode(recurringIds, e.target.value as "now" | "date" | "days")}
-                      aria-label="When billing starts for every recurring line"
-                    >
-                      {sharedStart.mixed && <option value="">Mixed — set all to…</option>}
-                      <option value="now">At checkout</option>
-                      <option value="date">On a date</option>
-                      <option value="days">After N days</option>
-                    </select>
-                    {sharedStart.start?.mode === "date" && (
-                      <input
-                        type="date"
-                        className={styles.adjustInput}
-                        value={sharedStart.start.date}
-                        onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
-                        aria-label="Billing start date for every recurring line"
-                      />
-                    )}
-                    {sharedStart.start?.mode === "days" && (
-                      <span className={styles.pctWrap}>
-                        <input
-                          type="number" min={1} max={MAX_BILLING_DELAY_DAYS} step={1}
-                          className={styles.adjustInput}
-                          value={sharedStart.start.days}
-                          onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "days", days: Number(e.target.value) } })}
-                          aria-label="Billing start delay in days for every recurring line"
-                        />
-                        <span className={styles.pctSign}>days</span>
-                      </span>
-                    )}
-                  </span>
-                </label>
-              </div>
-
-              <p className={styles.adjustNote}>
-                The discount skips install and training, which are already comped to $0, and is
-                capped at {maxDiscountPercent}%. On a recurring line it is permanent — to give time
-                away, delay billing instead. A delay applies to recurring lines only; one-time
-                charges always bill at checkout.
-              </p>
-            </div>
-        )}
-
       </div>
 
       {/* Hangs in the page gutter on wide hosts; short by construction, so it
@@ -1018,41 +1355,14 @@ export default function ProductConfigurator({
         </div>
 
         {quoteLines.length > 0 && (
-          <div className={styles.panel}>
-            <div className={styles.sectionHead}>
-              <h2 className={styles.sectionTitle}>Quote Totals</h2>
-              <p className={styles.sectionNote}>
-                Kept apart on purpose — one-time and recurring charges are different units and are
-                never added together.
-              </p>
-            </div>
-            {packages.savings > 0 && (
-              <div className={styles.totalRow}>
-                <span className={styles.totalLabel}>Package savings</span>
-                <span className={styles.totalValue} data-tone="discount">−{fmt$(packages.savings)}</span>
-              </div>
-            )}
-            {totalDiscount > 0 && (
-              <div className={styles.totalRow}>
-                <span className={styles.totalLabel}>Discounts applied</span>
-                <span className={styles.totalValue} data-tone="discount">−{fmt$(totalDiscount)}</span>
-              </div>
-            )}
-            <div className={styles.totalRow}>
-              <span className={styles.totalLabel}>Due once (hardware &amp; setup)</span>
-              <span className={styles.totalValue}>{fmt$(totals.oneTime)}</span>
-            </div>
-            {totals.recurring.map(r => (
-              <div key={r.frequency} className={styles.totalRow}>
-                <span className={styles.totalLabel}>Recurring, per {fmtFrequency(r.frequency)}</span>
-                <span className={styles.totalValue}>{fmt$(r.amount)}/{fmtFrequency(r.frequency)}</span>
-              </div>
-            ))}
-            <div className={styles.totalRow} data-emphasis="true">
-              <span className={styles.totalLabel}>All recurring, monthly equivalent</span>
-              <span className={styles.totalValue}>{fmt$(totals.monthlyEquivalent)}/mo</span>
-            </div>
-          </div>
+          <QuoteReceipt
+            lines={quoteLines}
+            totals={totals}
+            packageSavings={packages.savings}
+            discountTotal={totalDiscount}
+            dueAtCheckout={amountDueAtCheckout(quoteLines)}
+            preAuthAmount={built.preAuth.lines[0]?.unitPrice ?? null}
+          />
         )}
       </aside>
     </div>

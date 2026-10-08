@@ -314,6 +314,16 @@ describe("canPublishBillingQuote", () => {
     expect(codes(check({ quoteLines: bad }))).toContain("discount_over_policy");
   });
 
+  it("refuses a quote that collects nothing at checkout, before any HubSpot write", () => {
+    // Saved before the configurator enforced it: a delayed plan, hardware comped.
+    const delayedPlan = [
+      { ...LINES[0], billingStart: { mode: "days" as const, days: 60 } },
+      { ...LINES[1], discountPercent: 100 },
+    ];
+    const result = check({ quoteLines: delayedPlan }, { maxDiscountPercent: 100 });
+    expect(codes(result)).toContain("nothing_due_at_checkout");
+  });
+
   it("returns every problem at once, not the first one", () => {
     const result = check(
       { hubspotDealId: null, tenantLink: null, stage: "closed_lost", quoteLines: [] },

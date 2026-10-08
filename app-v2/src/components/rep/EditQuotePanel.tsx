@@ -57,7 +57,9 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   const [channels, setChannels] = useState<string[]>(app.orderPoints?.channels ?? []);
   // Read off the SAVED lines, derived ones included — a comped install lives
   // on a derived line, and picksFromQuoteLines drops those by design.
-  const [adjustments, setAdjustments] = useState<QuoteAdjustments>(adjustmentsFromQuoteLines(app.quoteLines));
+  const [adjustments, setAdjustments] = useState<QuoteAdjustments>(
+    adjustmentsFromQuoteLines(app.quoteLines, savedQuoteType)
+  );
   const [quote, setQuote] = useState<ConfiguredQuote | null>(null);
 
   const [quoteRates, setQuoteRates] = useState<QuoteRates>(app.quoteRates ?? DEFAULT_QUOTE_RATES);

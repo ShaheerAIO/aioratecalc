@@ -1,12 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
+import { PACKAGES } from "@/lib/quotePackages";
 import {
   DEFAULT_MAX_DISCOUNT_PERCENT,
   INCLUDED_SERVICE_PRODUCTS,
   MAX_BILLING_DELAY_DAYS,
   adjustmentBlockers,
   adjustmentsFromQuoteLines,
+  amountDueAtCheckout,
   applyLineAdjustment,
+  PRE_AUTH_PRODUCT,
+  checkoutAmountBlockers,
   buildQuote,
+  isAllowedForQuoteType,
   describeBillingStart,
   discountQtyBlockers,
   lineDiscountAmount,
@@ -20,6 +25,11 @@ import {
 } from "@/lib/quoting";
 import { planLineItemReconciliation, toLineItemProperties } from "@/lib/adapters/hubspot";
 import type { CatalogProduct, QuoteAdjustments, QuoteLine } from "@/types/merchant";
+
+// These tests are about discount and billing-start mechanics, so the free
+// hardware kit is switched off for the file: left on, it zeroes the POS and
+// terminal lines these tests price. It has its own file (quotePackages.test.ts).
+beforeAll(() => { for (const pkg of PACKAGES) pkg.active = false; });
 
 // Discounts and delayed billing starts, end to end through the pure layer.
 // The shapes here are the ones the live portal actually carries: a 100%-comped
@@ -40,14 +50,17 @@ const INSTALL_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "Onsite Instal
 const TRAINING_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "System Onboarding and Training")!.hubspotProductId;
 const WIFI_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "AIO WiFi Network Package")!.hubspotProductId;
 const POS_ID = "217445755632";
+const AMS1_ID = "223511653105";
 
 const CATALOG: CatalogProduct[] = [
   p(PLATFORM_ID, "All-in-One Platform", 399, "monthly", ""),
   p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p(POS_ID, "POS Unit", 749, "one_time", "inventory"),
+  p(AMS1_ID, "Payment Terminal - AMS1", 300, "one_time", "inventory"),
   p(WIFI_ID, "AIO WiFi Network Package", 999, "one_time", "inventory"),
   p(INSTALL_ID, "Onsite Installation", 999, "one_time", "Service"),
   p(TRAINING_ID, "System Onboarding and Training", 499, "one_time", "Service"),
+  p(PRE_AUTH_PRODUCT.hubspotProductId, PRE_AUTH_PRODUCT.name, 0.5, "one_time", "Service"),
 ];
 
 const line = (over: Partial<QuoteLine> = {}): QuoteLine => ({
@@ -202,16 +215,54 @@ describe("quoteSanityBlockers", () => {
     expect(totals([])).toEqual([]);
   });
 
+  // The 2-year marketing plan on 2026-10-07: $299/mo delayed 60 days, hardware
+  // comped by the plan. Worth $299/mo, owes $0 today, and HubSpot answered the
+  // publish with 400 MIN_TOTAL_NOT_REACHED after the draft was already built.
+  describe("nothing due at checkout", () => {
+    const plan = (over: Partial<QuoteLine> = {}) =>
+      line({ name: "Plan", unitPrice: 299, billingFrequency: "monthly", ...over });
+    const comped = line({ discountPercent: 100, coveredByPackage: "Plan" });
+    const delayed = { mode: "days" as const, days: 60 };
+
+    it("counts one-time lines and the first payment of an undelayed recurring line", () => {
+      expect(amountDueAtCheckout([plan(), comped])).toBe(299);
+      expect(amountDueAtCheckout([plan({ billingStart: delayed }), line()])).toBe(749);
+    });
+
+    it("counts nothing for a delayed recurring line", () => {
+      expect(amountDueAtCheckout([plan({ billingStart: delayed }), comped])).toBe(0);
+    });
+
+    it("refuses a worth-something quote that owes nothing today", () => {
+      const blockers = checkoutAmountBlockers([plan({ billingStart: delayed }), comped]);
+      expect(blockers).toHaveLength(1);
+      expect(blockers[0]).toContain("Nothing is due at checkout");
+    });
+
+    it("lets it through once the delay comes off, or something is charged up front", () => {
+      expect(checkoutAmountBlockers([plan(), comped])).toEqual([]);
+      expect(checkoutAmountBlockers([plan({ billingStart: delayed }), line()])).toEqual([]);
+      expect(checkoutAmountBlockers([])).toEqual([]);
+    });
+
+    it("sits at HubSpot's threshold: $0.50 is enough, $0.49 is not", () => {
+      expect(checkoutAmountBlockers([line({ unitPrice: 0.5 })])).toEqual([]);
+      expect(checkoutAmountBlockers([line({ unitPrice: 0.49 })])).toHaveLength(1);
+    });
+  });
+
   it("gates buildQuote, so a $0 quote can't be sent or published", () => {
     const pos = CATALOG.find(c => c.hubspotProductId === POS_ID)!;
     const adjustments: QuoteAdjustments = {
       [POS_ID]: { discountPercent: 100 },
       [PLATFORM_ID]: { discountPercent: 100 },
       [WIFI_ID]: { discountPercent: 100 },
+      [AMS1_ID]: { discountPercent: 100 },
     };
     const built = buildQuote("all_in_one", [toQuoteLine(pos, 1)], [], CATALOG, adjustments, 100);
-    expect(built.totals.oneTime).toBe(0);
-    expect(built.blockers.some(b => b.includes("$0"))).toBe(true);
+    // Only the $0.50 pre-authorization is left to charge, and it must not hide the $0 quote.
+    expect(built.totals.oneTime).toBe(0.5);
+    expect(built.blockers.some(b => b.includes("nets to $0"))).toBe(true);
   });
 });
 
@@ -225,10 +276,10 @@ describe("buildQuote with adjustments", () => {
     const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
     expect(install.discountPercent).toBe(100);
     expect(lineNetAmount(install)).toBe(0);
-    // $999 wifi + $749 POS. The install AND the training are both comped —
-    // the install by this adjustment, the training by standing AIO policy
-    // (see COMPED_SERVICE_PRODUCT_IDS), so neither adds anything.
-    expect(built.totals.oneTime).toBe(1748);
+    // $999 wifi + $749 POS + $300 AMS1 (one per POS). The install AND the
+    // training are both comped — the install by this adjustment, the training
+    // by standing AIO policy (see COMPED_SERVICE_PRODUCT_IDS).
+    expect(built.totals.oneTime).toBe(2048);
     expect(built.blockers).toEqual([]);
   });
 
@@ -510,5 +561,179 @@ describe("a scoped discount through buildQuote", () => {
   it("does not invent a quantity when the discount covered the whole line", () => {
     const saved = buildQuote("all_in_one", picked, [], CATALOG, { [POS_ID]: { discountPercent: 40 } }, 100).quoteLines;
     expect(adjustmentsFromQuoteLines(saved)[POS_ID]).toEqual({ discountPercent: 40 });
+  });
+});
+
+// Several units on one line, each treated differently: one free, one whose
+// billing starts later. The line splits by what the units came out as, never
+// into a line per unit, and reopens the way it was saved.
+describe("adjusting each unit separately", () => {
+  const SUB_ID = "999000111";
+  const catalog = [...CATALOG, p(SUB_ID, "Kitchen Display Subscription", 50, "monthly", "software")];
+  const sub = catalog.find(c => c.hubspotProductId === SUB_ID)!;
+  const posProduct = catalog.find(c => c.hubspotProductId === POS_ID)!;
+  const subQty = (qty: number) => [toQuoteLine(sub, qty)];
+  const subLines = (lines: QuoteLine[]) => lines.filter(l => l.hubspotProductId === SUB_ID);
+
+  it("groups identical units and splits the rest", () => {
+    const built = buildQuote("all_in_one", subQty(3), [], catalog, {
+      [SUB_ID]: { units: [{}, { billingStart: { mode: "days", days: 60 } }, { billingStart: { mode: "days", days: 60 } }] },
+    }, 100);
+    expect(subLines(built.quoteLines).map(l => [l.qty, l.billingStart ?? null])).toEqual([
+      [1, null],
+      [2, { mode: "days", days: 60 }],
+    ]);
+  });
+
+  it("discounts and delays different units independently", () => {
+    const built = buildQuote("all_in_one", subQty(3), [], catalog, {
+      [SUB_ID]: { units: [{ discountPercent: 100 }, { billingStart: { mode: "days", days: 30 } }, {}] },
+    }, 100);
+    expect(subLines(built.quoteLines).map(l => [l.qty, l.discountPercent ?? null, l.billingStart?.mode ?? null])).toEqual([
+      [1, 100, null],
+      [1, null, "days"],
+      [1, null, null],
+    ]);
+  });
+
+  it("conserves quantity and bills the right money", () => {
+    const built = buildQuote("all_in_one", subQty(3), [], catalog, {
+      [SUB_ID]: { units: [{ discountPercent: 100 }, {}, {}] },
+    }, 100);
+    const lines = subLines(built.quoteLines);
+    expect(lines.reduce((s, l) => s + l.qty, 0)).toBe(3);
+    expect(lines.reduce((s, l) => s + lineNetAmount(l), 0)).toBe(100);
+  });
+
+  it("replaces the line-level edits instead of stacking on them", () => {
+    const built = buildQuote("all_in_one", subQty(2), [], catalog, {
+      [SUB_ID]: { discountPercent: 50, units: [{}, {}] },
+    }, 100);
+    expect(subLines(built.quoteLines)).toHaveLength(1);
+    expect(subLines(built.quoteLines)[0].discountPercent).toBeUndefined();
+  });
+
+  it("leaves a unit past the end of the array unadjusted", () => {
+    const built = buildQuote("all_in_one", subQty(3), [], catalog, {
+      [SUB_ID]: { units: [{ discountPercent: 100 }] },
+    }, 100);
+    expect(subLines(built.quoteLines).map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [2, null]]);
+  });
+
+  it("drops a one-time line's billing start, same as the whole-line path", () => {
+    const built = buildQuote("all_in_one", [toQuoteLine(posProduct, 2)], [], catalog, {
+      [POS_ID]: { units: [{ discountPercent: 100 }, { billingStart: { mode: "days", days: 60 } }] },
+    }, 100);
+    const pos = built.quoteLines.filter(l => l.hubspotProductId === POS_ID);
+    expect(pos.every(l => l.billingStart === undefined)).toBe(true);
+    expect(pos.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [1, null]]);
+  });
+
+  it("still enforces the discount cap and date validity per unit", () => {
+    const over = buildQuote("all_in_one", subQty(2), [], catalog, {
+      [SUB_ID]: { units: [{ discountPercent: 80 }, {}] },
+    }, 50);
+    expect(over.blockers.join(" ")).toMatch(/Kitchen Display Subscription.*80%/);
+
+    const badDate = buildQuote("all_in_one", subQty(2), [], catalog, {
+      [SUB_ID]: { units: [{}, { billingStart: { mode: "date", date: "2026-02-31" } }] },
+    }, 100);
+    expect(badDate.blockers.join(" ")).toMatch(/billing start date/);
+  });
+
+  it("survives junk from the browser", () => {
+    expect(() =>
+      buildQuote("all_in_one", subQty(2), [], catalog, {
+        [SUB_ID]: { units: [null, "x"] as never },
+      }, 100)
+    ).not.toThrow();
+  });
+
+  it("round-trips mixed billing starts as per-unit edits", () => {
+    const adjustments: QuoteAdjustments = {
+      [SUB_ID]: { units: [{ discountPercent: 100 }, { billingStart: { mode: "days", days: 60 } }, {}] },
+    };
+    const saved = buildQuote("all_in_one", subQty(3), [], catalog, adjustments, 100).quoteLines;
+    expect(picksFromQuoteLines(saved, "all_in_one")).toContainEqual({ hubspotProductId: SUB_ID, qty: 3 });
+
+    const reopened = adjustmentsFromQuoteLines(saved);
+    expect(reopened[SUB_ID].units).toHaveLength(3);
+    expect(buildQuote("all_in_one", subQty(3), [], catalog, reopened, 100).quoteLines).toEqual(saved);
+  });
+
+  it("still reopens a simple '1 of 3 free' the old way", () => {
+    const saved = buildQuote("all_in_one", subQty(3), [], catalog, {
+      [SUB_ID]: { discountPercent: 100, discountQty: 1 },
+    }, 100).quoteLines;
+    expect(adjustmentsFromQuoteLines(saved)[SUB_ID]).toEqual({ discountPercent: 100, discountQty: 1 });
+  });
+});
+
+describe("the pre-authorization charge", () => {
+  const pos = CATALOG.find(c => c.hubspotProductId === POS_ID)!;
+  const preAuthLines = (lines: QuoteLine[]) =>
+    lines.filter(l => l.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId);
+  // A quote that owes nothing today: the platform starts in 60 days and the
+  // only hardware is given away.
+  const delayedAll: QuoteAdjustments = {
+    [PLATFORM_ID]: { billingStart: { mode: "days", days: 60 } },
+    [POS_ID]: { discountPercent: 100 },
+    [WIFI_ID]: { discountPercent: 100 },
+    [AMS1_ID]: { discountPercent: 100 },
+  };
+  const build = (adj: QuoteAdjustments, catalog = CATALOG) =>
+    buildQuote("all_in_one", [toQuoteLine(pos, 1)], [], catalog, adj, 100);
+
+  it("is added when nothing else is due at checkout, making the quote sendable", () => {
+    const built = build(delayedAll);
+    expect(preAuthLines(built.quoteLines)).toHaveLength(1);
+    expect(built.totals.oneTime).toBe(0.5);
+    expect(built.blockers).toEqual([]);
+  });
+
+  it("is left off a quote that already collects something at checkout", () => {
+    expect(preAuthLines(build({ [PLATFORM_ID]: { billingStart: { mode: "days", days: 60 } } }).quoteLines)).toHaveLength(0);
+    expect(preAuthLines(build({}).quoteLines)).toHaveLength(0);
+  });
+
+  it("goes away again when the rep undoes the delay", () => {
+    const { [PLATFORM_ID]: _undone, ...rest } = delayedAll;
+    expect(preAuthLines(build(rest).quoteLines)).toHaveLength(0);
+  });
+
+  it("can't be discounted, delayed or resized by an adjustment", () => {
+    const id = PRE_AUTH_PRODUCT.hubspotProductId;
+    const built = build({ ...delayedAll, [id]: { discountPercent: 100, billingStart: { mode: "days", days: 30 } } });
+    const [line] = preAuthLines(built.quoteLines);
+    expect(line.discountPercent).toBeUndefined();
+    expect(line.billingStart).toBeUndefined();
+    expect(line.qty).toBe(1);
+    expect(line.unitPrice).toBe(0.5);
+  });
+
+  it("is never pickable, and never read back as a pick", () => {
+    const preAuth = CATALOG.find(c => c.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId)!;
+    expect(isAllowedForQuoteType(preAuth, "all_in_one")).toBe(false);
+    const built = build(delayedAll);
+    expect(picksFromQuoteLines(built.quoteLines, "all_in_one").some(
+      pick => pick.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId
+    )).toBe(false);
+    expect(adjustmentsFromQuoteLines(built.quoteLines)[PRE_AUTH_PRODUCT.hubspotProductId]).toBeUndefined();
+  });
+
+  it("does not rescue a quote that nets to $0 on its real lines", () => {
+    const built = build({ ...delayedAll, [PLATFORM_ID]: { discountPercent: 100, billingStart: { mode: "days", days: 60 } } });
+    expect(built.blockers.some(b => b.includes("nets to $0"))).toBe(true);
+  });
+
+  it("blocks, naming the product, when it is missing from the catalog", () => {
+    const withoutPreAuth = CATALOG.filter(c => c.hubspotProductId !== PRE_AUTH_PRODUCT.hubspotProductId);
+    const built = build(delayedAll, withoutPreAuth);
+    expect(built.blockers.some(b => b.includes(PRE_AUTH_PRODUCT.name))).toBe(true);
+  });
+
+  it("never appears on a rate-only quote", () => {
+    const built = buildQuote("all_in_one", [], [], CATALOG, {}, 100);
+    expect(preAuthLines(built.quoteLines)).toHaveLength(0);
   });
 });

@@ -6,10 +6,10 @@
 // operates on is read from HubSpot server-side and passed in.
 
 import { monthlyEquivalent } from "@/lib/utils";
-import { decomposePackages, isPackageProduct, type PackageDecomposition } from "@/lib/quotePackages";
+import { decomposePackages, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
-  QuoteAdjustments, QuoteLine, QuoteTotals, QuoteType, StoredQuoteType,
+  QuoteAdjustments, QuoteLine, QuoteTotals, QuoteType, StoredQuoteType, UnitAdjustment,
 } from "@/types/merchant";
 
 // ── Quote types ─────────────────────────────────────────────────────────────
@@ -151,32 +151,36 @@ export function quoteHasProcessing(
 //   - the two "AIO Payment Processing" entries are $0 placeholders; processing
 //     margin is taken out of Adyen settlement, never billed through HubSpot
 //   - "CAMP Invoice" is a billing artifact, not something a rep sells
-//   - "AIO Pre Auth" ($0.50/Service) is a PER-TRANSACTION fee — quoting it as a
-//     single $0.50 line is meaningless
+//   - "AIO Pre Auth" ($0.50/Service) is DERIVED (see PRE_AUTH_PRODUCT): it goes
+//     on a quote that would otherwise collect nothing at checkout, and never by hand
 export const PICKER_EXCLUDED_PRODUCT_NAMES = [
   "AIO Processing Two Tiered Rate",
   "AIO Tier Processing",
   "CAMP Invoice",
   "AIO Pre Auth",
+  // A pre-built POS kit. The cart is quoted as the individual products, and
+  // the AMS1 that has to ship with each POS is derived — a bundle line on top
+  // of that would bill the same hardware twice.
+  "QSR POS Hardware Bundle",
+  // The $0 package SKU. The kit is now the individual products at 100% off
+  // (quotePackages.ts); this record is what that design replaced.
+  "QSR Kit",
 ] as const;
 
 /**
  * Everything a rep can never pick by hand. Two reasons land here:
  *   - the exclusions above — things nobody sells as a line
- *   - DERIVED lines: all three platform products and the three mandatory
- *     install services. They still land on the quote, just not by hand, and
- *     leaving them in the picker is how you get billed for two platform fees
- *     or a second $999 install.
+ *   - DERIVED lines: all three platform products, the three install services,
+ *     and the additional software license (one per screen past the included
+ *     four). They still land on the quote, just not by hand.
  */
 export function isPickable(product: CatalogProduct): boolean {
   return (
     !PICKER_EXCLUDED_PRODUCT_NAMES.includes(product.name as (typeof PICKER_EXCLUDED_PRODUCT_NAMES)[number]) &&
     !isPlatformProduct(product.name, product.hubspotProductId) &&
     !isIncludedServiceProduct(product.hubspotProductId, product.name) &&
-    // Package SKUs are derived from what the cart contains, never picked. A
-    // rep who could add one by hand would put a package on the quote with
-    // nothing discounted underneath it — the merchant pays for it twice.
-    !isPackageProduct(product.hubspotProductId)
+    !isPreAuthProduct(product.hubspotProductId, product.name) &&
+    !isSoftwareLicenseProduct(product.hubspotProductId, product.name)
   );
 }
 
@@ -243,27 +247,37 @@ function isMarketingProduct(id: string, name: string): boolean {
   return MARKETING_PRODUCTS.some(m => m.hubspotProductId === id || m.name === name.trim());
 }
 
+/** The two kiosk kits. Not the Website — that one is allowed on a POS quote. */
+function isMarketingKit(id: string, name: string): boolean {
+  const trimmed = name.trim();
+  return MARKETING_PRODUCTS.some(
+    m => m.name.startsWith("Marketing Kit") && (m.hubspotProductId === id || m.name === trimmed)
+  );
+}
+
 /**
  * Whether a rep may put this product on a quote of this type. Applied to the
  * picker AND re-applied server-side, because "the rep can't see it" is not the
  * same as "it can't be sent".
  *
- * Only the marketing plans restrict anything: a processing deal can carry any
- * pickable product, marketing included (a restaurant buying both is one deal,
- * not two quotes).
+ * Marketing plans only carry the marketing products. Processing plans carry
+ * any other pickable product except the marketing kits — those kiosks belong
+ * to the marketing plans, and a POS quote sells its own hardware.
  */
 export function isAllowedForQuoteType(product: CatalogProduct, quoteType: QuoteType): boolean {
   if (!isPickable(product)) return false;
-  if (!isMarketingQuote(quoteType)) return true;
+  if (!isMarketingQuote(quoteType)) {
+    return !isMarketingKit(product.hubspotProductId, product.name);
+  }
   return isMarketingProduct(product.hubspotProductId, product.name);
 }
 
 // ── Mandatory install services (derived, not chosen) ────────────────────────
 
 // Confirmed with Shaheer 2026-08-20: every quote that puts AIO's system in a
-// restaurant includes a network, an install and a training — qty 1 each, not a
-// rep decision. So they're derived lines with no stepper, exactly like the
-// platform fee, rather than three checkboxes a rep can forget or unpick.
+// restaurant includes a network, an install and a training — qty 1 each.
+// Install and training stay mandatory. The WiFi package is still added by
+// default, and a rep can take it off (LineAdjustment.removed) after confirming.
 //
 // Two exceptions, both meaning "nothing is being installed":
 //   - a marketing-only quote
@@ -272,14 +286,88 @@ export function isAllowedForQuoteType(product: CatalogProduct, quoteType: QuoteT
 //     nothing to install, no network to run and nothing to train on. Declared
 //     ordering channels do NOT pull them in — a website-ordering merchant has
 //     no on-site anything for a $999 install or a $999 WiFi package to cover.
+export const WIFI_PRODUCT_ID = "281351401209";
+
 export const INCLUDED_SERVICE_PRODUCTS = [
-  { name: "AIO WiFi Network Package", hubspotProductId: "281351401209" },
+  { name: "AIO WiFi Network Package", hubspotProductId: WIFI_PRODUCT_ID },
   { name: "Onsite Installation", hubspotProductId: "223452690133" },
   { name: "System Onboarding and Training", hubspotProductId: "223152695032" },
 ] as const;
 
+/**
+ * POS units that ship with their own payment terminal. The kiosk SKUs already
+ * name an AMS1 in the product, so they don't get a second one.
+ */
+export const POS_REQUIRING_TERMINAL_IDS = [
+  "217445755632", // POS Unit
+  "223452690130", // POS Unit - With Customer Facing Display
+] as const;
+
+/** Charged at the catalog price, one per POS unit, on top of any the rep adds. */
+export const AMS1_PRODUCT = {
+  name: "Payment Terminal - AMS1",
+  hubspotProductId: "223511653105",
+} as const;
+
+/**
+ * Screens that consume a software license: anything that runs an AIO app.
+ * The first four on a processing quote are included in the platform fee.
+ */
+export const INCLUDED_SCREEN_COUNT = 4;
+
+export const SCREEN_PRODUCT_IDS = [
+  "217445755632", // POS Unit
+  "223452690130", // POS Unit - With Customer Facing Display
+  "223511653101", // mPOS
+  "223452690132", // KDS (Kitchen Display System)
+  "260674226888", // Mega Kiosk
+  "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
+  "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+  "223511653103", // Menu Board Computer
+] as const;
+
+/** $19/mo in the catalog, derived at one per screen past INCLUDED_SCREEN_COUNT. */
+export const SOFTWARE_LICENSE_PRODUCT = {
+  name: "Additional Software License",
+  hubspotProductId: "335280960199",
+} as const;
+
+// Pre-built bundles that exist as HubSpot PRODUCTS. Both are retired as lines:
+// a kit is now expressed by `quotePackages.ts` as the individual products at
+// 100% off, so putting a bundle line on top would bill the same hardware twice.
+// "QSR Kit" is the $0 record created for the package-SKU design that
+// quotePackages.ts replaced (2026-10-08).
+const HARDWARE_BUNDLES = [
+  { id: "252941875920", name: "QSR POS Hardware Bundle" },
+  { id: "333450361558", name: "QSR Kit" },
+] as const;
+
 function isIncludedServiceProduct(id: string, name: string): boolean {
   return INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === id || s.name === name.trim());
+}
+
+function isAms1Product(id: string, name: string): boolean {
+  return id === AMS1_PRODUCT.hubspotProductId || name.trim() === AMS1_PRODUCT.name;
+}
+
+function isPosRequiringTerminal(line: { hubspotProductId: string }): boolean {
+  return (POS_REQUIRING_TERMINAL_IDS as readonly string[]).includes(line.hubspotProductId);
+}
+
+function isSoftwareLicenseProduct(id: string, name: string): boolean {
+  return id === SOFTWARE_LICENSE_PRODUCT.hubspotProductId || name.trim() === SOFTWARE_LICENSE_PRODUCT.name;
+}
+
+function isHardwareBundle(id: string, name: string): boolean {
+  return HARDWARE_BUNDLES.some(b => b.id === id || b.name === name.trim());
+}
+
+/** How many app screens the picks add up to. Package-covered units still count. */
+export function screenCount(lines: Array<{ hubspotProductId: string; qty: number }>): number {
+  return lines.reduce(
+    (n, l) => n + ((SCREEN_PRODUCT_IDS as readonly string[]).includes(l.hubspotProductId) ? l.qty : 0),
+    0
+  );
 }
 
 /**
@@ -386,6 +474,69 @@ export function splitPartialDiscount(line: QuoteLine, adjustment: LineAdjustment
   return [{ ...line, qty: want }, rest];
 }
 
+/** Whether a line is in "adjust each unit" mode. Defensive: this arrives from the browser. */
+export function hasUnitAdjustments(adjustment: LineAdjustment | undefined): adjustment is LineAdjustment & { units: UnitAdjustment[] } {
+  return Array.isArray(adjustment?.units);
+}
+
+/** A stable identity for a billing start, so identical units can be regrouped. */
+function startSignature(start: BillingStart | null | undefined): string {
+  if (!start) return "now";
+  return start.mode === "date" ? `date:${start.date}` : `days:${start.days}`;
+}
+
+/**
+ * Per-unit edits → lines. Unit `offset + i` of the product is the i-th unit of
+ * THIS line, because a product can be on the quote as more than one line (a
+ * package leaves a remainder) and the rep's units are numbered across the
+ * chargeable ones.
+ *
+ * Each unit gets the same treatment a whole line would — the rep's edit, then
+ * the service comp — and units that come out identical are folded back into one
+ * line. A quantity of three with one free unit is a 1-unit line at 100% and a
+ * 2-unit line at list, not three lines and not 33.3333% across all of them, for
+ * the reason `splitPartialDiscount` gives: the percentage doesn't divide.
+ *
+ * Never called on a package-covered line; `applyPackageComp` owns those.
+ */
+export function splitByUnits(line: QuoteLine, adjustment: LineAdjustment & { units: UnitAdjustment[] }, offset: number): QuoteLine[] {
+  const out: QuoteLine[] = [];
+  const seen = new Map<string, number>();
+  for (let i = 0; i < line.qty; i++) {
+    const raw = adjustment.units[offset + i];
+    const unit: LineAdjustment = raw && typeof raw === "object"
+      ? { discountPercent: raw.discountPercent, billingStart: raw.billingStart }
+      : {};
+    const one = applyServiceComp(applyLineAdjustment(line, unit), unit);
+    const key = `${one.discountPercent ?? 0}|${startSignature(one.billingStart)}`;
+    const at = seen.get(key);
+    if (at === undefined) {
+      seen.set(key, out.length);
+      out.push({ ...one, qty: 1 });
+    } else {
+      out[at] = { ...out[at], qty: out[at].qty + 1 };
+    }
+  }
+  return out;
+}
+
+/**
+ * The chargeable units of one product, read back off the quote's lines — one
+ * entry per unit, in line order. This is what "adjust each unit" is seeded
+ * with, and what `adjustmentsFromQuoteLines` reopens a mixed quote as.
+ */
+export function unitsFromQuoteLines(lines: QuoteLine[] | null | undefined, productId: string): UnitAdjustment[] {
+  const out: UnitAdjustment[] = [];
+  for (const line of lines ?? []) {
+    if (line.hubspotProductId !== productId || line.coveredByPackage) continue;
+    const unit: UnitAdjustment = {};
+    if (line.discountPercent) unit.discountPercent = line.discountPercent;
+    if (line.billingStart) unit.billingStart = line.billingStart;
+    for (let i = 0; i < line.qty; i++) out.push({ ...unit });
+  }
+  return out;
+}
+
 /**
  * What's wrong with the rep's discount quantities. Separate from
  * `adjustmentBlockers` because `discountQty` never lands on a QuoteLine — it
@@ -430,13 +581,20 @@ export type IncludedServicesResult = {
 export function resolveIncludedServices(
   quoteType: QuoteType,
   pickedLines: QuoteLine[],
-  catalog: CatalogProduct[]
+  catalog: CatalogProduct[],
+  /**
+   * Product ids to leave off without reporting them missing. The WiFi package
+   * uses this when a rep has removed it — absence is then a decision, not a
+   * catalog hole. Install and training are never passed here.
+   */
+  omitIds: readonly string[] = []
 ): IncludedServicesResult {
   if (!isProcessingQuote(quoteType) || pickedLines.length === 0) return { lines: [], missing: [] };
 
   const lines: QuoteLine[] = [];
   const missing: string[] = [];
   for (const service of INCLUDED_SERVICE_PRODUCTS) {
+    if (omitIds.includes(service.hubspotProductId)) continue;
     const product =
       catalog.find(p => p.hubspotProductId === service.hubspotProductId) ??
       catalog.find(p => p.name.trim() === service.name);
@@ -444,6 +602,64 @@ export function resolveIncludedServices(
     else missing.push(service.name);
   }
   return { lines, missing };
+}
+
+export type RequiredTerminalsResult = IncludedServicesResult & { qty: number };
+
+/**
+ * One AMS1 per POS unit, charged at the catalog price. Added on top of any
+ * terminals the rep picked — those are extras. Missing from the catalog is a
+ * blocker: a POS quote without the terminal it has to ship with is incomplete.
+ */
+export function resolveRequiredAms1(
+  quoteType: QuoteType,
+  pickedLines: QuoteLine[],
+  catalog: CatalogProduct[]
+): RequiredTerminalsResult {
+  if (!isProcessingQuote(quoteType)) return { lines: [], missing: [], qty: 0 };
+  const qty = pickedLines.reduce((n, l) => n + (isPosRequiringTerminal(l) ? l.qty : 0), 0);
+  if (qty === 0) return { lines: [], missing: [], qty: 0 };
+
+  const product =
+    catalog.find(p => p.hubspotProductId === AMS1_PRODUCT.hubspotProductId) ??
+    catalog.find(p => p.name.trim() === AMS1_PRODUCT.name);
+  return product
+    ? { lines: [toQuoteLine(product, qty)], missing: [], qty }
+    : { lines: [], missing: [AMS1_PRODUCT.name], qty };
+}
+
+export type SoftwareLicenseResult = IncludedServicesResult & { screens: number };
+
+/**
+ * One Additional Software License per screen past the four the platform fee
+ * includes. Marketing plans don't get one — their screens are a different offer.
+ * The license is derived, never picked, so a hand-added line can't double it.
+ */
+export function resolveSoftwareLicense(
+  quoteType: QuoteType,
+  pickedLines: QuoteLine[],
+  catalog: CatalogProduct[]
+): SoftwareLicenseResult {
+  if (!isProcessingQuote(quoteType)) return { lines: [], missing: [], screens: 0 };
+  const screens = screenCount(pickedLines);
+  const extra = Math.max(0, screens - INCLUDED_SCREEN_COUNT);
+  if (extra === 0) return { lines: [], missing: [], screens };
+
+  const product =
+    catalog.find(p => p.hubspotProductId === SOFTWARE_LICENSE_PRODUCT.hubspotProductId) ??
+    catalog.find(p => p.name.trim() === SOFTWARE_LICENSE_PRODUCT.name);
+  return product
+    ? { lines: [toQuoteLine(product, extra)], missing: [], screens }
+    : { lines: [], missing: [SOFTWARE_LICENSE_PRODUCT.name], screens };
+}
+
+/** Fold the derived AMS1 quantity into the picks so the quote carries one line. */
+function withRequiredTerminals(picks: QuoteLine[], required: RequiredTerminalsResult): QuoteLine[] {
+  const extra = required.lines[0];
+  if (!extra) return picks;
+  const idx = picks.findIndex(l => l.hubspotProductId === extra.hubspotProductId);
+  if (idx < 0) return [...picks, extra];
+  return picks.map((l, i) => (i === idx ? { ...l, qty: l.qty + extra.qty } : l));
 }
 
 /**
@@ -480,6 +696,61 @@ export function resolveMarketingHardware(
     } else missing.push(included.name);
   }
   return { lines, missing };
+}
+
+/**
+ * The $0.50 charge that lets a quote delay its billing.
+ *
+ * HubSpot won't publish a payment-enabled quote that collects under $0.50 at
+ * checkout (see `MIN_CHECKOUT_AMOUNT`), and a delayed recurring line collects
+ * nothing at checkout — so a quote whose hardware is comped and whose plan
+ * starts billing in 60 days has NOTHING due, and can't be sent at all. This
+ * product is what makes that quote sendable: a real $0.50 charge at checkout,
+ * which also proves the merchant's bank details work before the first real bill.
+ *
+ * Already in the HubSpot catalog (`AIO Pre Auth`, $0.50, one-time). It used to
+ * be listed under the picker exclusions as a per-transaction fee that made no
+ * sense as a quote line; this is the one use of it that does.
+ *
+ * DERIVED AND UNTOUCHABLE, deliberately. A rep can't pick it, discount it,
+ * delay it or change its quantity: `buildQuote` appends it AFTER every
+ * adjustment has been applied, so there is no path by which an adjustment
+ * reaches it. A rep who could remove it could build a quote that can't publish;
+ * one who could discount it would do the same by another route.
+ */
+export const PRE_AUTH_PRODUCT = {
+  name: "AIO Pre Auth",
+  hubspotProductId: "281354281678",
+} as const;
+
+export function isPreAuthProduct(id: string, name: string): boolean {
+  return id === PRE_AUTH_PRODUCT.hubspotProductId || name.trim() === PRE_AUTH_PRODUCT.name;
+}
+
+/**
+ * The pre-authorization line, when — and only when — the quote needs one.
+ *
+ * Judged on the lines AS ADJUSTED, so it appears the moment a rep delays the
+ * last recurring charge and disappears the moment they undo it. A quote that
+ * already collects something at checkout is left exactly as it was: adding a
+ * charge to every quote would rewrite documents AIO sends today for no reason.
+ *
+ * An empty quote (rate-only) never gets one — it builds no HubSpot document at
+ * all, so there is no checkout to satisfy.
+ */
+export function resolvePreAuthLine(
+  lines: QuoteLine[],
+  catalog: CatalogProduct[]
+): IncludedServicesResult {
+  if (lines.length === 0 || amountDueAtCheckout(lines) >= MIN_CHECKOUT_AMOUNT) {
+    return { lines: [], missing: [] };
+  }
+  const product =
+    catalog.find(p => p.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId) ??
+    catalog.find(p => p.name.trim() === PRE_AUTH_PRODUCT.name);
+  return product
+    ? { lines: [toQuoteLine(product, 1)], missing: [] }
+    : { lines: [], missing: [PRE_AUTH_PRODUCT.name] };
 }
 
 /**
@@ -658,6 +929,33 @@ export function quoteTotals(lines: QuoteLine[]): QuoteTotals {
   };
 }
 
+/**
+ * HubSpot refuses to publish a payment-enabled quote whose checkout total is
+ * under this (`MIN_TOTAL_NOT_REACHED`, ACH threshold $0.50 — observed live
+ * 2026-10-07). It is HubSpot's number, not ours; restated so the refusal can
+ * happen BEFORE a merchant is standing at the door.
+ */
+export const MIN_CHECKOUT_AMOUNT = 0.5;
+
+/**
+ * What the merchant is charged at the moment they check out: every one-time
+ * line, plus the FIRST payment of each recurring line that has no delayed
+ * start. A recurring line with a `billingStart` takes nothing at checkout —
+ * HubSpot reported `totalAmount: 0.00` for a quote whose only charge was a
+ * $299/mo plan delayed 60 days, with its hardware comped by the plan.
+ *
+ * Distinct from `quoteTotals`, which is what the quote is WORTH. A quote can be
+ * worth $299/mo and still owe $0 today.
+ */
+export function amountDueAtCheckout(lines: QuoteLine[]): number {
+  let due = 0;
+  for (const line of lines) {
+    if (line.billingFrequency !== "one_time" && line.billingStart) continue;
+    due += lineNetAmount(line);
+  }
+  return Math.round(due * 100) / 100;
+}
+
 // ── Ordering points ─────────────────────────────────────────────────────────
 
 // THE pricing rule. It lives here — in EasyOB — and deliberately NOT in the
@@ -754,9 +1052,8 @@ export function ruleForLine(line: { hubspotProductId: string; name: string }): O
 
 /**
  * Ordering points one unit of this line is worth. The rules above are the
- * single source of truth for it, and `quotePackages.ts` takes this function
- * rather than importing the table — which is what keeps the package module
- * free of any dependency on this one.
+ * single source of truth for it. (The hardware kit used to read this to decide
+ * what could fill an ordering-point slot; it now goes by sheet MSRP instead.)
  */
 export function orderPointsPerUnit(line: { hubspotProductId: string; name: string }): number {
   return ruleForLine(line)?.pointsPerUnit ?? 0;
@@ -928,15 +1225,32 @@ export function resolvePlatformLine(
  * Reopen a saved quote in the configurator: the picks that produced it.
  *
  * Derived lines are dropped, because they're re-derived on the way back out —
- * keeping them would send the platform fee, the three install services and any
- * package SKU back as picks, and the server refuses those (they aren't
- * pickable) rather than quoting them twice.
+ * keeping them would send the platform fee and the three install services
+ * back as picks, and the server refuses those (they aren't pickable) rather
+ * than quoting them twice.
  *
  * Quantities are SUMMED per product, because a package splits one pick into a
  * covered line and a remainder line. Two picks of the same product would
  * otherwise reach the server, and the last one written wins — silently
  * dropping whichever half the package didn't cover.
  */
+/** Lines that are re-derived on the way back out, so they must not come back as picks. */
+function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
+  return (
+    isPlatformProduct(line.name, line.hubspotProductId) ||
+    isIncludedServiceProduct(line.hubspotProductId, line.name) ||
+    line.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId ||
+    isPreAuthProduct(line.hubspotProductId, line.name) ||
+    isSoftwareLicenseProduct(line.hubspotProductId, line.name) ||
+    isHardwareBundle(line.hubspotProductId, line.name) ||
+    (isMarketingQuote(quoteType) && isMarketingIncludedHardware(line.hubspotProductId, line.name)) ||
+    // Kits belong on the marketing plans. A processing quote that still carries
+    // one (saved before they were taken off) must not send it back as a pick —
+    // the server would refuse the whole save.
+    (!isMarketingQuote(quoteType) && isMarketingKit(line.hubspotProductId, line.name))
+  );
+}
+
 export function picksFromQuoteLines(
   lines: QuoteLine[] | null | undefined,
   /**
@@ -949,16 +1263,21 @@ export function picksFromQuoteLines(
    */
   quoteType: QuoteType
 ): Array<{ hubspotProductId: string; qty: number }> {
+  const processing = isProcessingQuote(quoteType);
+  let posQty = 0;
+  let ams1Qty = 0;
   const merged = new Map<string, number>();
   for (const l of lines ?? []) {
-    if (
-      isPlatformProduct(l.name, l.hubspotProductId) ||
-      isIncludedServiceProduct(l.hubspotProductId, l.name) ||
-      isPackageProduct(l.hubspotProductId) ||
-      l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId ||
-      (isMarketingQuote(quoteType) && isMarketingIncludedHardware(l.hubspotProductId, l.name))
-    ) continue;
+    // Counted before the drop, because the derived AMS1 is itself dropped and
+    // only the extras — quantity above one per POS — go back as a pick.
+    if (processing && isPosRequiringTerminal(l)) posQty += l.qty;
+    if (isAms1Product(l.hubspotProductId, l.name)) ams1Qty += l.qty;
+    if (isDroppedOnReopen(l, quoteType) || isAms1Product(l.hubspotProductId, l.name)) continue;
     merged.set(l.hubspotProductId, (merged.get(l.hubspotProductId) ?? 0) + l.qty);
+  }
+  if (processing) {
+    const extra = ams1Qty - posQty;
+    if (extra > 0) merged.set(AMS1_PRODUCT.hubspotProductId, extra);
   }
   return [...merged].map(([hubspotProductId, qty]) => ({ hubspotProductId, qty }));
 }
@@ -1097,6 +1416,28 @@ export function quoteSanityBlockers(lines: QuoteLine[], totals: QuoteTotals): st
 }
 
 /**
+ * Whether the quote collects enough at checkout for HubSpot to publish it.
+ *
+ * Kept apart from `quoteSanityBlockers`, which is judged on the quote WITHOUT
+ * its pre-authorization line: that line exists to satisfy this check, so
+ * counting it in the sanity pass would let a quote that nets to $0 through
+ * every real line sail past "every line nets to $0" on the strength of fifty
+ * cents. This one is judged on the final lines.
+ *
+ * Reachable on a freshly built quote only if the pre-auth product is missing
+ * from the catalog or has been repriced under the threshold — otherwise the
+ * line is added and this is silent. It is the whole story for a quote saved
+ * BEFORE the pre-auth existed, which `canPublishBillingQuote` re-checks.
+ */
+export function checkoutAmountBlockers(lines: QuoteLine[]): string[] {
+  if (lines.length === 0 || amountDueAtCheckout(lines) >= MIN_CHECKOUT_AMOUNT) return [];
+  return [
+    "Nothing is due at checkout — every charge is either free or has a delayed billing start — and " +
+    "HubSpot can't publish a quote that collects less than $0.50 up front."
+  ];
+}
+
+/**
  * Reopen a saved quote's edits in the configurator, the discount/delay twin of
  * `picksFromQuoteLines`.
  *
@@ -1110,7 +1451,17 @@ export function quoteSanityBlockers(lines: QuoteLine[], totals: QuoteTotals): st
  * come back free too, and would stay free even after the package stopped
  * applying.
  */
-export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined): QuoteAdjustments {
+export function adjustmentsFromQuoteLines(
+  lines: QuoteLine[] | null | undefined,
+  /**
+   * The plan, when the caller has it. A processing quote that already has its
+   * install lines but no WiFi line was saved with the package removed, and
+   * reopening has to keep it removed — otherwise the derivation puts it back.
+   * A channel-only quote has a platform line and no install lines, so it does
+   * not count: WiFi was never applicable there.
+   */
+  quoteType?: QuoteType
+): QuoteAdjustments {
   // How many units of each product the merchant is actually being charged for,
   // so a discounted line smaller than that total is recognised as a SPLIT and
   // its quantity is carried back. Without this a "1 of 3 free" reopens as
@@ -1122,9 +1473,28 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
     chargeable.set(line.hubspotProductId, (chargeable.get(line.hubspotProductId) ?? 0) + line.qty);
   }
 
-  const out: QuoteAdjustments = {};
+  // Products whose lines disagree about WHEN billing starts, or carry more than
+  // one distinct discount, can't be expressed as one line-level edit plus a
+  // `discountQty` — that shape has room for a single discount and a single
+  // start. They reopen in "adjust each unit" mode instead. Everything the old
+  // shape could say still reopens the old way, so existing quotes are untouched.
+  const shape = new Map<string, { starts: Set<string>; discounts: Set<number>; discounted: number }>();
   for (const line of lines ?? []) {
     if (line.coveredByPackage) continue;
+    const s = shape.get(line.hubspotProductId) ?? { starts: new Set(), discounts: new Set(), discounted: 0 };
+    s.starts.add(startSignature(line.billingStart));
+    s.discounts.add(line.discountPercent || 0);
+    if (line.discountPercent) s.discounted += 1;
+    shape.set(line.hubspotProductId, s);
+  }
+  const perUnit = new Set(
+    [...shape].filter(([, s]) => s.starts.size > 1 || s.discounted > 1 || s.discounts.size > 2).map(([id]) => id)
+  );
+
+  const out: QuoteAdjustments = {};
+  for (const id of perUnit) out[id] = { units: unitsFromQuoteLines(lines, id) };
+  for (const line of lines ?? []) {
+    if (line.coveredByPackage || perUnit.has(line.hubspotProductId)) continue;
     const adjustment: LineAdjustment = {};
     if (line.discountPercent) {
       adjustment.discountPercent = line.discountPercent;
@@ -1135,7 +1505,21 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
     // no key and can't overwrite the half that does.
     if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
   }
+
+  if (quoteType && isProcessingQuote(quoteType)) {
+    const rows = lines ?? [];
+    const hasInstall =
+      rows.some(l => isIncludedServiceProduct(l.hubspotProductId, l.name) && !isWifiLine(l));
+    const hasWifi = rows.some(isWifiLine);
+    if (hasInstall && !hasWifi) {
+      out[WIFI_PRODUCT_ID] = { ...out[WIFI_PRODUCT_ID], removed: true };
+    }
+  }
   return out;
+}
+
+function isWifiLine(line: { hubspotProductId: string; name: string }): boolean {
+  return line.hubspotProductId === WIFI_PRODUCT_ID || line.name.trim() === "AIO WiFi Network Package";
 }
 
 /** A one-line, rep- and customer-readable rendering of a delayed start. */
@@ -1149,9 +1533,10 @@ export function describeBillingStart(start: BillingStart): string {
 
 export type BuiltQuote = {
   /**
-   * Platform line, then any package SKUs, then the mandatory services and what
-   * the rep picked — the latter two rewritten by the package decomposition, so
-   * a line a package absorbed sits here at 100% off carrying `coveredByPackage`.
+   * Platform line, then the mandatory services and what the rep picked — the
+   * latter two rewritten by the package decomposition, so a line a package
+   * absorbed sits here at 100% off carrying `coveredByPackage`. There is no
+   * line for the package itself: it is free.
    */
   quoteLines: QuoteLine[];
   orderPoints: OrderPoints;
@@ -1159,8 +1544,14 @@ export type BuiltQuote = {
   includedServices: IncludedServicesResult;
   /** Hardware the marketing plans hand over at no charge. Empty on a processing quote. */
   planHardware: IncludedServicesResult;
+  /** One charged AMS1 per POS unit. Empty when the quote has no POS. */
+  requiredTerminals: RequiredTerminalsResult;
+  /** Additional software licenses past the four screens the plan includes. */
+  softwareLicense: SoftwareLicenseResult;
   /** The $0 card-rate disclosure, on a marketing quote that sells through a website. */
   processingDisclosure: IncludedServicesResult;
+  /** The $0.50 checkout charge, present only when nothing else is due at checkout. Never editable. */
+  preAuth: IncludedServicesResult;
   breakdown: OrderPointsBreakdown;
   /** Which pre-made packages the cart broke down into, and what they absorbed. */
   packages: PackageDecomposition;
@@ -1204,21 +1595,35 @@ export function buildQuote(
   // taking orders through AIO.
   const effectiveChannels = isProcessingQuote(quoteType) ? channels : [];
 
-  const breakdown = deriveOrderPoints(pickedLines, effectiveChannels);
-  const platform = resolvePlatformLine(quoteType, pickedLines, effectiveChannels, catalog);
-  const includedServices = resolveIncludedServices(quoteType, pickedLines, catalog);
+  // The license is derived from the screen count. A line of it arriving as a
+  // pick (a stale tab, a hand-edited payload) would bill it a second time.
+  const picks = pickedLines.filter(l => !isSoftwareLicenseProduct(l.hubspotProductId, l.name));
+
+  const breakdown = deriveOrderPoints(picks, effectiveChannels);
+  const platform = resolvePlatformLine(quoteType, picks, effectiveChannels, catalog);
+  // Removed WiFi is a decision, not a missing product. Install and training
+  // are not optional and are never omitted this way.
+  const wifiRemoved = isProcessingQuote(quoteType) && adjustments[WIFI_PRODUCT_ID]?.removed === true;
+  const includedServices = resolveIncludedServices(
+    quoteType, picks, catalog, wifiRemoved ? [WIFI_PRODUCT_ID] : []
+  );
+  const requiredTerminals = resolveRequiredAms1(quoteType, picks, catalog);
+  const softwareLicense = resolveSoftwareLicense(quoteType, picks, catalog);
   const planHardware = resolveMarketingHardware(quoteType, catalog);
-  const processingDisclosure = resolveProcessingDisclosure(quoteType, pickedLines, catalog);
+  const processingDisclosure = resolveProcessingDisclosure(quoteType, picks, catalog);
 
   // The 2-year term's included kiosk, taken out of what the rep picked before
   // anything else runs: the comp is a line SPLIT, so it has to happen while
   // these are still the picks, and the covered half then flows through the
   // adjustment pass like a package-covered line.
-  const picksWithInclusions = applyPlanIncludedKiosk(quoteType, pickedLines);
+  const picksWithInclusions = applyPlanIncludedKiosk(
+    quoteType,
+    withRequiredTerminals(picks, requiredTerminals)
+  );
 
-  // The pre-made packages, resolved against the mandatory services AND the
-  // picks — the QSR Kit covers the WiFi package, which is a derived line, so
-  // restricting this to the picks would leave $999 of it uncovered.
+  // The hardware kit, resolved against the mandatory services AND the picks —
+  // it covers the WiFi package and the AMS1 each POS ships with, both derived
+  // lines, so restricting this to the picks would leave them uncovered.
   //
   // The platform line is deliberately not offered: it is recurring, and a
   // package only ever absorbs one-time charges (see quotePackages.ts). The
@@ -1228,18 +1633,27 @@ export function buildQuote(
   // the same count either way — splitting a line preserves its total quantity.
   const packages = decomposePackages({
     lines: [...includedServices.lines, ...picksWithInclusions],
-    catalog,
-    orderPointsPerUnit,
+    quoteType,
   });
 
-  const quoteLines = [
+  const unitCursor = new Map<string, number>();
+  const chargedLines = [
     ...(platform.line ? [platform.line] : []),
+    ...softwareLicense.lines,
     ...processingDisclosure.lines,
     ...planHardware.lines,
-    ...packages.packageLines,
     ...packages.lines,
   ].flatMap(line => {
     const adjustment = adjustments[line.hubspotProductId];
+    // "Adjust each unit" mode: the units are numbered across every chargeable
+    // line of the product, so the cursor carries on from where the last one
+    // stopped. Covered lines are skipped here and fall through to the package
+    // comp below — they are already wholly paid for and own no units.
+    if (hasUnitAdjustments(adjustment) && !line.coveredByPackage) {
+      const offset = unitCursor.get(line.hubspotProductId) ?? 0;
+      unitCursor.set(line.hubspotProductId, offset + line.qty);
+      return splitByUnits(line, adjustment, offset);
+    }
     // The comps come AFTER the rep's edits — an unrelated edit on the row must
     // not clear them. An explicit discount from the rep beats the service comp
     // (see applyServiceComp) but never the package one (see applyPackageComp),
@@ -1249,14 +1663,28 @@ export function buildQuote(
     return splitPartialDiscount(adjusted, adjustment);
   });
 
+  // The pre-authorization comes LAST and past every adjustment on purpose: it is
+  // judged on what the quote would collect after the rep's discounts and
+  // delays, and nothing the rep does can reach it. See PRE_AUTH_PRODUCT.
+  const preAuth = resolvePreAuthLine(chargedLines, catalog);
+  const quoteLines = [...chargedLines, ...preAuth.lines];
+
   const totals = quoteTotals(quoteLines);
 
   const blockers: string[] = [
     ...adjustmentBlockers(quoteLines, maxDiscountPercent),
     ...discountQtyBlockers(adjustments, quoteLines),
-    ...quoteSanityBlockers(quoteLines, totals),
-    ...packages.blockers,
+    // The real lines only: fifty cents must not rescue a quote that nets to $0.
+    ...quoteSanityBlockers(chargedLines, quoteTotals(chargedLines)),
+    // When the product is missing, its own message below says what to fix.
+    ...(preAuth.missing.length ? [] : checkoutAmountBlockers(quoteLines)),
   ];
+  for (const name of preAuth.missing) {
+    blockers.push(
+      `This quote delays or waives every charge, so it needs the "${name}" product to collect $0.50 at ` +
+      `checkout — but it isn't in the HubSpot catalog (renamed, archived, or the catalog didn't load).`
+    );
+  }
   if (platform.status === "unresolved") {
     blockers.push(
       `This quote needs the "${platform.productName}" platform product, which isn't in the HubSpot ` +
@@ -1279,6 +1707,18 @@ export function buildQuote(
     blockers.push(
       `This plan includes "${name}", which isn't in the HubSpot catalog (renamed, archived, or ` +
       `the catalog didn't load) — so it can't be put on the quote at the $0 the merchant was promised.`
+    );
+  }
+  for (const name of requiredTerminals.missing) {
+    blockers.push(
+      `Every POS unit needs a "${name}", which isn't in the HubSpot catalog (renamed, archived, or ` +
+      `the catalog didn't load) — so this quote can't include the terminal that has to ship with it.`
+    );
+  }
+  for (const name of softwareLicense.missing) {
+    blockers.push(
+      `This quote has more than ${INCLUDED_SCREEN_COUNT} screens, so it needs an "${name}" for each ` +
+      `one past that — but it isn't in the HubSpot catalog (renamed, archived, or the catalog didn't load).`
     );
   }
   // Nothing on the quote exceeds its own limit. Summed per PRODUCT rather
@@ -1320,7 +1760,10 @@ export function buildQuote(
     platform,
     includedServices,
     planHardware,
+    requiredTerminals,
+    softwareLicense,
     processingDisclosure,
+    preAuth,
     breakdown,
     packages,
     totals,
