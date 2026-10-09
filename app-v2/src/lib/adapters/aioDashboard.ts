@@ -22,8 +22,12 @@
 // AIO never collects EIN, bank account, or SSN through this path — Adyen
 // collects those on its own hosted onboarding page, same rule as check.ts.
 //
-// Contract facts below were verified live against internal dev on 2026-09-23;
-// see app-v2/AIO-DASHBOARD-API-TRANSCRIPT.md for the raw session.
+// Contract facts below were verified live against internal dev on 2026-09-23 and
+// then end-to-end against PROD (backend.prod.aioapp.com) on 2026-10-09 with the
+// dedicated service account — see app-v2/AIO-DASHBOARD-PROD-VERIFIED.md. Prod is
+// stricter than internal dev in two ways, both handled below: business/create and
+// restaurant/post/create reject a non-geocodable address / null coordinates, and
+// prod Adyen is LIVE (real KYC), not test.
 
 import { locationAddress } from "@/types/merchant";
 import type { MerchantApplication, OwnerContact } from "@/types/merchant";
@@ -200,11 +204,18 @@ export function aioBusinessAlias(app: Pick<MerchantApplication, "id">): string {
   return `easyob_${app.id}`.toLowerCase().replace(/[^a-z0-9_]+/g, "_").slice(0, 60);
 }
 
-/** The ONLY way to obtain the Adyen legal entity id today: AIO's response
- *  carries an empty accountDetails and restaurant.accountId stays null, so the
- *  id is read out of the onboarding URL path. Returns null rather than
- *  throwing — the link still works without it, only our cross-reference is
- *  degraded. */
+/** Extracts the Adyen legal-entity id from a TEST onboarding URL, whose path
+ *  carries `/legalEntities/LE…/`. Returns null rather than throwing — the link
+ *  works without it, only our cross-reference is degraded.
+ *
+ *  LIVE IS DIFFERENT, verified on prod 2026-10-09: the live hosted-onboarding URL
+ *  (`balanceplatform-live.adyen.com/balanceplatform/uo/form/…`) carries NO
+ *  legal-entity id — just opaque session tokens — and `restaurant.accountId`
+ *  stays null until the MERCHANT completes KYC on Adyen's page. So on live this
+ *  correctly returns null at link-mint time; the id is a post-KYC artifact, read
+ *  from `restaurant.accountId` once it populates (consistent with there being no
+ *  automatic KYC-completion signal — see CLAUDE.md). Don't treat null here as a
+ *  bug to "fix" by parsing harder; there is nothing in the live URL to parse. */
 export function legalEntityIdFromOnboardingUrl(url: string): string | null {
   return /\/legalEntities\/(LE[A-Za-z0-9]+)/.exec(url)?.[1] ?? null;
 }
@@ -213,6 +224,84 @@ export function legalEntityIdFromOnboardingUrl(url: string): string | null {
  *  objects actually are instead of what we think we configured. */
 export function adyenEnvironmentFromOnboardingUrl(url: string): "test" | "live" {
   return /onboarding-test\.adyen\.com/.test(url) ? "test" : "live";
+}
+
+// AIO's restaurant/post/create REQUIRES non-null latitude/longitude on prod —
+// internal dev tolerated null, prod answers 500 "Missing required field". Unlike
+// business/create, this route does not geocode the address server-side, so we
+// resolve coordinates ourselves.
+//
+// Provisioning MUST NOT stall on a geocode miss: by the time this runs step 1
+// (business/create) has already created a permanent tenant, and a merchant who
+// has paid is waiting on their account. So geocodeUsAddress tries progressively
+// looser sources and, as a last resort, returns a logged placeholder — it never
+// throws. The coordinate is a map pin on the AIO location record; the merchant's
+// real address is re-entered on Adyen's own hosted KYC page regardless.
+
+type LatLng = { latitude: number; longitude: number };
+
+// Geographic center of the contiguous US. Only used when every geocoder misses,
+// which for a real, already-validated US address effectively never happens.
+const US_CENTROID: LatLng = { latitude: 39.8283, longitude: -98.5795 };
+
+/** US Census geocoder — free, no key, authoritative for US addresses. */
+async function censusGeocode(oneline: string): Promise<LatLng | null> {
+  try {
+    const url =
+      "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress" +
+      `?address=${encodeURIComponent(oneline)}&benchmark=Public_AR_Current&format=json`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const json: any = await res.json();
+    const c = json?.result?.addressMatches?.[0]?.coordinates; // x = lng, y = lat
+    if (typeof c?.y === "number" && typeof c?.x === "number") {
+      return { latitude: c.y, longitude: c.x };
+    }
+  } catch {
+    /* fall through to the next source */
+  }
+  return null;
+}
+
+/** OpenStreetMap / Nominatim — different dataset, catches Census gaps. Policy
+ *  requires an identifying User-Agent; provisioning is low volume. */
+async function nominatimGeocode(query: string): Promise<LatLng | null> {
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { headers: { "User-Agent": "EasyOB/1.0 (aioapp.com)" } });
+    if (!res.ok) return null;
+    const arr: any = await res.json();
+    const hit = Array.isArray(arr) ? arr[0] : null;
+    const lat = Number(hit?.lat), lng = Number(hit?.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { latitude: lat, longitude: lng };
+  } catch {
+    /* fall through to the next source */
+  }
+  return null;
+}
+
+/** Never throws, never stalls — see the note above. Order: Census exact → OSM
+ *  exact → OSM city/state (centroid) → US centroid placeholder (logged). */
+export async function geocodeUsAddress(parts: {
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+}): Promise<LatLng> {
+  const full = [parts.address, parts.city, parts.state, parts.zip].filter(Boolean).join(", ");
+  const cityState = [parts.city, parts.state, parts.zip].filter(Boolean).join(", ");
+
+  const resolved =
+    (await censusGeocode(full)) ??
+    (await nominatimGeocode(full)) ??
+    (cityState ? await nominatimGeocode(cityState) : null);
+
+  if (resolved) return resolved;
+
+  // Non-null is what the API requires; precision we cannot get here. Loud so the
+  // record can be corrected, but provisioning continues.
+  console.warn(`AIO location geocode: no match for "${full}" — using US-centroid placeholder`);
+  return { ...US_CENTROID };
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -323,6 +412,10 @@ export async function createAioLocation(
   // The LOCATION is where the restaurant physically is, so it takes the DBA
   // address when there is one. The tenant above keeps the legal address.
   const loc = locationAddress(biz);
+  // Prod rejects null coordinates here; geocode the location address. See
+  // geocodeUsAddress — this throws if the address can't be resolved, which is
+  // the right failure: step 1 already succeeded, so a resume re-runs just this.
+  const { latitude, longitude } = await geocodeUsAddress(loc);
   const body = {
     businessId: args.businessId,
     companyId: args.companyId,
@@ -335,11 +428,11 @@ export async function createAioLocation(
       onlineOrder: false,
       restaurantModes: "quickServe",
       onlineOrderTimer: "16:00:00",
-      // AIO's form geocodes; we don't hold coordinates, and 0/0 would place
-      // every merchant in the Gulf of Guinea. Left null so a wrong point is
-      // never asserted — see the open question about required fields.
-      latitude: null,
-      longitude: null,
+      // Geocoded above (geocodeUsAddress). Prod's restaurant/post/create rejects
+      // null here with 500 "Missing required field"; business/create geocodes
+      // server-side but this route does not.
+      latitude,
+      longitude,
       phoneNo: toE164Phone(biz.phone) ?? "",
       otherMode: "",
       building: "",
