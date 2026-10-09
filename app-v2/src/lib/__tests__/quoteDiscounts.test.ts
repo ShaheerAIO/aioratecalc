@@ -356,7 +356,8 @@ describe("reopening a saved quote", () => {
     }, 100).quoteLines;
 
     // The picks drop derived lines — that is their job, they get re-derived.
-    expect(picksFromQuoteLines(saved, "all_in_one").map(x => x.hubspotProductId)).toEqual([POS_ID]);
+    // The POS's AMS1 is a pick like any other, so it comes back.
+    expect(picksFromQuoteLines(saved, "all_in_one").map(x => x.hubspotProductId)).toEqual([POS_ID, AMS1_ID]);
 
     // The adjustments must NOT, or the comped install silently returns to $999.
     const reopened = adjustmentsFromQuoteLines(saved);

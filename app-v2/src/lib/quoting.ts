@@ -325,7 +325,11 @@ export const POS_REQUIRING_TERMINAL_IDS = [
   "223452690130", // POS Unit - With Customer Facing Display
 ] as const;
 
-/** Charged at the catalog price, one per POS unit, on top of any the rep adds. */
+/**
+ * Charged at the catalog price, at least one per POS unit. The rep picks it
+ * like any other product and the configurator moves it with the POS stepper;
+ * `resolveRequiredAms1` only tops up a quote that arrives with too few.
+ */
 export const AMS1_PRODUCT = {
   name: "Payment Terminal - AMS1",
   hubspotProductId: "223511653105",
@@ -376,8 +380,17 @@ function isAms1Product(id: string, name: string): boolean {
   return id === AMS1_PRODUCT.hubspotProductId || name.trim() === AMS1_PRODUCT.name;
 }
 
-function isPosRequiringTerminal(line: { hubspotProductId: string }): boolean {
+export function isPosRequiringTerminal(line: { hubspotProductId: string }): boolean {
   return (POS_REQUIRING_TERMINAL_IDS as readonly string[]).includes(line.hubspotProductId);
+}
+
+/** The fewest AMS1 terminals these picks may carry: one per POS unit. */
+export function minimumTerminalsFor(
+  quoteType: QuoteType,
+  picks: Array<{ hubspotProductId: string; qty: number }>
+): number {
+  if (!isProcessingQuote(quoteType)) return 0;
+  return picks.reduce((n, p) => n + (isPosRequiringTerminal(p) ? p.qty : 0), 0);
 }
 
 function isSoftwareLicenseProduct(id: string, name: string): boolean {
@@ -633,17 +646,23 @@ export function resolveIncludedServices(
 export type RequiredTerminalsResult = IncludedServicesResult & { qty: number };
 
 /**
- * One AMS1 per POS unit, charged at the catalog price. Added on top of any
- * terminals the rep picked — those are extras. Missing from the catalog is a
- * blocker: a POS quote without the terminal it has to ship with is incomplete.
+ * The AMS1 terminals a quote is short of: one per POS unit, less the ones the
+ * rep already picked. Picked terminals COUNT toward the minimum — they are not
+ * extras on top of it — so a configurator that keeps the stepper at or above
+ * the POS count never triggers this, and `qty` is 0. It exists for a payload
+ * that arrives under the minimum (a stale tab, a hand-edited request): the
+ * terminal has to ship with the POS, so it is added rather than refused.
+ * Missing from the catalog is a blocker: a POS quote without the terminal it
+ * has to ship with is incomplete.
  */
 export function resolveRequiredAms1(
   quoteType: QuoteType,
   pickedLines: QuoteLine[],
   catalog: CatalogProduct[]
 ): RequiredTerminalsResult {
-  if (!isProcessingQuote(quoteType)) return { lines: [], missing: [], qty: 0 };
-  const qty = pickedLines.reduce((n, l) => n + (isPosRequiringTerminal(l) ? l.qty : 0), 0);
+  const required = minimumTerminalsFor(quoteType, pickedLines);
+  const picked = pickedLines.reduce((n, l) => n + (isAms1Product(l.hubspotProductId, l.name) ? l.qty : 0), 0);
+  const qty = Math.max(0, required - picked);
   if (qty === 0) return { lines: [], missing: [], qty: 0 };
 
   const product =
@@ -848,6 +867,25 @@ export function applyPlanIncludedKiosk(quoteType: QuoteType, lines: QuoteLine[])
   const covered: QuoteLine = { ...line, qty: 1, coveredByPackage: planName };
   const rest: QuoteLine[] = line.qty > 1 ? [{ ...line, qty: line.qty - 1 }] : [];
   return [...lines.slice(0, best), covered, ...rest, ...lines.slice(best + 1)];
+}
+
+/** The plans whose subscription includes the Website. Preselected on them, and held at $0. */
+export const PLANS_INCLUDING_WEBSITE: readonly QuoteType[] = ["all_in_one"];
+
+export function planIncludesWebsite(quoteType: QuoteType): boolean {
+  return PLANS_INCLUDING_WEBSITE.includes(quoteType);
+}
+
+/**
+ * The Website the All-in-One plan includes, marked as covered by the plan so
+ * `applyPackageComp` holds it at 100% off — the same expression as the
+ * 2-year term's kiosk. The Website is single-instance, so the whole line is
+ * the included one; a rep can still take it off the quote.
+ */
+export function applyPlanIncludedWebsite(quoteType: QuoteType, lines: QuoteLine[]): QuoteLine[] {
+  if (!planIncludesWebsite(quoteType)) return lines;
+  const planName = PLATFORM_PRODUCTS[quoteType].name;
+  return lines.map(l => (l.hubspotProductId === WEBSITE_PRODUCT_ID ? { ...l, coveredByPackage: planName } : l));
 }
 
 // HubSpot's hs_product_type values, in the order a configurator should show
@@ -1291,21 +1329,12 @@ export function picksFromQuoteLines(
    */
   quoteType: QuoteType
 ): Array<{ hubspotProductId: string; qty: number }> {
-  const processing = isProcessingQuote(quoteType);
-  let posQty = 0;
-  let ams1Qty = 0;
+  // The AMS1 comes back whole, like any pick: picked terminals count toward
+  // the one-per-POS minimum, so the saved total is exactly what to reopen as.
   const merged = new Map<string, number>();
   for (const l of lines ?? []) {
-    // Counted before the drop, because the derived AMS1 is itself dropped and
-    // only the extras — quantity above one per POS — go back as a pick.
-    if (processing && isPosRequiringTerminal(l)) posQty += l.qty;
-    if (isAms1Product(l.hubspotProductId, l.name)) ams1Qty += l.qty;
-    if (isDroppedOnReopen(l, quoteType) || isAms1Product(l.hubspotProductId, l.name)) continue;
+    if (isDroppedOnReopen(l, quoteType)) continue;
     merged.set(l.hubspotProductId, (merged.get(l.hubspotProductId) ?? 0) + l.qty);
-  }
-  if (processing) {
-    const extra = ams1Qty - posQty;
-    if (extra > 0) merged.set(AMS1_PRODUCT.hubspotProductId, extra);
   }
   return [...merged].map(([hubspotProductId, qty]) => ({ hubspotProductId, qty }));
 }
@@ -1578,7 +1607,7 @@ export type BuiltQuote = {
   includedServices: IncludedServicesResult;
   /** Hardware the marketing plans hand over at no charge. Empty on a processing quote. */
   planHardware: IncludedServicesResult;
-  /** One charged AMS1 per POS unit. Empty when the quote has no POS. */
+  /** AMS1 terminals added to reach one per POS unit. Empty when the picks already carry enough. */
   requiredTerminals: RequiredTerminalsResult;
   /** Additional software licenses past the four screens the plan includes. */
   softwareLicense: SoftwareLicenseResult;
@@ -1650,9 +1679,9 @@ export function buildQuote(
   // anything else runs: the comp is a line SPLIT, so it has to happen while
   // these are still the picks, and the covered half then flows through the
   // adjustment pass like a package-covered line.
-  const picksWithInclusions = applyPlanIncludedKiosk(
+  const picksWithInclusions = applyPlanIncludedWebsite(
     quoteType,
-    withRequiredTerminals(picks, requiredTerminals)
+    applyPlanIncludedKiosk(quoteType, withRequiredTerminals(picks, requiredTerminals))
   );
 
   // The hardware kit, resolved against the mandatory services AND the picks —

@@ -10,6 +10,8 @@ import {
   MARKETING_TERM_KIOSK_IDS,
   SINGLE_INSTANCE_PRODUCT_IDS,
   maxQtyFor,
+  minimumTerminalsFor,
+  planIncludesWebsite,
   PROCESSING_DISCLOSURE_PRODUCT,
   ORDER_POINT_RULES,
   PICKER_EXCLUDED_PRODUCT_NAMES,
@@ -881,8 +883,10 @@ describe("one website per merchant", () => {
     // A scoped discount splits one pick into two lines. Counting per line
     // instead of per product would let 1 + 1 through as "no line over 1".
     const id = find(WEBSITE).hubspotProductId;
+    // Order & Pay, where the Website is charged — All-in-One includes it, and
+    // a plan-covered line is never split.
     const built = buildQuote(
-      "all_in_one", picked([[WEBSITE, 2]]), [], CATALOG,
+      "order_pay_only", picked([[WEBSITE, 2]]), [], CATALOG,
       { [id]: { discountPercent: 50, discountQty: 1 } }, 100
     );
     expect(built.quoteLines.filter(l => l.hubspotProductId === id)).toHaveLength(2);
@@ -896,7 +900,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     lines.filter(l => l.hubspotProductId === AMS1_PRODUCT.hubspotProductId)
       .reduce((n, l) => n + l.qty, 0);
 
-  it("charges one AMS1 per POS unit, on top of any the rep picked", () => {
+  it("counts picked AMS1 toward the one-per-POS minimum, and tops up only what's short", () => {
     const built = buildQuote(
       "all_in_one",
       picked([["POS Unit", 2], ["POS Unit - With Customer Facing Display", 1], ["Payment Terminal - AMS1", 1]]),
@@ -904,8 +908,29 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
       CATALOG
     );
     expect(built.blockers).toEqual([]);
-    expect(ams1Qty(built.quoteLines)).toBe(4);
-    expect(built.requiredTerminals.qty).toBe(3);
+    expect(ams1Qty(built.quoteLines)).toBe(3);
+    expect(built.requiredTerminals.qty).toBe(2);
+  });
+
+  it("adds nothing when the picks already carry one AMS1 per POS, and keeps extras", () => {
+    const exact = buildQuote("all_in_one", picked([["POS Unit", 2], ["Payment Terminal - AMS1", 2]]), [], CATALOG);
+    expect(ams1Qty(exact.quoteLines)).toBe(2);
+    expect(exact.requiredTerminals.qty).toBe(0);
+
+    const extra = buildQuote("all_in_one", picked([["POS Unit", 1], ["Payment Terminal - AMS1", 3]]), [], CATALOG);
+    expect(ams1Qty(extra.quoteLines)).toBe(3);
+    expect(extra.requiredTerminals.qty).toBe(0);
+  });
+
+  it("sets the AMS1 floor at one per POS, on processing plans only", () => {
+    const picks = [
+      { hubspotProductId: "217445755632", qty: 2 },
+      { hubspotProductId: "223452690130", qty: 1 },
+      { hubspotProductId: "222497165009", qty: 4 },
+    ];
+    expect(minimumTerminalsFor("all_in_one", picks)).toBe(3);
+    expect(minimumTerminalsFor("order_pay_only", picks)).toBe(3);
+    expect(minimumTerminalsFor("marketing_only", picks)).toBe(0);
   });
 
   it("does not add an AMS1 for a kiosk that already includes one", () => {
@@ -990,7 +1015,10 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     const reopened = adjustmentsFromQuoteLines(first.quoteLines, "all_in_one");
     expect(reopened[WIFI_PRODUCT_ID]).toEqual({ removed: true });
     const picks = picksFromQuoteLines(first.quoteLines, "all_in_one");
-    expect(picks).toEqual([{ hubspotProductId: find("POS Unit").hubspotProductId, qty: 1 }]);
+    expect(picks).toEqual([
+      { hubspotProductId: find("POS Unit").hubspotProductId, qty: 1 },
+      { hubspotProductId: AMS1_PRODUCT.hubspotProductId, qty: 1 },
+    ]);
 
     const second = buildQuote(
       "all_in_one",
@@ -1017,7 +1045,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     expect(license.blockers.join(" ")).toContain("Additional Software License");
   });
 
-  it("drops kits, the hardware bundle, and derived AMS1 when a processing quote is reopened", () => {
+  it("drops kits and the hardware bundle when a processing quote is reopened, and keeps every AMS1", () => {
     const lines = [
       line("POS Unit", 2),
       line("Payment Terminal - AMS1", 3),
@@ -1027,8 +1055,22 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     ];
     expect(picksFromQuoteLines(lines, "all_in_one")).toEqual([
       { hubspotProductId: find("POS Unit").hubspotProductId, qty: 2 },
-      { hubspotProductId: AMS1_PRODUCT.hubspotProductId, qty: 1 },
+      { hubspotProductId: AMS1_PRODUCT.hubspotProductId, qty: 3 },
     ]);
+  });
+
+  it("reopens a quote saved under the old derivation with the same terminal count", () => {
+    // Before 2026-10-09 the POS's AMS1 was derived on top of the picks: 2 POS +
+    // 1 extra saved as one AMS1 line of 3. Reopened and rebuilt, it stays 3.
+    const saved = [line("POS Unit", 2), line("Payment Terminal - AMS1", 3)];
+    const picks = picksFromQuoteLines(saved, "all_in_one");
+    const rebuilt = buildQuote(
+      "all_in_one",
+      picks.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
+      [],
+      CATALOG
+    );
+    expect(ams1Qty(rebuilt.quoteLines)).toBe(3);
   });
 
   it("leaves a marketing quote's kit as a pick", () => {
@@ -1036,5 +1078,47 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     expect(picksFromQuoteLines(lines, "marketing_only")).toEqual([
       { hubspotProductId: find("Marketing Kit - Mega Kiosk").hubspotProductId, qty: 1 },
     ]);
+  });
+});
+
+describe("the Website the All-in-One plan includes", () => {
+  const website = () => line("Website", 1);
+  const websiteLine = (lines: QuoteLine[]) => lines.find(l => l.name === "Website")!;
+
+  it("is included on All-in-One only", () => {
+    expect(planIncludesWebsite("all_in_one")).toBe(true);
+    for (const t of ["order_pay_only", "marketing_only", "marketing_term"] as const) {
+      expect(planIncludesWebsite(t)).toBe(false);
+    }
+  });
+
+  it("is held at $0 as part of the plan on All-in-One", () => {
+    const built = buildQuote("all_in_one", [line("POS Unit", 1), website()], [], CATALOG);
+    expect(websiteLine(built.quoteLines)).toMatchObject({
+      discountPercent: 100,
+      coveredByPackage: PLATFORM_PRODUCTS.all_in_one.name,
+    });
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
+    expect(built.blockers).toEqual([]);
+  });
+
+  it("stays at $0 even when the rep edits the row", () => {
+    const id = find("Website").hubspotProductId;
+    const built = buildQuote("all_in_one", [line("POS Unit", 1), website()], [], CATALOG, { [id]: { discountPercent: 10 } });
+    expect(websiteLine(built.quoteLines).discountPercent).toBe(100);
+  });
+
+  it("is charged on Order & Pay", () => {
+    const built = buildQuote("order_pay_only", [line("POS Unit", 1), website()], [], CATALOG);
+    expect(websiteLine(built.quoteLines).discountPercent).toBeUndefined();
+    expect(websiteLine(built.quoteLines).coveredByPackage).toBeUndefined();
+  });
+
+  it("reopens as a plain pick, with no adjustment read back from its 100%", () => {
+    const built = buildQuote("all_in_one", [line("POS Unit", 1), website()], [], CATALOG);
+    expect(picksFromQuoteLines(built.quoteLines, "all_in_one")).toContainEqual({
+      hubspotProductId: find("Website").hubspotProductId, qty: 1,
+    });
+    expect(adjustmentsFromQuoteLines(built.quoteLines, "all_in_one")[find("Website").hubspotProductId]).toBeUndefined();
   });
 });

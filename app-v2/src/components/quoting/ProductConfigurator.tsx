@@ -22,6 +22,7 @@ import {
   groupProducts,
   isAllowedForQuoteType,
   isCompedService,
+  isPosRequiringTerminal,
   isPreAuthProduct,
   isMarketingQuote,
   isProcessingQuote,
@@ -29,6 +30,8 @@ import {
   lineListAmount,
   lineNetAmount,
   maxQtyFor,
+  minimumTerminalsFor,
+  planIncludesWebsite,
   toQuoteLine,
   unitsFromQuoteLines,
   websiteTakesOrders,
@@ -271,10 +274,13 @@ export default function ProductConfigurator({
   const coveredQty = useMemo(() => {
     const map = new Map<string, number>();
     for (const l of packages.lines) {
-      if (l.coveredByPackage) map.set(l.hubspotProductId, (map.get(l.hubspotProductId) ?? 0) + l.qty);
+      // What the plan includes is counted in planCoveredQty, not here.
+      if (l.coveredByPackage && l.coveredByPackage !== planName) {
+        map.set(l.hubspotProductId, (map.get(l.hubspotProductId) ?? 0) + l.qty);
+      }
     }
     return map;
-  }, [packages.lines]);
+  }, [packages.lines, planName]);
 
   // What each package absorbed, for its one-line summary. Built off the
   // covered lines rather than the slot definitions so it describes what the
@@ -283,10 +289,10 @@ export default function ProductConfigurator({
   const coveredSummary = useMemo(
     () =>
       packages.lines
-        .filter(l => l.coveredByPackage)
+        .filter(l => l.coveredByPackage && l.coveredByPackage !== planName)
         .map(l => `${l.qty} × ${l.name.trim()}`)
         .join(", "),
-    [packages.lines]
+    [packages.lines, planName]
   );
 
   // Summed across billing cycles ON PURPOSE, unlike the totals themselves: this
@@ -389,20 +395,33 @@ export default function ProductConfigurator({
       // already selected counts — that is how a rep re-applies the kit after
       // clearing it. WiFi isn't a pick (it is derived once there is hardware),
       // but "preselect everything" includes bringing it back if it was removed.
+      // The Website comes with All-in-One, so choosing that plan puts it on —
+      // whether or not the quote was empty, since it is part of the plan
+      // rather than a hardware choice the rep has already made.
+      const withWebsite = (list: ProductPick[]) =>
+        planIncludesWebsite(next) && allowed.has(WEBSITE_PRODUCT_ID) && !list.some(p => p.hubspotProductId === WEBSITE_PRODUCT_ID)
+          ? [...list, { hubspotProductId: WEBSITE_PRODUCT_ID, qty: 1 }]
+          : list;
+
       const kit = kitFor(next);
       if (kit && kept.length === 0) {
         const inKit = new Map(kitPicks(kit).map(k => [k.hubspotProductId, k.qty]));
+        // The POS's AMS1, the same as the stepper adds by hand.
+        const terminals = minimumTerminalsFor(next, kitPicks(kit));
+        if (terminals > 0) inKit.set(AMS1_PRODUCT.hubspotProductId, terminals);
         const seeded = catalog
           .filter(p => allowed.has(p.hubspotProductId) && inKit.has(p.hubspotProductId))
           .map(p => ({ hubspotProductId: p.hubspotProductId, qty: inKit.get(p.hubspotProductId)! }));
         if (seeded.length) {
-          onPicksChange(seeded);
+          onPicksChange(withWebsite(seeded));
           if (adjustments[WIFI_PRODUCT_ID]?.removed) setAdjustment(WIFI_PRODUCT_ID, { removed: null });
-        } else if (picks.length) {
-          onPicksChange(kept);
+        } else {
+          const nextPicks = withWebsite(kept);
+          if (nextPicks.length !== picks.length) onPicksChange(nextPicks);
         }
-      } else if (kept.length !== picks.length) {
-        onPicksChange(kept);
+      } else {
+        const nextPicks = withWebsite(kept);
+        if (nextPicks.length !== picks.length || kept.length !== picks.length) onPicksChange(nextPicks);
       }
     }
     if (!isProcessingQuote(next) && channels.length) onChannelsChange([]);
@@ -412,11 +431,25 @@ export default function ProductConfigurator({
   // arrive in the same order the rep sees them listed.
   const qtyOf = (id: string) => picks.find(p => p.hubspotProductId === id)?.qty ?? 0;
 
+  // Every POS ships with an AMS1, so the terminal row can't go below the POS count.
+  const terminalFloor = minimumTerminalsFor(quoteType, picks);
+
   const setQtyFor = (id: string, next: number) => {
-    const qty = Math.max(0, next);
+    const floor = id === AMS1_PRODUCT.hubspotProductId ? terminalFloor : 0;
+    const qty = Math.max(floor, next);
     const wanted = new Map(picks.map(p => [p.hubspotProductId, p.qty]));
     if (qty > 0) wanted.set(id, qty);
     else wanted.delete(id);
+    // A POS added or taken off moves its AMS1 with it, keeping any extras.
+    if (isPosRequiringTerminal({ hubspotProductId: id }) && isProcessingQuote(quoteType)) {
+      const delta = qty - qtyOf(id);
+      const terminals = Math.max(
+        (wanted.get(AMS1_PRODUCT.hubspotProductId) ?? 0) + delta,
+        minimumTerminalsFor(quoteType, [...wanted].map(([hubspotProductId, q]) => ({ hubspotProductId, qty: q }))),
+      );
+      if (terminals > 0) wanted.set(AMS1_PRODUCT.hubspotProductId, terminals);
+      else wanted.delete(AMS1_PRODUCT.hubspotProductId);
+    }
     onPicksChange(
       selectable
         .filter(p => wanted.has(p.hubspotProductId))
@@ -929,12 +962,12 @@ export default function ProductConfigurator({
     const max = maxQtyFor(p.hubspotProductId);
     const covered = coveredQty.get(p.hubspotProductId) ?? 0;
     const planCovered = planCoveredQty.get(p.hubspotProductId) ?? 0;
-    // What the quote carries, which is NOT always what the stepper
-    // shows: the AMS1 terminals are derived (one per POS), so they
-    // sit on the quote and in `covered` while `n` — the rep's own
-    // picks — reads 0. Comparing `covered` to `n` printed "1 of 0".
-    const derivedQty = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? built.requiredTerminals.qty : 0;
-    const onQuote = n + derivedQty;
+    // Terminals topped up server-side sit on the quote but not in the
+    // stepper. The configurator keeps the stepper at the floor, so this is
+    // 0 unless the picks arrived short (a quote saved some other way).
+    const toppedUp = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? built.requiredTerminals.qty : 0;
+    const onQuote = n + toppedUp;
+    const min = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? terminalFloor : 0;
     return (
       <div key={p.hubspotProductId} className={styles.productRow} data-picked={n > 0}>
         <div className={styles.productMain}>
@@ -952,16 +985,11 @@ export default function ProductConfigurator({
                 : `${planCovered} of ${onQuote} included in the plan`}
             </div>
           )}
-          {p.hubspotProductId === AMS1_PRODUCT.hubspotProductId && built.requiredTerminals.qty > 0 && (
-            <div className={styles.coveredTag}>
-              {built.requiredTerminals.qty} added automatically with your POS{" "}
-              {built.requiredTerminals.qty === 1 ? "unit" : "units"}
-            </div>
-          )}
         </div>
         <div className={styles.stepper}>
           <button
-            type="button" className={styles.stepBtn} disabled={n === 0}
+            type="button" className={styles.stepBtn} disabled={n <= min}
+            title={min > 0 && n <= min ? "One per POS unit" : undefined}
             onClick={() =>
               // Taking off a unit the kit is currently covering
               // gives hardware back — ask first, since it is
@@ -1039,9 +1067,6 @@ export default function ProductConfigurator({
       if (l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) return { tag: "Card rates" };
       if (l.hubspotProductId === SOFTWARE_LICENSE_PRODUCT.hubspotProductId) {
         return { tag: "Auto", why: `${built.softwareLicense.screens} screens, ${INCLUDED_SCREEN_COUNT} included in the plan` };
-      }
-      if (l.hubspotProductId === AMS1_PRODUCT.hubspotProductId && built.requiredTerminals.qty > 0) {
-        return { tag: "Required", why: `One per POS unit — ${built.requiredTerminals.qty} added automatically` };
       }
       if (INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === l.hubspotProductId)) {
         return { tag: isCompedService(l) && lineNetAmount(l) === 0 ? "Comped" : "Included" };
