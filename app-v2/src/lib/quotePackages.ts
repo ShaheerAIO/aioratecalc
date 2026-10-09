@@ -22,10 +22,19 @@
 // MSRP. A cart line fits a slot two ways:
 //
 //   1. EXACT — the line is made of that very item. Always fits, at any price.
-//   2. SWAP  — the line is made of a different but SWAPPABLE item whose MSRP is
-//      within SWAP_TOLERANCE of the slot's. "Fuzzy" on purpose: a 15.6" kiosk
-//      can stand in for a POS, a tableside device for a KDS. Never anything
-//      outside the band, so a Mega Kiosk can't ride in on a POS slot.
+//   2. SWAP  — the line is made of a different but SWAPPABLE item that costs NO
+//      MORE than the slot's MSRP (Shaheer, 2026-10-09). A cheaper item in an
+//      open slot gives away less than the kit already promised, so there is no
+//      lower bound: a tableside device can stand in for a POS, a printer for a
+//      KDS. Never anything dearer, so a Mega Kiosk can't ride in on a POS slot.
+//      Among the slots it fits, an item takes the CHEAPEST, so it leaves the
+//      dear slots for the dear items.
+//
+// Hardware that is NOT on the sheet (mPOS, the tablets, the label printer) can
+// swap too, priced at its HubSpot list price since there is no sheet MSRP. It
+// never fills a slot exactly, never counts as an ordering device, and only
+// one-time "inventory" lines qualify — services and software are never kit
+// hardware.
 //
 // Some items are LOCKED (`swappable: false`) and fit ONLY their own slot, in
 // both directions: a locked item can't fill another slot, and a locked slot
@@ -45,8 +54,8 @@
 //
 // - ONE-TIME lines only. A weekly fee and a hardware price are different units
 //   (see quoteTotals), and nothing in the kit is recurring.
-// - WHOLE UNITS only. A swap over the band is not covered at all rather than
-//   covered "up to the slot value", which would need a fractional discount on
+// - WHOLE UNITS only. A swap dearer than the slot is not covered at all rather
+//   than covered "up to the slot value", which would need a fractional discount on
 //   one line. That is the next decision to make, not a gap in this one.
 // - A kit APPLIES only when an ORDERING DEVICE (a POS, kiosk or tableside
 //   device) was placed — in whatever slot it landed. A WiFi package and a
@@ -115,8 +124,9 @@ export const SHEET_ITEMS: Record<SheetKey, SheetItem> = {
 
 /**
  * What each HubSpot product is made of, in sheet items. A product that is not
- * here is never covered — it is not in the sheet, so there is no MSRP to
- * compare it by. Add the row when someone adds the sheet value.
+ * here can still SWAP into a slot at its HubSpot price if it is one-time
+ * hardware (see `partsOf`), but never fills one exactly. Add the row when
+ * someone adds the sheet value.
  *
  * Keyed by product id, like ORDER_POINT_RULES, so a rename in HubSpot can't
  * silently drop a product out of the kit.
@@ -141,24 +151,35 @@ export const PRODUCT_PARTS: Record<string, SheetKey[]> = {
   "281351401209": ["wifi"],               // AIO WiFi Network Package
 };
 
-/**
- * How far from a slot's MSRP a swapped-in item may sit, as a share of the
- * slot's. ±25%: wide enough that a 15.6" kiosk ($799) can stand in for a POS
- * ($949) and a tableside device ($603) for a KDS ($735), narrow enough that
- * nothing crosses to a Mega Kiosk ($2,700). A first guess, not a measured one —
- * the intent is for this to become admin-configurable.
- */
-export const SWAP_TOLERANCE = 0.25;
-
 /** The MSRP of a whole HubSpot product — the sum of what it is made of — or null if unmapped. */
 export function sheetMsrpOf(hubspotProductId: string): number | null {
   const parts = PRODUCT_PARTS[hubspotProductId];
   return parts ? parts.reduce((sum, k) => sum + SHEET_ITEMS[k].msrp, 0) : null;
 }
 
-function withinBand(candidate: number, slot: number): boolean {
-  // The epsilon is for the boundary case: 999 × 0.75 is not exactly 749.25.
-  return Math.abs(candidate - slot) <= SWAP_TOLERANCE * slot + 1e-9;
+/** Whether an item may swap into a slot: it costs no more than the slot's MSRP. */
+export function fitsUnder(candidate: number, slot: number): boolean {
+  // The epsilon is for list prices carried in cents: 949 vs 948.9999….
+  return candidate <= slot + 1e-9;
+}
+
+/**
+ * One physical part of a cart line. `key` is null for hardware the sheet
+ * doesn't carry, which can only ever swap (see the header).
+ */
+type Part = { key: SheetKey | null; msrp: number; swappable: boolean; orders: boolean };
+
+function partsOf(line: QuoteLine): Part[] | null {
+  const keys = PRODUCT_PARTS[line.hubspotProductId];
+  if (keys) {
+    return keys.map(k => ({
+      key: k, msrp: SHEET_ITEMS[k].msrp, swappable: SHEET_ITEMS[k].swappable, orders: !!SHEET_ITEMS[k].orders,
+    }));
+  }
+  if (line.productType === "inventory" && Number.isFinite(line.unitPrice) && line.unitPrice > 0) {
+    return [{ key: null, msrp: line.unitPrice, swappable: true, orders: false }];
+  }
+  return null;
 }
 
 // ── The kit ─────────────────────────────────────────────────────────────────
@@ -223,11 +244,11 @@ export const PACKAGES: QuotePackage[] = [
  * "In the package" / "1 of 3 in the package" — the tag on a picker row.
  *
  * `onQuote` is how many units of the product are on the QUOTE, not how many the
- * rep picked. They differ for any product that is also derived: each POS brings
- * its own AMS1 (`resolveRequiredAms1`), so a rep who picked a POS and no
- * terminal has AMS1 covered 1× on a quote carrying 1× while the row's stepper
- * reads 0 — which printed "1 of 0 in the package". Callers pass the quote's
- * figure; this also clamps, so a mismatch can never print more than the whole.
+ * rep picked. They can differ for a product that is also derived — an AMS1
+ * topped up to one per POS (`resolveRequiredAms1`) sits on the quote while the
+ * row's stepper doesn't count it, which once printed "1 of 0 in the package".
+ * Callers pass the quote's figure; this also clamps, so a mismatch can never
+ * print more than the whole.
  * Returns null when nothing is covered.
  */
 export function coverageLabel(covered: number, onQuote: number, where: string): string | null {
@@ -242,12 +263,13 @@ export function coverageLabel(covered: number, onQuote: number, where: string): 
  * The product a rep would pick for each slot, for preselecting the kit when a
  * plan is chosen.
  *
- * `terminal` and `wifi` are ABSENT on purpose: both are derived lines. Each POS
- * unit brings its own AMS1 (`resolveRequiredAms1`), the kiosk SKU already
- * contains one, and the WiFi package is an always-included service — picking
- * any of them by hand would bill a second one. That is the kit's two terminals
- * and its WiFi package, and the test file asserts the preselect really does
- * fill every slot, so changing the kit without changing this fails loudly.
+ * `terminal` and `wifi` are ABSENT on purpose. The kit's two terminals are the
+ * POS's AMS1 — which the configurator adds alongside every POS it picks, kit or
+ * not (`minimumTerminalsFor`) — and the one inside the kiosk SKU. Naming the
+ * terminal here would add a second AMS1 for the kiosk that already has one.
+ * The WiFi package is an always-included service, never a pick. The test file
+ * asserts the preselect really does fill every slot, so changing the kit
+ * without changing this fails loudly.
  */
 export const KIT_DEFAULT_PRODUCTS: Partial<Record<SheetKey, string>> = {
   pos: "217445755632",       // POS Unit
@@ -287,7 +309,8 @@ export type AppliedPackage = {
 /** One unit of one line landing in one slot. `swapped` is the fuzzy case. */
 export type FilledSlot = {
   hubspotProductId: string;
-  part: SheetKey;
+  /** Null for hardware the sheet doesn't carry — always a swap. */
+  part: SheetKey | null;
   slot: SheetKey;
   swapped: boolean;
 };
@@ -313,7 +336,7 @@ function none(lines: QuoteLine[]): PackageDecomposition {
 }
 
 /** A coverable line and how much of it is still unclaimed. */
-type PoolEntry = { line: QuoteLine; parts: SheetKey[]; left: number; msrp: number };
+type PoolEntry = { line: QuoteLine; parts: Part[]; left: number; msrp: number };
 
 type Slot = { item: SheetKey; owner: number };
 
@@ -325,28 +348,30 @@ const MAX_PACKAGE_INSTANCES = 10;
  * Where one unit of this entry would go. Returns the slot index per part, or
  * null if ANY part has nowhere to go — a unit is covered whole or not at all.
  *
- * Exact beats swap, per part. Among swaps the CLOSEST MSRP wins (lowest slot
- * index on a tie), so the answer never depends on the order lines arrived in.
+ * Exact beats swap, per part. Among swaps the CHEAPEST slot the part fits
+ * wins (lowest slot index on a tie), so the answer never depends on the order
+ * lines arrived in.
  */
 function placeUnit(
   entry: PoolEntry,
   slots: Slot[],
   allowSwap: boolean
-): Array<{ part: SheetKey; slot: number }> | null {
+): Array<{ part: Part; slot: number }> | null {
   const used = new Set<number>();
-  const placed: Array<{ part: SheetKey; slot: number }> = [];
+  const placed: Array<{ part: Part; slot: number }> = [];
 
   for (const part of entry.parts) {
-    let pick = slots.findIndex((s, i) => s.owner < 0 && !used.has(i) && s.item === part);
+    let pick = part.key === null
+      ? -1
+      : slots.findIndex((s, i) => s.owner < 0 && !used.has(i) && s.item === part.key);
 
-    if (pick < 0 && allowSwap && SHEET_ITEMS[part].swappable) {
+    if (pick < 0 && allowSwap && part.swappable) {
       let best = Infinity;
       slots.forEach((s, i) => {
         if (s.owner >= 0 || used.has(i)) return;
         const target = SHEET_ITEMS[s.item];
-        if (!target.swappable || !withinBand(SHEET_ITEMS[part].msrp, target.msrp)) return;
-        const gap = Math.abs(SHEET_ITEMS[part].msrp - target.msrp);
-        if (gap < best) { best = gap; pick = i; }
+        if (!target.swappable || !fitsUnder(part.msrp, target.msrp)) return;
+        if (target.msrp < best) { best = target.msrp; pick = i; }
       });
     }
 
@@ -365,11 +390,10 @@ function placeUnit(
 function flexibility(entry: PoolEntry, slots: Slot[]): number {
   let n = 0;
   for (const part of entry.parts) {
-    const item = SHEET_ITEMS[part];
     slots.forEach(s => {
       if (s.owner >= 0) return;
       const target = SHEET_ITEMS[s.item];
-      if (s.item === part || (item.swappable && target.swappable && withinBand(item.msrp, target.msrp))) n += 1;
+      if (s.item === part.key || (part.swappable && target.swappable && fitsUnder(part.msrp, target.msrp))) n += 1;
     });
   }
   return n;
@@ -380,9 +404,9 @@ function flexibility(entry: PoolEntry, slots: Slot[]): number {
  *
  * Per kit instance: first every unit that fits EXACTLY, then the leftovers by
  * SWAP — the MOST CONSTRAINED unit first (fewest slots it could take), dearest
- * on a tie, into the slot closest to its MSRP. Nearest-first alone strands
- * coverage: a 15.6" kiosk is nearest the KDS slot, and would take the one seat
- * a tableside device could use. This is a heuristic, not a matching solver —
+ * on a tie, into the cheapest slot it fits. Cheapest-first alone strands
+ * coverage: a tableside device and a printer both fit the KDS slot, and the
+ * one placed first would take the seat the other needed. This is a heuristic, not a matching solver —
  * it can still leave money on the table in a contrived cart, and it never
  * covers anything the rules above don't allow. An instance that places no
  * ordering device is thrown away and no further instances are tried.
@@ -399,11 +423,11 @@ export function decomposePackages({
   const active = packages.filter(p => p.active && p.plans.includes(quoteType));
   if (active.length === 0 || lines.length === 0) return none(lines);
 
-  // Only one-time lines are coverable, and only products the sheet knows.
+  // Only one-time lines are coverable, and only hardware (see `partsOf`).
   const pool: PoolEntry[] = [];
   const poolIndexOfLine = new Map<number, number>();
   lines.forEach((line, i) => {
-    const parts = PRODUCT_PARTS[line.hubspotProductId];
+    const parts = partsOf(line);
     if (
       !parts ||
       line.billingFrequency !== "one_time" ||
@@ -413,7 +437,7 @@ export function decomposePackages({
       line.coveredByPackage
     ) return;
     poolIndexOfLine.set(i, pool.length);
-    pool.push({ line, parts, left: line.qty, msrp: parts.reduce((n, k) => n + SHEET_ITEMS[k].msrp, 0) });
+    pool.push({ line, parts, left: line.qty, msrp: parts.reduce((n, part) => n + part.msrp, 0) });
   });
   if (pool.length === 0) return none(lines);
 
@@ -434,14 +458,16 @@ export function decomposePackages({
       const placedUnits = pool.map(() => 0);
       const placements: FilledSlot[] = [];
 
-      const commit = (e: number, placed: Array<{ part: SheetKey; slot: number }>) => {
+      let placedOrderingDevice = false;
+      const commit = (e: number, placed: Array<{ part: Part; slot: number }>) => {
         for (const { part, slot } of placed) {
           slots[slot].owner = e;
+          if (part.orders) placedOrderingDevice = true;
           placements.push({
             hubspotProductId: pool[e].line.hubspotProductId,
-            part,
+            part: part.key,
             slot: slots[slot].item,
-            swapped: part !== slots[slot].item,
+            swapped: part.key !== slots[slot].item,
           });
         }
         left[e] -= 1;
@@ -460,7 +486,7 @@ export function decomposePackages({
 
       // Then swaps, one unit at a time, re-ranking after each placement.
       for (;;) {
-        let next: { e: number; flex: number; placed: Array<{ part: SheetKey; slot: number }> } | null = null;
+        let next: { e: number; flex: number; placed: Array<{ part: Part; slot: number }> } | null = null;
         for (let e = 0; e < pool.length; e++) {
           if (left[e] <= 0) continue;
           const placed = placeUnit(pool[e], slots, true);
@@ -475,7 +501,7 @@ export function decomposePackages({
       }
 
       // No ordering device placed means no system here, whatever else fit.
-      if (!placements.some(pl => SHEET_ITEMS[pl.part].orders)) break;
+      if (!placedOrderingDevice) break;
 
       pool.forEach((entry, e) => {
         if (!placedUnits[e]) return;
