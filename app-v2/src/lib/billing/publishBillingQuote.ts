@@ -37,7 +37,7 @@ import {
   tenantCompanyId,
   type QuoteAssociation,
 } from "@/lib/adapters/hubspot";
-import { getQuoteTemplatePolicy } from "@/lib/actions/quoteTemplates";
+import { resolveQuoteTemplate, type ResolvedQuoteTemplate } from "@/lib/actions/quoteTemplates";
 import { getMaxDiscountPercent } from "@/lib/actions/pricing";
 import { DEFAULT_MAX_DISCOUNT_PERCENT, quoteTypeOf } from "@/lib/quoting";
 import { canPublishBillingQuote, type PublishRefusal, type SenderResolution } from "@/lib/billing/preconditions";
@@ -309,7 +309,7 @@ export async function buildAndPublishBillingQuote(
   // Resolved here rather than inside the pure checker so every branch of it
   // stays testable without a DB or a network.
   let senderResolved: SenderResolution = { ok: false, code: "no_rep_email" };
-  let templateId: string | null = null;
+  let templateResolved: ResolvedQuoteTemplate = { id: "", active: false };
   let catalog: Awaited<ReturnType<typeof listProducts>> = [];
   let maxDiscountPercent = DEFAULT_MAX_DISCOUNT_PERCENT;
   try {
@@ -317,9 +317,11 @@ export async function buildAndPublishBillingQuote(
     // requires a rep/admin session and the trigger here is an unauthenticated
     // acceptance POST. The catalog is needed unfiltered anyway — the derived
     // platform product is one the picker hides.
-    [senderResolved, templateId, catalog, maxDiscountPercent] = await Promise.all([
+    [senderResolved, templateResolved, catalog, maxDiscountPercent] = await Promise.all([
       resolveSender(app.ownerUserId),
-      getQuoteTemplatePolicy().then(policy => policy[quoteTypeOf(app.quoteType)]),
+      // Not just the id: HubSpot refuses an INACTIVE template at the
+      // association, three writes deep. See preconditions' `templateActive`.
+      resolveQuoteTemplate(quoteTypeOf(app.quoteType)),
       listProducts(),
       getMaxDiscountPercent(),
     ]);
@@ -335,7 +337,8 @@ export async function buildAndPublishBillingQuote(
     catalog,
     sender: senderResolved,
     signerEmail: signer?.email ?? null,
-    templateId,
+    templateId: templateResolved.id || null,
+    templateActive: templateResolved.active,
     maxDiscountPercent,
   });
   if (!decision.ok) {
@@ -363,7 +366,7 @@ export async function buildAndPublishBillingQuote(
 
   // Non-null past the precondition gate.
   const dealId = app.hubspotDealId!;
-  const template = templateId!;
+  const template = templateResolved.id;
 
   // ── The graph, persisting after every step that yields an id ──────────────
   // NOT the Adyen adapter's build-everything-then-persist-once shape
@@ -433,6 +436,13 @@ export async function buildAndPublishBillingQuote(
       { toObjectType: "quote_template", toObjectId: template, associationTypeId: QUOTE_TO_TEMPLATE },
     ];
     await associateQuote(ids.quoteId!, assocs);
+    // A RESUMED build can be attaching a different template than the one the
+    // draft recorded at create — a retired template is precisely what strands a
+    // build here — so keep the row honest about what is actually attached.
+    if (ids.quoteTemplateId !== template) {
+      ids = { ...ids, quoteTemplateId: template };
+      await persist(app.id, ids);
+    }
     // CRM tidiness, and best-effort inside the adapter: a deal whose quote has a
     // signer the deal itself doesn't list is confusing to work.
     await associateDealToContact(dealId, ids.contactId!);

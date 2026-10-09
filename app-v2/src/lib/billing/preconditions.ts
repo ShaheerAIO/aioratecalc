@@ -76,6 +76,15 @@ export type CanPublishInput = {
   /** The HubSpot quote_template id for this quote's type (association 286). */
   templateId: string | null;
   /**
+   * Whether that template is still ACTIVE in HubSpot.
+   *
+   * Checked here because HubSpot checks it at the association, which is step 4
+   * of 5 — by then the contact, the line items and the draft quote all exist.
+   * On 2026-10-09 "AIO Quote v3" was retired for v4 and the next build left 13
+   * orphan line items and a stranded draft behind before 400ing.
+   */
+  templateActive: boolean;
+  /**
    * The admin discount cap in force NOW, not when the quote was configured.
    *
    * Re-checked here on purpose. `publishBillingQuote` sends `app.quoteLines`
@@ -96,7 +105,7 @@ export type CanPublishInput = {
  * warning.
  */
 export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult {
-  const { app, catalog, sender, signerEmail, templateId, maxDiscountPercent } = input;
+  const { app, catalog, sender, signerEmail, templateId, templateActive, maxDiscountPercent } = input;
 
   // 1. Already published — short-circuit before anything else. This is the
   //    one-way-door marker, and once it is set no other precondition matters:
@@ -285,6 +294,11 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
     add(
       "no_template",
       `No HubSpot quote template is configured for a ${quoteType} quote. Set one in Admin → Quote templates.`
+    );
+  } else if (!templateActive) {
+    add(
+      "template_inactive",
+      `The HubSpot quote template configured for a ${quoteType} quote (${templateId}) has been deactivated in HubSpot, which refuses to attach an inactive template to a quote. Point it at the current version in Admin → Quote templates.`
     );
   }
 

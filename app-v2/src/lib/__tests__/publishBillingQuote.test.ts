@@ -27,7 +27,7 @@ const associateDealToContact = vi.fn();
 const publishQuote = vi.fn();
 const findOwnerByEmail = vi.fn();
 const listProducts = vi.fn();
-const getQuoteTemplatePolicy = vi.fn();
+const resolveQuoteTemplate = vi.fn();
 
 type Row = Record<string, unknown> & { id: string; hubspotIds: HubspotIds | null };
 
@@ -83,7 +83,7 @@ const db = {
 
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
-vi.mock("@/lib/actions/quoteTemplates", () => ({ getQuoteTemplatePolicy }));
+vi.mock("@/lib/actions/quoteTemplates", () => ({ resolveQuoteTemplate }));
 vi.mock("@/lib/actions/pricing", () => ({ getMaxDiscountPercent: vi.fn().mockResolvedValue(50) }));
 // Partial mock: the pure builders stay real, only the network calls are stubbed.
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
@@ -239,7 +239,7 @@ beforeEach(() => {
   for (const fn of [
     syncDealFromApplication, sendMagicLinkEmail, ensureQuoteContact, createQuoteLineItems, findOwnerByEmail,
     deleteQuoteLineItem, createDraftQuote, associateQuote, associateDealToContact,
-    publishQuote, listProducts, getQuoteTemplatePolicy,
+    publishQuote, listProducts, resolveQuoteTemplate,
   ]) fn.mockReset();
 
   patches.length = 0;
@@ -253,9 +253,7 @@ beforeEach(() => {
   // user test below for the case that check exists for.
   findOwnerByEmail.mockResolvedValue({ id: "71234567", email: "rita@aioapp.com", firstName: "Rita", lastName: "Rep" });
   listProducts.mockResolvedValue([PLATFORM, POS, REVIEWABLE]);
-  getQuoteTemplatePolicy.mockResolvedValue({
-    order_pay_only: "817263673055", all_in_one: "817263673055", marketing_only: "817697352408",
-  });
+  resolveQuoteTemplate.mockResolvedValue({ id: "854670598854", active: true });
   ensureQuoteContact.mockResolvedValue("contact-7");
   createQuoteLineItems.mockImplementation(async (lines: QuoteLine[]) =>
     lines.map((_, i) => `li-${i + 1}`)
@@ -308,7 +306,7 @@ describe("publishing the billing quote", () => {
       { toObjectType: "deals", toObjectId: "deal-99", associationTypeId: 64 },
       { toObjectType: "contacts", toObjectId: "contact-7", associationTypeId: 69 },
       { toObjectType: "contacts", toObjectId: "contact-7", associationTypeId: 702 },
-      { toObjectType: "quote_template", toObjectId: "817263673055", associationTypeId: 286 },
+      { toObjectType: "quote_template", toObjectId: "854670598854", associationTypeId: 286 },
     ]);
     // 1393 (deal ↔ primary quote) is HubSpot's to create at publish, never ours.
     const associated = associateQuote.mock.calls[0][1] as Array<{ associationTypeId: number }>;
@@ -323,7 +321,7 @@ describe("publishing the billing quote", () => {
     expect(ids.contactId).toBe("contact-7");
     expect(ids.lineItemIds).toEqual(["li-1", "li-2"]);
     expect(ids.quoteId).toBe("quote-5");
-    expect(ids.quoteTemplateId).toBe("817263673055");
+    expect(ids.quoteTemplateId).toBe("854670598854");
     expect(ids.quoteLink).toBe("https://customers.aioapp.com/abc123");
     expect(ids.publishedAt).not.toBeNull();
     expect(ids.lastSyncError).toBeNull();
@@ -526,6 +524,19 @@ describe("publishing the billing quote", () => {
     expect(outcome.status).toBe("refused");
     expect(outcome.status === "refused" && outcome.reasons.map(r => r.code)).toContain("sender_unverified");
     expect(billingCallCount()).toBe(0);
+  });
+
+  // Found live on 2026-10-09: "AIO Quote v3" was retired for v4, and the next
+  // build got a contact, 13 line items and a draft quote into HubSpot before
+  // the association came back 400 "Quote template is not active". HubSpot only
+  // validates this at step 4 of 5, so it has to be validated at step 0.
+  it("refuses a deactivated quote template, before touching HubSpot", async () => {
+    resolveQuoteTemplate.mockResolvedValue({ id: "817263673055", active: false });
+    const outcome = await send();
+    expect(outcome.status).toBe("refused");
+    expect(outcome.status === "refused" && outcome.reasons.map(r => r.code)).toContain("template_inactive");
+    expect(billingCallCount()).toBe(0);
+    expect(storedIds()!.lastSyncError).toContain("refused before any HubSpot write");
   });
 
   it("builds the whole graph once the link arrives, without a second send", async () => {

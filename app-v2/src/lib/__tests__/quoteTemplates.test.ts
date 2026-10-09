@@ -17,6 +17,7 @@ type Row = {
   allInOneTemplateId: string;
   orderPayOnlyTemplateId: string;
   marketingOnlyTemplateId: string;
+  marketingTermTemplateId: string;
   updatedByUserId: string | null;
   updatedAt: Date;
   isActive: boolean;
@@ -55,22 +56,28 @@ const {
   getQuoteTemplatePolicy,
   updateQuoteTemplatePolicyAction,
   listQuoteTemplatesAction,
+  resolveQuoteTemplate,
+  auditQuoteTemplatePolicy,
 } = await import("@/lib/actions/quoteTemplates");
 
 const TEMPLATES = [
-  { id: "817263673055", name: "AIO Quote v3", active: true, templateType: "QUOTE" },
+  { id: "854670598854", name: "AIO Quote v4", active: true, templateType: "QUOTE" },
+  // Retired for v4 on 2026-10-09, and HubSpot stopped accepting it the moment
+  // it was — hence the inactive cases below.
+  { id: "817263673055", name: "AIO Quote v3", active: false, templateType: "QUOTE" },
   { id: "787244469949", name: "Hardware Addition Quote", active: true, templateType: "QUOTE" },
   { id: "817697352408", name: "Marketing Only Quote", active: true, templateType: "QUOTE" },
+  { id: "854671277804", name: "Marketing Only (2-year term) Quote - BAY AREA ONLY", active: true, templateType: "QUOTE" },
   { id: "111111111111", name: "AIO Quote v2 (retired)", active: false, templateType: "QUOTE" },
 ];
 
 const DEFAULTS: Record<QuoteType, string> = {
-  all_in_one: "817263673055",
-  order_pay_only: "817263673055",
+  all_in_one: "854670598854",
+  order_pay_only: "854670598854",
   marketing_only: "817697352408",
-  // The 2-year plan reads on the same document as the $199 one — only the
-  // platform line and the included kiosk differ.
-  marketing_term: "817697352408",
+  // Its own document since 2026-10-09 — the 2-year term has a template of its
+  // own in HubSpot (two, in fact, split by region).
+  marketing_term: "854671277804",
 };
 
 beforeEach(() => {
@@ -94,6 +101,7 @@ describe("getQuoteTemplatePolicy", () => {
       allInOneTemplateId: "787244469949",
       orderPayOnlyTemplateId: "787244469949",
       marketingOnlyTemplateId: "817697352408",
+      marketingTermTemplateId: "854671277804",
       updatedByUserId: "admin-1",
       updatedAt: new Date(),
       isActive: true,
@@ -104,6 +112,7 @@ describe("getQuoteTemplatePolicy", () => {
       all_in_one: "787244469949",
       order_pay_only: "787244469949",
       marketing_only: "817697352408",
+      marketing_term: "854671277804",
     });
   });
 });
@@ -127,12 +136,19 @@ describe("updateQuoteTemplatePolicyAction", () => {
     expect(updated).toHaveLength(0);
   });
 
-  it("accepts an inactive template id — inactive templates are still selectable", async () => {
+  // REVERSED 2026-10-09. An inactive template used to be savable, on the
+  // theory that the choice was the admin's. It isn't: HubSpot refuses
+  // association 286 to one outright ("Quote template is not active"), so
+  // saving it is not a preference, it is a guaranteed failed publish for every
+  // quote of that type.
+  it("rejects an inactive template id, naming it", async () => {
     getEffectiveRole.mockResolvedValue({ role: "admin", userId: "admin-1", name: "Admin", isDebug: false });
 
-    await updateQuoteTemplatePolicyAction({ ...DEFAULTS, all_in_one: "111111111111" });
-    expect(inserted).toHaveLength(1);
-    expect(inserted[0].allInOneTemplateId).toBe("111111111111");
+    await expect(
+      updateQuoteTemplatePolicyAction({ ...DEFAULTS, all_in_one: "817263673055" })
+    ).rejects.toThrow(/AIO Quote v3/);
+    expect(inserted).toHaveLength(0);
+    expect(updated).toHaveLength(0);
   });
 
   it("inserts when no row exists yet, and attributes the admin who saved it", async () => {
@@ -148,6 +164,7 @@ describe("updateQuoteTemplatePolicyAction", () => {
       allInOneTemplateId: "787244469949",
       orderPayOnlyTemplateId: "787244469949",
       marketingOnlyTemplateId: "817697352408",
+      marketingTermTemplateId: "817697352408",
       updatedByUserId: "admin-1",
     });
   });
@@ -158,6 +175,7 @@ describe("updateQuoteTemplatePolicyAction", () => {
       allInOneTemplateId: "817263673055",
       orderPayOnlyTemplateId: "817263673055",
       marketingOnlyTemplateId: "817697352408",
+      marketingTermTemplateId: "854671277804",
       updatedByUserId: "admin-0",
       updatedAt: new Date("2026-01-01"),
       isActive: true,
@@ -201,12 +219,36 @@ describe("listQuoteTemplatesAction", () => {
 });
 
 describe("QuoteType → template resolution", () => {
+  it("resolves the configured template and reports it live", async () => {
+    const resolved = await resolveQuoteTemplate("all_in_one");
+    expect(resolved).toEqual({ id: "854670598854", active: true });
+  });
+
+  // The whole point of resolving activity alongside the id: the publish path
+  // refuses on this BEFORE it writes a contact, 13 line items and a draft
+  // quote it then can't attach to anything.
+  it("reports a deactivated template as inactive rather than hiding it", async () => {
+    row = {
+      id: "policy-1",
+      allInOneTemplateId: "817263673055",
+      orderPayOnlyTemplateId: "817263673055",
+      marketingOnlyTemplateId: "817697352408",
+      marketingTermTemplateId: "854671277804",
+      updatedByUserId: null,
+      updatedAt: new Date(),
+      isActive: true,
+    };
+
+    expect(await resolveQuoteTemplate("all_in_one")).toEqual({ id: "817263673055", active: false });
+  });
+
   it("resolves all three quote types from the saved policy", async () => {
     row = {
       id: "policy-1",
       allInOneTemplateId: "817263673055",
       orderPayOnlyTemplateId: "787244469949",
       marketingOnlyTemplateId: "817697352408",
+      marketingTermTemplateId: "854671277804",
       updatedByUserId: null,
       updatedAt: new Date(),
       isActive: true,
@@ -215,5 +257,60 @@ describe("QuoteType → template resolution", () => {
     const policy = await getQuoteTemplatePolicy();
     const types: QuoteType[] = ["order_pay_only", "all_in_one", "marketing_only"];
     expect(types.map(t => policy[t])).toEqual(["787244469949", "817263673055", "817697352408"]);
+  });
+});
+
+// The nightly tripwire. Nobody tells EasyOB when AIO retires a template, so
+// without this the first thing that notices is a refused publish with a
+// merchant waiting on it.
+describe("auditQuoteTemplatePolicy", () => {
+  it("reports nothing when every configured template is still active", async () => {
+    const audit = await auditQuoteTemplatePolicy();
+    expect(audit.stale).toEqual([]);
+    expect(audit.checked).toBe(4);
+  });
+
+  it("names a retired template, the quote type it blocks, and why", async () => {
+    row = {
+      id: "policy-1",
+      allInOneTemplateId: "817263673055",
+      orderPayOnlyTemplateId: "854670598854",
+      marketingOnlyTemplateId: "817697352408",
+      marketingTermTemplateId: "854671277804",
+      updatedByUserId: null,
+      updatedAt: new Date(),
+      isActive: true,
+    };
+
+    const audit = await auditQuoteTemplatePolicy();
+    expect(audit.stale).toContainEqual({
+      quoteType: "all_in_one",
+      templateId: "817263673055",
+      name: "AIO Quote v3",
+      reason: "inactive",
+    });
+  });
+
+  // A template DELETED from the portal reads as missing, not inactive — the
+  // same blocked publish, but a different thing to tell whoever fixes it.
+  it("distinguishes a template HubSpot no longer has at all", async () => {
+    row = {
+      id: "policy-1",
+      allInOneTemplateId: "999999999999",
+      orderPayOnlyTemplateId: "854670598854",
+      marketingOnlyTemplateId: "817697352408",
+      marketingTermTemplateId: "854671277804",
+      updatedByUserId: null,
+      updatedAt: new Date(),
+      isActive: true,
+    };
+
+    const audit = await auditQuoteTemplatePolicy();
+    expect(audit.stale).toContainEqual({
+      quoteType: "all_in_one",
+      templateId: "999999999999",
+      name: null,
+      reason: "missing",
+    });
   });
 });

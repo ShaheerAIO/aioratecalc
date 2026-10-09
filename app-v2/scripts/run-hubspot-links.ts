@@ -23,6 +23,11 @@ async function main() {
 
   console.log("[company link clears] starting");
   console.log("[company link clears]", JSON.stringify(await clearCompanyEasyobLinks()));
+
+  const { auditQuoteTemplatePolicy } = await import("../src/lib/actions/quoteTemplates");
+  const audit = await auditQuoteTemplatePolicy();
+  console.log("[quote templates]", JSON.stringify(audit));
+  if (audit.stale.length > 0) process.exitCode = 1;
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

@@ -11,11 +11,26 @@ import type { QuoteType } from "@/types/merchant";
 // fallback used whenever no policy row exists yet, so a fresh environment (or
 // one where the migration hasn't been applied) can still publish a Phase E
 // quote instead of hard-failing on a missing settings row.
+//
+// AIO deactivates the old template when it ships a new one, and HubSpot
+// REFUSES association 286 to an inactive template ("Quote template is not
+// active", 400 VALIDATION_ERROR) — so a default left on a retired version
+// strands every build at the association step, after the line items and the
+// draft quote have already been created. "AIO Quote v3" (817263673055) was
+// retired for v4 on 2026-10-09, which is how that was found. When AIO ships
+// v5, this constant moves too, or an admin re-points it in
+// Admin → Quote templates.
 const DEFAULT_TEMPLATE_IDS: Record<QuoteType, string> = {
-  order_pay_only: "817263673055",
-  all_in_one: "817263673055",
-  marketing_only: "817697352408",
-  marketing_term: "817697352408",
+  order_pay_only: "854670598854",  // AIO Quote v4
+  all_in_one: "854670598854",      // AIO Quote v4
+  marketing_only: "817697352408",  // Marketing Only (one-time hardware payment) Quote
+  // Marketing Only (2-year term) Quote — BAY AREA ONLY. HubSpot carries a
+  // second, equally active "OUTSIDE BAY AREA" version (850518393534); EasyOB
+  // has no notion of a merchant's region, so the default is the Bay Area one
+  // (Shaheer, 2026-10-09) and an outside-the-Bay deal is an admin re-point in
+  // Admin → Quote templates. If that becomes common, it wants a region on the
+  // quote rather than a global default.
+  marketing_term: "854671277804",
 };
 
 export type QuoteTemplatePolicy = Record<QuoteType, string>;
@@ -47,11 +62,23 @@ export async function updateQuoteTemplatePolicyAction(input: QuoteTemplatePolicy
 
   // A typo'd template id would 400 at publish time, which is unrecoverable
   // mid-acceptance — validate against the real HubSpot template list first.
+  //
+  // An INACTIVE one is refused here too, which reverses the rule this had
+  // until 2026-10-09. It used to be savable on the theory that the choice was
+  // the admin's; it isn't, because HubSpot rejects association 286 to an
+  // inactive template outright. Saving one is therefore not a preference, it
+  // is a guaranteed failed publish for every quote of that type.
   const templates = await listQuoteTemplates();
-  const validIds = new Set(templates.map(t => t.id));
+  const byId = new Map(templates.map(t => [t.id, t]));
   for (const [quoteType, templateId] of Object.entries(input) as [QuoteType, string][]) {
-    if (!validIds.has(templateId)) {
+    const template = byId.get(templateId);
+    if (!template) {
       throw new Error(`"${templateId}" (${quoteType}) is not a known HubSpot quote template`);
+    }
+    if (!template.active) {
+      throw new Error(
+        `"${template.name}" (${quoteType}) is inactive in HubSpot, which refuses to attach it to a quote. Pick an active template.`
+      );
     }
   }
 
@@ -112,4 +139,61 @@ export async function listQuoteTemplatesAction(): Promise<QuoteTemplateListResul
   } catch (err) {
     return { templates: [], error: err instanceof Error ? err.message : "Could not load HubSpot quote templates" };
   }
+}
+
+export type ResolvedQuoteTemplate = {
+  id: string;
+  /** Whether HubSpot will accept it on association 286. An inactive one 400s. */
+  active: boolean;
+};
+
+/**
+ * The template this quote type publishes against, AND whether HubSpot still
+ * accepts it — resolved together because the publish path needs both.
+ *
+ * Reads the live list rather than `getCachedTemplates()`: this sits in front of
+ * an irreversible build, and the one thing being checked is a flag that changes
+ * exactly when a stale cache would be wrong. One request for a list of a dozen,
+ * on an operation that happens once per merchant.
+ *
+ * Throws when HubSpot can't be reached. Deliberate: the caller resolves this in
+ * the same preflight as the sender and the catalog, so an unanswerable check
+ * refuses before the first write instead of discovering it at step 4 of 5.
+ */
+export async function resolveQuoteTemplate(quoteType: QuoteType): Promise<ResolvedQuoteTemplate> {
+  const [policy, templates] = await Promise.all([getQuoteTemplatePolicy(), listQuoteTemplates()]);
+  const id = policy[quoteType];
+  return { id, active: templates.some(t => t.id === id && t.active) };
+}
+
+export type QuoteTemplateAudit = {
+  /** One entry per quote type whose configured template HubSpot would now refuse. */
+  stale: Array<{ quoteType: QuoteType; templateId: string; name: string | null; reason: "inactive" | "missing" }>;
+  checked: number;
+};
+
+/**
+ * Compare the policy against HubSpot's live template list.
+ *
+ * Runs nightly (/api/cron/hubspot-links) because nobody tells EasyOB when AIO
+ * retires a template, and the first thing that notices otherwise is a refused
+ * publish with a merchant standing at the door. Finding it the night it
+ * happens turns a blocked checkout into a settings change made in advance.
+ *
+ * It ALERTS, it does not heal. Which template replaces a retired one is a
+ * human's call — "AIO Quote v3 → v4" looks obvious, but the two region-split
+ * marketing templates are the counter-example, and guessing wrong puts the
+ * wrong document in front of a merchant irreversibly.
+ */
+export async function auditQuoteTemplatePolicy(): Promise<QuoteTemplateAudit> {
+  const [policy, templates] = await Promise.all([getQuoteTemplatePolicy(), listQuoteTemplates()]);
+  const byId = new Map(templates.map(t => [t.id, t]));
+
+  const stale: QuoteTemplateAudit["stale"] = [];
+  for (const [quoteType, templateId] of Object.entries(policy) as [QuoteType, string][]) {
+    const template = byId.get(templateId);
+    if (!template) stale.push({ quoteType, templateId, name: null, reason: "missing" });
+    else if (!template.active) stale.push({ quoteType, templateId, name: template.name, reason: "inactive" });
+  }
+  return { stale, checked: Object.keys(policy).length };
 }

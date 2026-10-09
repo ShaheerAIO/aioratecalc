@@ -115,7 +115,8 @@ function check(extra: Partial<MerchantApplication> = {}, overrides: Partial<Para
     catalog: CATALOG,
     sender: { ok: true, email: "rita@aioapp.com", ownerId: "71234567" },
     signerEmail: "ana@tortapalace.com",
-    templateId: "817263673055",
+    templateId: "854670598854",
+    templateActive: true,
     maxDiscountPercent: 50,
     ...overrides,
   });
@@ -269,6 +270,16 @@ describe("canPublishBillingQuote", () => {
     expect(codes(check({}, { templateId: null }))).toContain("no_template");
   });
 
+  // HubSpot refuses association 286 to an inactive template, and it refuses it
+  // at step 4 of 5 — after the line items and the draft quote exist. Caught
+  // here instead, before the first write.
+  it("refuses a template that HubSpot has deactivated", () => {
+    const result = check({}, { templateActive: false });
+    expect(codes(result)).toContain("template_inactive");
+    if (result.ok) return;
+    expect(result.reasons.find(r => r.code === "template_inactive")!.message).toContain("854670598854");
+  });
+
   it("refuses a closed-lost deal", () => {
     expect(codes(check({ stage: "closed_lost" }))).toContain("closed_lost");
   });
@@ -327,7 +338,7 @@ describe("canPublishBillingQuote", () => {
   it("returns every problem at once, not the first one", () => {
     const result = check(
       { hubspotDealId: null, tenantLink: null, stage: "closed_lost", quoteLines: [] },
-      { sender: { ok: false, code: "no_rep_email" }, signerEmail: null, templateId: null }
+      { sender: { ok: false, code: "no_rep_email" }, signerEmail: null, templateId: null, templateActive: false }
     );
     expect(codes(result).sort()).toEqual(
       ["closed_lost", "no_deal", "no_quote_lines", "no_sender_email", "no_signer_email", "no_template", "no_tenant_company"].sort()
