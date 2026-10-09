@@ -63,6 +63,20 @@ export function isAcceptedInHubspot(app: MerchantApplication): boolean {
 export async function applyDetectedAcceptance(app: MerchantApplication): Promise<MerchantApplication> {
   if (app.quoteAcceptedAt) return app;
   if (!isAcceptedInHubspot(app)) return app;
+  return recordAcceptance(app, { syncDeal: true });
+}
+
+/**
+ * The write + side effects, with no billing check. Only two callers:
+ * applyDetectedAcceptance above, and the DEBUG billing bypass
+ * (lib/actions/debugBilling.ts), which skips the deal sync so a test click
+ * never moves a real HubSpot deal.
+ */
+export async function recordAcceptance(
+  app: MerchantApplication,
+  opts: { syncDeal: boolean },
+): Promise<MerchantApplication> {
+  if (app.quoteAcceptedAt) return app;
 
   // Forward-only, same rule the Adyen webhook used: a deal already further
   // along (onboarding, closed won) is never dragged back to quote_accepted.
@@ -104,7 +118,7 @@ export async function applyDetectedAcceptance(app: MerchantApplication): Promise
   // timestamp here is a few milliseconds optimistic; the next refresh corrects it.
   if (!updated) return accepted;
 
-  if (accepted.hubspotDealId) {
+  if (opts.syncDeal && accepted.hubspotDealId) {
     try {
       await syncDealFromApplication(accepted);
     } catch (err) {

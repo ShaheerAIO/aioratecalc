@@ -112,6 +112,8 @@ type AccountsDashboardProps = {
   // ownerUserId to narrow the accounts table to (drill-down from a rep row).
   repFilter?: string | null;
   onClearRepFilter?: () => void;
+  /** DEBUG-BILLING-BYPASS — see lib/debug/billingBypass.ts. */
+  debugBillingBypass?: boolean;
 };
 
 // useSearchParams (for the ?tab= param below) requires a Suspense boundary
@@ -132,6 +134,7 @@ function AccountsDashboardInner({
   view,
   repFilter,
   onClearRepFilter,
+  debugBillingBypass = false,
 }: AccountsDashboardProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -977,6 +980,7 @@ function AccountsDashboardInner({
                     app={selected}
                     canManage={isAdmin || selected.ownerUserId === userId}
                     onUpdated={updateOne}
+                    debugBillingBypass={debugBillingBypass}
                   />
 
                   <Section label="Onboarding">

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { getApplicationAction } from "@/lib/actions/applications";
 import { sendQuoteAction, type SendQuoteResult } from "@/lib/actions/billing";
+import { bypassBillingAction } from "@/lib/actions/debugBilling";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
 import {
   billingPanelState,
@@ -42,7 +43,43 @@ type Props = {
    *  this component at all (it only renders on /rep and /admin). */
   canManage: boolean;
   onUpdated: (app: MerchantApplication) => void;
+  /** DEBUG-BILLING-BYPASS — see lib/debug/billingBypass.ts. */
+  debugBillingBypass?: boolean;
 };
+
+// DEBUG-BILLING-BYPASS — delete with lib/debug/billingBypass.ts.
+function DebugBillingBypass({ app, onUpdated }: Pick<Props, "app" | "onUpdated">) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await bypassBillingAction(app.id);
+      if (!res.ok) setError(res.error ?? "Could not skip billing");
+      const refreshed = await getApplicationAction(app.id);
+      if (refreshed) onUpdated(refreshed);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not skip billing");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className={styles.retryRow}>
+      <div className={styles.emptyNote}>
+        <strong>Debug:</strong> mark this quote accepted as if the merchant had paid. Unlocks their
+        checklist and emails the account link to the contact on file. Nothing is written to HubSpot,
+        and AIO tenant provisioning will not run for this account.
+      </div>
+      <button className={shared.btnPrimary} disabled={busy} onClick={run}>
+        {busy ? "Skipping…" : "Skip Billing (Debug)"}
+      </button>
+      {error && <div className={styles.errorBannerMessage}>{error}</div>}
+    </div>
+  );
+}
 
 /**
  * The rep/admin HubSpot billing surface (PHASE-E-SPEC.md §5.7 / this task's
@@ -55,12 +92,13 @@ type Props = {
  * disappears. A rep who needs to change a published quote is told to do it in
  * HubSpot, not offered a button that implies otherwise.
  */
-export function BillingPanel({ app, canManage, onUpdated }: Props) {
+export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = false }: Props) {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendQuoteResult | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
 
   const state = billingPanelState(app);
+  const showBypass = debugBillingBypass && canManage && !app.quoteAcceptedAt && (app.quoteLines?.length ?? 0) > 0;
 
   if (state === "not_configured") {
     return (
@@ -92,6 +130,7 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
           made now would never show up on the company record. Link the tenant company above and the
           deal and quote are built automatically.
         </div>
+        {showBypass && <DebugBillingBypass app={app} onUpdated={onUpdated} />}
       </Section>
     );
   }
@@ -300,6 +339,8 @@ export function BillingPanel({ app, canManage, onUpdated }: Props) {
           possible by hand in HubSpot. To change it, do that directly in HubSpot.
         </div>
       )}
+
+      {showBypass && <DebugBillingBypass app={app} onUpdated={onUpdated} />}
     </Section>
   );
 }

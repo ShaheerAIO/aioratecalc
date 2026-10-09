@@ -50,7 +50,9 @@ const VIEW_TABS: { id: AdminView; label: string }[] = [
 ];
 
 // useSearchParams (?view=/?rep= below) needs a Suspense boundary above it.
-export function AdminDashboard(props: { userId: string }) {
+type AdminDashboardProps = { userId: string; debugBillingBypass?: boolean };
+
+export function AdminDashboard(props: AdminDashboardProps) {
   return (
     <Suspense>
       <AdminDashboardInner {...props} />
@@ -62,7 +64,7 @@ export function AdminDashboard(props: { userId: string }) {
 // of three views — the per-rep breakdown, all accounts, or customer leads —
 // chosen by ?view= (default "reps"). The accounts/leads views reuse
 // AccountsDashboard embedded, so there is one accounts table in the app, not two.
-function AdminDashboardInner({ userId }: { userId: string }) {
+function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -214,6 +216,7 @@ function AdminDashboardInner({ userId }: { userId: string }) {
         <AccountsDashboard
           role="admin"
           userId={userId}
+          debugBillingBypass={debugBillingBypass}
           embedded
           view={view}
           repFilter={repFilter}
