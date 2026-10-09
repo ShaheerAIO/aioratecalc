@@ -56,6 +56,7 @@ function NewProspectFlow() {
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
   const [smsSent, setSmsSent]           = useState(false);
+  const [companySynced, setCompanySynced] = useState(true);
   const [copied, setCopied]             = useState(false);
   const [saving, setSaving]             = useState(false);
   const [error, setError]               = useState<string | null>(null);
@@ -266,7 +267,7 @@ function NewProspectFlow() {
 
   const hardBlocks: string[] = [];
   if (!deal || !hubspotCompany) hardBlocks.push("Open this quote from its HubSpot deal before sending the link.");
-  if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name.");
+  if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name — HubSpot doesn't have it, and it's saved back to the company.");
   if (!ownerContact.email.trim()) hardBlocks.push("Enter the customer's contact email.");
   hardBlocks.push(...malformedMessages);
   hardBlocks.push(...quoteBlockers);
@@ -291,7 +292,7 @@ function NewProspectFlow() {
     setSaving(true);
     setError(null);
     try {
-      const { linkUrl, emailResult, smsResult } = await createProspectAction({
+      const { linkUrl, emailResult, smsResult, companySync } = await createProspectAction({
         business, ownerContact, processing: rated ? processing : null,
         quoteRates, pricingModel, quoteType,
         quoteConfig: ticket > 0 && volume > 0 ? { avgTicket: ticket, monthlyVolume: volume } : null,
@@ -310,6 +311,7 @@ function NewProspectFlow() {
       setLinkUrl(linkUrl);
       setEmailSent(emailResult.sent);
       setSmsSent(smsResult?.sent ?? false);
+      setCompanySynced(companySync.synced);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create prospect");
     }
@@ -321,7 +323,7 @@ function NewProspectFlow() {
     setFile(null); setAnalysis(null); setPerCardOpen(false); setDetailsOpen(false);
     setQuoteType("all_in_one"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
-    setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCopied(false); setError(null);
+    setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
     clearDeal();
     setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
     setPrefill(null); setReviewApplied(NO_REVIEW_PREFILL_APPLIED); appliedRef.current = { review: NO_REVIEW_PREFILL_APPLIED, channels: [] };
@@ -335,6 +337,8 @@ function NewProspectFlow() {
     : picks.length > 0;
 
   const merchantName = business.dba || business.legalName;
+  const altEmail = ownerContact.altEmail?.trim() ?? "";
+  const recipients = [ownerContact.email.trim(), altEmail].filter(Boolean).join(" and ");
   const prefilledChannels = channelsApplied.map(
     id => ORDER_POINT_CHANNELS.find(c => c.id === id)?.label ?? id
   );
@@ -369,11 +373,18 @@ function NewProspectFlow() {
           </button>
         </div>
         <p className={styles.prefillNote}>
-          {emailSent ? `Emailed to ${ownerContact.email}.` : "Email delivery isn't configured yet — send this link yourself."}
+          {emailSent
+            ? `Emailed to ${recipients}.`
+            : "Email delivery isn't configured yet — send this link yourself."}
         </p>
         {ownerContact.phone && (
           <p className={styles.prefillNote}>
             {smsSent ? `Texted to ${ownerContact.phone}.` : "Text delivery isn't configured yet — send this link yourself."}
+          </p>
+        )}
+        {!companySynced && (
+          <p className={styles.prefillNote}>
+            The legal name, processor and MCC didn&apos;t reach the HubSpot company — enter them there by hand.
           </p>
         )}
         <button onClick={reset} className={styles.btnGhost}>
@@ -407,7 +418,7 @@ function NewProspectFlow() {
     business.legalName, business.dba, business.address, business.city, business.state, business.zip,
     business.phone, business.website, business.yearsInBusiness,
     ownerContact.firstName, ownerContact.lastName, ownerContact.title, ownerContact.phone,
-    ...(rated ? [processing.mcc, processing.currentProcessor, processing.businessDescription] : []),
+    ...(rated ? [processing.mcc, processing.currentProcessor] : []),
   ];
   const knownCount = detailFields.filter(v => v?.trim()).length;
   const merchantBlocked = !business.legalName.trim() || malformedMessages.length > 0;
@@ -422,7 +433,7 @@ function NewProspectFlow() {
 
   const statement = (
     <div
-      className={`${styles.dropzone} ${styles.dropzoneCompact}`}
+      className={`${styles.dropzone} ${styles.statementBox}`}
       data-state={analyzing ? "busy" : analysis ? "done" : dragOver ? "dragging" : undefined}
       onDragOver={e => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
@@ -442,8 +453,8 @@ function NewProspectFlow() {
         </>
       ) : (
         <>
-          <p className={styles.dropzoneTitle}>Or drop their statement</p>
-          <p className={styles.dropzoneSubtitle}>PDF or image — overrides the numbers</p>
+          <p className={styles.dropzoneTitle}>Drop their statement</p>
+          <p className={styles.dropzoneSubtitle}>PDF or image · prices the quote on their real numbers, overriding the volume and ticket above</p>
         </>
       )}
     </div>
@@ -531,7 +542,6 @@ function NewProspectFlow() {
             />
           </span>
         </label>
-        {statement}
       </div>
       <p className={styles.prefillNote}>
         {analysis
@@ -542,6 +552,7 @@ function NewProspectFlow() {
               ? "The customer opens the link straight to this quote."
               : "Optional. Leave blank and the customer uploads a statement before they see a quote."}
       </p>
+      {statement}
     </section>
   );
 
@@ -584,7 +595,7 @@ function NewProspectFlow() {
       </button>
       {ownerContact.email.trim() && (
         <p className={styles.sendNote}>
-          Emailed to {ownerContact.email.trim()}
+          Emailed to {recipients}
           {ownerContact.phone.trim() ? ` and texted to ${ownerContact.phone.trim()}` : ""}.
         </p>
       )}
@@ -666,6 +677,16 @@ function NewProspectFlow() {
                 value={ownerContact.email}
                 onChange={e => setOwnerContact({ ...ownerContact, email: e.target.value })}
                 placeholder="owner@business.com"
+                className={styles.input}
+              />
+            </label>
+            <label className={`${styles.field} ${styles.altEmail}`}>
+              <span className={styles.label}>Also send to <em>(optional)</em></span>
+              <input
+                type="email"
+                value={ownerContact.altEmail ?? ""}
+                onChange={e => setOwnerContact({ ...ownerContact, altEmail: e.target.value })}
+                placeholder="partner@business.com"
                 className={styles.input}
               />
             </label>

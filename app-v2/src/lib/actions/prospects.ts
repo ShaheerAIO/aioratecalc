@@ -16,7 +16,7 @@ import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidatio
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
-import { deleteQuoteLineItem, getQuoteSnapshot } from "@/lib/adapters/hubspot";
+import { deleteQuoteLineItem, getQuoteSnapshot, updateCompanyMerchantDetails } from "@/lib/adapters/hubspot";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
 import { getMaxDiscountPercent } from "@/lib/actions/pricing";
 import { buildQuote, isAllowedForQuoteType, isProcessingQuote, quoteHasProcessing, quoteTypeOf, toQuoteLine } from "@/lib/quoting";
@@ -58,11 +58,17 @@ async function deliverLeadLink(
   url: string,
   merchantName: string | undefined,
   phone: string | null | undefined,
+  /** A second address to send the same link to. Best-effort; its result isn't reported. */
+  altEmail?: string | null,
 ): Promise<{ emailResult: SendMagicLinkResult; smsResult: SendSmsResult | null }> {
   const emailResult = await sendLeadLinkEmail(email, url, merchantName).catch(err => {
     console.error("lead link email failed", err);
     return { sent: false, devUrl: url };
   });
+  const alt = altEmail?.trim();
+  if (alt && alt.toLowerCase() !== email.trim().toLowerCase()) {
+    await sendLeadLinkEmail(alt, url, merchantName).catch(err => console.error("lead link email (second address) failed", err));
+  }
   const smsResult = phone
     ? await sendLeadLinkSms(phone, url).catch(err => {
         console.error("lead link sms failed", err);
@@ -70,6 +76,29 @@ async function deliverLeadLink(
       })
     : null;
   return { emailResult, smsResult };
+}
+
+/**
+ * Write the legal name, previous processor and MCC the rep entered onto the
+ * HubSpot Company. Best-effort, like the link delivery: the row is already
+ * saved, and a HubSpot hiccup must not undo a link the rep has to send.
+ */
+async function syncCompanyDetails(
+  companyId: string | null | undefined,
+  app: Pick<MerchantApplication, "business" | "processing">,
+): Promise<{ synced: boolean }> {
+  if (!companyId) return { synced: false };
+  try {
+    await updateCompanyMerchantDetails(companyId, {
+      legalName: app.business?.legalName,
+      previousProcessor: app.processing?.currentProcessor,
+      mcc: app.processing?.mcc,
+    });
+    return { synced: true };
+  } catch (err) {
+    console.error("HubSpot company details sync failed", companyId, err);
+    return { synced: false };
+  }
 }
 
 async function persistLeadLink(
@@ -376,6 +405,8 @@ export async function createProspectAction(input: {
   linkUrl: string;
   emailResult: SendMagicLinkResult;
   smsResult: SendSmsResult | null;
+  /** Whether the legal name / previous processor / MCC reached the HubSpot Company. */
+  companySync: { synced: boolean };
 }> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
@@ -502,9 +533,11 @@ export async function createProspectAction(input: {
     link.url,
     app.business?.dba || app.business?.legalName,
     app.ownerContact!.phone,
+    app.ownerContact!.altEmail,
   );
+  const companySync = await syncCompanyDetails(input.hubspotCompanyId, app);
 
-  return { app, linkUrl: link.url, emailResult, smsResult };
+  return { app, linkUrl: link.url, emailResult, smsResult, companySync };
 }
 
 // ── The proposal wizard writes through the same derivation ──────────────────
@@ -688,6 +721,7 @@ export async function saveApplicationDetailsAction(input: {
     updatedAt: new Date().toISOString(),
   };
   await postgresStorage.saveApplication(scope, updated);
+  await syncCompanyDetails(updated.tenantLink?.hubspotCompanyId, updated);
   return updated;
 }
 
@@ -764,6 +798,7 @@ export async function resendLeadLinkAction(
     linkUrl,
     merchantName,
     updated.ownerContact?.phone,
+    updated.ownerContact?.altEmail,
   );
 
   return { app: updated, linkUrl, emailResult, smsResult };

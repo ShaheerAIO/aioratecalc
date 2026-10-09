@@ -109,6 +109,10 @@ export function validateOnboardingFields(input: OnboardingValidationInput): Onbo
   if (email && !EMAIL.test(email)) {
     errors["ownerContact.email"] = "Enter a valid email address.";
   }
+  const altEmail = s(owner.altEmail);
+  if (altEmail && !EMAIL.test(altEmail)) {
+    errors["ownerContact.altEmail"] = "Enter a valid second email address, or leave it blank.";
+  }
 
   return errors;
 }

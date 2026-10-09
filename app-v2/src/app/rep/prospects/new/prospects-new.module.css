@@ -64,6 +64,8 @@
 }
 
 .recipient .field, .dealPaste .field { flex: 1 1 16rem; margin-bottom: 0; }
+.altEmail em { font-style: normal; font-weight: 500; color: var(--ink-3); text-transform: none; letter-spacing: normal; }
+.altEmail .input { border-style: dashed; border-color: var(--accent-2); }
 .dealPaste .btnSm { margin-top: 0; margin-bottom: 2px; }
 
 /* ---------- Merchant details drawer ---------- */
@@ -241,10 +243,29 @@
 
 .sendBlock .error { margin-bottom: 0; }
 
-.blocks { font-size: 0.8rem; line-height: 1.5; color: var(--ink-2); }
-.blocksTitle { font-weight: 700; color: var(--ink); margin: 0 0 var(--space-2xs); }
-.blocks ul { margin: 0 0 var(--space-xs); padding-left: 1.1em; list-style: disc; }
-.blocks li + li { margin-top: var(--space-3xs); }
+/* Loud on purpose: this list is why the button is grey, and a rep who misses
+   it thinks the page is broken. */
+.blocks {
+  font-size: 1rem;
+  line-height: 1.45;
+  font-weight: 600;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 2px solid var(--danger);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+.blocksTitle {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--danger);
+  margin: 0 0 var(--space-xs);
+}
+.blocks ul { margin: 0 0 var(--space-xs); padding-left: 1.2em; list-style: disc; }
+.blocks li + li { margin-top: var(--space-2xs); }
+.blocks .linkBtn { font-size: 0.9rem; color: var(--danger); }
 
 .sendNote { font-size: 0.75rem; color: var(--ink-3); margin: 0; text-align: center; overflow-wrap: anywhere; }
 
@@ -337,6 +358,15 @@
 }
 
 .dropzoneCompact { margin-top: 0; padding: var(--space-sm) var(--space-md); border-width: 1.5px; }
+
+/* The statement drop, in its own box under the rate: a darker well than the
+   paper-2 block it sits in, so it reads as a target rather than another field. */
+.statementBox {
+  margin-top: var(--space-md);
+  background: oklch(91% 0.014 32);
+  border-color: oklch(64% 0.010 32);
+}
+.statementBox:hover { border-color: var(--ink-2); }
 
 .fileInput { display: none; }
 

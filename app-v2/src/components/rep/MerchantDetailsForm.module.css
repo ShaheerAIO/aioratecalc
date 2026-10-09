@@ -51,6 +51,7 @@
 .field[data-span="3"]  { grid-column: span 3; }
 .field[data-span="4"]  { grid-column: span 4; }
 .field[data-span="6"]  { grid-column: span 6; }
+.field[data-span="8"]  { grid-column: span 8; }
 .field[data-span="12"] { grid-column: 1 / -1; }
 
 .label {
@@ -111,6 +112,48 @@
 
 .check input { accent-color: var(--accent); margin: 0; }
 
+.checkRow { display: flex; align-items: center; gap: var(--space-xs); margin-top: var(--space-sm); }
+.checkRow .check { margin-top: 0; }
+.checkRow + .grid { margin-top: var(--space-sm); }
+
+/* A hover/focus tooltip. The button is what makes it reachable by keyboard;
+   `title` alone never shows on focus or touch. */
+.tip { position: relative; display: inline-flex; }
+
+.tipButton {
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 1px solid var(--ink-3);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink-2);
+  font: italic 700 0.7rem/1 var(--font-body);
+  cursor: help;
+}
+
+.tipButton:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+.tipText {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + var(--space-xs));
+  transform: translateX(-50%);
+  width: min(20rem, 80vw);
+  padding: var(--space-sm);
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  z-index: 10;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 120ms var(--ease-out);
+}
+
+.tip:hover .tipText, .tipButton:focus-visible + .tipText { visibility: visible; opacity: 1; }
+
 @media (min-width: 64rem) {
   .group {
     display: grid;
@@ -121,14 +164,14 @@
 
   .groupLabel { grid-column: 1; grid-row: 1 / span 3; margin: 0; padding-top: 1.45rem; }
   .group > :not(.groupLabel) { grid-column: 2; }
-  .check { justify-self: start; }
+  .check, .checkRow { justify-self: start; }
 }
 
 @media (max-width: 48rem) {
   .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .field[data-span="1"], .field[data-span="2"] { grid-column: span 2; }
   .field[data-span="3"], .field[data-span="4"] { grid-column: span 3; }
-  .field[data-span="6"] { grid-column: 1 / -1; }
+  .field[data-span="6"], .field[data-span="8"] { grid-column: 1 / -1; }
 }
 
 @media (max-width: 32rem) {
@@ -136,5 +179,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .input { transition-duration: 1ms; }
+  .input, .tipText { transition-duration: 1ms; }
 }

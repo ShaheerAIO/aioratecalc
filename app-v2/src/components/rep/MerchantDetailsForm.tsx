@@ -100,46 +100,62 @@ export default function MerchantDetailsForm({
         <span className={styles.dot} aria-hidden="true" /> from HubSpot · everything is editable, and what you type wins
       </p>
 
+      {/* Everything that's on the registration, together: the name, the entity
+          type and the address the state has on file. The legal name is
+          written back to the HubSpot company when the link is created. */}
+      <section className={styles.group} aria-label="Legal">
+        <h3 className={styles.groupLabel} aria-hidden="true">Legal</h3>
+        <div className={styles.grid}>
+          {field("business.legalName", "Legal name, as registered", 8, business.legalName, v => b({ legalName: v }), { placeholder: "Not in HubSpot · saved back to the company" })}
+          {select("Entity type", 4, business.bizType, v => b({ bizType: v as BusinessInfo["bizType"] }),
+            BIZ_TYPES.map(([t, label]) => <option key={t} value={t}>{label}</option>))}
+          {field("business.address", "Legal street address", 4, business.address, v => b({ address: v }))}
+          {field("business.city", "City", 3, business.city, v => b({ city: v }))}
+          {field("business.state", "State", 2, business.state, v => b({ state: v }), { placeholder: "CA" })}
+          {field("business.zip", "ZIP", 3, business.zip, v => b({ zip: v }), { inputMode: "numeric", placeholder: "90210" })}
+        </div>
+        <div className={styles.checkRow}>
+          <label className={styles.check}>
+            <input
+              type="checkbox"
+              checked={!elsewhere}
+              onChange={e => {
+                setElsewhere(!e.target.checked);
+                if (e.target.checked) b({ dbaAddress: "", dbaCity: "", dbaState: "", dbaZip: "" });
+              }}
+            />
+            Operating address is the same as the legal address
+          </label>
+          <span className={styles.tip}>
+            <button type="button" className={styles.tipButton} aria-describedby="operating-address-tip" aria-label="What's an operating address?">
+              i
+            </button>
+            <span id="operating-address-tip" role="tooltip" className={styles.tipText}>
+              The legal address is where the business is registered with the state. The
+              operating address is where it actually trades — the restaurant itself.
+              They often differ when the owner registered at home or through an
+              accountant. Untick to enter the restaurant&apos;s address.
+            </span>
+          </span>
+        </div>
+        {elsewhere && (
+          <div className={styles.grid}>
+            {field("business.dbaAddress", "Operating street address", 4, business.dbaAddress ?? "", v => b({ dbaAddress: v }))}
+            {field("business.dbaCity", "City", 3, business.dbaCity ?? "", v => b({ dbaCity: v }))}
+            {field("business.dbaState", "State", 2, business.dbaState ?? "", v => b({ dbaState: v }), { placeholder: "CA" })}
+            {field("business.dbaZip", "ZIP", 3, business.dbaZip ?? "", v => b({ dbaZip: v }), { inputMode: "numeric", placeholder: "90210" })}
+          </div>
+        )}
+      </section>
+
       <section className={styles.group} aria-label="Business">
         <h3 className={styles.groupLabel} aria-hidden="true">Business</h3>
         <div className={styles.grid}>
-          {field("business.legalName", "Legal name", 3, business.legalName, v => b({ legalName: v }))}
-          {field("business.dba", "DBA", 3, business.dba, v => b({ dba: v }))}
-          {select("Type", 2, business.bizType, v => b({ bizType: v as BusinessInfo["bizType"] }),
-            BIZ_TYPES.map(([t, label]) => <option key={t} value={t}>{label}</option>))}
-          {field("business.yearsInBusiness", "Years open", 1, business.yearsInBusiness, v => b({ yearsInBusiness: v }), { inputMode: "numeric", placeholder: "—" })}
+          {field("business.dba", "DBA (trading name)", 4, business.dba, v => b({ dba: v }))}
           {field("business.website", "Website", 3, business.website, v => b({ website: v }), { placeholder: "https://" })}
+          {field("business.phone", "Business phone", 3, business.phone, v => b({ phone: v }), { type: "tel", placeholder: "555-000-0000" })}
+          {field("business.yearsInBusiness", "Years open", 2, business.yearsInBusiness, v => b({ yearsInBusiness: v }), { inputMode: "numeric", placeholder: "—" })}
         </div>
-      </section>
-
-      <section className={styles.group} aria-label="Legal address">
-        <h3 className={styles.groupLabel} aria-hidden="true">Legal address</h3>
-        <div className={styles.grid}>
-          {field("business.address", "Street", 4, business.address, v => b({ address: v }))}
-          {field("business.city", "City", 3, business.city, v => b({ city: v }))}
-          {field("business.state", "State", 1, business.state, v => b({ state: v }), { placeholder: "CA" })}
-          {field("business.zip", "ZIP", 2, business.zip, v => b({ zip: v }), { inputMode: "numeric", placeholder: "90210" })}
-          {field("business.phone", "Business phone", 2, business.phone, v => b({ phone: v }), { type: "tel", placeholder: "555-000-0000" })}
-        </div>
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={elsewhere}
-            onChange={e => {
-              setElsewhere(e.target.checked);
-              if (!e.target.checked) b({ dbaAddress: "", dbaCity: "", dbaState: "", dbaZip: "" });
-            }}
-          />
-          Operates at a different address
-        </label>
-        {elsewhere && (
-          <div className={styles.grid}>
-            {field("business.dbaAddress", "Street", 4, business.dbaAddress ?? "", v => b({ dbaAddress: v }))}
-            {field("business.dbaCity", "City", 3, business.dbaCity ?? "", v => b({ dbaCity: v }))}
-            {field("business.dbaState", "State", 1, business.dbaState ?? "", v => b({ dbaState: v }), { placeholder: "CA" })}
-            {field("business.dbaZip", "ZIP", 2, business.dbaZip ?? "", v => b({ dbaZip: v }), { inputMode: "numeric", placeholder: "90210" })}
-          </div>
-        )}
       </section>
 
       <section className={styles.group} aria-label="Owner">
@@ -156,26 +172,11 @@ export default function MerchantDetailsForm({
         <section className={styles.group} aria-label="Processing">
           <h3 className={styles.groupLabel} aria-hidden="true">Processing</h3>
           <div className={styles.grid}>
-            {field("processing.currentProcessor", "Current processor", 4, processing.currentProcessor, v => p({ currentProcessor: v }), { placeholder: "Stripe" })}
+            {field("processing.currentProcessor", "Previous processor", 4, processing.currentProcessor, v => p({ currentProcessor: v }), { placeholder: "Stripe · saved to HubSpot" })}
             {field("processing.mcc", "MCC", 2, processing.mcc, v => p({ mcc: v }), { inputMode: "numeric", placeholder: "5812" })}
             {field("processing.cardPresentPct", "Card present %", 2, processing.cardPresentPct, v => p({ cardPresentPct: v }), { inputMode: "decimal", placeholder: "95" })}
             {select("Terminated before?", 2, processing.previouslyTerminated, v => p({ previouslyTerminated: v as ProcessingInfo["previouslyTerminated"] }), yesNo)}
             {select("Bankruptcy, 5 yr?", 2, processing.bankruptcy, v => p({ bankruptcy: v as ProcessingInfo["bankruptcy"] }), yesNo)}
-            <label className={styles.field} data-span={12}>
-              <span className={styles.label}>
-                What they do
-                {isFromHubspotField(applied, "processing.businessDescription", processing.businessDescription) && (
-                  <span className={styles.dot} title="From HubSpot" aria-label="from HubSpot" />
-                )}
-              </span>
-              <textarea
-                rows={2}
-                value={processing.businessDescription}
-                onChange={e => p({ businessDescription: e.target.value })}
-                placeholder="Briefly describe the business…"
-                className={`${styles.input} ${styles.textarea}`}
-              />
-            </label>
           </div>
         </section>
       )}

@@ -600,6 +600,12 @@ export type OwnerContact = {
   title: string;
   email: string;
   phone: string;
+  /**
+   * A second address the quote link also goes to — a partner, a bookkeeper,
+   * the owner's other inbox. Optional, and never the signer: billing goes to
+   * `email` only. Optional also so rows saved before it existed still parse.
+   */
+  altEmail?: string;
 };
 
 export type ProcessingInfo = {
