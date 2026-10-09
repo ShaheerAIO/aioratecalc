@@ -556,3 +556,24 @@
   padding: var(--space-2xs) var(--space-md);
   margin-top: var(--space-2xs);
 }
+
+/* A monthly volume with an extra zero in it prices the whole quote wrong, and
+   the rep sees the figure they typed rather than the one they meant. Asked
+   once, in line, rather than refused — some restaurants really do run $1.2M a
+   month. Warning weight, not the danger weight .blocks carries: nothing here
+   is wrong yet. */
+.volumeCheck {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+}

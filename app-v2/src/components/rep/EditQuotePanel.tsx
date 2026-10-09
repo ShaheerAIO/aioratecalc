@@ -140,7 +140,11 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   const belowMin = pricing?.belowMarginFloor ?? false;
   const blockers = quote?.blockers ?? [];
 
-  const disabled = saving || blockers.length > 0 || (!rated && !picks.length);
+  // Below the minimum margin REFUSES the save (2026-10-09, "card rate minimums
+  // are needed"), where it used to be a note the rep could read past. Below
+  // COST stays a warning: it is the sharper of the two, but it is measured
+  // against the processor tier on file, which a rep can't fix from here.
+  const disabled = saving || blockers.length > 0 || belowMin || (!rated && !picks.length);
 
   const save = async () => {
     if (disabled) return;
@@ -259,7 +263,8 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
                 )}
                 {belowMin && (
                   <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Below AIO&rsquo;s minimum margin for this volume.
+                    Below AIO&rsquo;s minimum margin for this volume. Raise the card rate to save
+                    this quote.
                   </div>
                 )}
               </div>

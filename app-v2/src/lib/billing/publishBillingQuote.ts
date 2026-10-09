@@ -38,8 +38,8 @@ import {
   type QuoteAssociation,
 } from "@/lib/adapters/hubspot";
 import { resolveQuoteTemplate, type ResolvedQuoteTemplate } from "@/lib/actions/quoteTemplates";
-import { getMaxDiscountPercent } from "@/lib/actions/pricing";
-import { DEFAULT_MAX_DISCOUNT_PERCENT, quoteTypeOf } from "@/lib/quoting";
+import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
+import { DEFAULT_MAX_APPROVED_DELAY_DAYS, DEFAULT_MAX_DISCOUNT_PERCENT, quoteTypeOf } from "@/lib/quoting";
 import { canPublishBillingQuote, type PublishRefusal, type SenderResolution } from "@/lib/billing/preconditions";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds, type MerchantApplication } from "@/types/merchant";
 
@@ -312,19 +312,23 @@ export async function buildAndPublishBillingQuote(
   let templateResolved: ResolvedQuoteTemplate = { id: "", active: false };
   let catalog: Awaited<ReturnType<typeof listProducts>> = [];
   let maxDiscountPercent = DEFAULT_MAX_DISCOUNT_PERCENT;
+  let maxBillingDelayDays = DEFAULT_MAX_APPROVED_DELAY_DAYS;
   try {
     // listProducts() rather than listQuotableProductsAction(): that action
     // requires a rep/admin session and the trigger here is an unauthenticated
     // acceptance POST. The catalog is needed unfiltered anyway — the derived
     // platform product is one the picker hides.
-    [senderResolved, templateResolved, catalog, maxDiscountPercent] = await Promise.all([
+    let limits;
+    [senderResolved, templateResolved, catalog, maxDiscountPercent, limits] = await Promise.all([
       resolveSender(app.ownerUserId),
       // Not just the id: HubSpot refuses an INACTIVE template at the
       // association, three writes deep. See preconditions' `templateActive`.
       resolveQuoteTemplate(quoteTypeOf(app.quoteType)),
       listProducts(),
       getMaxDiscountPercent(),
+      getQuoteLimits(),
     ]);
+    maxBillingDelayDays = limits.maxBillingDelayDays;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     await persistSyncError(app.id, ids, `preflight failed: could not load the catalog, sender or template policy: ${detail}`);
@@ -340,6 +344,7 @@ export async function buildAndPublishBillingQuote(
     templateId: templateResolved.id || null,
     templateActive: templateResolved.active,
     maxDiscountPercent,
+    maxBillingDelayDays,
   });
   if (!decision.ok) {
     if (decision.alreadyPublished) return { status: "skipped", reason: "already_published" };

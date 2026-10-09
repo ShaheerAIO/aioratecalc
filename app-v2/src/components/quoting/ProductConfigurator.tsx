@@ -2,14 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
-import { getMaxDiscountPercent } from "@/lib/actions/pricing";
+import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
 import {
   AMS1_PRODUCT,
   DEFAULT_MAX_DISCOUNT_PERCENT,
+  DEFAULT_QUOTE_LIMITS,
   INCLUDED_SCREEN_COUNT,
   INCLUDED_SERVICE_PRODUCTS,
+  KIOSK_PRODUCT_IDS,
+  MARKETING_INCLUDED_HARDWARE,
+  MARKETING_TERM_KIOSK_IDS,
+  POS_COMPANIONS,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
+  PLAN_DEFAULT_BILLING_DELAY_DAYS,
   PLATFORM_PRODUCTS,
   PROCESSING_DISCLOSURE_PRODUCT,
   PRODUCT_GROUP_LABELS,
@@ -29,14 +35,17 @@ import {
   lineDiscountAmount,
   lineListAmount,
   lineNetAmount,
+  companionsFor,
   maxQtyFor,
   minimumTerminalsFor,
+  planDefaultBillingStart,
   planIncludesWebsite,
   toQuoteLine,
   unitsFromQuoteLines,
   websiteTakesOrders,
   WEBSITE_PRODUCT_ID,
   type BuiltQuote,
+  type QuoteLimits,
 } from "@/lib/quoting";
 import { coverageLabel, kitFor, kitPicks } from "@/lib/quotePackages";
 import QuoteReceipt from "@/components/quoting/QuoteReceipt";
@@ -116,6 +125,17 @@ type Props = {
   documentRate?: ReactNode;
   /** document layout: under the totals — the host's send controls. */
   documentFooter?: ReactNode;
+  /**
+   * Whether this host is starting a BRAND-NEW quote, in which case the chosen
+   * plan brings its own starting point: the hardware kit preselected, and the
+   * 60-day billing start the two POS plans open with.
+   *
+   * Off by default, and every host that REOPENS a saved quote leaves it off.
+   * A reopened rate-only quote has no picks and no adjustments either, so
+   * "looks empty" is not a safe proxy for "is new" — seeding off that would
+   * put a $4,000 kit onto a quote a rep deliberately cleared.
+   */
+  seedPlanDefaults?: boolean;
 };
 
 // Recurring prices read monthly (see fmtRecurring): everything AIO sells bills
@@ -147,6 +167,7 @@ export default function ProductConfigurator({
   rail = "gutter",
   layout = "panels",
   buildSlot, documentHeader, documentRate, documentFooter,
+  seedPlanDefaults = false,
 }: Props) {
   // The catalog is read from HubSpot server-side and cached there, so this is
   // one call per mount, not one per keystroke. It lives in here rather than in
@@ -161,6 +182,9 @@ export default function ProductConfigurator({
   // on every save and publish, so a stale or tampered value here can widen
   // nothing — the worst it does is show a blocker a beat late.
   const [maxDiscountPercent, setMaxDiscountPercent] = useState(DEFAULT_MAX_DISCOUNT_PERCENT);
+  // Quantity caps and the billing-delay ceiling, same posture as the cap above:
+  // display only. The server reads its own copy on every save and publish.
+  const [limits, setLimits] = useState<QuoteLimits>(DEFAULT_QUOTE_LIMITS);
 
   useEffect(() => {
     listQuotableProductsAction()
@@ -168,6 +192,7 @@ export default function ProductConfigurator({
       .catch(e => setCatalogError(e instanceof Error ? e.message : "Could not load the product catalog"))
       .finally(() => setCatalogLoading(false));
     getMaxDiscountPercent().then(setMaxDiscountPercent).catch(() => {});
+    getQuoteLimits().then(setLimits).catch(() => {});
   }, []);
 
   const types = QUOTE_TYPES.filter(t => !selectableTypes || selectableTypes.includes(t.id));
@@ -192,8 +217,29 @@ export default function ProductConfigurator({
     // carries no product type on the Customer Facing Display, so it would
     // otherwise sit under "Uncategorized", nowhere near the POS it goes with.
     const byId = new Map(selectable.map(p => [p.hubspotProductId, p]));
-    const inKit = kitPicks(kit).flatMap(k => byId.get(k.hubspotProductId) ?? []);
-    const kitIds = new Set(inKit.map(p => p.hubspotProductId));
+    const ordered = kitPicks(kit).flatMap(k => byId.get(k.hubspotProductId) ?? []);
+
+    // Each POS's companions sit directly UNDER it — "CFD + cash drawer +
+    // adyen should automatically add when adding in a POS and show below them
+    // for clarity" (2026-10-09). A row whose quantity moves on its own has to
+    // be where the rep can see it move.
+    //
+    // Done HERE, in the listing, rather than by naming them in the kit: the
+    // kit's terminal slots are already filled by the POS's AMS1 and the one
+    // inside the kiosk SKU, so adding the terminal to KIT_DEFAULT_PRODUCTS
+    // would preselect a second one nobody needs.
+    const placed = new Set(ordered.map(p => p.hubspotProductId));
+    for (const pos of [...ordered]) {
+      for (const companion of companionsFor(pos.hubspotProductId)) {
+        const product = byId.get(companion.hubspotProductId);
+        if (!product || placed.has(product.hubspotProductId)) continue;
+        placed.add(product.hubspotProductId);
+        ordered.splice(ordered.indexOf(pos) + 1, 0, product);
+      }
+    }
+
+    const inKit = ordered;
+    const kitIds = placed;
 
     const rest = groupProducts(selectable.filter(p => !kitIds.has(p.hubspotProductId)));
     if (inKit.length === 0) return rest;
@@ -226,11 +272,11 @@ export default function ProductConfigurator({
   }, [selectable, picks]);
 
   const built = useMemo(
-    () => buildQuote(quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent),
-    [quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent]
+    () => buildQuote(quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits),
+    [quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits]
   );
   const {
-    orderPoints, breakdown, platform, includedServices, planHardware,
+    orderPoints, breakdown, platform, includedServices,
     processingDisclosure, packages, totals, quoteLines,
   } = built;
 
@@ -359,6 +405,9 @@ export default function ProductConfigurator({
   // The WiFi remove confirmation. Local, like the adjust drawers: it is a
   // disclosure, and the decision itself lives on the adjustment.
   const [confirmWifi, setConfirmWifi] = useState(false);
+  // The "clear the cart?" confirmation. Same kind of local disclosure state,
+  // declared here with the others because `changeType` resets it.
+  const [confirmClear, setConfirmClear] = useState(false);
   // Same idea for taking a unit the kit is giving away off the quote: the
   // product id whose removal is awaiting a yes. One at a time.
   const [confirmKitRemove, setConfirmKitRemove] = useState<string | null>(null);
@@ -375,55 +424,122 @@ export default function ProductConfigurator({
   useEffect(() => { emit.current = onDerivedChange; });
   useEffect(() => { emit.current(built); }, [built]);
 
-  // Switching to a type that forbids something already picked has to drop it,
-  // or the rep sends a marketing-only quote with a POS unit they can no longer
-  // see. Runs off the catalog rather than the picks so it's a no-op until the
-  // catalog has actually loaded.
+  // ── What a plan opens with ────────────────────────────────────────────────
+  // A billing start waiting to be swept across the recurring lines, once there
+  // ARE recurring lines. `changeType` can't do it itself: the plan's fee and
+  // the kit it just seeded only become lines after `buildQuote` has run again,
+  // so there is nothing to apply it to until the next render.
+  //
+  // Strictly one-shot — cleared the moment it is applied — which is what makes
+  // the 60 days an ordinary rep edit from then on. Re-deriving it instead
+  // would put it straight back every time a rep set a line to bill at
+  // checkout, since clearing an adjustment deletes it.
+  const [pendingStart, setPendingStart] = useState<BillingStart | null>(null);
+
+  // A NEW quote opens on a plan nobody clicked — `all_in_one` is the initial
+  // state — so the plan's own starting point (its kit, its menu boards, its
+  // 60-day start) was never applied, and a rep had to click the plan card that
+  // was already selected to get it. That is the "need to reselect for it to
+  // pop up" the product owner reported on 2026-10-09.
+  //
+  // Guarded three ways, because seeding the wrong quote hands over a $4,000
+  // kit: only a host that says it is starting a new quote, only once, and only
+  // while the quote is genuinely untouched.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || !seedPlanDefaults || catalog.length === 0) return;
+    if (picks.length > 0 || Object.keys(adjustments).length > 0) return;
+    seeded.current = true;
+    changeType(quoteType);
+    // Deliberately keyed on the catalog arriving. Everything else is read at
+    // the moment it fires and must not re-trigger it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, seedPlanDefaults]);
+
+  /**
+   * What a plan opens with: its cart, and the billing start it bills from.
+   *
+   * SWITCHING PLANS CLEARS THE CART, then re-seeds it from the new plan
+   * (product owner, 2026-10-09). It used to carry across whatever the new plan
+   * also allowed, which meant the kit only appeared on an empty quote and a
+   * rep who had touched anything got a half-converted cart — some of the old
+   * plan's hardware, none of the new plan's. A plan IS the offer, so changing
+   * it starts the offer again.
+   *
+   * Re-clicking the plan already selected does NOT clear. It re-seeds only an
+   * empty cart, which is what makes "Clear cart, then click the plan" the way
+   * to get the kit back — and what stops a stray click on the highlighted card
+   * throwing away a configured quote.
+   */
   const changeType = (next: QuoteType) => {
+    const switching = next !== quoteType;
     onQuoteTypeChange(next);
     setConfirmKitRemove(null);
+    setConfirmWifi(false);
+    setConfirmClear(false);
+
+    // The adjustments go with the cart. They are keyed by product id, so a
+    // discount left behind would re-attach itself to whatever the new plan
+    // seeds — a comp meant for one quote silently applying to another.
+    if (switching) onAdjustmentsChange?.({});
+
+    // The 60-day start the two POS plans bill from. Applied a render later
+    // (see `pendingStart`) because the lines it applies to don't exist until
+    // `buildQuote` has run against the new plan and its freshly seeded picks.
+    if (onAdjustmentsChange) setPendingStart(planDefaultBillingStart(next));
+
     if (catalog.length) {
       const allowed = new Set(
         catalog.filter(p => isAllowedForQuoteType(p, next)).map(p => p.hubspotProductId)
       );
-      const kept = picks.filter(p => allowed.has(p.hubspotProductId));
+      // A switch starts from nothing; a re-click keeps what is there.
+      const kept = switching ? [] : picks.filter(p => allowed.has(p.hubspotProductId));
 
-      // Choosing a plan that comes with a kit puts the whole kit on the quote.
-      // ONLY onto an empty quote: a rep who has already picked hardware has
-      // made choices, and swapping between the two kit plans must not pile a
-      // second set of everything on top of them. Clicking the plan that is
-      // already selected counts — that is how a rep re-applies the kit after
-      // clearing it. WiFi isn't a pick (it is derived once there is hardware),
-      // but "preselect everything" includes bringing it back if it was removed.
-      // The Website comes with All-in-One, so choosing that plan puts it on —
-      // whether or not the quote was empty, since it is part of the plan
-      // rather than a hardware choice the rep has already made.
-      const withWebsite = (list: ProductPick[]) =>
-        planIncludesWebsite(next) && allowed.has(WEBSITE_PRODUCT_ID) && !list.some(p => p.hubspotProductId === WEBSITE_PRODUCT_ID)
-          ? [...list, { hubspotProductId: WEBSITE_PRODUCT_ID, qty: 1 }]
-          : list;
-
+      // The hardware kit the two POS plans come with, onto an empty cart —
+      // which after a switch is always.
       const kit = kitFor(next);
+      const fromKit: ProductPick[] = [];
       if (kit && kept.length === 0) {
         const inKit = new Map(kitPicks(kit).map(k => [k.hubspotProductId, k.qty]));
         // The POS's AMS1, the same as the stepper adds by hand.
         const terminals = minimumTerminalsFor(next, kitPicks(kit));
         if (terminals > 0) inKit.set(AMS1_PRODUCT.hubspotProductId, terminals);
-        const seeded = catalog
-          .filter(p => allowed.has(p.hubspotProductId) && inKit.has(p.hubspotProductId))
-          .map(p => ({ hubspotProductId: p.hubspotProductId, qty: inKit.get(p.hubspotProductId)! }));
-        if (seeded.length) {
-          onPicksChange(withWebsite(seeded));
-          if (adjustments[WIFI_PRODUCT_ID]?.removed) setAdjustment(WIFI_PRODUCT_ID, { removed: null });
-        } else {
-          const nextPicks = withWebsite(kept);
-          if (nextPicks.length !== picks.length) onPicksChange(nextPicks);
-        }
-      } else {
-        const nextPicks = withWebsite(kept);
-        if (nextPicks.length !== picks.length || kept.length !== picks.length) onPicksChange(nextPicks);
+        fromKit.push(
+          ...catalog
+            .filter(p => allowed.has(p.hubspotProductId) && inKit.has(p.hubspotProductId))
+            .map(p => ({ hubspotProductId: p.hubspotProductId, qty: inKit.get(p.hubspotProductId)! }))
+        );
       }
+
+      // Everything else the plan includes and the rep would otherwise have to
+      // add by hand: the Website on All-in-One, the three Menu Board Computers
+      // on either marketing plan. Both are held at $0 by the plan comps, so
+      // leaving them off doesn't save the merchant anything — it just omits
+      // what they were promised.
+      const included: ProductPick[] = [];
+      if (planIncludesWebsite(next) && allowed.has(WEBSITE_PRODUCT_ID)) {
+        included.push({ hubspotProductId: WEBSITE_PRODUCT_ID, qty: 1 });
+      }
+      if (isMarketingQuote(next)) {
+        included.push(
+          ...MARKETING_INCLUDED_HARDWARE
+            .filter(h => allowed.has(h.hubspotProductId))
+            .map(h => ({ hubspotProductId: h.hubspotProductId, qty: h.qty }))
+        );
+      }
+
+      const have = new Set([...kept, ...fromKit].map(p => p.hubspotProductId));
+      const nextPicks = [...kept, ...fromKit, ...included.filter(p => !have.has(p.hubspotProductId))];
+      const unchanged =
+        nextPicks.length === picks.length &&
+        nextPicks.every(p => picks.some(q => q.hubspotProductId === p.hubspotProductId && q.qty === p.qty));
+      if (!unchanged) onPicksChange(nextPicks);
+    } else if (switching && picks.length) {
+      // The catalog hasn't loaded, so there is nothing to seed — but the old
+      // plan's cart still must not survive onto the new one.
+      onPicksChange([]);
     }
+
     if (!isProcessingQuote(next) && channels.length) onChannelsChange([]);
   };
 
@@ -440,15 +556,24 @@ export default function ProductConfigurator({
     const wanted = new Map(picks.map(p => [p.hubspotProductId, p.qty]));
     if (qty > 0) wanted.set(id, qty);
     else wanted.delete(id);
-    // A POS added or taken off moves its AMS1 with it, keeping any extras.
-    if (isPosRequiringTerminal({ hubspotProductId: id }) && isProcessingQuote(quoteType)) {
+    // A POS added or taken off moves its companions with it — the terminal it
+    // has to ship with, the customer display and the cash drawer — keeping any
+    // extras the rep added on top. Only the terminal has a floor under it
+    // (`minimumTerminalsFor`); the other two are a convenience the rep can
+    // step straight back down.
+    const companions = isProcessingQuote(quoteType) ? companionsFor(id) : [];
+    if (companions.length) {
       const delta = qty - qtyOf(id);
-      const terminals = Math.max(
-        (wanted.get(AMS1_PRODUCT.hubspotProductId) ?? 0) + delta,
-        minimumTerminalsFor(quoteType, [...wanted].map(([hubspotProductId, q]) => ({ hubspotProductId, qty: q }))),
-      );
-      if (terminals > 0) wanted.set(AMS1_PRODUCT.hubspotProductId, terminals);
-      else wanted.delete(AMS1_PRODUCT.hubspotProductId);
+      const asPicks = () => [...wanted].map(([hubspotProductId, q]) => ({ hubspotProductId, qty: q }));
+      for (const companion of companions) {
+        const cid = companion.hubspotProductId;
+        const moved = (wanted.get(cid) ?? 0) + delta;
+        const n = cid === AMS1_PRODUCT.hubspotProductId
+          ? Math.max(moved, minimumTerminalsFor(quoteType, asPicks()))
+          : moved;
+        if (n > 0) wanted.set(cid, n);
+        else wanted.delete(cid);
+      }
     }
     onPicksChange(
       selectable
@@ -463,6 +588,23 @@ export default function ProductConfigurator({
 
   const toggleChannel = (id: string) =>
     onChannelsChange(channels.includes(id) ? channels.filter(c => c !== id) : [...channels, id]);
+
+  // ── Clearing the cart ─────────────────────────────────────────────────────
+  // Starting the hardware over used to mean stepping every row back to zero
+  // one press at a time, which on a seeded kit is a dozen rows.
+  //
+  // It clears the ADJUSTMENTS with the picks, deliberately: they are keyed by
+  // product id, so a discount left behind would re-attach itself, silently, to
+  // whatever the rep picks next. Behind a confirmation, since it is the one
+  // button here that throws work away. The plan, the rates and the declared
+  // channels are not the cart and are left alone.
+  const clearCart = () => {
+    onPicksChange([]);
+    onAdjustmentsChange?.({});
+    setConfirmClear(false);
+    setConfirmKitRemove(null);
+    setConfirmWifi(false);
+  };
 
   // An adjustment with nothing left in it is DELETED rather than kept as an
   // empty object, so a rep who sets a discount and clears it again leaves no
@@ -599,6 +741,18 @@ export default function ProductConfigurator({
     () => [...new Set(recurringLines.map(l => l.hubspotProductId))],
     [recurringLines]
   );
+
+  // The plan's own billing start, swept across those recurring lines the first
+  // render on which there are any. Declared up with the other plan defaults;
+  // applied here, where `recurringIds` finally exists.
+  useEffect(() => {
+    if (!pendingStart || recurringIds.length === 0) return;
+    setPendingStart(null);
+    setAdjustments(recurringIds, { billingStart: pendingStart });
+    // setAdjustments closes over today's adjustments; re-running this on every
+    // change would re-apply a start the rep has since cleared.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingStart, recurringIds]);
   // One shared start, or null when the lines disagree — a rep who delayed a
   // single line by hand must not be told the whole quote is delayed.
   const sharedStart = useMemo(() => {
@@ -609,31 +763,18 @@ export default function ProductConfigurator({
   }, [recurringLines]);
   const globalMode = sharedStart.mixed ? "" : (sharedStart.start?.mode ?? "now");
 
-  // ── The quote-wide discount ───────────────────────────────────────────────
-  // Every chargeable line EXCEPT the comped services. Those sit at 100% by
-  // default, and a rep's typed figure overrides the comp — so sweeping "10%
-  // off" across them would quietly put $1,348 of install and training back on.
-  // Package-covered lines are already absent from `lineFor`.
-  const discountIds = useMemo(
-    () => [...lineFor.keys()].filter(id => !isCompedService({ hubspotProductId: id })),
-    [lineFor]
-  );
-  const sharedDiscount = useMemo(() => {
-    if (discountIds.length === 0) return { mixed: false, pct: null as number | null };
-    const pctOf = (id: string) =>
-      adjustments[id]?.discountQty || lineFor.get(id)?.mixedDiscount ? -1 : (lineFor.get(id)?.discountPercent ?? 0);
-    const first = pctOf(discountIds[0]);
-    const mixed = discountIds.some(id => pctOf(id) !== first);
-    return { mixed, pct: mixed || first <= 0 ? null : first };
-  }, [discountIds, lineFor, adjustments]);
-
-  const setGlobalDiscount = (raw: string) => {
-    const pct = raw.trim() === "" ? null : Number(raw);
-    const next = pct === null || Number.isNaN(pct) ? null : Math.min(100, Math.max(0, pct));
-    // Whole lines only: a per-line "1 of 3" scope can't be shared across lines
-    // with different quantities, so a quote-wide figure replaces it.
-    setAdjustments(discountIds, { discountPercent: next || null, discountQty: null });
-  };
+  // ── No quote-wide discount ────────────────────────────────────────────────
+  // There WAS one here, next to the billing start, until 2026-10-09. It is
+  // gone at the product owner's request: "they should not be allowed to
+  // discount the entire bill, instead only individual line items. Almost no
+  // cases where we would have a free quote."
+  //
+  // A single box that took the whole document to any percentage in one
+  // keystroke was the one control on this screen that could give everything
+  // away by accident, and it rode onto a quote nobody can amend. Discounting
+  // is now a per-line decision taken on the line, where the rep can see what
+  // they are giving away — and `quoteSanityBlockers` still refuses a quote
+  // that nets to $0 whichever way it got there.
 
   // A line's price, struck through and restated when it carries a discount.
   // Lifted verbatim out of the old Discounts panel — now that the adjust
@@ -763,9 +904,16 @@ export default function ProductConfigurator({
               </div>
             )}
 
+            {/* Discount and billing start are SEPARATED, each in its own
+                titled block (2026-10-09). Side by side in one row they read
+                as one control with two halves — "discount 50%, billing starts
+                after 60 days" looks like the discount is what starts in 60
+                days, which is the opposite of what a delayed start does. */}
             {!unitMode && (<>
+            <div className={styles.adjustBlock}>
+              <span className={styles.adjustBlockTitle}>Discount</span>
             <label className={styles.adjustField}>
-              <span className={styles.adjustLabel}>Discount</span>
+              <span className={styles.adjustLabel}>Percent off</span>
               <span className={styles.pctWrap}>
                 <input
                   type="number" min={0} max={100} step={1}
@@ -801,11 +949,14 @@ export default function ProductConfigurator({
                 </span>
               </label>
             )}
+            </div>
 
             {/* One-time charges have no billing schedule to delay. */}
             {l.billingFrequency !== "one_time" && (
+              <div className={styles.adjustBlock}>
+                <span className={styles.adjustBlockTitle}>When billing starts</span>
               <label className={styles.adjustField}>
-                <span className={styles.adjustLabel}>Billing starts</span>
+                <span className={styles.adjustLabel}>First charge</span>
                 <span className={styles.startWrap}>
                   <select
                     className={styles.adjustSelect}
@@ -840,6 +991,7 @@ export default function ProductConfigurator({
                   )}
                 </span>
               </label>
+              </div>
             )}
             </>)}
 
@@ -898,22 +1050,6 @@ export default function ProductConfigurator({
   const globalControls = (
     <div className={styles.globalGrid}>
       <label className={styles.adjustField}>
-        <span className={styles.adjustLabel}>Discount</span>
-        <span className={styles.pctWrap}>
-          <input
-            type="number" min={0} max={100} step={1}
-            className={styles.adjustInput}
-            value={sharedDiscount.pct ?? ""}
-            placeholder={sharedDiscount.mixed ? "Mixed" : "0"}
-            disabled={discountIds.length === 0}
-            onChange={e => setGlobalDiscount(e.target.value)}
-            aria-label="Discount percent for every line on the quote"
-          />
-          <span className={styles.pctSign}>%</span>
-        </span>
-      </label>
-
-      <label className={styles.adjustField}>
         <span className={styles.adjustLabel}>Billing starts</span>
         <span className={styles.startWrap}>
           <select
@@ -954,12 +1090,27 @@ export default function ProductConfigurator({
     </div>
   );
 
+  // The control itself, shared by both layouts so neither can drift.
+  const clearCartControl = picks.length > 0 ? (
+    confirmClear ? (
+      <span className={styles.clearConfirm}>
+        Clear {picks.length} {picks.length === 1 ? "line" : "lines"} and any discounts on them?
+        <button type="button" className={styles.linkBtn} onClick={clearCart}>Clear it</button>
+        <button type="button" className={styles.linkBtn} onClick={() => setConfirmClear(false)}>Keep</button>
+      </span>
+    ) : (
+      <button type="button" className={styles.linkBtn} onClick={() => setConfirmClear(true)}>
+        Clear cart
+      </button>
+    )
+  ) : null;
+
   const productRow = (p: CatalogProduct, withAdjust: boolean) => {
     const n = qtyOf(p.hubspotProductId);
     // Capped in the picker AND refused by buildQuote. The cap is
     // the courtesy; the blocker is the authority, since the server
     // re-derives from the picks and never trusts the browser.
-    const max = maxQtyFor(p.hubspotProductId);
+    const max = maxQtyFor(p.hubspotProductId, limits.unitCaps);
     const covered = coveredQty.get(p.hubspotProductId) ?? 0;
     const planCovered = planCoveredQty.get(p.hubspotProductId) ?? 0;
     // Terminals topped up server-side sit on the quote but not in the
@@ -968,11 +1119,49 @@ export default function ProductConfigurator({
     const toppedUp = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? built.requiredTerminals.qty : 0;
     const onQuote = n + toppedUp;
     const min = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? terminalFloor : 0;
+    // Which POS products, if any, are currently carrying this one along. The
+    // rep needs to see that the terminal, the display and the drawer arrived
+    // with the POS rather than wondering who added them — and, for the AMS1,
+    // that it is not optional. Read off the picks, so it says so only while
+    // the POS is actually on the quote.
+    const carriedBy = POS_COMPANIONS
+      .filter(c => c.hubspotProductId === p.hubspotProductId)
+      .flatMap(c => c.withProductIds.filter(id => qtyOf(id) > 0));
+    const autoAdded = isProcessingQuote(quoteType) && carriedBy.length > 0;
+    // A kiosk SKU ships with its own AMS1, so nothing adds one for it — but a
+    // rep selling kiosks for ordering still usually needs a terminal, and
+    // might not for a marketing-only kiosk. Hence a reminder on the terminal
+    // row rather than a quantity nobody asked for.
+    const kioskNeedsTerminal =
+      p.hubspotProductId === AMS1_PRODUCT.hubspotProductId &&
+      isProcessingQuote(quoteType) &&
+      !autoAdded &&
+      picks.some(pick => KIOSK_PRODUCT_IDS.includes(pick.hubspotProductId) && pick.qty > 0);
+    // The 2-year marketing plan LOANS its kiosk rather than discounting it, so
+    // a price under the row reads as a charge the merchant is about to see on
+    // the quote (product owner, 2026-10-09). The quote document still shows
+    // what any EXTRA one costs, which is where that number belongs.
+    const loanedByPlan = quoteType === "marketing_term" && MARKETING_TERM_KIOSK_IDS.includes(p.hubspotProductId);
     return (
       <div key={p.hubspotProductId} className={styles.productRow} data-picked={n > 0}>
         <div className={styles.productMain}>
           <div className={styles.productName}>{p.name}</div>
-          <div className={styles.productPrice}>{priceLabel(p.price, p.billingFrequency)}</div>
+          <div className={styles.productPrice}>
+            {loanedByPlan ? "Included with the 2-year plan" : priceLabel(p.price, p.billingFrequency)}
+          </div>
+          {autoAdded && (
+            <div className={styles.autoTag}>
+              {p.hubspotProductId === AMS1_PRODUCT.hubspotProductId
+                ? "Added with each POS — one ships with every unit"
+                : "Added with the POS — remove it if they don't need it"}
+            </div>
+          )}
+          {kioskNeedsTerminal && (
+            <div className={styles.autoTag}>
+              Kiosks come with their own terminal. Add one here only if they&apos;re taking payments
+              somewhere else too.
+            </div>
+          )}
           {covered > 0 && (
             <div className={styles.coveredTag}>
               {coverageLabel(covered, onQuote, "the package")}
@@ -1000,7 +1189,24 @@ export default function ProductConfigurator({
             }
             aria-label={`Remove one ${p.name}`}
           >−</button>
-          <span className={styles.stepQty}>{n}</span>
+          {/* A TYPED box, not a read-out (2026-10-09). "Payroll should allow
+              type function so you can type 25 employees rather than clicking
+              the add button 25 times" — and the same is true of every line a
+              multi-site merchant buys. The +/− buttons stay, because one more
+              is the common case and the kit's give-it-back confirmation hangs
+              off the minus. A box that takes 25 also takes 250, which is what
+              the unit caps are for. */}
+          <input
+            type="number" inputMode="numeric" step={1}
+            min={min} max={max ?? undefined}
+            className={styles.stepQty}
+            value={n}
+            onChange={e => {
+              const typed = Math.floor(Number(e.target.value));
+              setQtyFor(p.hubspotProductId, Number.isFinite(typed) ? Math.max(0, typed) : 0);
+            }}
+            aria-label={`How many ${p.name}`}
+          />
           <button
             type="button" className={styles.stepBtn}
             disabled={max != null && n >= max}
@@ -1134,7 +1340,6 @@ export default function ProductConfigurator({
     const missingNames = catalogLoading ? [] : [
       ...(platform.status === "unresolved" ? [platform.productName] : []),
       ...includedServices.missing,
-      ...planHardware.missing,
       ...processingDisclosure.missing,
       ...built.softwareLicense.missing,
       ...built.requiredTerminals.missing,
@@ -1160,6 +1365,7 @@ export default function ProductConfigurator({
                   {built.softwareLicense.screens} screens · {INCLUDED_SCREEN_COUNT} included
                 </span>
               )}
+              {clearCartControl}
             </div>
             {catalogLoading && <p className={styles.sectionNote}>Loading catalog…</p>}
             {catalogError && (
@@ -1362,28 +1568,31 @@ export default function ProductConfigurator({
         {onAdjustmentsChange && (
             <div className={styles.panel}>
               <div className={styles.sectionHead}>
-                <h2 className={styles.sectionTitle}>Whole-Quote Adjustments</h2>
+                <h2 className={styles.sectionTitle}>When Billing Starts</h2>
                 <p className={styles.sectionNote}>
                   {quoteLines.length === 0
-                    ? "Pick products below, then discount or delay billing for the whole quote here."
-                    : "Sets every line at once. Use a line's own Adjust button for exceptions."}
+                    ? "Pick products below, then push the first charge out for the whole quote here."
+                    : "Sets every recurring line at once. Use a line's own Adjust button for exceptions."}
                 </p>
               </div>
 
               {globalControls}
 
               <p className={styles.adjustNote}>
-                The discount skips install and training, which are already comped to $0, and is
-                capped at {maxDiscountPercent}%. On a recurring line it is permanent — to give time
-                away, delay billing instead. A delay applies to recurring lines only; one-time
-                charges always bill at checkout.
+                Recurring lines only — a one-time charge has no schedule to move and always bills at
+                checkout. All-in-One and Order &amp; Pay quotes start at {PLAN_DEFAULT_BILLING_DELAY_DAYS}{" "}
+                days; past {limits.maxBillingDelayDays} an admin has to approve it. Discounts are set
+                on the individual lines below, not here.
               </p>
             </div>
         )}
 
         <div className={styles.panel}>
           <div className={styles.sectionHead}>
-            <h2 className={styles.sectionTitle}>Products &amp; Hardware</h2>
+            <h2 className={styles.sectionTitle}>
+              Products &amp; Hardware
+              {clearCartControl && <span className={styles.titleAction}>{clearCartControl}</span>}
+            </h2>
             <p className={styles.sectionNote}>
               {rated ? (
                 <>
@@ -1450,43 +1659,36 @@ export default function ProductConfigurator({
           </div>
         )}
 
-        {/* Everything the marketing plan carries that the rep did not pick:
-            the hardware it hands over, and the card processing the Website
-            turns on. One panel because they are one answer to one question â
-            what does this plan come with â and two panels of $0 rows read as
-            two unrelated asides.
+        {/* What the marketing plan turns on that the rep did not pick: the card
+            processing a Website with online ordering brings with it.
 
-            No stepper and no adjust control, unlike Always Included: these
-            aren't comped services a rep may decide to charge for.
+            The hardware the plan hands over used to be listed here as derived
+            $0 rows. It is a PICK now (2026-10-09) — three Menu Board Computers
+            are included, not compulsory, and a merchant who wants five can buy
+            the other two — so it lives in the picker above, where its row
+            already says "3 of 5 included in the plan". Listing it again here
+            would be the same hardware in two places disagreeing about whether
+            it is a choice.
 
             The payments row renders on EVERY marketing quote, not only the
             ones that have a Website, and is greyed until the Website is picked
-            with online ordering on: a rep
-            is looking at this screen with the merchant, so "add a website and
-            you can take card payments" is the conversation. The whole panel
-            disappears on a POS quote, where none of this is a question. */}
+            with online ordering on: a rep is looking at this screen with the
+            merchant, so "add a website and you can take card payments" is the
+            conversation. The whole panel disappears on a POS quote, where none
+            of this is a question. */}
         {isMarketingQuote(quoteType) && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
               <h2 className={styles.sectionTitle}>Included With This Plan</h2>
               <p className={styles.sectionNote}>
-                What {planName} comes with, at no cost and shown at list price so the merchant can
-                see what they got. TVs are not supplied or installed by AIO.
+                What {planName} comes with at no cost. The first{" "}
+                {MARKETING_INCLUDED_HARDWARE[0].qty} {MARKETING_INCLUDED_HARDWARE[0].name}s are free
+                — set the quantity above, and anything past that bills at list. TVs are not supplied
+                or installed by AIO.
                 {quoteType === "marketing_term" &&
-                  " The kiosk is the Marketing Kit you pick above â the first one is free."}
+                  " The kiosk is the Marketing Kit you pick above — the first one is free."}
               </p>
             </div>
-
-            {planHardware.lines.map(l => (
-              <div key={l.hubspotProductId} className={styles.includedRow}>
-                <div className={styles.productMain}>
-                  <div className={styles.productName}>{l.name}</div>
-                  <div className={styles.productPrice}>{priceLabel(l.unitPrice, l.billingFrequency)}</div>
-                </div>
-                <span className={styles.includedTag}>Included ×{l.qty}</span>
-              </div>
-            ))}
-
             <div className={styles.includedRow} data-pending={!websiteOn || undefined}>
               <div className={styles.productMain}>
                 <div className={styles.productName}>{PROCESSING_DISCLOSURE_PRODUCT.name}</div>
@@ -1501,14 +1703,6 @@ export default function ProductConfigurator({
               </span>
             </div>
 
-            {planHardware.missing.length > 0 && (
-              <div className={styles.error}>
-                <strong>Can&apos;t price what the plan includes.</strong>{" "}
-                {planHardware.missing.join(", ")} {planHardware.missing.length === 1 ? "is" : "are"}{" "}
-                included with {planName} but missing from the HubSpot catalog (renamed, archived, or
-                the catalog didn&apos;t load). Fix that before sending this quote.
-              </div>
-            )}
             {processingDisclosure.missing.length > 0 && (
               <div className={styles.error}>
                 <strong>Can&apos;t state the card rates.</strong>{" "}

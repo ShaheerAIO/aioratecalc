@@ -2,11 +2,17 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
-import { marginPolicy } from "@/lib/db/schema";
+import { marginPolicy, quoteLimitPolicy } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
-import { derivePricingForRole, type PaddingConfig, type RoleScopedPricing, type FeeOverrides } from "@/lib/pricing";
-import { DEFAULT_MAX_DISCOUNT_PERCENT } from "@/lib/quoting";
-import type { StatementAnalysis, ProcessorTier, QuoteRates } from "@/types/merchant";
+import {
+  analysisFromQuoteConfig, derivePricingForRole,
+  type PaddingConfig, type RoleScopedPricing, type FeeOverrides,
+} from "@/lib/pricing";
+import {
+  DEFAULT_MAX_APPROVED_DELAY_DAYS, DEFAULT_MAX_DISCOUNT_PERCENT, DEFAULT_UNIT_CAPS,
+  MAX_BILLING_DELAY_DAYS, type QuoteLimits,
+} from "@/lib/quoting";
+import type { StatementAnalysis, ProcessorTier, QuoteConfig, QuoteRates } from "@/types/merchant";
 
 // paddingPct is a proportion (0.5 = +50%). It is persisted in the existing integer
 // padding_bps column as basis points of proportion (5000 = 0.50) — no schema change.
@@ -76,7 +82,15 @@ export async function updateMaxDiscountPercentAction(maxDiscountPercent: number)
 }
 
 export async function getPricingPreviewAction(input: {
-  analysis: StatementAnalysis;
+  /**
+   * The statement, when there is one. `quoteConfig` is the alternative for a
+   * rep who has typed a volume and a ticket instead — the conversion happens
+   * HERE rather than in the caller, because `analysisFromQuoteConfig` lives in
+   * pricing.ts next to the true MARGIN_REQS table, and a client component that
+   * imported it would ship AIO's real floors to the browser.
+   */
+  analysis?: StatementAnalysis | null;
+  quoteConfig?: QuoteConfig | null;
   // The rates the rep has typed. Omitted means "the standard rate" —
   // DEFAULT_QUOTE_RATES — not "work one out from a margin", which is what the
   // omitted targetMargin this replaced used to mean.
@@ -87,9 +101,90 @@ export async function getPricingPreviewAction(input: {
 }): Promise<RoleScopedPricing> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
+  const analysis = input.analysis ?? (input.quoteConfig ? analysisFromQuoteConfig(input.quoteConfig) : null);
+  if (!analysis) throw new Error("A statement or a volume and ticket is needed to price a quote.");
   const padding = await getActivePaddingPolicy();
   return derivePricingForRole(
-    input.analysis, input.quoteRates, input.pricingModel, input.feeOverrides,
+    analysis, input.quoteRates, input.pricingModel, input.feeOverrides,
     effective.role, input.activeTier, padding
   );
+}
+
+// ── Quantity caps and the billing-delay ceiling ─────────────────────────────
+// Their own table (`quote_limit_policy`) rather than more columns on
+// margin_policy: that row is about AIO's margin — what a rep may see of it and
+// give away of it. A quantity ceiling catches a typo in a quantity box, and a
+// delay ceiling is a question about commitment. Neither is a margin secret;
+// both are shown to the rep in the blocker that refuses the quote.
+
+/**
+ * The active limits, or the module defaults when nothing has been saved yet.
+ *
+ * Fails to the DEFAULTS, not to "no limit": an unseeded settings table must
+ * never be able to block a quote, and must not silently uncap one either. Same
+ * posture as `getMaxDiscountPercent` and the quote-template policy.
+ */
+export async function getQuoteLimits(): Promise<QuoteLimits> {
+  const fallback = { unitCaps: DEFAULT_UNIT_CAPS, maxBillingDelayDays: DEFAULT_MAX_APPROVED_DELAY_DAYS };
+  // The READ is wrapped, not just the empty case. `saveQuoteConfigurationAction`
+  // awaits this alongside the discount cap with no catch of its own, so a
+  // database that has not run migration 0019 yet — a preview branch, a local
+  // DB, the window between deploy and migrate — would otherwise take the whole
+  // save down rather than falling back to the limits in code.
+  let row;
+  try {
+    [row] = await db.select().from(quoteLimitPolicy).where(eq(quoteLimitPolicy.isActive, true)).limit(1);
+  } catch (err) {
+    console.error("[quote-limits] could not read quote_limit_policy; using the defaults in code", err);
+    return fallback;
+  }
+  if (!row) return fallback;
+  // An empty map is a real answer ("an admin removed every cap"), so it is
+  // kept rather than falling through to the defaults — but a row written
+  // before this column existed, or one whose jsonb came back as something
+  // other than an object, is not an answer at all.
+  const caps = row.unitCaps;
+  return {
+    unitCaps: caps && typeof caps === "object" && !Array.isArray(caps) ? caps : DEFAULT_UNIT_CAPS,
+    maxBillingDelayDays: row.maxBillingDelayDays || DEFAULT_MAX_APPROVED_DELAY_DAYS,
+  };
+}
+
+export async function updateQuoteLimitsAction(input: QuoteLimits): Promise<void> {
+  const effective = await getEffectiveRole();
+  if (!effective || effective.role !== "admin") throw new Error("Admin only");
+
+  if (
+    !Number.isInteger(input.maxBillingDelayDays) ||
+    input.maxBillingDelayDays < 1 ||
+    input.maxBillingDelayDays > MAX_BILLING_DELAY_DAYS
+  ) {
+    throw new Error(
+      `The billing-delay limit has to be a whole number of days between 1 and ${MAX_BILLING_DELAY_DAYS} — ` +
+      `HubSpot will not accept a start further out than that.`
+    );
+  }
+  // A cap of 0 or a fraction would refuse every quote carrying the product,
+  // with a blocker reading "a merchant can only have 0". Removing the entry is
+  // how you uncap something.
+  const unitCaps: Record<string, number> = {};
+  for (const [productId, cap] of Object.entries(input.unitCaps ?? {})) {
+    if (!Number.isInteger(cap) || cap < 1) {
+      throw new Error(`The cap on product ${productId} has to be a whole number of 1 or more, or removed entirely.`);
+    }
+    unitCaps[productId] = cap;
+  }
+
+  const [existing] = await db.select({ id: quoteLimitPolicy.id }).from(quoteLimitPolicy).where(eq(quoteLimitPolicy.isActive, true)).limit(1);
+  const values = {
+    unitCaps,
+    maxBillingDelayDays: input.maxBillingDelayDays,
+    updatedByUserId: effective.userId,
+    updatedAt: new Date(),
+  };
+  if (existing) {
+    await db.update(quoteLimitPolicy).set(values).where(eq(quoteLimitPolicy.id, existing.id));
+  } else {
+    await db.insert(quoteLimitPolicy).values(values);
+  }
 }

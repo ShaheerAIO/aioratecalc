@@ -93,21 +93,52 @@ export function isProcessingQuote(quoteType: QuoteType): boolean {
 export const WEBSITE_PRODUCT_ID = "333275576048";
 
 /**
- * Products a merchant can only have one of, however many times a rep presses
- * "+". A restaurant has one website; two $50/mo lines for it is a billing
- * error on a document that can't be amended once published.
+ * The most of each product one quote may carry, by HubSpot product id.
  *
- * A list rather than a flag on the Website alone, because the picker and the
- * server both need the answer and the next single-instance product shouldn't
- * need a second mechanism. Everything absent from it is uncapped, which is
- * the right default — most of this catalog is hardware a merchant buys
- * several of.
+ * ADMIN-EDITABLE at /admin/settings/quote-limits (`quote_limit_policy`). This
+ * is what an unseeded policy row falls back to AND what the editor is seeded
+ * from, so a cap nobody has touched is still a real cap rather than an absence.
+ *
+ * Two different reasons to be in here. The Website and the WiFi package are
+ * ONE per restaurant as a matter of fact — a second $50/mo website line is a
+ * billing error on a document that can't be amended once published. The rest
+ * are "nobody fits this many in one restaurant", which is the whole point of
+ * the cap: the quantity box takes a typed number now (so a rep can enter 25
+ * without pressing + twenty-five times), and a box that accepts 25 also
+ * accepts 250.
+ *
+ * Everything ABSENT is uncapped, and that stays the right default: the catalog
+ * is maintained in HubSpot by non-engineers, and a product added there must
+ * not arrive capped at some number nobody chose.
  */
-export const SINGLE_INSTANCE_PRODUCT_IDS = [WEBSITE_PRODUCT_ID];
+export const DEFAULT_UNIT_CAPS: Record<string, number> = {
+  "333275576048": 1,  // Website
+  "281351401209": 1,  // AIO WiFi Network Package
+  "217445755632": 10, // POS Unit
+  "223452690130": 10, // POS Unit - With Customer Facing Display
+  "318736467644": 10, // Customer Facing Display
+  "223511653105": 20, // Payment Terminal - AMS1
+  "260674226888": 6,  // Mega Kiosk
+  "222497165009": 6,  // Kiosk 27" + Payment Terminal (AMS1) and Mount
+  "223519571666": 6,  // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+  "335279520447": 20, // AIO Tableside POS
+  "223511653101": 10, // mPOS
+  "223452690132": 10, // KDS (Kitchen Display System)
+  "223511653104": 10, // Thermal Printer
+  "250458906315": 10, // Epson Sticky Printer
+  "222497165011": 10, // Cash Drawer
+  "223511653103": 10, // Menu Board Computer
+  "276751313619": 20, // Orders Hub Tablet
+  "276754193118": 20, // Clock in Tablet
+};
 
 /** The most of this product a quote may carry, or null when there's no limit. */
-export function maxQtyFor(hubspotProductId: string): number | null {
-  return SINGLE_INSTANCE_PRODUCT_IDS.includes(hubspotProductId) ? 1 : null;
+export function maxQtyFor(
+  hubspotProductId: string,
+  caps: Record<string, number> = DEFAULT_UNIT_CAPS
+): number | null {
+  const cap = caps[hubspotProductId];
+  return Number.isFinite(cap) && cap > 0 ? cap : null;
 }
 
 /** Whether a set of picks or quote lines carries the Website add-on. */
@@ -217,12 +248,16 @@ export function isPickable(product: CatalogProduct): boolean {
 // pickable. The 2-year term SKU was pickable until 2026-10-06, when it became
 // a plan of its own.
 //
-// The Menu Board Computers are not here either: all three are derived onto
-// every marketing quote at no charge (MARKETING_INCLUDED_HARDWARE).
+// The Menu Board Computer IS here, and is an ordinary pick. The plan still
+// includes three at no charge (MARKETING_INCLUDED_HARDWARE), but it stopped
+// DERIVING them on 2026-10-09: not every marketing merchant wants three, some
+// want none, and some want more and will pay for them. The rep sets the
+// quantity and `applyPlanIncludedHardware` holds the first three at $0.
 export const MARKETING_PRODUCTS = [
   { name: "Marketing Kit - Mega Kiosk", hubspotProductId: "332617109238" },
   { name: "Marketing Kit - 27\" Kiosk", hubspotProductId: "332793212658" },
   { name: "Website", hubspotProductId: "333275576048" },
+  { name: "Menu Board Computer", hubspotProductId: "223511653103" },
 ] as const;
 
 /**
@@ -244,25 +279,49 @@ export const MARKETING_TERM_KIOSK_IDS = [
 ];
 
 /**
- * Hardware both marketing plans include at no charge, derived onto the quote
- * rather than picked.
+ * Hardware both marketing plans include at no charge, as a CEILING on what is
+ * free rather than a quantity that is derived.
  *
  * Three Menu Board Computers, straight off both plans' HubSpot descriptions
  * ("3 x Menu Board Computers (TVs are not provided or installed by AIO)").
- * They appear at MSRP discounted to $0, the same way a packaged line does, so
- * the merchant can see what they were given.
  *
- * The product stays rep-pickable on a POS quote, where it is ordinary
- * hardware at $99 — these constants only describe what a MARKETING plan
- * includes, which is why `picksFromQuoteLines` needs the quote type to know
- * whether a line of it was derived or chosen.
+ * Until 2026-10-09 exactly three were derived onto every marketing quote and
+ * the product was unpickable there, so a merchant who wanted none still got
+ * three and a merchant who wanted five could not be sold the other two. Now
+ * the rep picks the quantity like any other product and
+ * `applyPlanIncludedHardware` holds the first `qty` of them at $0; anything
+ * beyond that bills at the catalog price.
+ *
+ * The product is ordinary $99 hardware on a POS quote — these constants only
+ * describe what a MARKETING plan hands over.
  */
 export const MARKETING_INCLUDED_HARDWARE = [
   { name: "Menu Board Computer", hubspotProductId: "223511653103", qty: 3 },
 ] as const;
 
-function isMarketingIncludedHardware(id: string, name: string): boolean {
-  return MARKETING_INCLUDED_HARDWARE.some(h => h.hubspotProductId === id || h.name === name.trim());
+/**
+ * Hold the units a marketing plan includes at $0, splitting the line when the
+ * merchant bought more than the plan covers.
+ *
+ * The same expression as `applyPlanIncludedKiosk` and as a package-covered
+ * line: covered units stay on the quote at MSRP discounted 100%, carrying
+ * `coveredByPackage`, so the merchant can see what they were given and
+ * `applyPackageComp` holds it there however the rep edits the row.
+ */
+export function applyPlanIncludedHardware(quoteType: QuoteType, lines: QuoteLine[]): QuoteLine[] {
+  if (!isMarketingQuote(quoteType)) return lines;
+  const planName = PLATFORM_PRODUCTS[quoteType].name;
+
+  return lines.flatMap(line => {
+    const included = MARKETING_INCLUDED_HARDWARE.find(
+      h => h.hubspotProductId === line.hubspotProductId || h.name === line.name.trim()
+    );
+    if (!included || line.coveredByPackage || line.qty < 1) return [line];
+
+    const free = Math.min(line.qty, included.qty);
+    const covered: QuoteLine = { ...line, qty: free, coveredByPackage: planName };
+    return line.qty > free ? [covered, { ...line, qty: line.qty - free }] : [covered];
+  });
 }
 
 function isMarketingProduct(id: string, name: string): boolean {
@@ -334,6 +393,63 @@ export const AMS1_PRODUCT = {
   name: "Payment Terminal - AMS1",
   hubspotProductId: "223511653105",
 } as const;
+
+/**
+ * Hardware that moves with a POS unit's quantity: add a POS and one of each
+ * of these is added beside it, take the POS off and they come off again.
+ * Product owner, 2026-10-09 — "CFD + cash drawer + adyen should automatically
+ * add when adding in a POS".
+ *
+ * A CONVENIENCE, not a requirement, and only the terminal is otherwise.
+ * `minimumTerminalsFor` is the real rule that one AMS1 ships with every POS
+ * and it is enforced server-side; the display and the drawer are simply what
+ * a POS is nearly always sold with, so a rep who doesn't want them can step
+ * them straight back down. That is why the floor stays on the AMS1 alone.
+ *
+ * `withProductIds` is which POS pulls which companion, and the display is the
+ * reason it exists: "POS Unit - With Customer Facing Display" has one in the
+ * box, so adding a second would bill the merchant twice for the same screen.
+ */
+export const POS_COMPANIONS = [
+  {
+    name: AMS1_PRODUCT.name,
+    hubspotProductId: AMS1_PRODUCT.hubspotProductId,
+    withProductIds: POS_REQUIRING_TERMINAL_IDS,
+  },
+  {
+    name: "Customer Facing Display",
+    hubspotProductId: "318736467644",
+    withProductIds: ["217445755632"] as readonly string[], // the plain POS Unit only
+  },
+  {
+    name: "Cash Drawer",
+    hubspotProductId: "222497165011",
+    withProductIds: POS_REQUIRING_TERMINAL_IDS,
+  },
+] as const;
+
+/**
+ * The ordering kiosks. Nothing adds a terminal for these — two of the three
+ * name an AMS1 in the SKU itself — but a rep selling one still often needs one
+ * (product owner, 2026-10-09: "a reminder with Kiosk to add it, because they
+ * could use the kiosk for marketing only but still need to remind them they
+ * might need it"), so the terminal row says so rather than a quantity nobody
+ * asked for appearing.
+ *
+ * The Mega Kiosk is the sharp end of it: unlike the other two it carries no
+ * terminal at all (see PRODUCT_PARTS in quotePackages.ts), so a Mega sold for
+ * ordering needs one bought beside it.
+ */
+export const KIOSK_PRODUCT_IDS: readonly string[] = [
+  "260674226888", // Mega Kiosk — no terminal in the SKU
+  "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
+  "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+];
+
+/** The companions a change to this product's quantity should carry with it. */
+export function companionsFor(hubspotProductId: string): typeof POS_COMPANIONS[number][] {
+  return POS_COMPANIONS.filter(c => (c.withProductIds as readonly string[]).includes(hubspotProductId));
+}
 
 /**
  * Screens that consume a software license: anything that runs an AIO app.
@@ -708,42 +824,6 @@ function withRequiredTerminals(picks: QuoteLine[], required: RequiredTerminalsRe
 }
 
 /**
- * The hardware a marketing plan hands over at no charge — three Menu Board
- * Computers on both plans today.
- *
- * Derived, not picked, and marked `coveredByPackage` with the plan's name, so
- * the $0 is unconditional policy for exactly the reasons a package-covered
- * line's is: the subscription already paid for it, and `applyPackageComp`
- * holds it there even after a rep edits something else on the row.
- *
- * Missing products are reported rather than skipped, same posture as the
- * install services: quoting a plan while silently omitting what it includes
- * is how a merchant finds out at delivery.
- */
-export function resolveMarketingHardware(
-  quoteType: QuoteType,
-  catalog: CatalogProduct[]
-): IncludedServicesResult {
-  if (!isMarketingQuote(quoteType)) return { lines: [], missing: [] };
-
-  const planName = PLATFORM_PRODUCTS[quoteType].name;
-  const lines: QuoteLine[] = [];
-  const missing: string[] = [];
-  for (const included of MARKETING_INCLUDED_HARDWARE) {
-    const product =
-      catalog.find(p => p.hubspotProductId === included.hubspotProductId) ??
-      catalog.find(p => p.name.trim() === included.name);
-    // Comped here AND again in buildQuote, same as the included services: the
-    // 100% has to be on the line the moment it exists, or a caller reading
-    // this result on its own prices hardware the plan gives away.
-    if (product) {
-      lines.push(applyPackageComp({ ...toQuoteLine(product, included.qty), coveredByPackage: planName }));
-    } else missing.push(included.name);
-  }
-  return { lines, missing };
-}
-
-/**
  * The $0.50 charge that lets a quote delay its billing.
  *
  * HubSpot won't publish a payment-enabled quote that collects under $0.50 at
@@ -869,7 +949,19 @@ export function applyPlanIncludedKiosk(quoteType: QuoteType, lines: QuoteLine[])
   return [...lines.slice(0, best), covered, ...rest, ...lines.slice(best + 1)];
 }
 
-/** The plans whose subscription includes the Website. Preselected on them, and held at $0. */
+/**
+ * The plans whose subscription includes the Website. Preselected on them, and
+ * held at $0.
+ *
+ * It has moved twice. Added for All-in-One on 2026-10-07; the 2026-10-09 notes
+ * said "Website removed from All-in-one" and it was emptied; the product owner
+ * corrected that the same day — "website is included in all in one package" —
+ * and it is back. The written note is the one that was wrong.
+ *
+ * A list you can empty rather than a hardcoded plan check, for the same reason
+ * `COMPED_SERVICE_PRODUCT_IDS` is: this has now changed three times in three
+ * days, and each time it should be one word.
+ */
 export const PLANS_INCLUDING_WEBSITE: readonly QuoteType[] = ["all_in_one"];
 
 export function planIncludesWebsite(quoteType: QuoteType): boolean {
@@ -1309,7 +1401,6 @@ function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
     isPreAuthProduct(line.hubspotProductId, line.name) ||
     isSoftwareLicenseProduct(line.hubspotProductId, line.name) ||
     isHardwareBundle(line.hubspotProductId, line.name) ||
-    (isMarketingQuote(quoteType) && isMarketingIncludedHardware(line.hubspotProductId, line.name)) ||
     // Kits belong on the marketing plans. A processing quote that still carries
     // one (saved before they were taken off) must not send it back as a pick —
     // the server would refuse the whole save.
@@ -1320,12 +1411,15 @@ function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
 export function picksFromQuoteLines(
   lines: QuoteLine[] | null | undefined,
   /**
-   * The plan the quote is on. Needed because one product is derived on some
-   * plans and picked on others: the Menu Board Computer is hardware a rep adds
-   * at $99 on a POS quote, and something a marketing plan hands over. Without
-   * this, reopening a marketing quote would return its three included ones as
-   * picks — which the server then refuses outright, since they aren't
-   * pickable on a marketing quote.
+   * The plan the quote is on. Needed because one product group is sellable on
+   * some plans and not others: the marketing kiosks belong to the marketing
+   * plans, so a POS quote that still carries one (saved before they were taken
+   * off) must not send it back as a pick — the server refuses the whole save.
+   *
+   * What the plan COMPS does come back as a pick, covered lines included: the
+   * three free Menu Board Computers and the 2-year term's kiosk are ordinary
+   * picks whose first N units a comp holds at $0, so reopening has to return
+   * the quantity the rep chose and let the comp re-apply on the way out.
    */
   quoteType: QuoteType
 ): Array<{ hubspotProductId: string; qty: number }> {
@@ -1349,6 +1443,27 @@ export function picksFromQuoteLines(
  */
 export const DEFAULT_MAX_DISCOUNT_PERCENT = 50;
 
+/**
+ * Whole days from today to a yyyy-MM-dd date, so a dated billing start can be
+ * measured against the same ceiling a day count is. Both ends are read at UTC
+ * midnight, which is what `isCalendarDate` already guarantees of the input; a
+ * date in the past comes back 0 rather than negative, since it collects at
+ * checkout and is nobody's idea of a long delay.
+ */
+function daysUntil(date: string): number {
+  const then = new Date(`${date}T00:00:00Z`).getTime();
+  const now = Date.now();
+  return Math.max(0, Math.ceil((then - now) / 86_400_000));
+}
+
+/** One wording for "too long a delay", so the two modes can't disagree about the fix. */
+function delayTooLong(name: string, what: string, capDays: number): string {
+  return (
+    `"${name}" ${what}, past the ${capDays}-day limit AIO allows without approval. ` +
+    `Shorten it, or ask an admin to raise the limit in Admin → Quote limits.`
+  );
+}
+
 /** yyyy-MM-dd, and a real date — `2026-02-31` parses as March 3 if you let it. */
 function isCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -1358,6 +1473,57 @@ function isCalendarDate(value: string): boolean {
 
 /** HubSpot's own ceiling on `hs_billing_start_delay_days`; also just a sane upper bound. */
 export const MAX_BILLING_DELAY_DAYS = 365;
+
+/**
+ * The longest billing delay a rep may set on their own, before an admin has to
+ * raise it. 90 days, at the product owner's request (2026-10-09) — "require a
+ * long delay such as 90 days+ to be approved".
+ *
+ * There is no approval QUEUE and deliberately so: the approval is an admin
+ * raising the ceiling at Admin → Quote limits, exactly the way the discount cap
+ * already works. A rep asks, an admin decides, and the change is visible in one
+ * place rather than becoming a workflow nobody maintains.
+ *
+ * Distinct from MAX_BILLING_DELAY_DAYS above, which is HubSpot's hard limit and
+ * is not anyone's to raise.
+ */
+export const DEFAULT_MAX_APPROVED_DELAY_DAYS = 90;
+
+/**
+ * The billing delay a plan starts with — 60 days on the two POS plans
+ * (product owner, 2026-10-09: "automatically add in billing after 60 days for
+ * all-in-one and order/pay only, then let them adjust if needed").
+ *
+ * A SEEDED DEFAULT, not a derived value, and the distinction is the whole
+ * design. It is written into `adjustments` when a plan is chosen, so it is an
+ * ordinary rep edit from that moment on: the rep can change it, or set the
+ * line back to "At checkout" and have it stay there. Derived in `buildQuote`
+ * instead, clearing it would delete the adjustment and the 60 days would
+ * silently come back on the next render.
+ */
+export const PLAN_DEFAULT_BILLING_DELAY_DAYS = 60;
+
+/** The billing start a newly chosen plan seeds onto its recurring lines, if any. */
+export function planDefaultBillingStart(quoteType: QuoteType): BillingStart | null {
+  return isProcessingQuote(quoteType)
+    ? { mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS }
+    : null;
+}
+
+/**
+ * The admin limits that aren't the discount cap: per-product quantity caps and
+ * the longest billing delay a rep may set unaided. One row in
+ * `quote_limit_policy`, read together, passed to `buildQuote` together.
+ */
+export type QuoteLimits = {
+  unitCaps: Record<string, number>;
+  maxBillingDelayDays: number;
+};
+
+export const DEFAULT_QUOTE_LIMITS: QuoteLimits = {
+  unitCaps: DEFAULT_UNIT_CAPS,
+  maxBillingDelayDays: DEFAULT_MAX_APPROVED_DELAY_DAYS,
+};
 
 /**
  * Put a rep's edits onto a derived line.
@@ -1389,9 +1555,18 @@ export function applyLineAdjustment(line: QuoteLine, adjustment: LineAdjustment 
  * to fix it. Hard refusals, not warnings — these ride onto a document that
  * cannot be edited, deleted or voided once the merchant accepts it.
  */
-export function adjustmentBlockers(lines: QuoteLine[], maxDiscountPercent: number): string[] {
+export function adjustmentBlockers(
+  lines: QuoteLine[],
+  maxDiscountPercent: number,
+  /**
+   * The admin-set ceiling on a delayed billing start. Capped by HubSpot's own
+   * limit, which no admin may raise past.
+   */
+  maxBillingDelayDays: number = DEFAULT_MAX_APPROVED_DELAY_DAYS
+): string[] {
   const blockers: string[] = [];
   const cap = Math.min(100, Math.max(0, maxDiscountPercent));
+  const delayCap = Math.min(MAX_BILLING_DELAY_DAYS, Math.max(1, maxBillingDelayDays));
 
   for (const line of lines) {
     const pct = line.discountPercent;
@@ -1414,13 +1589,28 @@ export function adjustmentBlockers(lines: QuoteLine[], maxDiscountPercent: numbe
 
     const start = line.billingStart;
     if (!start) continue;
-    if (start.mode === "date" && !isCalendarDate(start.date)) {
-      blockers.push(`"${line.name}" has a billing start date of "${start.date}", which isn't a real yyyy-MM-dd date.`);
+    if (start.mode === "date") {
+      if (!isCalendarDate(start.date)) {
+        blockers.push(`"${line.name}" has a billing start date of "${start.date}", which isn't a real yyyy-MM-dd date.`);
+      } else {
+        // A date is checked against the SAME ceiling as a day count, or
+        // "On a date" would be the way around it — a rep picking a day six
+        // months out is making exactly the decision the ceiling exists to
+        // put in front of an admin.
+        const days = daysUntil(start.date);
+        if (days > delayCap) {
+          blockers.push(delayTooLong(line.name, `starts billing on ${start.date}, about ${days} days out`, delayCap));
+        }
+      }
     }
-    if (start.mode === "days" && (!Number.isInteger(start.days) || start.days < 1 || start.days > MAX_BILLING_DELAY_DAYS)) {
-      blockers.push(
-        `"${line.name}" delays billing by ${start.days} days — it has to be a whole number of days between 1 and ${MAX_BILLING_DELAY_DAYS}.`
-      );
+    if (start.mode === "days") {
+      if (!Number.isInteger(start.days) || start.days < 1 || start.days > MAX_BILLING_DELAY_DAYS) {
+        blockers.push(
+          `"${line.name}" delays billing by ${start.days} days — it has to be a whole number of days between 1 and ${MAX_BILLING_DELAY_DAYS}.`
+        );
+      } else if (start.days > delayCap) {
+        blockers.push(delayTooLong(line.name, `delays billing by ${start.days} days`, delayCap));
+      }
     }
   }
 
@@ -1605,8 +1795,6 @@ export type BuiltQuote = {
   orderPoints: OrderPoints;
   platform: PlatformLineResult;
   includedServices: IncludedServicesResult;
-  /** Hardware the marketing plans hand over at no charge. Empty on a processing quote. */
-  planHardware: IncludedServicesResult;
   /** AMS1 terminals added to reach one per POS unit. Empty when the picks already carry enough. */
   requiredTerminals: RequiredTerminalsResult;
   /** Additional software licenses past the four screens the plan includes. */
@@ -1650,7 +1838,18 @@ export function buildQuote(
    */
   adjustments: QuoteAdjustments = {},
   /** The admin discount cap. Defaults low on purpose; see DEFAULT_MAX_DISCOUNT_PERCENT. */
-  maxDiscountPercent: number = DEFAULT_MAX_DISCOUNT_PERCENT
+  maxDiscountPercent: number = DEFAULT_MAX_DISCOUNT_PERCENT,
+  /**
+   * The other two admin limits — per-product quantity caps and the longest
+   * billing delay a rep may set without an admin raising it.
+   *
+   * Their own parameter rather than folded in beside `maxDiscountPercent`
+   * because that one is positional in roughly a hundred existing call sites;
+   * turning the pair into one options object would rewrite every one of them
+   * to change nothing. They travel together here because they arrive together,
+   * off the single `quote_limit_policy` row.
+   */
+  limits: QuoteLimits = DEFAULT_QUOTE_LIMITS
 ): BuiltQuote {
   // Marketing-only quotes have no ordering points at all, so declared channels
   // are dropped rather than trusted: ticking "website / online ordering" on a
@@ -1672,16 +1871,20 @@ export function buildQuote(
   );
   const requiredTerminals = resolveRequiredAms1(quoteType, picks, catalog);
   const softwareLicense = resolveSoftwareLicense(quoteType, picks, catalog);
-  const planHardware = resolveMarketingHardware(quoteType, catalog);
   const processingDisclosure = resolveProcessingDisclosure(quoteType, picks, catalog, adjustments);
 
-  // The 2-year term's included kiosk, taken out of what the rep picked before
-  // anything else runs: the comp is a line SPLIT, so it has to happen while
-  // these are still the picks, and the covered half then flows through the
-  // adjustment pass like a package-covered line.
+  // Everything a PLAN hands over at no charge, taken out of what the rep
+  // picked before anything else runs: the 2-year term's kiosk, the marketing
+  // plans' three menu boards, and (when a plan is listed for it) the Website.
+  // Each comp is a line SPLIT, so it has to happen while these are still the
+  // picks; the covered halves then flow through the adjustment pass like a
+  // package-covered line.
   const picksWithInclusions = applyPlanIncludedWebsite(
     quoteType,
-    applyPlanIncludedKiosk(quoteType, withRequiredTerminals(picks, requiredTerminals))
+    applyPlanIncludedHardware(
+      quoteType,
+      applyPlanIncludedKiosk(quoteType, withRequiredTerminals(picks, requiredTerminals))
+    )
   );
 
   // The hardware kit, resolved against the mandatory services AND the picks —
@@ -1704,7 +1907,6 @@ export function buildQuote(
     ...(platform.line ? [platform.line] : []),
     ...softwareLicense.lines,
     ...processingDisclosure.lines,
-    ...planHardware.lines,
     ...packages.lines,
   ].flatMap(line => {
     const adjustment = adjustments[line.hubspotProductId];
@@ -1735,7 +1937,7 @@ export function buildQuote(
   const totals = quoteTotals(quoteLines);
 
   const blockers: string[] = [
-    ...adjustmentBlockers(quoteLines, maxDiscountPercent),
+    ...adjustmentBlockers(quoteLines, maxDiscountPercent, limits.maxBillingDelayDays),
     ...discountQtyBlockers(adjustments, quoteLines),
     // The real lines only: fifty cents must not rescue a quote that nets to $0.
     ...quoteSanityBlockers(chargedLines, quoteTotals(chargedLines)),
@@ -1766,12 +1968,6 @@ export function buildQuote(
       `would be signed up for card processing with no rates written on the document.`
     );
   }
-  for (const name of planHardware.missing) {
-    blockers.push(
-      `This plan includes "${name}", which isn't in the HubSpot catalog (renamed, archived, or ` +
-      `the catalog didn't load) — so it can't be put on the quote at the $0 the merchant was promised.`
-    );
-  }
   for (const name of requiredTerminals.missing) {
     blockers.push(
       `Every POS unit needs a "${name}", which isn't in the HubSpot catalog (renamed, archived, or ` +
@@ -1796,10 +1992,11 @@ export function buildQuote(
     });
   }
   for (const [productId, { name, qty }] of qtyByProduct) {
-    const max = maxQtyFor(productId);
+    const max = maxQtyFor(productId, limits.unitCaps);
     if (max != null && qty > max) {
       blockers.push(
-        `This quote has ${qty} × "${name}" on it. A merchant can only have ${max} — drop the extras.`
+        `This quote has ${qty} × "${name}" on it, over the limit of ${max}. Drop the extras, or ask ` +
+        `an admin to raise it in Admin → Quote limits.`
       );
     }
   }
@@ -1822,7 +2019,6 @@ export function buildQuote(
     orderPoints: breakdown.orderPoints,
     platform,
     includedServices,
-    planHardware,
     requiredTerminals,
     softwareLicense,
     processingDisclosure,

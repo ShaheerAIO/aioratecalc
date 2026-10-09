@@ -235,13 +235,63 @@
 .stepBtn:not(:disabled):hover { background: var(--rule); color: var(--ink); }
 .stepBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
+/* A typed box since 2026-10-09, not a read-out: a rep buying 25 of something
+   types 25. Sized to three digits so the unit caps' ceiling fits, and the
+   spinners are hidden because the +/- buttons either side already are them. */
 .stepQty {
-  min-width: 1.5rem;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  padding: 2px 0;
   text-align: center;
+  font-family: var(--font-body);
   font-size: 0.85rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  outline: none;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.stepQty::-webkit-outer-spin-button,
+.stepQty::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.stepQty:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Why a line arrived without the rep adding it: the terminal, display and
+   drawer a POS carries with it, and the reminder on the terminal row when
+   there are kiosks but no POS. Quieter than .coveredTag, which states money. */
+.autoTag {
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+/* Clear cart, and its confirmation. Sits in a heading row, so it stays on the
+   baseline of the title rather than becoming a block of its own. */
+.titleAction {
+  margin-left: var(--space-md);
+  font-weight: 400;
+}
+
+.clearConfirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--ink-2);
 }
 
 /* ---------- Always-included services ---------- */
@@ -533,6 +583,34 @@
 .adjustChevron {
   font-size: 0.6rem;
   transition: transform 150ms var(--ease-out);
+}
+
+/* The two decisions in the drawer, each fenced off in its own titled block.
+   They used to sit side by side in one row, where "discount 50%" and "billing
+   starts after 60 days" read as one sentence — as though the discount were
+   what began in 60 days. */
+.adjustBlock {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
+  flex-basis: 100%;
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--rule);
+}
+
+.adjustBlock:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.adjustBlockTitle {
+  flex-basis: 100%;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
 
 .adjustDrawer {

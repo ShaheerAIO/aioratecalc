@@ -32,6 +32,7 @@ vi.mock("@/lib/actions/pricing", () => ({
     paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
   }),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
+  getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90 }),
 }));
 
 const { createProspectAction } = await import("@/lib/actions/prospects");

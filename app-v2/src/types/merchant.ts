@@ -72,6 +72,25 @@ export type QuoteRates = {
  * line states two different CNP rates. Flagged to the product owner; it is a
  * HubSpot-side fix, not a code one.
  */
+/**
+ * The highest card rate a rep can type. A CEILING AGAINST A TYPO, not a
+ * commercial limit — product owner, 2026-10-09: "force card rates to follow
+ * decimal points so they can't accidentally make a mistake. Ex rep might write
+ * 20.00% instead of 2.0%."
+ *
+ * 5% because AIO's own rate card tops out at 3.50% card-not-present, so
+ * anything past 5 is a decimal point in the wrong place rather than an
+ * expensive deal. The LOW side is not here and must not be: a rate that is too
+ * low is too low for AIO's MARGIN, which is a server-side question answered
+ * against the padded floor (`belowMarginFloor`) and never a number shipped to
+ * a rep's browser.
+ *
+ * Lives beside DEFAULT_QUOTE_RATES, and in this file rather than pricing.ts,
+ * for the same reason that does — the rate fields are client components, and
+ * importing pricing.ts into one would ship AIO's true margin floors with it.
+ */
+export const MAX_PLAUSIBLE_CARD_RATE = 0.05;
+
 export const DEFAULT_QUOTE_RATES: QuoteRates = {
   cardPresentRate: 0.0249,
   cardNotPresentRate: 0.0249,

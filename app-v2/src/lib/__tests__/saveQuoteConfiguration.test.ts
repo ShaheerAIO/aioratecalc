@@ -45,6 +45,7 @@ vi.mock("@/lib/actions/pricing", () => ({
     paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
   }),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
+  getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90 }),
 }));
 
 const { saveQuoteConfigurationAction } = await import("@/lib/actions/prospects");
@@ -73,7 +74,12 @@ const FULL_CATALOG: CatalogProduct[] = [
   p("332927902454", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
   p("223511653103", "Menu Board Computer", 99, "one_time", "inventory"),
 ];
-const PICKABLE = FULL_CATALOG.filter(c => c.hubspotProductId === "217445755632");
+// The POS a rep picks on a processing quote, and the Menu Board Computer the
+// marketing plans preselect three of — both are ordinary picks now.
+const MENU_BOARD_ID = "223511653103";
+const PICKABLE = FULL_CATALOG.filter(
+  c => c.hubspotProductId === "217445755632" || c.hubspotProductId === MENU_BOARD_ID
+);
 
 const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
   ({
@@ -198,14 +204,30 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       quoteType: "marketing_only",
     });
 
-    expect(updated.quoteLines!.map(l => l.name)).toEqual([
-      "AIO Marketing Platform",
-      "Menu Board Computer",
-    ]);
-    // Included, so the merchant pays the subscription and nothing else.
-    expect(updated.quoteLines!.find(l => l.name === "Menu Board Computer")!.discountPercent).toBe(100);
+    // The plan line, and nothing else. The three Menu Board Computers it
+    // includes are a PICK since 2026-10-09 — preselected in the configurator,
+    // not derived — so a payload that genuinely carries no picks is a plan on
+    // its own, and a merchant who wanted none gets none.
+    expect(updated.quoteLines!.map(l => l.name)).toEqual(["AIO Marketing Platform"]);
     // Marketing quotes carry no ordering-point count.
     expect(updated.orderPoints).toBeNull();
+  });
+
+  it("holds the Menu Board Computers the plan includes at $0 when they ARE picked", async () => {
+    // The configurator preselects three; this is what the server does with
+    // them. Anything past the plan's three bills, as a split line.
+    getApplication.mockResolvedValue(app({ quoteType: "marketing_only" }));
+
+    const updated = await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [{ hubspotProductId: MENU_BOARD_ID, qty: 3 }],
+      channels: [],
+      pricingModel: "2-tier",
+      quoteType: "marketing_only",
+    });
+
+    const boards = updated.quoteLines!.filter(l => l.name === "Menu Board Computer");
+    expect(boards.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[3, 100]]);
   });
 
   it("still saves a rate-only processing quote as no lines, without reading the catalog", async () => {

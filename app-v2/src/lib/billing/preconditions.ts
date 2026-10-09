@@ -94,6 +94,14 @@ export type CanPublishInput = {
    * documented in CLAUDE.md, and this is the only place left to catch it.
    */
   maxDiscountPercent: number;
+  /**
+   * The admin billing-delay ceiling in force NOW. Optional, defaulting to the
+   * module constant, for the same reason and with the same hazard as the
+   * discount cap above: saved lines publish verbatim, so a line delayed under
+   * a looser ceiling would otherwise go onto an unamendable document
+   * unchallenged.
+   */
+  maxBillingDelayDays?: number;
 };
 
 /**
@@ -105,7 +113,10 @@ export type CanPublishInput = {
  * warning.
  */
 export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult {
-  const { app, catalog, sender, signerEmail, templateId, templateActive, maxDiscountPercent } = input;
+  const {
+    app, catalog, sender, signerEmail, templateId, templateActive,
+    maxDiscountPercent, maxBillingDelayDays,
+  } = input;
 
   // 1. Already published — short-circuit before anything else. This is the
   //    one-way-door marker, and once it is set no other precondition matters:
@@ -192,7 +203,7 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   //     run, so a rep cannot be shown a sendable quote that refuses here — but
   //     the cap it is measured against is today's, which is what makes this a
   //     real check rather than a restatement.
-  for (const message of adjustmentBlockers(lines, maxDiscountPercent)) {
+  for (const message of adjustmentBlockers(lines, maxDiscountPercent, maxBillingDelayDays)) {
     add("discount_over_policy", message);
   }
 

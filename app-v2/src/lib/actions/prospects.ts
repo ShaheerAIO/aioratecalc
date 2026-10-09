@@ -18,7 +18,7 @@ import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/emai
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import { deleteQuoteLineItem, getQuoteSnapshot, updateCompanyMerchantDetails } from "@/lib/adapters/hubspot";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
-import { getMaxDiscountPercent } from "@/lib/actions/pricing";
+import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
 import { buildQuote, isAllowedForQuoteType, isProcessingQuote, quoteHasProcessing, quoteTypeOf, toQuoteLine } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
 import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
@@ -332,9 +332,11 @@ async function deriveQuoteLines(
     return toQuoteLine(product, Math.floor(pick.qty));
   });
 
-  // The cap is read server-side, never taken from the browser: it is the only
-  // thing standing between a rep's discount and an ACH mandate nobody can amend.
-  const built = buildQuote(quoteType, lines, channels, catalog.all, adjustments, await getMaxDiscountPercent());
+  // Every limit is read server-side, never taken from the browser: they are
+  // the only things standing between a rep's discount, delay or quantity and
+  // an ACH mandate nobody can amend.
+  const [maxDiscountPercent, limits] = await Promise.all([getMaxDiscountPercent(), getQuoteLimits()]);
+  const built = buildQuote(quoteType, lines, channels, catalog.all, adjustments, maxDiscountPercent, limits);
   if (built.blockers.length) throw new Error(built.blockers.join(" "));
 
   return {

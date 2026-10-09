@@ -9,6 +9,7 @@ import ProductConfigurator, {
 } from "@/components/quoting/ProductConfigurator";
 import MerchantDetailsForm from "@/components/rep/MerchantDetailsForm";
 import RateFields from "@/components/rep/RateFields";
+import { DecimalField, MoneyField } from "@/components/rep/NumberField";
 import {
   mergeChannels,
   mergeReviewPrefill,
@@ -16,17 +17,45 @@ import {
   type AppliedReviewFields,
 } from "@/lib/prefillMerge";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
+import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
-import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import { buildProspectPrefillForContact, contactOptionLabel } from "@/lib/hubspotPrefill";
 import type { HubspotCompanyProfile, HubspotContact, HubspotDeal } from "@/lib/adapters/hubspot";
 import styles from "./prospects-new.module.css";
 
-// A stored fraction as the percent a rep types: 0.029 → "2.9".
-const pct = (f: number) => (f * 100).toFixed(2).replace(/\.?0+$/, "");
+// A stored fraction as the percent a rep reads: 0.029 → "2.90". Always two
+// decimals (2026-10-09) — trailing zeros used to be stripped, so 2.50% read
+// "2.5" and 3.00% read "3", which is three shapes for one kind of number in
+// the field where a tenfold typo hides best.
+const pct = (f: number) => (f * 100).toFixed(2);
+
+/**
+ * A monthly volume this far above the top of AIO's margin table is almost
+ * always an extra zero on a $120k restaurant, not a $1.2M one. Confirmed once
+ * rather than refused, because some of them are real.
+ */
+const IMPLAUSIBLE_MONTHLY_VOLUME = 1_000_000;
+
+/**
+ * A monthly figure restated as the ANNUAL one, which is the number a rep can
+ * sanity-check against the restaurant in front of them.
+ *
+ * It is monthly × 12. The first version of this divided the monthly figure by
+ * a million and called the result "a year", so $1,234,567/month read as
+ * "1.2M a year" — off by the twelve months and by the units, and wrong in the
+ * direction that makes an implausible figure look reasonable, on the one
+ * control whose whole job is to catch an implausible figure.
+ */
+const annualVolumeLabel = (monthly: number) => {
+  const yearly = monthly * 12;
+  return yearly >= 1_000_000_000
+    ? `$${(yearly / 1_000_000_000).toFixed(1)}B`
+    : `$${(yearly / 1_000_000).toFixed(1)}M`;
+};
 
 const BLANK_BUSINESS: BusinessInfo = {
   legalName: "", dba: "", bizType: "llc", address: "", city: "", state: "", zip: "",
@@ -52,6 +81,12 @@ function NewProspectFlow() {
   // asks for them, or until they stop agreeing — then the grid stays open so a
   // lane that differs is never hidden behind a single figure.
   const [perCardOpen, setPerCardOpen]   = useState(false);
+  // "Yes, $1.2M a month really is their volume." Reset by any edit to it.
+  const [volumeConfirmed, setVolumeConfirmed] = useState(false);
+  // The server's role-scoped view of what the typed rates earn. Reps see a
+  // PADDED floor and never the number itself — this component only ever reads
+  // the booleans, and `belowMarginFloor` is the one that refuses the send.
+  const [floorCheck, setFloorCheck] = useState<{ belowMarginFloor: boolean } | null>(null);
   const [detailsOpen, setDetailsOpen]   = useState(false);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
@@ -265,13 +300,6 @@ function NewProspectFlow() {
   if (!business.state.trim()) missingWarnings.push("state");
   if (!business.zip.trim()) missingWarnings.push("ZIP");
 
-  const hardBlocks: string[] = [];
-  if (!deal || !hubspotCompany) hardBlocks.push("Open this quote from its HubSpot deal before sending the link.");
-  if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name — HubSpot doesn't have it, and it's saved back to the company.");
-  if (!ownerContact.email.trim()) hardBlocks.push("Enter the customer's contact email.");
-  hardBlocks.push(...malformedMessages);
-  hardBlocks.push(...quoteBlockers);
-
   // ONE copy of the volume and the ticket: the processing record's. They used
   // to be asked twice — once under Processing Details, once as the quote basis
   // — and stored apart. A basis needs both; one alone (HubSpot often has the
@@ -279,6 +307,60 @@ function NewProspectFlow() {
   const ticket = rated ? parseFloat(processing.avgTicket) || 0 : 0;
   const volume = rated ? parseFloat(processing.monthlyVolume) || 0 : 0;
   const basisHalfSet = (ticket > 0) !== (volume > 0);
+  const volumeLooksHigh = volume >= IMPLAUSIBLE_MONTHLY_VOLUME;
+
+  const hardBlocks: string[] = [];
+  if (!deal || !hubspotCompany) hardBlocks.push("Open this quote from its HubSpot deal before sending the link.");
+  if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name — HubSpot doesn't have it, and it's saved back to the company.");
+  if (!ownerContact.email.trim()) hardBlocks.push("Enter the customer's contact email.");
+  hardBlocks.push(...malformedMessages);
+  hardBlocks.push(...quoteBlockers);
+  if (floorCheck?.belowMarginFloor) {
+    hardBlocks.push(
+      "The card rate is below the minimum AIO can process this volume at. Raise it, or ask an admin to review the margin policy."
+    );
+  }
+  // A confirmation, not a veto — but it has to be answered, or it is a banner
+  // nobody reads. One click clears it, and the whole quote is priced on this
+  // number: the rate, the savings and the floor above.
+  if (volumeLooksHigh && !volumeConfirmed) {
+    hardBlocks.push(`Confirm the monthly volume — ${fmt$(volume)} a month is unusually high for a restaurant.`);
+  }
+
+
+  // ── The card-rate minimum ─────────────────────────────────────────────────
+  // A rate is too low when it doesn't clear AIO's margin floor for THIS
+  // merchant's volume, which is a server-side question: the true floor lives
+  // in pricing.ts and reps are shown a padded one, so the browser is told
+  // "yes" or "no" and never the figure. Floor enforcement was dropped on
+  // 2026-10-06 when rates replaced the margin input, leaving nothing to stop a
+  // rep quoting under cost; "card rate minimums are needed" (2026-10-09) is
+  // that decision reversed, against the same table it always used.
+  //
+  // Only askable with a volume behind it — a statement, or the rep's own
+  // volume/ticket. With neither there is no floor to clear, and the quote goes
+  // out as a rate the customer's own statement will later be priced against.
+  const hasFloorBasis = !!analysis || (volume > 0 && ticket > 0);
+  useEffect(() => {
+    if (!rated || !hasFloorBasis) { setFloorCheck(null); return; }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      getPricingPreviewAction({
+        analysis,
+        quoteConfig: analysis ? null : { monthlyVolume: volume, avgTicket: ticket },
+        quoteRates,
+        pricingModel,
+        feeOverrides: { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 },
+        activeTier: null,
+      })
+        .then(p => { if (!cancelled) setFloorCheck({ belowMarginFloor: p.belowMarginFloor }); })
+        // A preview that can't be fetched must not block the send: the rep
+        // would have no way to clear a blocker whose cause is a network error.
+        .catch(() => { if (!cancelled) setFloorCheck(null); });
+    }, 200);
+    return () => { cancelled = true; clearTimeout(handle); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rated, volume, ticket, analysis, quoteRates, pricingModel]);
 
   const submit = async () => {
     if (hardBlocks.length) {
@@ -402,12 +484,12 @@ function NewProspectFlow() {
     quoteRates.amexCardPresentRate === quoteRates.cardPresentRate &&
     quoteRates.amexCardNotPresentRate === quoteRates.cardPresentRate;
   const perCardShown = perCardOpen || !ratesUniform;
-  const setEveryLane = (raw: string) => {
-    const r = (parseFloat(raw) || 0) / 100;
+  const setEveryLane = (percent: number) => {
+    const r = percent / 100;
     setQuoteRates({ ...quoteRates, cardPresentRate: r, cardNotPresentRate: r, amexCardPresentRate: r, amexCardNotPresentRate: r });
   };
   const oneRate = () => {
-    setEveryLane(pct(quoteRates.cardPresentRate));
+    setEveryLane(quoteRates.cardPresentRate * 100);
     setPerCardOpen(false);
   };
 
@@ -484,10 +566,10 @@ function NewProspectFlow() {
         ) : (
           <>
             <span className={styles.affix}>
-              <input
-                type="number" min="0" step="0.01" inputMode="decimal"
-                value={pct(quoteRates.cardPresentRate)}
-                onChange={e => setEveryLane(e.target.value)}
+              <DecimalField
+                value={Number(pct(quoteRates.cardPresentRate))}
+                max={MAX_PLAUSIBLE_CARD_RATE * 100}
+                onChange={setEveryLane}
                 className={styles.rateInput}
                 aria-label="Rate on every card, percent"
               />
@@ -496,10 +578,9 @@ function NewProspectFlow() {
             <span className={styles.rateHint}>+</span>
             <span className={styles.affix}>
               <span aria-hidden="true">$</span>
-              <input
-                type="number" min="0" step="0.01" inputMode="decimal"
+              <DecimalField
                 value={quoteRates.perTransactionFee}
-                onChange={e => setQuoteRates({ ...quoteRates, perTransactionFee: parseFloat(e.target.value) || 0 })}
+                onChange={perTransactionFee => setQuoteRates({ ...quoteRates, perTransactionFee })}
                 className={styles.rateInput}
                 aria-label="Per-transaction fee, dollars"
               />
@@ -522,11 +603,16 @@ function NewProspectFlow() {
           <span className={styles.label}>Monthly volume</span>
           <span className={styles.affix}>
             <span aria-hidden="true">$</span>
-            <input
-              type="number" min="0" step="100" inputMode="decimal"
+            <MoneyField
               value={processing.monthlyVolume}
-              onChange={e => setProcessing({ ...processing, monthlyVolume: e.target.value })}
-              placeholder="100000" className={styles.rateInput}
+              onChange={monthlyVolume => {
+                setProcessing({ ...processing, monthlyVolume });
+                // Re-asked whenever the figure changes, so correcting it to
+                // another implausible one is questioned again.
+                setVolumeConfirmed(false);
+              }}
+              placeholder="100,000" className={styles.rateInput}
+              aria-label="Monthly card volume, dollars"
             />
           </span>
         </label>
@@ -534,15 +620,30 @@ function NewProspectFlow() {
           <span className={styles.label}>Average ticket</span>
           <span className={styles.affix}>
             <span aria-hidden="true">$</span>
-            <input
-              type="number" min="0" step="0.01" inputMode="decimal"
-              value={processing.avgTicket}
-              onChange={e => setProcessing({ ...processing, avgTicket: e.target.value })}
-              placeholder="35.00" className={styles.rateInput}
+            <DecimalField
+              value={parseFloat(processing.avgTicket) || 0}
+              onChange={n => setProcessing({ ...processing, avgTicket: n ? String(n) : "" })}
+              className={styles.rateInput}
+              aria-label="Average ticket, dollars"
             />
           </span>
         </label>
       </div>
+
+      {/* A volume this large is nearly always an extra zero. Confirmed once,
+          not refused — some restaurants really do run $1.2M a month, and the
+          whole quote is priced on this number. */}
+      {volumeLooksHigh && !volumeConfirmed && (
+        <div className={styles.volumeCheck} role="alert">
+          <span>
+            {fmt$(volume)} a month is {annualVolumeLabel(volume)} a year — is that right?
+            The rate, the savings and the margin floor are all figured on it.
+          </span>
+          <button type="button" className={styles.linkBtn} onClick={() => setVolumeConfirmed(true)}>
+            Yes, that&apos;s right
+          </button>
+        </div>
+      )}
       <p className={styles.prefillNote}>
         {analysis
           ? "The statement sets the volume their savings are figured on."
@@ -742,6 +843,12 @@ function NewProspectFlow() {
 
       <ProductConfigurator
         layout="document"
+        /* This is the only host that STARTS a quote, so it is the only one
+           that gets the plan's opening position — the kit preselected and the
+           60-day billing start. The panels that reopen a saved quote must not:
+           an empty one there means a rate-only quote somebody built that way
+           on purpose. */
+        seedPlanDefaults
         quoteType={quoteType}
         picks={picks}
         channels={channels}

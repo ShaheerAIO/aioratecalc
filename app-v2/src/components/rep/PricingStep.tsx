@@ -96,10 +96,15 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   // figure to show — showing one would be a fabricated negative.
   const hasCurrentCost = (analysis.totalFees || 0) > 0;
   const savings     = pricing ? (analysis.totalFees || 0) - pricing.projectedMonthlyFees : 0;
-  // Shown, never enforced. Floor enforcement went with the margin input on
-  // 2026-10-06 (product-owner decision) — a rep can quote under the floor and
-  // the quote saves. These still surface it to the rep in the collapsed panel,
-  // computed from the rates they typed.
+  // `belowMin` is ENFORCED again as of 2026-10-09 ("card rate minimums are
+  // needed"), reversing the 2026-10-06 change that dropped floor enforcement
+  // along with the margin input: between those dates a rep could quote under
+  // the floor and the quote went out. Both are computed server-side from the
+  // rates the rep typed, against a floor that is padded before they see it.
+  //
+  // `belowFloor` — under the true Adyen COST — stays a warning. It is the
+  // sharper of the two, but it depends on the processor tier on file rather
+  // than on anything this screen can change.
   const belowFloor  = pricing?.belowCostFloor ?? false;
   const belowMin    = pricing?.belowMarginFloor ?? false;
   const earnedMargin = pricing?.appliedTargetMargin ?? null;
@@ -310,7 +315,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
                   )}
                   {belowMin && (
                     <div className={styles.alertDanger}>
-                      <strong>Below margin floor.</strong> This rate earns less than AIO&rsquo;s minimum of {fmt$(pricing.marginFloor)}/mo at this volume.
+                      <strong>Below margin floor.</strong> This rate earns less than AIO&rsquo;s minimum of {fmt$(pricing.marginFloor)}/mo at this volume. Raise it to generate the proposal.
                     </div>
                   )}
                   {aboveMax && (
@@ -377,7 +382,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
         <button
           className={styles.btnPrimary}
           style={{ opacity: (loading || !pricing) ? 0.6 : 1 }}
-          disabled={loading || !pricing}
+          disabled={loading || !pricing || belowMin}
           onClick={generate}
         >
           {loading ? "Preparing proposal…" : "Continue to Products →"}

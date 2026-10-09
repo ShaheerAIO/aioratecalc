@@ -84,7 +84,10 @@ const db = {
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 vi.mock("@/lib/actions/quoteTemplates", () => ({ resolveQuoteTemplate }));
-vi.mock("@/lib/actions/pricing", () => ({ getMaxDiscountPercent: vi.fn().mockResolvedValue(50) }));
+vi.mock("@/lib/actions/pricing", () => ({
+  getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
+  getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90 }),
+}));
 // Partial mock: the pure builders stay real, only the network calls are stubbed.
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),

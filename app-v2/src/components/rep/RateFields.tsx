@@ -1,6 +1,7 @@
 "use client";
 
-import { DEFAULT_QUOTE_RATES, type QuoteRates } from "@/types/merchant";
+import { DecimalField } from "@/components/rep/NumberField";
+import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE, type QuoteRates } from "@/types/merchant";
 import styles from "./RateFields.module.css";
 
 /**
@@ -37,7 +38,13 @@ const AMEX_TWIN: Record<string, RateKey> = {
   cardNotPresentRate: "amexCardNotPresentRate",
 };
 
-const pctText = (fraction: number) => (fraction * 100).toFixed(2).replace(/\.?0+$/, "");
+/**
+ * Rates are stored as fractions and shown as percentages, ALWAYS to two
+ * decimal places (2026-10-09). The trailing zeros used to be stripped, so
+ * 2.50% read "2.5" and 3.00% read "3" — three different shapes for the same
+ * kind of number, in the field where a tenfold typo is hardest to see.
+ */
+const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
 const BRANDS: Array<{ label: string; cp: RateKey; cnp: RateKey }> = [
   { label: "Visa · Mastercard · Discover", cp: "cardPresentRate", cnp: "cardNotPresentRate" },
@@ -58,8 +65,8 @@ export default function RateFields({ value, onChange, hideNote }: RateFieldsProp
   //
   // The four rates are still stored and quoted as four explicit numbers, so
   // the document always states what was actually sold.
-  const setRate = (key: RateKey) => (raw: string) => {
-    const next = (parseFloat(raw) || 0) / 100;
+  const setRate = (key: RateKey) => (pct: number) => {
+    const next = pct / 100;
     const twin = AMEX_TWIN[key];
     const linked = twin !== undefined && value[twin] === value[key];
     onChange({ ...value, [key]: next, ...(linked ? { [twin]: next } : {}) });
@@ -86,11 +93,11 @@ export default function RateFields({ value, onChange, hideNote }: RateFieldsProp
                 <span className={styles.label}>{label}</span>
                 <div className={styles.pair}>
                   <span className={styles.inputWrap}>
-                    <input
-                      type="number" min="0" max="100" step="0.01" inputMode="decimal"
+                    <DecimalField
                       className={styles.input}
-                      value={pctText(value[key])}
-                      onChange={e => setRate(key)(e.target.value)}
+                      value={Number(pctText(value[key]))}
+                      max={MAX_PLAUSIBLE_CARD_RATE * 100}
+                      onChange={setRate(key)}
                       aria-label={`${brand.label}, ${label.toLowerCase()} rate, percent`}
                     />
                     <span className={styles.unit}>%</span>
@@ -98,11 +105,10 @@ export default function RateFields({ value, onChange, hideNote }: RateFieldsProp
                   <span className={styles.plus} aria-hidden="true">+</span>
                   <span className={styles.inputWrap}>
                     <span className={styles.unit} data-side="left">$</span>
-                    <input
-                      type="number" min="0" step="0.01" inputMode="decimal"
+                    <DecimalField
                       className={styles.input} data-unit="leading"
                       value={value.perTransactionFee}
-                      onChange={e => onChange({ ...value, perTransactionFee: parseFloat(e.target.value) || 0 })}
+                      onChange={perTransactionFee => onChange({ ...value, perTransactionFee })}
                       aria-label={`${brand.label}, ${label.toLowerCase()} per transaction fee, dollars`}
                     />
                   </span>

@@ -224,14 +224,23 @@ export const PACKAGES: QuotePackage[] = [
     maxPerQuote: 1,
     slots: [
       // Slot order is also the order the picker lists the kit in (see
-      // `kitPicks`), which is why the display sits right under the POS.
+      // `kitPicks`), which is why everything that MOVES WITH THE POS — the
+      // display, the drawer, and the terminal the configurator splices in
+      // beside them — comes first, directly under it. A row whose quantity
+      // changes on its own has to be where the rep can see it change.
+      //
+      // The decomposition itself does not depend on this order: an exact fit
+      // takes the only slot its item could, and a swap takes the cheapest slot
+      // it fits, with the index only breaking a tie between two slots of the
+      // SAME price. The one such pair is kiosk27 and wifi at $999, and wifi is
+      // locked (`swappable: false`), so it is never a swap target at all.
       { item: "pos", qty: 1 },
       { item: "cfd", qty: 1 },
-      { item: "kiosk27", qty: 1 },
+      { item: "drawer", qty: 1 },
       { item: "terminal", qty: 2 },
+      { item: "kiosk27", qty: 1 },
       { item: "kds", qty: 1 },
       { item: "printer", qty: 1 },
-      { item: "drawer", qty: 1 },
       { item: "menuboard", qty: 1 },
       { item: "wifi", qty: 1 },
     ],

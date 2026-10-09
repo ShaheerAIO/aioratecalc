@@ -77,6 +77,33 @@ export const quoteTemplatePolicy = pgTable("quote_template_policy", {
   isActive: boolean("is_active").notNull().default(true),
 });
 
+// Global, admin-controlled limits on what a rep may put on a quote: how many
+// of each product, and how long billing may be delayed. Mirrors
+// margin_policy's shape (single active row, admin-owned).
+//
+// NOT folded into margin_policy, which is specifically "what a rep may learn
+// about, or give away of, AIO's margin". A quantity ceiling is neither — it
+// catches a typo in a quantity box, and the delay ceiling is a commitment
+// question, not a margin one.
+//
+// unit_caps is jsonb where quote_template_policy uses one column per key, and
+// the difference is deliberate: QuoteType is a closed three-value enum, so a
+// column per type forces a migration when it changes. Product ids are an open
+// set maintained in HubSpot by non-engineers, so a new product must be
+// cappable without a deploy.
+export const quoteLimitPolicy = pgTable("quote_limit_policy", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // productId → the most of it one quote may carry. A product absent from the
+  // map is uncapped; see DEFAULT_UNIT_CAPS, which seeds the editor and is what
+  // an unseeded table falls back to.
+  unitCaps: jsonb("unit_caps").$type<Record<string, number>>().notNull().default({}),
+  // The longest billing delay a rep may set without an admin raising it.
+  maxBillingDelayDays: integer("max_billing_delay_days").notNull().default(90),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
 // Replaces localStorage "clearrate:settings" / "clearrate:adyen_config".
 export const appSettings = pgTable("app_settings", {
   id: uuid("id").primaryKey().defaultRandom(),

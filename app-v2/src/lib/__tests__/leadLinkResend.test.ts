@@ -33,6 +33,7 @@ vi.mock("@/lib/actions/pricing", () => ({
     paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
   }),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
+  getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90 }),
 }));
 // prospects.ts now imports resolveDealForCompany for the Company & Deal
 // picker — mocked so the real module (which pulls in the server-only db
