@@ -19,7 +19,7 @@ export default function RoleSwitcher({ current }: { current: DebugRole | null })
       // router.refresh() alone isn't enough here: if we're sitting on /login
       // (middleware redirected us there pre-pick), refreshing just re-renders
       // the login form — it doesn't navigate us into the now-accessible app.
-      const dest = role === "admin" ? "/admin" : role === "rep" ? "/rep/proposals/new" : "/login";
+      const dest = role === "admin" ? "/admin" : role === "rep" ? "/rep" : "/login";
       router.push(dest);
       router.refresh();
     });

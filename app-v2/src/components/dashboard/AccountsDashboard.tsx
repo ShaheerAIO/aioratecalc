@@ -38,6 +38,7 @@ const FALLBACK_STAGE_COLOR = "#9ca3af";
 // Proposal). `pricing` is here for completeness — nothing sets it today, but a
 // deal parked there would otherwise be unreachable from the dashboard.
 const RESUMABLE_STAGES = ["analysis", "pricing", "proposal_ready"];
+const PROPOSAL_FLOW_LINKED: boolean = false;
 
 // Grid column templates — admin adds a "Rep" column for commission attribution.
 const REP_COLS   = "1fr 140px 110px 100px 100px 90px";
@@ -242,7 +243,10 @@ function AccountsDashboardInner({
   // Resume actually works the deal, so it stays owner-only even for an admin —
   // unlike the two resend buttons, which are operational (an admin covering a
   // bounced email needs them on accounts they don't own).
-  const canResume = selected != null
+  // PROPOSAL_FLOW_LINKED gates the only link into /rep/proposals/new, which is
+  // hidden from the UI but kept for reference.
+  const canResume = PROPOSAL_FLOW_LINKED
+    && selected != null
     && selected.ownerUserId === userId
     && RESUMABLE_STAGES.includes(selected.stage);
   // Exactly one action is primary: the next thing to do. The header used to
