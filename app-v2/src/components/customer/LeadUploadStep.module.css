@@ -112,22 +112,6 @@
   transform: scale(0.97);
 }
 
-.btnGhostLink {
-  display: block;
-  margin: var(--space-md) auto 0;
-  border: none;
-  background: none;
-  padding: var(--space-2xs) var(--space-xs);
-  font-family: var(--font-body);
-  font-size: 0.83rem;
-  font-weight: 700;
-  color: var(--ink-2);
-  cursor: pointer;
-}
-
-.btnGhostLink:hover { color: var(--ink); }
-.btnGhostLink:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
 @media (prefers-reduced-motion: reduce) {
   .dropzone,
   .btnPrimary {

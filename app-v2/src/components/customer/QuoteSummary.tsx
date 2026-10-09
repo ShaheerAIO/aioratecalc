@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import {
   describeBillingStart, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
@@ -20,11 +19,9 @@ import styles from "./QuoteSummary.module.css";
 
 type Props = {
   quote: CustomerSafeQuote;
-  /** Optional affordance appended to the config-basis note (the lead page's "upload a statement instead"). */
-  basisAction?: ReactNode;
 };
 
-export default function QuoteSummary({ quote, basisAction }: Props) {
+export default function QuoteSummary({ quote }: Props) {
   // A marketing-only quote has no processing rate behind it, so there is no
   // effective rate, volume or savings to headline — the recurring cost of what
   // they're buying is the whole story.
@@ -96,9 +93,7 @@ export default function QuoteSummary({ quote, basisAction }: Props) {
 
       {quote.basis === "config" && (
         <p className={styles.basisNote}>
-          Priced on the volume and average ticket your AIO representative entered. Send us a recent
-          processing statement and we&apos;ll show you exactly what you&apos;d save against it.
-          {basisAction && <> {basisAction}</>}
+          Priced on the volume and average ticket your AIO representative entered.
         </p>
       )}
 

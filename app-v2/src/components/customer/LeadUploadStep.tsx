@@ -13,8 +13,11 @@ import styles from "./LeadUploadStep.module.css";
 //
 // Two entries into the same destination: a quote the rep prepared arrives as
 // `preparedQuote` and renders immediately, and a customer who has none
-// uploads a statement to generate one. Both end on LeadQuoteView. The quote
-// is always a CustomerSafeQuote — this component never sees the raw analysis.
+// uploads a statement to generate one. Both end on LeadQuoteView, and neither
+// goes back: a statement uploaded over an existing quote re-prices what the
+// merchant sees here without touching the HubSpot document they sign, so the
+// two would disagree. /api/lead/[token]/analyze refuses it too. The quote is
+// always a CustomerSafeQuote — this component never sees the raw analysis.
 type Props = {
   token: string;
   businessName: string | null;
@@ -101,13 +104,6 @@ export default function LeadUploadStep({
         canAcceptHere={canAcceptHere}
         alreadyAccepted={alreadyAccepted}
         signedWithoutPaying={signedWithoutPaying}
-        // Offered only when the quote came prepared — a customer who just
-        // uploaded a statement has nothing better to replace it with — and
-        // never once the quote is accepted: the accepted quote's basis is
-        // frozen server-side, so a re-upload would produce no new quote.
-        onUploadStatement={
-          !alreadyAccepted && preparedQuote && quote === preparedQuote ? () => setQuote(null) : undefined
-        }
       />
     );
   }
@@ -190,12 +186,6 @@ export default function LeadUploadStep({
             <p className={styles.statusHint}>Pulling out your volume, fees, and effective rate.</p>
           )}
         </>
-      )}
-
-      {preparedQuote && (
-        <button className={styles.btnGhostLink} onClick={() => setQuote(preparedQuote)}>
-          ← Back to my quote
-        </button>
       )}
     </div>
   );

@@ -54,14 +54,12 @@ type Props = {
   canAcceptHere?: boolean;
   /** True when this quote has already been accepted (re-opened link). */
   alreadyAccepted?: boolean;
-  /** Offered only on a rep-prepared quote — lets the customer supersede it with their own statement. */
-  onUploadStatement?: () => void;
 };
 
 export default function LeadQuoteView({
   token, quote, businessName, contactEmail,
   checkoutUrl = null, canAcceptHere = false, alreadyAccepted = false,
-  signedWithoutPaying = false, onUploadStatement,
+  signedWithoutPaying = false,
 }: Props) {
   const [email, setEmail]         = useState(contactEmail || "");
   const [accepting, setAccepting] = useState(false);
@@ -151,17 +149,7 @@ export default function LeadQuoteView({
           <h1 className={styles.quoteBusiness}>{businessName || "Your Business"}</h1>
         </div>
 
-        <QuoteSummary
-          quote={quote}
-          // Never once accepted — the accepted quote's basis is frozen, and
-          // the server refuses to replace it, so offering the upload would
-          // be an affordance that leads nowhere.
-          basisAction={onUploadStatement && !accepted ? (
-            <button type="button" onClick={onUploadStatement} className={styles.linkBtn}>
-              Upload a statement instead
-            </button>
-          ) : undefined}
-        />
+        <QuoteSummary quote={quote} />
 
         <div className={styles.panel}>
           {accepted ? (

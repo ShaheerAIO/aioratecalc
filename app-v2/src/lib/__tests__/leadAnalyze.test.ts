@@ -70,10 +70,41 @@ beforeEach(() => {
 });
 
 describe("the happy path", () => {
-  it("analyzes a statement and returns a quote", async () => {
+  it("analyzes a statement and returns a quote when there is none yet", async () => {
+    row = baseRow({ quoteConfig: null });
     const res = await post();
     expect(res.status).toBe(200);
     expect(analyzeStatement).toHaveBeenCalledTimes(1);
+    expect(patches[0]?.analysis).toBeDefined();
+  });
+});
+
+describe("a statement never replaces an existing quote", () => {
+  it("returns the rep-configured quote untouched, without calling Claude", async () => {
+    const res = await post();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.quote.basis).toBe("config");
+    expect(analyzeStatement).not.toHaveBeenCalled();
+    expect(patches).toHaveLength(0);
+  });
+
+  it("returns a quote already priced on a statement, without re-analyzing", async () => {
+    row = baseRow({
+      quoteConfig: null,
+      analysis: {
+        merchantName: "Torta Palace", totalVolume: 20000, totalFees: 700, totalTransactions: 400,
+        averageTicket: 50, effectiveRate: 0.035, cardPresentVolume: 20000, cardNotPresentVolume: 0,
+        currentPricingModel: "tiered",
+      },
+    });
+    const res = await post();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.quote.basis).toBe("statement");
+    expect(body.quote.monthlyVolume).toBe(20000);
+    expect(analyzeStatement).not.toHaveBeenCalled();
+    expect(patches).toHaveLength(0);
   });
 });
 

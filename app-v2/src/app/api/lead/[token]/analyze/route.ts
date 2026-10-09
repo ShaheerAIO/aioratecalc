@@ -68,6 +68,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       return NextResponse.json({ quote: accepted, accepted: true });
     }
 
+    // A statement only ever creates a quote, never replaces one. Acceptance
+    // is now detected at payment, long after "Continue to Billing" has
+    // published a HubSpot quote that carries quoteLines verbatim — so a
+    // re-upload would re-price this page against a document that can't move.
+    const existing = quoteFrom(row.analysis);
+    if (existing) {
+      return NextResponse.json({ quote: existing });
+    }
+
     const analysis: StatementAnalysis = await analyzeStatement(fileData, mediaType);
 
     const quote = quoteFrom(analysis);
