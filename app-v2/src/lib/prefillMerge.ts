@@ -47,7 +47,7 @@ export const NO_REVIEW_PREFILL_APPLIED: AppliedReviewFields = {};
 // by one dotted-path list so the merge loop and isFromHubspotField share one
 // vocabulary. Deliberately excludes the fields hubspotPrefill.ts documents as
 // unmapped (business.bizType/yearsInBusiness/annualRevenue,
-// processing.mcc/avgTicket/cardPresentPct) — HubSpot has no data
+// processing.avgTicket/cardPresentPct) — HubSpot has no data
 // for those at all, so merging them would be a no-op dressed up as a rule; the
 // Review section marks them "HubSpot doesn't have this" instead (see
 // UNKNOWABLE_REVIEW_FIELDS below).
@@ -74,6 +74,8 @@ const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => st
   // From `processing_volume`. Sparse, but present on real companies — it was
   // wrongly listed as unknowable until 2026-09-25.
   { path: "processing.monthlyVolume", read: p => p.processing.monthlyVolume },
+  // From `mcc_code`, which EasyOB writes back once a rep has entered one.
+  { path: "processing.mcc", read: p => p.processing.mcc },
 ];
 
 /**
@@ -84,7 +86,7 @@ const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => st
  */
 export const UNKNOWABLE_REVIEW_FIELDS: string[] = [
   "business.bizType", "business.yearsInBusiness", "business.annualRevenue",
-  "processing.mcc", "processing.avgTicket", "processing.cardPresentPct",
+  "processing.avgTicket", "processing.cardPresentPct",
 ];
 
 function readPath(sections: ReviewSections, path: string): string {

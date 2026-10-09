@@ -172,12 +172,18 @@ function compact<T extends object>(obj: { [K in keyof T]?: string | undefined })
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== "")) as Partial<T>;
 }
 
+/** `mcc_code` is free text in HubSpot; only a 4-digit code is a usable MCC. */
+export function mccFromCompany(mccCode: string | null | undefined): string | undefined {
+  const code = (mccCode ?? "").trim();
+  return /^\d{4}$/.test(code) ? code : undefined;
+}
+
 /**
  * NOT mapped, on purpose:
- *  - MCC. HubSpot has no MCC property, and its nearest proxies don't stand in
- *    for one: `industrytype`'s dominant value is "hospitality", a catch-all
- *    that spans 5812/5813/5814. A wrong MCC drives interchange and the Adyen
- *    industry code, so the field stays empty for a human to set.
+ *  - MCC from anything but `mcc_code`. The nearest proxies don't stand in for
+ *    one: `industrytype`'s dominant value is "hospitality", a catch-all that
+ *    spans 5812/5813/5814. A wrong MCC drives interchange and the Adyen
+ *    industry code, so without `mcc_code` the field stays empty for a human.
  *  - bizType. `ownership_type` is a FRANCHISE posture (Franchisee/Franchisor),
  *    not a legal-entity type; nothing in HubSpot says LLC vs corp.
  *  - yearsInBusiness / annualRevenue. `founded_year` and `annualrevenue` are
@@ -209,10 +215,12 @@ export function buildProspectPrefill(
   if (!company) return empty;
 
   const name = (company.name ?? "").trim();
-  // HubSpot has no separate legal name (the legal_* properties are empty portal
-  // wide), so `name` seeds both — same as the hand-entry path in prospects.ts.
+  // `name` is the trading name, so it seeds the DBA only. The legal name comes
+  // from HubSpot's legal-name property, which EasyOB writes back after the rep
+  // types it — never from `name`, which would pass the trading name off as the
+  // registered one on every quote.
   const business = compact<BusinessInfo>({
-    legalName: name || undefined,
+    legalName: (company.legalName ?? "").trim() || undefined,
     dba: name || undefined,
     address: streetLine(company.address, company.city),
     city: (company.city ?? "").trim() || undefined,
@@ -251,7 +259,9 @@ export function buildProspectPrefill(
   });
 
   const processing = compact<ProcessingInfo>({
-    currentProcessor: processorFromPos(company.currentPos),
+    // The rep's own answer, once written back, beats the POS-derived guess.
+    currentProcessor: (company.previousProcessor ?? "").trim() || processorFromPos(company.currentPos),
+    mcc: mccFromCompany(company.mccCode),
     businessDescription: businessDescription(company),
     monthlyVolume: monthlyVolumeFromCompany(company.processingVolume),
   });

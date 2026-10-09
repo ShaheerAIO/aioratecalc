@@ -110,8 +110,9 @@ export const STAGE_MAP = {
   closed_lost: "closedlost",
 } satisfies Partial<Record<DealStage, string>>;
 
-// Two private apps, two tokens. The general CRM app is companies-read-only,
-// covering the tenant linkage lookups below; the billing app covers deals,
+// Two private apps, two tokens. The general CRM app covers companies — the
+// tenant linkage lookups below, and the one company write,
+// `updateCompanyMerchantDetails`; the billing app covers deals,
 // products, quotes, line items, subscriptions and invoices. The general app
 // has no deals scope, so deal sync goes through the billing app's token too —
 // pick the right one per call rather than defaulting to either.
@@ -740,10 +741,14 @@ export async function getTenantCompany(companyId: string): Promise<TenantCompany
 //
 // Property choice is driven by measured portal-wide fill rates (n=100), not by
 // what the schema offers. Deliberately NOT read, because they're empty portal
-// wide: legal_trading_name_as_registered_with_government, legal_*_address_*,
-// full_name, processing_volume, monthly_card_volume, of_locations, the FEIN
-// property, annualrevenue, founded_year. Note `moduels` — the typo is the real
-// internal name.
+// wide: legal_*_address_*, full_name, monthly_card_volume, of_locations, the
+// FEIN property, annualrevenue, founded_year. Note `moduels` — the typo is the
+// real internal name.
+//
+// Three ARE read despite being near-empty, because EasyOB is what fills them:
+// `legal_trading_name_as_registered_with_government`, `previous_processor` and
+// `mcc_code` are written back by `updateCompanyMerchantDetails` whenever a rep
+// sends a quote link, so the next quote on the same company prefills them.
 export type HubspotCompanyProfile = TenantCompany & {
   domain: string | null;
   website: string | null;
@@ -769,13 +774,27 @@ export type HubspotCompanyProfile = TenantCompany & {
    * property is worse than no property, because it looks authoritative.
    */
   processingVolume: string | null;
+  /** "legal_trading_name_as_registered_with_government" — the registered legal name. */
+  legalName: string | null;
+  /** "previous_processor" — free text, the processor the merchant is leaving. */
+  previousProcessor: string | null;
+  /** "mcc_code" — free text in HubSpot; hubspotPrefill only accepts a 4-digit code. */
+  mccCode: string | null;
 };
+
+/** The Company properties EasyOB writes back from a rep's quote link. */
+export const COMPANY_WRITE_PROPS = {
+  legalName: "legal_trading_name_as_registered_with_government",
+  previousProcessor: "previous_processor",
+  mcc: "mcc_code",
+} as const;
 
 const COMPANY_PROFILE_PROPS = [
   ...TENANT_COMPANY_PROPS,
   "domain", "website", "address", "city", "state", "zip", "country", "description",
   "industrytype", "cuisine_type", "ownership_type", "current_pos", "moduels",
   "processing_volume",
+  ...Object.values(COMPANY_WRITE_PROPS),
 ];
 
 function toCompanyProfile(obj: { id: string; properties: Record<string, string | null> }): HubspotCompanyProfile {
@@ -796,7 +815,50 @@ function toCompanyProfile(obj: { id: string; properties: Record<string, string |
     currentPos: clean(p.current_pos),
     modules: clean(p.moduels),
     processingVolume: clean(p.processing_volume),
+    legalName: clean(p[COMPANY_WRITE_PROPS.legalName]),
+    previousProcessor: clean(p[COMPANY_WRITE_PROPS.previousProcessor]),
+    mccCode: clean(p[COMPANY_WRITE_PROPS.mcc]),
   };
+}
+
+export type CompanyMerchantDetails = {
+  legalName?: string | null;
+  previousProcessor?: string | null;
+  mcc?: string | null;
+};
+
+/**
+ * Write the merchant details a rep entered back onto the HubSpot COMPANY —
+ * never the deal: a legal name, a processor and an MCC belong to the business,
+ * and a company outlives every deal on it.
+ *
+ * Blank values are LEFT OUT rather than sent as "", so a rep who didn't know
+ * the answer never erases one HubSpot already had. A value the rep typed over
+ * the prefill does overwrite HubSpot's — they saw it and changed it.
+ *
+ * The general CRM app's token: it carries companies write (the billing app's
+ * does not — verified 2026-10-09, the billing token 403s on a company PATCH).
+ * Returns the property names written; an empty object makes no call at all.
+ */
+export async function updateCompanyMerchantDetails(
+  companyId: string,
+  details: CompanyMerchantDetails
+): Promise<string[]> {
+  const properties: Record<string, string> = {};
+  for (const key of Object.keys(COMPANY_WRITE_PROPS) as Array<keyof typeof COMPANY_WRITE_PROPS>) {
+    const value = clean(details[key]);
+    if (value) properties[COMPANY_WRITE_PROPS[key]] = value;
+  }
+  const written = Object.keys(properties);
+  if (!written.length) return [];
+
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/${companyId}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ properties }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot company update failed", res.status, await res.text());
+  return written;
 }
 
 /** The wide read behind the prospect prefill. A superset of getTenantCompany. */

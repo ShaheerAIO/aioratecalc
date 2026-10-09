@@ -31,13 +31,16 @@ const FULL: HubspotCompanyProfile = {
   currentPos: "Clover",
   modules: "POS;MPOS;Kiosk;Website;3PO",
   processingVolume: "230000",
+  legalName: "Little Arabia Holdings LLC",
+  previousProcessor: null,
+  mccCode: null,
 };
 
 const EMPTY: HubspotCompanyProfile = {
   id: "1", name: "", tenantRef: null, adyenAccountHolderId: null, mid: null, phone: null, email: null,
   domain: null, website: null, address: null, city: null, state: null, zip: null, country: null,
   description: null, industryType: null, cuisineType: null, ownershipType: null, currentPos: null, modules: null,
-  processingVolume: null,
+  processingVolume: null, legalName: null, previousProcessor: null, mccCode: null,
 };
 
 const CONTACT: HubspotContact = {
@@ -277,7 +280,7 @@ describe("choosing among several contacts", () => {
     const contacts = [person("1", "Ann", "a@x.com"), person("2", "Bo", "b@x.com")];
     const p = buildProspectPrefillForContact(company, contacts, null);
     expect(p.ownerContact).toEqual({});
-    expect(p.business.legalName).toBe("Bojax");
+    expect(p.business.dba).toBe("Bojax");
   });
 
   it("fills the owner fields from whichever contact was picked", () => {
@@ -312,7 +315,7 @@ describe("buildProspectPrefill", () => {
   it("maps a fully populated company and contact", () => {
     const p = buildProspectPrefill(FULL, CONTACT);
     expect(p.business).toEqual({
-      legalName: "Little Arabia Restaurant",
+      legalName: "Little Arabia Holdings LLC",
       dba: "Little Arabia Restaurant",
       address: "638 South Brookhurst Street",
       city: "Anaheim",
@@ -340,6 +343,24 @@ describe("buildProspectPrefill", () => {
     expect(p.industryType).toBe("TSR");
     expect(p.ownershipType).toBe("Franchisee");
     expect(p.contactSource).toBe("Business Owner");
+  });
+
+  it("never passes the trading name off as the legal name", () => {
+    const p = buildProspectPrefill({ ...FULL, legalName: null }, CONTACT);
+    expect(p.business.legalName).toBeUndefined();
+    expect(p.business.dba).toBe("Little Arabia Restaurant");
+    expect(p.fromHubspot).not.toContain("business.legalName");
+  });
+
+  it("prefers the previous processor written back over the POS guess", () => {
+    expect(buildProspectPrefill({ ...FULL, previousProcessor: " Worldpay " }, CONTACT).processing.currentProcessor).toBe("Worldpay");
+    expect(buildProspectPrefill({ ...FULL, previousProcessor: "  " }, CONTACT).processing.currentProcessor).toBe("Clover");
+  });
+
+  it("reads the MCC from mcc_code, only when it's a 4-digit code", () => {
+    expect(buildProspectPrefill({ ...FULL, mccCode: "5812" }, CONTACT).processing.mcc).toBe("5812");
+    expect(buildProspectPrefill({ ...FULL, mccCode: "restaurant" }, CONTACT).processing.mcc).toBeUndefined();
+    expect(buildProspectPrefill({ ...FULL, mccCode: "58121" }, CONTACT).processing.mcc).toBeUndefined();
   });
 
   it("never invents an MCC, a bizType, or a ticket/card-mix figure", () => {
@@ -401,13 +422,13 @@ describe("buildProspectPrefill", () => {
     const partial: HubspotCompanyProfile = { ...EMPTY, name: "Bojax", city: "Oakland", phone: "+1 510-969-5116" };
     const p = buildProspectPrefill(partial, null);
     expect(p.business).toEqual({
-      legalName: "Bojax", dba: "Bojax", city: "Oakland", phone: "510-969-5116",
+      dba: "Bojax", city: "Oakland", phone: "510-969-5116",
     });
     expect("state" in p.business).toBe(false);
     expect("zip" in p.business).toBe(false);
     expect(p.ownerContact).toEqual({});
     expect(p.processing).toEqual({});
-    expect(p.fromHubspot).toEqual(["business.legalName", "business.dba", "business.city", "business.phone"]);
+    expect(p.fromHubspot).toEqual(["business.dba", "business.city", "business.phone"]);
   });
 
   it("falls back to the bare domain when there's no website", () => {
