@@ -710,6 +710,53 @@
 
 .adjustInput { width: 5.5rem; }
 
+/* A date field has to hold mm/dd/yyyy AND the browser's picker icon. At the
+   5.5rem the number inputs share it clipped the year (Elizabeth Phillips,
+   2026-10-12) — a billing start reading "10/12/20" on the one control whose
+   whole job is which year the charge lands in. Sized in ch so it survives a
+   larger font, and min-width so a flex row can't squeeze it back. */
+.dateInput {
+  width: auto;
+  min-width: 9.5rem;
+}
+
+/* The quote note, on its own row under the billing controls it explains. */
+.noteField {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.noteInput {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.noteInput:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Required only ever means "this quote delays a charge past the default", so
+   it is stated rather than implied — the label says the number of days. */
+.noteField[data-required] .noteInput {
+  border-color: var(--accent);
+}
+
+.noteField[data-required] .adjustLabel {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .adjustInput:disabled,
 .adjustSelect:disabled { opacity: 0.5; cursor: not-allowed; }
 

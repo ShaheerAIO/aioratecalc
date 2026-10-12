@@ -123,6 +123,26 @@ export default function QuoteLimitsSettingsPage() {
         </div>
 
         <div className={styles.header}>
+          <h2 className={styles.sectionHead}>Products offered</h2>
+          <p className={styles.headerSubtitle}>
+            The two tablets are hidden from the quote builder by default — nobody is selling them
+            today. Turning them back on only changes what a rep is OFFERED: a tablet already on a
+            quote stays on it either way, and no quote is ever refused over this.
+          </p>
+        </div>
+
+        <div className={styles.panel}>
+          <label className={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={limits.showTablets}
+              onChange={e => setLimits(prev => prev && ({ ...prev, showTablets: e.target.checked }))}
+            />
+            <span>Offer the Orders Hub and Clock-in tablets in the quote builder</span>
+          </label>
+        </div>
+
+        <div className={styles.header}>
           <h2 className={styles.sectionHead}>Unit caps</h2>
           <p className={styles.headerSubtitle}>
             The most of each product one quote may carry, counted across every line of it.

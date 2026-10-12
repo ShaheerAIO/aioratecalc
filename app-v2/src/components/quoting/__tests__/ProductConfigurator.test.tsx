@@ -16,11 +16,14 @@ import type { CatalogProduct, QuoteAdjustments, QuoteType } from "@/types/mercha
 
 // Hoisted with the vi.mock call below it, because the component under test is
 // imported statically further down and reaches the mock during that import.
-const { listQuotableProductsAction } = vi.hoisted(() => ({ listQuotableProductsAction: vi.fn() }));
+const { listQuotableProductsAction, getQuoteLimits } = vi.hoisted(() => ({
+  listQuotableProductsAction: vi.fn(),
+  getQuoteLimits: vi.fn(),
+}));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
 vi.mock("@/lib/actions/pricing", () => ({
   getMaxDiscountPercent: () => Promise.resolve(50),
-  getQuoteLimits: () => Promise.resolve({ unitCaps: {}, maxBillingDelayDays: 90 }),
+  getQuoteLimits,
 }));
 
 import ProductConfigurator, { type ProductPick } from "@/components/quoting/ProductConfigurator";
@@ -42,6 +45,8 @@ const P: Array<[string, string, number, CatalogProduct["billingFrequency"], stri
   ["223452690133", "Onsite Installation", 999, "one_time", "Service"],
   ["223152695032", "System Onboarding and Training", 499, "one_time", "Service"],
   ["335280960199", "Additional Software License", 19, "monthly", "Software"],
+  ["276751313619", "Orders Hub Tablet", 199, "one_time", "inventory"],
+  ["276754193118", "Clock in Tablet", 199, "one_time", "inventory"],
 ];
 const CATALOG: CatalogProduct[] = P.map(([hubspotProductId, name, price, billingFrequency, productType]) => ({
   hubspotProductId, name, price, billingFrequency, productType,
@@ -81,6 +86,8 @@ const planCard = (name: RegExp) => screen.getByRole("button", { name });
 beforeEach(() => {
   listQuotableProductsAction.mockReset();
   listQuotableProductsAction.mockResolvedValue({ products: CATALOG, all: CATALOG, error: null });
+  getQuoteLimits.mockReset();
+  getQuoteLimits.mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90, showTablets: false });
 });
 afterEach(cleanup);
 
@@ -136,5 +143,88 @@ describe("a new quote opens on no plan at all", () => {
     fireEvent.click(planCard(/Marketing Only/));
     // Three Menu Board Computers, and none of the POS plan's hardware.
     await waitFor(() => expect(picksText()).toBe("223511653103:3"));
+  });
+});
+
+// ── The tablets an admin can switch off ─────────────────────────────────────
+// Visibility, not a rule about what may be sold: nothing downstream refuses a
+// tablet, which is why these assert the PICKER rather than the blockers.
+describe("tablet visibility", () => {
+  // The picker's own stepper, so a tablet sitting in the RECEIPT can't stand
+  // in for a row the rep could actually change.
+  const pickerRow = (name: string) => screen.queryByRole("button", { name: `Add one ${name}` });
+  const pickTablet = () => pickerRow("Orders Hub Tablet");
+
+  it("leaves them out of the picker by default", async () => {
+    render(<Host />);
+    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
+    fireEvent.click(planCard(/All-in-One/));
+
+    await waitFor(() => expect(picksText()).toContain(`${POS}:1`));
+    expect(pickTablet()).toBeNull();
+    // The products either side of them are untouched.
+    expect(pickerRow("Thermal Printer")).not.toBeNull();
+  });
+
+  it("offers them once an admin switches them on", async () => {
+    getQuoteLimits.mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90, showTablets: true });
+    render(<Host />);
+    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
+    fireEvent.click(planCard(/All-in-One/));
+
+    await waitFor(() => expect(pickTablet()).not.toBeNull());
+  });
+
+  it("keeps showing one that is already on the quote", async () => {
+    // A rep mid-quote when the switch flips must not be left looking at a
+    // price with no row to change it on.
+    render(
+      <ProductConfigurator
+        layout="document"
+        quoteType="all_in_one"
+        picks={[{ hubspotProductId: "276751313619", qty: 2 }]}
+        channels={[]}
+        adjustments={{}}
+        onQuoteTypeChange={() => {}}
+        onPicksChange={() => {}}
+        onChannelsChange={() => {}}
+        onAdjustmentsChange={() => {}}
+        onDerivedChange={() => {}}
+      />
+    );
+    await waitFor(() => expect(pickTablet()).not.toBeNull());
+    // The other one is still hidden: it is on nobody's quote.
+    expect(pickerRow("Clock in Tablet")).toBeNull();
+  });
+});
+
+// ── The note a long billing delay has to carry ──────────────────────────────
+describe("the quote note", () => {
+  const withDelay = (days: number, note: string) => (
+    <ProductConfigurator
+      layout="document"
+      quoteType="all_in_one"
+      picks={[{ hubspotProductId: POS, qty: 1 }]}
+      channels={[]}
+      adjustments={{ "335283119838": { billingStart: { mode: "days", days } } }}
+      note={note}
+      onNoteChange={() => {}}
+      onQuoteTypeChange={() => {}}
+      onPicksChange={() => {}}
+      onChannelsChange={() => {}}
+      onAdjustmentsChange={() => {}}
+      onDerivedChange={() => {}}
+    />
+  );
+
+  it("asks for a reason, naming the delay, once past the plan's own 60 days", async () => {
+    render(withDelay(90, ""));
+    await waitFor(() => expect(screen.getByText(/Why billing starts after 90 days/)).toBeTruthy());
+    expect(screen.getByText(/Elizabeth Phillips/)).toBeTruthy();
+  });
+
+  it("is an optional box at the delay the plan itself seeds", async () => {
+    render(withDelay(60, ""));
+    await waitFor(() => expect(screen.getByText("Note (optional)")).toBeTruthy());
   });
 });

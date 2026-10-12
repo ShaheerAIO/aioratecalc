@@ -195,6 +195,17 @@
   outline-offset: 2px;
 }
 
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.toggleRow input { flex: none; }
+
 .actions {
   display: flex;
   flex-wrap: wrap;

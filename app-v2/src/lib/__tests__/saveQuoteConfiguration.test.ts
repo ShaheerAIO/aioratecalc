@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/merchant";
-import { picksFromQuoteLines, toQuoteLine } from "@/lib/quoting";
+import { picksFromQuoteLines, toQuoteLine, QUOTE_NOTE_WATCHER } from "@/lib/quoting";
 import { PACKAGES } from "@/lib/quotePackages";
 
 // The free hardware kit is switched off for this file: these tests are about
@@ -27,9 +27,11 @@ vi.mock("@/lib/storage/postgresAdapter", () => ({
   postgresStorage: { getApplication, saveApplication },
 }));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
+const createDealNote = vi.fn();
 vi.mock("@/lib/adapters/hubspot", () => ({
   listCompanyContacts: vi.fn(),
   getCompanyProfile: vi.fn(),
+  createDealNote,
 }));
 vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail: vi.fn() }));
 vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms: vi.fn() }));
@@ -45,7 +47,7 @@ vi.mock("@/lib/actions/pricing", () => ({
     paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
   }),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
-  getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90 }),
+  getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90, showTablets: false }),
 }));
 
 const { saveQuoteConfigurationAction } = await import("@/lib/actions/prospects");
@@ -409,5 +411,71 @@ describe("saveQuoteConfigurationAction — rates, and the floor that no longer b
     });
 
     expect(updated.quoteRates).toEqual(DEFAULT_QUOTE_RATES);
+  });
+});
+
+// ── The note a long billing delay has to carry ──────────────────────────────
+// Elizabeth Phillips, 2026-10-12: a rep who holds a first charge past the
+// plan's own 60 days writes down why, and it lands on the HubSpot deal.
+describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
+  const PLATFORM = "335283119838";
+  const save = (quoteNote: string | undefined, days: number) =>
+    saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [{ hubspotProductId: "217445755632", qty: 1 }],
+      channels: [],
+      adjustments: { [PLATFORM]: { billingStart: { mode: "days", days } } },
+      quoteNote,
+      pricingModel: "2-tier",
+    });
+
+  it("refuses a 90-day delay with nothing written down", async () => {
+    await expect(save(undefined, 90)).rejects.toThrow(/write a note saying why/i);
+    expect(saveApplication).not.toHaveBeenCalled();
+  });
+
+  it("refuses a note too short to be an explanation", async () => {
+    await expect(save("ok", 90)).rejects.toThrow(/write a note saying why/i);
+  });
+
+  it("takes the 60 days the plan itself seeds without asking for anything", async () => {
+    await expect(save(undefined, 60)).resolves.toBeTruthy();
+    expect(createDealNote).not.toHaveBeenCalled();
+  });
+
+  it("saves with a reason, and puts it on the deal for the watcher", async () => {
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
+    const updated = await save("Equipment lands in November, agreed with the owner.", 90);
+
+    expect(updated.quoteNote).toBe("Equipment lands in November, agreed with the owner.");
+    expect(createDealNote).toHaveBeenCalledTimes(1);
+    const [dealId, body, ownerId] = createDealNote.mock.calls[0];
+    expect(dealId).toBe("deal-9");
+    expect(body).toContain("90 days");
+    expect(body).toContain("Equipment lands in November");
+    expect(ownerId).toBe(QUOTE_NOTE_WATCHER.hubspotOwnerId);
+  });
+
+  it("keeps the quote when the note can't reach HubSpot", async () => {
+    // A note is a record of a decision, never a precondition for one — a
+    // missing notes scope must not stop a rep quoting.
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
+    createDealNote.mockRejectedValueOnce(new Error("403 missing scope"));
+    await expect(save("Equipment lands in November.", 90)).resolves.toBeTruthy();
+    expect(saveApplication).toHaveBeenCalled();
+  });
+
+  it("does not repost a note the deal already carries", async () => {
+    const note = "Equipment lands in November, agreed with the owner.";
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9", quoteNote: note }));
+    await save(note, 90);
+    expect(createDealNote).not.toHaveBeenCalled();
+  });
+
+  it("leaves an existing note alone when the caller doesn't offer the box", async () => {
+    const note = "Equipment lands in November, agreed with the owner.";
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9", quoteNote: note }));
+    const updated = await save(undefined, 90);
+    expect(updated.quoteNote).toBe(note);
   });
 });

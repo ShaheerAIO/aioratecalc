@@ -130,7 +130,43 @@ export const DEFAULT_UNIT_CAPS: Record<string, number> = {
   "223511653103": 10, // Menu Board Computer
   "276751313619": 20, // Orders Hub Tablet
   "276754193118": 20, // Clock in Tablet
+  // The marketing kits were the one uncapped family (Elizabeth Phillips,
+  // 2026-10-12: "limit quantity if marketing products too"). Six, like the
+  // ordering kiosks they are — the 2-year plan's own "one kiosk, Mega or 27\""
+  // rule is a separate thing and is enforced in buildQuote, because it is
+  // about what that plan includes rather than about how many fit in a room.
+  "332617109238": 6,  // Marketing Kit - Mega Kiosk
+  "332793212658": 6,  // Marketing Kit - 27" Kiosk
 };
+
+/**
+ * The two tablets, which an admin can take out of the picker altogether.
+ *
+ * Elizabeth Phillips, 2026-10-12: "Delete tablet options. I dont think we have
+ * any reason to offer them unless we can think of a use case" — and she names
+ * the use case in the same breath (marketing-only with online ordering), which
+ * is why this is a switch rather than a deletion. Default OFF: nobody is
+ * selling them today, and the one line that turns them back on is at
+ * /admin/settings/quote-limits.
+ *
+ * VISIBILITY ONLY, and deliberately not enforced in `buildQuote` or in
+ * `isAllowedForQuoteType` the way the picker exclusions are. Those say what
+ * may never be SOLD; this says what is worth showing a rep this month. Making
+ * it a refusal would mean a quote configured ten minutes before an admin
+ * flipped the switch stops being saveable, with a blocker naming a setting the
+ * rep can't reach. The configurator keeps showing a tablet already on a quote
+ * for the same reason — see `selectable` in ProductConfigurator.
+ */
+export const TABLET_PRODUCT_IDS: readonly string[] = [
+  "276751313619", // Orders Hub Tablet
+  "276754193118", // Clock in Tablet
+];
+
+export function isTabletProduct(hubspotProductId: string): boolean {
+  return TABLET_PRODUCT_IDS.includes(hubspotProductId);
+}
+
+export const DEFAULT_SHOW_TABLETS = false;
 
 /** The most of this product a quote may carry, or null when there's no limit. */
 export function maxQtyFor(
@@ -507,6 +543,78 @@ export function minimumTerminalsFor(
 ): number {
   if (!isProcessingQuote(quoteType)) return 0;
   return picks.reduce((n, p) => n + (isPosRequiringTerminal(p) ? p.qty : 0), 0);
+}
+
+/**
+ * Quantities that only mean anything against another product's quantity: a
+ * display and a drawer belong to a POS, a terminal to a POS or a kiosk.
+ * Elizabeth Phillips, 2026-10-12 — "Dont allow more Customer Facing
+ * Displays/Cash drawer than POS units", "Dont allow more adyen's than POS
+ * units/kiosks".
+ *
+ * A CEILING, and the counterpart to `minimumTerminalsFor`'s floor: one AMS1
+ * ships with every POS, and now no more than one per thing that can take a
+ * payment. The flat `unitCaps` can't express this — it caps each product at a
+ * number an admin typed, which is a typo catcher, not "four drawers for two
+ * tills".
+ *
+ * It REPORTS rather than clamps. `resolveRequiredAms1` tops a quote up to the
+ * floor because a POS without a terminal cannot take a card; nothing here
+ * takes a line off a quote a rep is reading out loud to a merchant.
+ *
+ * Counted against BOTH POS SKUs, including the one with a display in the box.
+ * A merchant buying that SKU plus a loose display is more likely putting a
+ * second screen on the counter than making a mistake, and this exists to catch
+ * the mistake.
+ */
+export const RELATIVE_CEILINGS: Array<{
+  hubspotProductId: string;
+  perProductIds: readonly string[];
+  /** How to name what it's counted against, so the blocker reads like English. */
+  per: { one: string; many: string };
+}> = [
+  {
+    hubspotProductId: "318736467644", // Customer Facing Display
+    perProductIds: POS_REQUIRING_TERMINAL_IDS,
+    per: { one: "POS unit", many: "POS units" },
+  },
+  {
+    hubspotProductId: "222497165011", // Cash Drawer
+    perProductIds: POS_REQUIRING_TERMINAL_IDS,
+    per: { one: "POS unit", many: "POS units" },
+  },
+  {
+    hubspotProductId: AMS1_PRODUCT.hubspotProductId,
+    perProductIds: [...POS_REQUIRING_TERMINAL_IDS, ...KIOSK_PRODUCT_IDS],
+    per: { one: "POS unit or kiosk", many: "POS units and kiosks" },
+  },
+];
+
+/**
+ * Reasons a quote carries more of something than there is anything to attach
+ * it to. Summed per PRODUCT, like the unit caps and for the same reason: a
+ * scoped discount splits one pick into two lines.
+ */
+export function relativeCeilingBlockers(
+  lines: Array<{ hubspotProductId: string; name: string; qty: number }>
+): string[] {
+  const qtyOf = (ids: readonly string[]) =>
+    lines.reduce((n, l) => n + (ids.includes(l.hubspotProductId) ? l.qty : 0), 0);
+
+  const out: string[] = [];
+  for (const rule of RELATIVE_CEILINGS) {
+    const qty = qtyOf([rule.hubspotProductId]);
+    if (qty < 1) continue;
+    const ceiling = qtyOf(rule.perProductIds);
+    if (qty <= ceiling) continue;
+    const name = lines.find(l => l.hubspotProductId === rule.hubspotProductId)?.name.trim() ?? "";
+    const have = ceiling === 0 ? `no ${rule.per.many}` : `${ceiling} ${ceiling === 1 ? rule.per.one : rule.per.many}`;
+    out.push(
+      `This quote has ${qty} × "${name}" on it but ${have} — one goes with each ${rule.per.one}. ` +
+      `Drop the extras, or add what they belong to.`
+    );
+  }
+  return out;
 }
 
 function isSoftwareLicenseProduct(id: string, name: string): boolean {
@@ -1511,6 +1619,70 @@ export function planDefaultBillingStart(quoteType: QuoteType): BillingStart | nu
 }
 
 /**
+ * Who a quote's note is addressed to in HubSpot: the owner record it is
+ * assigned to, and the name written into it.
+ *
+ * Elizabeth Phillips, 2026-10-12 — "if they make the delayed billing longer
+ * than 60 days, force them to leave a note explaining why and tagging me
+ * automatically". Owner 161690499, checked live against portal 244508708.
+ *
+ * It is an ASSIGNMENT, not an @mention, and that is a platform limit rather
+ * than a corner cut: this portal's NOTE object carries no
+ * `hs_at_mentioned_owner_ids`, so the API cannot raise the notification the
+ * "@" in HubSpot's own composer does. The note lands on the deal, owned by her
+ * and naming her, which is as close as the API reaches. A HubSpot-side
+ * workflow on "note created, owner = her" is the way to turn it into an alert.
+ *
+ * Here rather than in `adapters/hubspot.ts` because the rep-facing copy has to
+ * name who it goes to, and that file is server-only.
+ */
+export const QUOTE_NOTE_WATCHER = {
+  hubspotOwnerId: "161690499",
+  name: "Elizabeth Phillips",
+} as const;
+
+/**
+ * The shortest note that counts as an explanation. A required box a rep can
+ * satisfy with "x" only slows them down.
+ */
+export const MIN_QUOTE_NOTE_LENGTH = 10;
+
+/** How far out a line's first charge sits. 0 for "at checkout", and for a date already past. */
+export function billingStartDelayDays(start: BillingStart | null | undefined): number {
+  if (!start) return 0;
+  return start.mode === "days" ? Math.max(0, Math.floor(start.days)) : daysUntil(start.date);
+}
+
+/** The longest first-charge delay anywhere on the quote. */
+export function longestBillingDelayDays(lines: Array<{ billingStart?: BillingStart | null }>): number {
+  return lines.reduce((n, l) => Math.max(n, billingStartDelayDays(l.billingStart)), 0);
+}
+
+/**
+ * The delay past which a rep has to write down why.
+ *
+ * Deliberately the plan's own default, so the rule reads as "anything longer
+ * than what the plan already gives them". Distinct from the delay CEILING
+ * (`maxBillingDelayDays`), which REFUSES and is raised by an admin: this one
+ * doesn't refuse the delay, it refuses the silence. Between the two numbers —
+ * 61 to 90 days by default — a note is the whole requirement.
+ */
+export const DELAY_NOTE_THRESHOLD_DAYS = PLAN_DEFAULT_BILLING_DELAY_DAYS;
+
+export function quoteNoteBlockers(
+  lines: Array<{ billingStart?: BillingStart | null }>,
+  note: string | null | undefined
+): string[] {
+  const days = longestBillingDelayDays(lines);
+  if (days <= DELAY_NOTE_THRESHOLD_DAYS) return [];
+  if ((note ?? "").trim().length >= MIN_QUOTE_NOTE_LENGTH) return [];
+  return [
+    `This quote holds a first charge for ${days} days, past the ${DELAY_NOTE_THRESHOLD_DAYS}-day ` +
+    `default — write a note saying why. It goes onto the HubSpot deal for ${QUOTE_NOTE_WATCHER.name}.`,
+  ];
+}
+
+/**
  * The admin limits that aren't the discount cap: per-product quantity caps and
  * the longest billing delay a rep may set unaided. One row in
  * `quote_limit_policy`, read together, passed to `buildQuote` together.
@@ -1518,11 +1690,14 @@ export function planDefaultBillingStart(quoteType: QuoteType): BillingStart | nu
 export type QuoteLimits = {
   unitCaps: Record<string, number>;
   maxBillingDelayDays: number;
+  /** Whether the picker offers the two tablets at all. See TABLET_PRODUCT_IDS. */
+  showTablets: boolean;
 };
 
 export const DEFAULT_QUOTE_LIMITS: QuoteLimits = {
   unitCaps: DEFAULT_UNIT_CAPS,
   maxBillingDelayDays: DEFAULT_MAX_APPROVED_DELAY_DAYS,
+  showTablets: DEFAULT_SHOW_TABLETS,
 };
 
 /**
@@ -1999,6 +2174,9 @@ export function buildQuote(
       qty: (prev?.qty ?? 0) + line.qty,
     });
   }
+  // …and nothing is on it in a quantity that has nothing to attach to.
+  blockers.push(...relativeCeilingBlockers(quoteLines));
+
   for (const [productId, { name, qty }] of qtyByProduct) {
     const max = maxQtyFor(productId, limits.unitCaps);
     if (max != null && qty > max) {
@@ -2009,17 +2187,34 @@ export function buildQuote(
     }
   }
 
-  // The kiosk is part of what $299/mo buys, so a 2-year quote without one is
-  // incomplete rather than cheap: the merchant pays the committed price and
-  // the hardware they were promised never appears on the document.
-  if (
-    quoteType === "marketing_term" &&
-    !quoteLines.some(l => MARKETING_TERM_KIOSK_IDS.includes(l.hubspotProductId))
-  ) {
-    blockers.push(
-      `The 2-year marketing plan includes one kiosk at no cost — add a Marketing Kit (Mega Kiosk ` +
-      `or 27") so the merchant gets the hardware they're paying for.`
+  // The kiosk is part of what the 2-year plan buys, so such a quote carries
+  // exactly one: without it the merchant pays the committed price and the
+  // hardware they were promised never appears on the document, and with more
+  // than one they are billed for a second kiosk the plan reads as included.
+  //
+  // The upper half is Elizabeth Phillips, 2026-10-12 — "only allow either
+  // 27inch kiosk or mega kiosk, dont allow both or more than one". It is a
+  // REFUSAL rather than a comp on the extra: the plan hands over one, and
+  // whether the merchant may buy a second on the same document is a pricing
+  // decision nobody has made. `applyPlanIncludedKiosk` still comps the dearer
+  // line, which is what stops a refused quote from also being mispriced while
+  // the rep is fixing it.
+  if (quoteType === "marketing_term") {
+    const kiosks = quoteLines.reduce(
+      (n, l) => n + (MARKETING_TERM_KIOSK_IDS.includes(l.hubspotProductId) ? l.qty : 0),
+      0
     );
+    if (kiosks === 0) {
+      blockers.push(
+        `The 2-year marketing plan includes one kiosk at no cost — add a Marketing Kit (Mega Kiosk ` +
+        `or 27") so the merchant gets the hardware they're paying for.`
+      );
+    } else if (kiosks > 1) {
+      blockers.push(
+        `The 2-year marketing plan includes exactly one kiosk — a Mega or a 27", not both and not ` +
+        `${kiosks}. Take the extras off, or quote them on a separate marketing quote.`
+      );
+    }
   }
 
   return {

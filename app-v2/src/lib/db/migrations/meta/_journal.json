@@ -141,6 +141,13 @@
       "when": 1791411000000,
       "tag": "0019_quote_limit_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791840667564,
+      "tag": "0020_tablet_visibility_and_quote_notes",
+      "breakpoints": true
     }
   ]
 }

@@ -106,6 +106,9 @@ function NewProspectFlow() {
   const [quoteType, setQuoteType] = useState<QuoteType | null>(null);
   const [picks, setPicks]       = useState<ProductPick[]>([]);
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
+  // The rep's note on this quote — required once a first charge is held past
+  // the plan's own 60 days, and mirrored onto the HubSpot deal on save.
+  const [quoteNote, setQuoteNote] = useState("");
   const [channels, setChannels] = useState<string[]>([]);
   const [channelsApplied, setChannelsApplied] = useState<string[]>([]);
   const [quote, setQuote]       = useState<ConfiguredQuote | null>(null);
@@ -388,6 +391,7 @@ function NewProspectFlow() {
         picks,
         channels,
         adjustments,
+        quoteNote,
         hubspotCompanyId: hubspotCompany!.id,
         // Always "existing": this page no longer creates deals. The deal came
         // from HubSpot and the server re-resolves it through the same
@@ -860,6 +864,8 @@ function NewProspectFlow() {
         onDerivedChange={setQuote}
         adjustments={adjustments}
         onAdjustmentsChange={setAdjustments}
+        note={quoteNote}
+        onNoteChange={setQuoteNote}
         buildSlot={ratePanel || undefined}
         documentHeader={
           <div className={styles.docHead}>

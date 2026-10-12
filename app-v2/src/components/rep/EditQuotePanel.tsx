@@ -61,6 +61,9 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
     adjustmentsFromQuoteLines(app.quoteLines, savedQuoteType)
   );
   const [quote, setQuote] = useState<ConfiguredQuote | null>(null);
+  // Reopened from the row, so a rep editing an existing quote sees the reason
+  // they already wrote rather than being asked for it again.
+  const [quoteNote, setQuoteNote] = useState(app.quoteNote ?? "");
 
   const [quoteRates, setQuoteRates] = useState<QuoteRates>(app.quoteRates ?? DEFAULT_QUOTE_RATES);
   const [pricingModel, setPricingModel] = useState<PricingModel>(app.pricingModel ?? "2-tier");
@@ -154,6 +157,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
       const updated = await saveQuoteConfigurationAction({
         applicationId: app.id,
         quoteType,
+        quoteNote,
         picks,
         channels,
         quoteRates,
@@ -207,6 +211,8 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         onDerivedChange={setQuote}
         adjustments={adjustments}
         onAdjustmentsChange={setAdjustments}
+        note={quoteNote}
+        onNoteChange={setQuoteNote}
       />
 
       {rated && (

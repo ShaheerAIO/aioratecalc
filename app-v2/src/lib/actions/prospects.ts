@@ -16,10 +16,13 @@ import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidatio
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
-import { deleteQuoteLineItem, getQuoteSnapshot, updateCompanyMerchantDetails } from "@/lib/adapters/hubspot";
+import { createDealNote, deleteQuoteLineItem, getQuoteSnapshot, updateCompanyMerchantDetails } from "@/lib/adapters/hubspot";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
 import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
-import { buildQuote, isAllowedForQuoteType, isProcessingQuote, quoteHasProcessing, quoteTypeOf, toQuoteLine } from "@/lib/quoting";
+import {
+  buildQuote, isAllowedForQuoteType, isProcessingQuote, longestBillingDelayDays, quoteHasProcessing,
+  quoteNoteBlockers, quoteTypeOf, toQuoteLine, DELAY_NOTE_THRESHOLD_DAYS, QUOTE_NOTE_WATCHER,
+} from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
 import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
 import type {
@@ -98,6 +101,46 @@ async function syncCompanyDetails(
   } catch (err) {
     console.error("HubSpot company details sync failed", companyId, err);
     return { synced: false };
+  }
+}
+
+/**
+ * Mirror the rep's quote note onto the HubSpot deal, as a note owned by
+ * QUOTE_NOTE_WATCHER.
+ *
+ * Best-effort, like the company sync above: the quote is already saved, and a
+ * note is a RECORD of a decision rather than a precondition for one — a
+ * missing `crm.objects.notes.write` scope must not stop a rep quoting.
+ *
+ * Only on CHANGE, and only when there is a deal to put it on. HubSpot notes
+ * are append-only (there is no update-this-note here), so posting an unchanged
+ * note on every save would bury the deal in copies of one sentence. The
+ * trade-off runs the other way for a note written before the deal existed: it
+ * is kept on the row and reaches HubSpot the next time the rep edits it, which
+ * is the same bargain `deliverLeadLink` strikes — the rep's own copy is never
+ * lost, even when the push is.
+ */
+async function mirrorQuoteNote(
+  app: Pick<MerchantApplication, "id" | "hubspotDealId" | "quoteNote" | "quoteLines">,
+  previous: string | null,
+): Promise<void> {
+  const note = (app.quoteNote ?? "").trim();
+  if (!note || note === (previous ?? "").trim()) return;
+  if (!app.hubspotDealId) return;
+
+  // The delay is what makes this note mandatory, so it is what the note has
+  // to open with — a reason with no number beside it is a sentence nobody can
+  // check.
+  const delay = longestBillingDelayDays(app.quoteLines ?? []);
+  const heading = delay > DELAY_NOTE_THRESHOLD_DAYS
+    ? `${QUOTE_NOTE_WATCHER.name} — billing on this quote starts after ${delay} days ` +
+      `(past the ${DELAY_NOTE_THRESHOLD_DAYS}-day default). The rep's reason:`
+    : `${QUOTE_NOTE_WATCHER.name} — note from the rep on this quote:`;
+
+  try {
+    await createDealNote(app.hubspotDealId, `${heading}\n\n${note}`, QUOTE_NOTE_WATCHER.hubspotOwnerId);
+  } catch (err) {
+    console.error("HubSpot quote note push failed", app.id, app.hubspotDealId, err);
   }
 }
 
@@ -289,7 +332,14 @@ async function deriveQuoteLines(
   quoteType: QuoteType,
   picks: QuotePick[],
   channels: string[],
-  adjustments: QuoteAdjustments
+  adjustments: QuoteAdjustments,
+  /**
+   * The rep's note, checked here because a long billing delay is only
+   * visible once the lines are built — the adjustments alone don't say which
+   * of them are recurring. Server-side like every other limit: the browser's
+   * copy of this rule is a courtesy.
+   */
+  note?: string | null
 ): Promise<{ quoteLines: QuoteLine[] | null; orderPoints: OrderPoints | null }> {
   const wanted = picks.filter(p => p.hubspotProductId && p.qty > 0);
   // A PROCESSING quote with nothing picked and no channel declared is a
@@ -337,7 +387,8 @@ async function deriveQuoteLines(
   // an ACH mandate nobody can amend.
   const [maxDiscountPercent, limits] = await Promise.all([getMaxDiscountPercent(), getQuoteLimits()]);
   const built = buildQuote(quoteType, lines, channels, catalog.all, adjustments, maxDiscountPercent, limits);
-  if (built.blockers.length) throw new Error(built.blockers.join(" "));
+  const blockers = [...built.blockers, ...quoteNoteBlockers(built.quoteLines, note)];
+  if (blockers.length) throw new Error(blockers.join(" "));
 
   return {
     quoteLines: built.quoteLines.length ? built.quoteLines : null,
@@ -392,6 +443,12 @@ export async function createProspectAction(input: {
    * the admin cap; the browser's copy of it is advisory only.
    */
   adjustments?: QuoteAdjustments | null;
+  /**
+   * The rep's note on this quote. Optional, and REQUIRED when a first charge
+   * is held past DELAY_NOTE_THRESHOLD_DAYS — `deriveQuoteLines` refuses
+   * without one. Mirrored onto the HubSpot deal below.
+   */
+  quoteNote?: string | null;
   // Required — the Company & Deal section makes both mandatory before submit
   // is enabled. Re-fetched here (not trusted from whatever the client last
   // showed) so the persisted tenant-link snapshot reflects the Company at
@@ -467,7 +524,10 @@ export async function createProspectAction(input: {
       : null;
   const analysis = rated ? input.analysis ?? null : null;
 
-  const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {});
+  const quoteNote = (input.quoteNote ?? "").trim() || null;
+  const { quoteLines, orderPoints } = await deriveQuoteLines(
+    quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {}, quoteNote
+  );
 
   // The same predicate the customer-facing render uses, so a quote can't be
   // marked "sent" when it would draw as nothing. On a marketing-only quote the
@@ -504,6 +564,7 @@ export async function createProspectAction(input: {
     quoteLines,
     orderPoints,
     quoteAcceptedAt: null,
+    quoteNote,
     quoteRates: rated ? (input.quoteRates ?? DEFAULT_QUOTE_RATES) : null,
     // Not written any more — rates replaced it as the input. Null on every new
     // row; the column stays for the rows that have one. See QuoteRates.
@@ -538,6 +599,7 @@ export async function createProspectAction(input: {
     app.ownerContact!.altEmail,
   );
   const companySync = await syncCompanyDetails(input.hubspotCompanyId, app);
+  await mirrorQuoteNote(app, null);
 
   return { app, linkUrl: link.url, emailResult, smsResult, companySync };
 }
@@ -585,6 +647,12 @@ export async function saveQuoteConfigurationAction(input: {
    * the admin cap; the browser's copy of it is advisory only.
    */
   adjustments?: QuoteAdjustments | null;
+  /**
+   * The rep's note on this quote. Undefined keeps whatever the row already
+   * has — a caller that doesn't offer the box must not erase one. Required
+   * when a first charge is held past DELAY_NOTE_THRESHOLD_DAYS.
+   */
+  quoteNote?: string | null;
   /** What this quote is priced on. Omitted keeps whatever the row already has. */
   quoteRates?: QuoteRates | null;
   pricingModel: PricingModel;
@@ -627,7 +695,12 @@ export async function saveQuoteConfigurationAction(input: {
   }
 
   const quoteType: QuoteType = quoteTypeOf(input.quoteType);
-  const { quoteLines, orderPoints } = await deriveQuoteLines(quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {});
+  const quoteNote = input.quoteNote === undefined
+    ? app.quoteNote ?? null
+    : (input.quoteNote ?? "").trim() || null;
+  const { quoteLines, orderPoints } = await deriveQuoteLines(
+    quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {}, quoteNote
+  );
 
   const quoteConfig =
     input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0
@@ -680,11 +753,13 @@ export async function saveQuoteConfigurationAction(input: {
     quoteConfig,
     quoteLines,
     orderPoints,
+    quoteNote,
     quoteRates: input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES,
     pricingModel: input.pricingModel,
     updatedAt: new Date().toISOString(),
   };
   await postgresStorage.saveApplication(scope, updated);
+  await mirrorQuoteNote(updated, app.quoteNote ?? null);
   return updated;
 }
 

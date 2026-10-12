@@ -152,3 +152,57 @@ the cart. clicking a plan is what seeds its kit / website / menu boards.
 
 marketing product boxes: the Website tile's "online ordering" checkbox was
 squeezing the price into one character per line. (DONE — tiles wrap.)
+
+10/12
+make the merchant details a static card, not in drawer
+pull operating addy from hubspot. its the one most likley hubspot actually carries. Then we ask for the legal addy. push it back into hs once they submit
+
+figure out how to change quotes after publishing
+edit if not signed, make a new one if alr signed
+change old quote status to void (redundant confirmation)
+
+matrix table, editable
+when quote is confirmed "payment_processing_arr" in hs = margin x monthly volume x 12
+not needed for marketing only.
+for online ordering there should be a separate matrix, but dont put it back into hubspot because website arr is not important
+block quote creations for when deal stage is past "close won" or just add diologue box
+
+LATER: comissions calculator, write to HS
+
+
+Elizabeth notes: 
+
+Limit quantity if marketing products too 
+(DONE — both Marketing Kits capped at 6; they were the only uncapped family.)
+
+Dont allow more Customer Facing Displays/Cash drawer than POS units 
+(DONE — RELATIVE_CEILINGS. Counted against both POS SKUs, reported not clamped.)
+
+Dont allow more adyen’s than POS units/kiosks  (we should put kiosk separate from adyen and have them automatically add too with kiosks) 
+(CEILING DONE — AMS1 <= POS + kiosks. The auto-add half is NOT done: it needs the
+27"/Mini SKUs renamed in HubSpot first, or it double-bills the terminal already in
+the box, and it reverses the 10/9 "reminder on kiosks" decision.)
+
+Delete tablet options. I dont think we have any reason to offer them unless we can think of a use case where they should be allowed.  Maybe in marketing ony package if they add in online ordering. --> online ordering will need some other hardware options too with marketing only 
+(DONE as a SWITCH, default off — Admin → Quote limits → "Products offered".
+Hidden from the picker, never refused, and one already on a quote stays visible.
+The marketing/online-ordering hardware question is still open.)
+
+Fix formatting on billing start date, year gets cut off
+(DONE — the date fields shared the number inputs' 5.5rem width.)
+
+Marketing 2 year term: only allow either 27inch kiosk or mega kiosk. dont allow both or more than one  
+(DONE — exactly one, either kind. Refused, not comped.)
+
+Categorize the “AIO tableside POS” as a product and “website” as a software (this has been moved on hubspot already) 
+(NOT MOVED — checked live 10/12: both still have an empty hs_product_type, so both
+sit under "Uncategorized" in the picker. EasyOB reads the type straight off
+HubSpot, so this is two field edits in the portal, no code change.)
+
+
+Add a section to make notes. Can we make it so that the sales person can add notes that are automatically added in hubspot about certain things. Like if they make the delayed billing longer than 60 days, force them to leave a note explaining why and tagging me automatically  
+(DONE — note box under the billing controls, required past 60 days, posted to the
+deal and OWNED by Elizabeth. Not an @mention: this portal's NOTE object has no
+hs_at_mentioned_owner_ids, so the API can't raise that notification — a HubSpot
+workflow on "note created, owner = Elizabeth" would. Needs crm.objects.notes.write
+on the EasyOB Billing app or every push 403s.)

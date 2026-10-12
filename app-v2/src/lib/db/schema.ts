@@ -99,6 +99,10 @@ export const quoteLimitPolicy = pgTable("quote_limit_policy", {
   unitCaps: jsonb("unit_caps").$type<Record<string, number>>().notNull().default({}),
   // The longest billing delay a rep may set without an admin raising it.
   maxBillingDelayDays: integer("max_billing_delay_days").notNull().default(90),
+  // Whether the picker offers the two tablets. A visibility switch, not a
+  // cap — see TABLET_PRODUCT_IDS in quoting.ts for why it is neither a
+  // deletion nor a refusal. Default false: nobody sells them today.
+  showTablets: boolean("show_tablets").notNull().default(false),
   updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   isActive: boolean("is_active").notNull().default(true),
@@ -174,6 +178,10 @@ export const merchantApplications = pgTable("merchant_applications", {
   // Frozen alongside quoteConfig/quoteLines — the record of what was agreed,
   // not a piece of live deal state (that's `stage`).
   quoteAcceptedAt: timestamp("quote_accepted_at", { withTimezone: true }),
+  // The rep's note on this quote, mirrored onto the HubSpot deal. Nullable:
+  // most quotes have nothing to say. It becomes REQUIRED only when a first
+  // charge is held past DELAY_NOTE_THRESHOLD_DAYS — see `quoteNoteBlockers`.
+  quoteNote: text("quote_note"),
   analysis: jsonb("analysis").$type<StatementAnalysis | null>(),
   proposal: jsonb("proposal").$type<ProposalOutput | null>(),
   business: jsonb("business").$type<BusinessInfo | null>(),

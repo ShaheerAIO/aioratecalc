@@ -78,6 +78,7 @@ const CATALOG: CatalogProduct[] = [
   p("223511653101", "mPOS", 349, "one_time", "inventory"),
   p("223511653105", "Payment Terminal - AMS1", 300, "one_time", "inventory"),
   p("222497165011", "Cash Drawer", 69, "one_time", "inventory"),
+  p("318736467644", "Customer Facing Display", 299, "one_time", "inventory"),
   p("276751313619", "Orders Hub Tablet", 199, "one_time", "inventory"),
   p("276754193118", "Clock in Tablet", 199, "one_time", "inventory"),
   p("252941875920", "QSR POS Hardware Bundle", 1110, "one_time", "inventory"),
@@ -702,15 +703,33 @@ describe("marketing plans", () => {
     expect(built.blockers[0]).toContain("includes one kiosk at no cost");
   });
 
-  it("holds the first kiosk at $0 on the 2-year plan and bills the rest", () => {
+  it("refuses a 2-year quote carrying more than one kiosk, and still comps the first", () => {
+    // Elizabeth Phillips, 2026-10-12 — the plan includes ONE kiosk and a
+    // second one on the same document is a sale nobody has priced. The comp
+    // keeps running while the rep fixes it, so a refused quote isn't also
+    // showing the wrong money.
     const built = buildQuote("marketing_term", picked([[MEGA, 3]]), [], CATALOG);
-    expect(built.blockers).toEqual([]);
+    expect(built.blockers).toHaveLength(1);
+    expect(built.blockers[0]).toContain("includes exactly one kiosk");
 
     const kiosks = built.quoteLines.filter(l => l.name === MEGA);
     expect(kiosks.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [2, null]]);
-    // $1,500 × 2 — the third is the plan's, and the menu boards are free.
     expect(built.totals.oneTime).toBe(3000);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
+  });
+
+  it("takes exactly one kiosk, of either kind, without complaint", () => {
+    for (const kit of [MEGA, KIOSK_27]) {
+      const built = buildQuote("marketing_term", picked([[kit, 1]]), [], CATALOG);
+      expect(built.blockers).toEqual([]);
+      expect(built.totals.oneTime).toBe(0);
+    }
+  });
+
+  it("caps the marketing kits like the ordering kiosks they are", () => {
+    // They were the one uncapped family until 2026-10-12.
+    expect(maxQtyFor(find(MEGA).hubspotProductId)).toBe(6);
+    expect(maxQtyFor(find(KIOSK_27).hubspotProductId)).toBe(6);
   });
 
   it("charges for the same kiosk on the $199 plan", () => {
@@ -720,10 +739,13 @@ describe("marketing plans", () => {
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 199 }]);
   });
 
-  it("comps the DEARER kiosk when a merchant buys both", () => {
-    // The plan says "a Mega or a 27-inch". Buying the other one too must not
-    // cost the merchant the better half of the inclusion.
+  it("refuses both kiosks at once, and comps the DEARER one meanwhile", () => {
+    // "Dont allow both or more than one" (2026-10-12) — but while the rep is
+    // taking one off, the money shown still has to be the money the plan
+    // means: the comp lands on the Mega, not the 27".
     const built = buildQuote("marketing_term", picked([[KIOSK_27, 1], [MEGA, 1]]), [], CATALOG);
+    expect(built.blockers).toHaveLength(1);
+    expect(built.blockers[0]).toContain("not both");
     const free = built.quoteLines.find(l => l.discountPercent === 100 && l.name !== "Menu Board Computer");
     expect(free!.name).toBe(MEGA);
     expect(built.totals.oneTime).toBe(999);
@@ -901,7 +923,7 @@ describe("one website per merchant", () => {
     const id = find("POS Unit").hubspotProductId;
     const built = buildQuote(
       "all_in_one", picked([["POS Unit", 3]]), [], CATALOG, {}, 50,
-      { unitCaps: { [id]: 2 }, maxBillingDelayDays: 90 }
+      { unitCaps: { [id]: 2 }, maxBillingDelayDays: 90, showTablets: false }
     );
     expect(built.blockers.some(b => b.includes("over the limit of 2"))).toBe(true);
     expect(built.blockers.some(b => b.includes("Admin → Quote limits"))).toBe(true);
@@ -1170,5 +1192,55 @@ describe("the Website the All-in-One plan includes", () => {
       hubspotProductId: find("Website").hubspotProductId, qty: 1,
     });
     expect(adjustmentsFromQuoteLines(built.quoteLines, "all_in_one")[find("Website").hubspotProductId]).toBeUndefined();
+  });
+});
+
+// ── One per thing it attaches to ────────────────────────────────────────────
+// Elizabeth Phillips, 2026-10-12: a display or a drawer belongs to a POS, a
+// terminal to a POS or a kiosk. The flat unit caps can't say this — they cap
+// each product at a number an admin typed, which catches a typo, not "four
+// drawers for two tills".
+describe("quantities counted against what they attach to", () => {
+  const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
+  const blockersFor = (names: Array<[string, number]>) =>
+    buildQuote("all_in_one", picked(names), [], CATALOG).blockers;
+
+  it("refuses more displays or drawers than POS units", () => {
+    const blockers = blockersFor([["POS Unit", 2], ["Customer Facing Display", 3], ["Cash Drawer", 5]]);
+    expect(blockers).toHaveLength(2);
+    expect(blockers[0]).toContain('3 × "Customer Facing Display" on it but 2 POS units');
+    expect(blockers[1]).toContain('5 × "Cash Drawer" on it but 2 POS units');
+  });
+
+  it("counts the POS that ships with a display toward the ceiling too", () => {
+    expect(blockersFor([
+      ["POS Unit", 1], ["POS Unit - With Customer Facing Display", 1], ["Customer Facing Display", 2],
+    ])).toEqual([]);
+  });
+
+  it("says so plainly when there is nothing to attach them to", () => {
+    const blockers = blockersFor([["Cash Drawer", 2]]);
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]).toContain("but no POS units");
+  });
+
+  it("counts kiosks as well as POS units for the terminal", () => {
+    // One terminal per POS is already DERIVED, so the ceiling it's measured
+    // against has to include everything that can take a payment — otherwise
+    // the quote blocks itself.
+    expect(blockersFor([["POS Unit", 2]])).toEqual([]);
+    expect(blockersFor([
+      ["Kiosk 27\" + Payment Terminal (AMS1) and Mount", 2], ["Payment Terminal - AMS1", 2],
+    ])).toEqual([]);
+
+    const blockers = blockersFor([["POS Unit", 1], ["Payment Terminal - AMS1", 4]]);
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]).toContain('4 × "Payment Terminal - AMS1" on it but 1 POS unit or kiosk');
+  });
+
+  it("reports rather than clamping — the lines stay on the quote", () => {
+    const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Cash Drawer", 4]]), [], CATALOG);
+    expect(built.blockers).toHaveLength(1);
+    expect(built.quoteLines.filter(l => l.name === "Cash Drawer").map(l => l.qty)).toEqual([4]);
   });
 });

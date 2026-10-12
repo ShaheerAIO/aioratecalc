@@ -32,6 +32,11 @@ import {
   isPreAuthProduct,
   isMarketingQuote,
   isProcessingQuote,
+  isTabletProduct,
+  longestBillingDelayDays,
+  quoteNoteBlockers,
+  DELAY_NOTE_THRESHOLD_DAYS,
+  QUOTE_NOTE_WATCHER,
   lineDiscountAmount,
   lineListAmount,
   lineNetAmount,
@@ -102,6 +107,14 @@ type Props = {
   adjustments?: QuoteAdjustments;
   onAdjustmentsChange?: (adjustments: QuoteAdjustments) => void;
   /**
+   * The rep's note on this quote, held by the caller like the picks are and
+   * sent to the server with them. Hosts that don't offer it (none today) get
+   * no note box and no note rule — which is why the box renders only when
+   * `onNoteChange` is given.
+   */
+  note?: string;
+  onNoteChange?: (note: string) => void;
+  /**
    * Which types this caller offers. Defaults to all of them; the proposal
    * wizard passes only the rated ones because it starts from a statement, and a
    * marketing-only quote has no statement behind it.
@@ -157,6 +170,7 @@ function startKey(start: BillingStart | null | undefined): string {
 export default function ProductConfigurator({
   quoteType, picks, channels,
   onQuoteTypeChange, onPicksChange, onChannelsChange, onDerivedChange,
+  note = "", onNoteChange,
   adjustments = NO_ADJUSTMENTS, onAdjustmentsChange,
   selectableTypes,
   rail = "gutter",
@@ -201,10 +215,22 @@ export default function ProductConfigurator({
   const planned: QuoteType = quoteType ?? "all_in_one";
   const rated = isProcessingQuote(planned);
 
-  // The picker only ever shows what this quote type may carry.
+  // The picker only ever shows what this quote type may carry — minus the
+  // tablets, unless an admin has switched them back on at
+  // /admin/settings/quote-limits (TABLET_PRODUCT_IDS).
+  //
+  // One already on the quote stays listed however the switch is set. Hiding a
+  // picked line would leave a rep looking at a price with no row to change it
+  // on, and the switch is a view of the catalog, not a rule about what may be
+  // sold — nothing downstream refuses a tablet.
   const selectable = useMemo(
-    () => catalog.filter(p => isAllowedForQuoteType(p, planned)),
-    [catalog, planned]
+    () => catalog.filter(p =>
+      isAllowedForQuoteType(p, planned) &&
+      (limits.showTablets ||
+        !isTabletProduct(p.hubspotProductId) ||
+        picks.some(pick => pick.hubspotProductId === p.hubspotProductId && pick.qty > 0))
+    ),
+    [catalog, planned, limits.showTablets, picks]
   );
   // The kit's products sit together at the top of the ordinary Hardware group,
   // in the kit's own order, with no label of their own. Static on purpose: the
@@ -275,8 +301,17 @@ export default function ProductConfigurator({
   }, [selectable, picks]);
 
   const built = useMemo(
-    () => buildQuote(planned, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits),
-    [planned, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits]
+    () => {
+      const quote = buildQuote(planned, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits);
+      // Folded in here rather than inside `buildQuote` because the note isn't
+      // part of the derivation — it changes nothing on the quote, it is a
+      // condition on sending one. The server re-runs the same check against
+      // its own copy of the note (`deriveQuoteLines`), so this is the
+      // courtesy and that is the authority.
+      const noteBlockers = quoteNoteBlockers(quote.quoteLines, note);
+      return noteBlockers.length ? { ...quote, blockers: [...quote.blockers, ...noteBlockers] } : quote;
+    },
+    [planned, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits, note]
   );
   const {
     orderPoints, breakdown, platform, includedServices,
@@ -887,7 +922,7 @@ export default function ProductConfigurator({
                             {us?.mode === "date" && (
                               <input
                                 type="date"
-                                className={styles.adjustInput}
+                                className={`${styles.adjustInput} ${styles.dateInput}`}
                                 value={us.date}
                                 onChange={e => setUnit(id, l.qty, i, { billingStart: { mode: "date", date: e.target.value } })}
                                 aria-label={`Billing start date for unit ${i + 1} of ${l.name}`}
@@ -981,7 +1016,7 @@ export default function ProductConfigurator({
                   {start?.mode === "date" && (
                     <input
                       type="date"
-                      className={styles.adjustInput}
+                      className={`${styles.adjustInput} ${styles.dateInput}`}
                       value={start.date}
                       onChange={e => setAdjustment(id, { billingStart: { mode: "date", date: e.target.value } })}
                       aria-label={`Billing start date for ${l.name}`}
@@ -1108,6 +1143,34 @@ export default function ProductConfigurator({
     );
   }
 
+  // Why this quote delays what it delays. Required past the plan's own 60
+  // days — Elizabeth Phillips, 2026-10-12: "force them to leave a note
+  // explaining why and tagging me automatically". It sits with the billing
+  // controls rather than near the send button because this is where the rep
+  // makes the decision it is asking about.
+  const longestDelay = longestBillingDelayDays(quoteLines);
+  const noteRequired = longestDelay > DELAY_NOTE_THRESHOLD_DAYS;
+  const noteControl = onNoteChange ? (
+    <label className={styles.noteField} data-required={noteRequired || undefined}>
+      <span className={styles.adjustLabel}>
+        {noteRequired ? `Why billing starts after ${longestDelay} days — required` : "Note (optional)"}
+      </span>
+      <textarea
+        className={styles.noteInput}
+        rows={2}
+        value={note}
+        placeholder={noteRequired
+          ? "The reason this quote holds the first charge longer than usual."
+          : "Anything about this quote worth recording."}
+        onChange={e => onNoteChange(e.target.value)}
+        aria-label="Note on this quote"
+      />
+      <span className={styles.adjustNote}>
+        Posted to the HubSpot deal for {QUOTE_NOTE_WATCHER.name}.
+      </span>
+    </label>
+  ) : null;
+
   const globalControls = (
     <div className={styles.globalGrid}>
       <label className={styles.adjustField}>
@@ -1128,7 +1191,7 @@ export default function ProductConfigurator({
           {sharedStart.start?.mode === "date" && (
             <input
               type="date"
-              className={styles.adjustInput}
+              className={`${styles.adjustInput} ${styles.dateInput}`}
               value={sharedStart.start.date}
               onChange={e => setAdjustments(recurringIds, { billingStart: { mode: "date", date: e.target.value } })}
               aria-label="Billing start date for every recurring line"
@@ -1148,6 +1211,7 @@ export default function ProductConfigurator({
           )}
         </span>
       </label>
+      {noteControl}
     </div>
   );
 

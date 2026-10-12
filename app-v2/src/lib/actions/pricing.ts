@@ -9,8 +9,8 @@ import {
   type PaddingConfig, type RoleScopedPricing, type FeeOverrides,
 } from "@/lib/pricing";
 import {
-  DEFAULT_MAX_APPROVED_DELAY_DAYS, DEFAULT_MAX_DISCOUNT_PERCENT, DEFAULT_UNIT_CAPS,
-  MAX_BILLING_DELAY_DAYS, type QuoteLimits,
+  DEFAULT_MAX_APPROVED_DELAY_DAYS, DEFAULT_MAX_DISCOUNT_PERCENT, DEFAULT_SHOW_TABLETS,
+  DEFAULT_UNIT_CAPS, MAX_BILLING_DELAY_DAYS, type QuoteLimits,
 } from "@/lib/quoting";
 import type { StatementAnalysis, ProcessorTier, QuoteConfig, QuoteRates } from "@/types/merchant";
 
@@ -125,7 +125,11 @@ export async function getPricingPreviewAction(input: {
  * posture as `getMaxDiscountPercent` and the quote-template policy.
  */
 export async function getQuoteLimits(): Promise<QuoteLimits> {
-  const fallback = { unitCaps: DEFAULT_UNIT_CAPS, maxBillingDelayDays: DEFAULT_MAX_APPROVED_DELAY_DAYS };
+  const fallback = {
+    unitCaps: DEFAULT_UNIT_CAPS,
+    maxBillingDelayDays: DEFAULT_MAX_APPROVED_DELAY_DAYS,
+    showTablets: DEFAULT_SHOW_TABLETS,
+  };
   // The READ is wrapped, not just the empty case. `saveQuoteConfigurationAction`
   // awaits this alongside the discount cap with no catch of its own, so a
   // database that has not run migration 0019 yet — a preview branch, a local
@@ -147,6 +151,9 @@ export async function getQuoteLimits(): Promise<QuoteLimits> {
   return {
     unitCaps: caps && typeof caps === "object" && !Array.isArray(caps) ? caps : DEFAULT_UNIT_CAPS,
     maxBillingDelayDays: row.maxBillingDelayDays || DEFAULT_MAX_APPROVED_DELAY_DAYS,
+    // A row written before migration 0020 reads undefined, which is the same
+    // answer as "an admin left them hidden" — the default either way.
+    showTablets: row.showTablets ?? DEFAULT_SHOW_TABLETS,
   };
 }
 
@@ -179,6 +186,7 @@ export async function updateQuoteLimitsAction(input: QuoteLimits): Promise<void>
   const values = {
     unitCaps,
     maxBillingDelayDays: input.maxBillingDelayDays,
+    showTablets: input.showTablets === true,
     updatedByUserId: effective.userId,
     updatedAt: new Date(),
   };

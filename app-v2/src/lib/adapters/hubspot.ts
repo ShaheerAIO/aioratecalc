@@ -620,6 +620,56 @@ export async function createDeal(input: CreateDealInput): Promise<string> {
   return data.id;
 }
 
+// HUBSPOT_DEFINED note → deal. The note has to be associated at CREATE the
+// same way a deal's company is: a note with no association is a record nobody
+// will ever come across.
+export const NOTE_TO_DEAL_ASSOCIATION_TYPE_ID = 214;
+
+/** The rep's text, as safe HTML. `hs_note_body` is rendered as HTML by HubSpot. */
+function noteHtml(body: string): string {
+  const esc = body
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return esc.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+}
+
+/**
+ * Put a note on a deal, owned by `ownerId`.
+ *
+ * Owned, not @mentioned: this portal's NOTE object has no
+ * `hs_at_mentioned_owner_ids` property, so there is no API route to the
+ * notification HubSpot's own composer raises. See QUOTE_NOTE_WATCHER.
+ *
+ * Every caller is fire-and-log — a note is a record of a decision, never a
+ * precondition for one — so the thrown message has to name the deal itself.
+ * A 403 here means the billing app is missing `crm.objects.notes.write`.
+ */
+export async function createDealNote(
+  dealId: string,
+  body: string,
+  ownerId?: string | null
+): Promise<string> {
+  const properties: Record<string, string> = {
+    hs_timestamp: new Date().toISOString(),
+    hs_note_body: noteHtml(body),
+  };
+  if (ownerId) properties.hubspot_owner_id = ownerId;
+
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/notes`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({
+      properties,
+      associations: [{
+        to: { id: dealId },
+        types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: NOTE_TO_DEAL_ASSOCIATION_TYPE_ID }],
+      }],
+    }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot note create failed (deal ${dealId})`, res.status, await res.text());
+  const data = await res.json() as { id: string };
+  return data.id;
+}
+
 /**
  * Sets a deal↔company association on an EXISTING deal via a v4 associations
  * PUT — the repair primitive for a deal that's missing (or, someday, wrong)

@@ -50,6 +50,7 @@ function newApp(): MerchantApplication {
     quoteLines: null,
     orderPoints: null,
     quoteAcceptedAt: null,
+    quoteNote: null,
     quoteRates: null,
     targetMargin: null,
     pricingModel: null,
@@ -95,6 +96,9 @@ function NewProposalFlow() {
   const [quoteType, setQuoteType] = useState<QuoteType>("all_in_one");
   const [picks, setPicks]         = useState<ProductPick[]>([]);
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
+  // The rep's note on this quote — required once a first charge is held past
+  // the plan's own 60 days, and mirrored onto the HubSpot deal on save.
+  const [quoteNote, setQuoteNote] = useState(app.quoteNote ?? "");
   const [channels, setChannels]   = useState<string[]>([]);
   const [quote, setQuote]         = useState<ConfiguredQuote | null>(null);
 
@@ -191,6 +195,7 @@ function NewProposalFlow() {
         picks,
         channels,
         adjustments,
+        quoteNote,
         quoteRates,
         pricingModel,
         quoteConfig: app.quoteConfig,
@@ -359,6 +364,8 @@ function NewProposalFlow() {
             onDerivedChange={setQuote}
             adjustments={adjustments}
             onAdjustmentsChange={setAdjustments}
+            note={quoteNote}
+            onNoteChange={setQuoteNote}
           />
           {error && <div className={styles.error}>{error}</div>}
           <div className={styles.stepActions}>
