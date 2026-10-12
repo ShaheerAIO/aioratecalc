@@ -1103,12 +1103,14 @@ export const MIN_CHECKOUT_AMOUNT = 0.5;
  * plan delayed 60 days, with its hardware comped by the plan.
  *
  * ⚠️ VERIFIED FOR RECURRING LINES ONLY. A dated ONE-TIME line is read the same
- * way here, which is what the property means, but AIO's portal has no paid
- * quote that proves it: all 49 delayed one-time lines sit on three
- * PAYMENT_NOT_ENABLED quotes (`299198595785`, `306949302000`, `330294198002`),
- * so nothing was ever collected through one. If HubSpot in fact charges a
- * dated one-time line at checkout anyway, this under-reports and the merchant
- * is billed on a document nobody can amend — see the note on `startAppliesTo`.
+ * way here, which is what the property means, but the portal cannot confirm
+ * it for TWO independent reasons: all 49 delayed one-time lines sit on
+ * PAYMENT_NOT_ENABLED quotes (`299198595785`, `306949302000`, `330294198002`)
+ * that have no checkout at all, AND every one of them is discounted 100% to
+ * `amount: 0.00`. No dated one-time line in the portal has ever carried more
+ * than the $0.50 pre-auth. If HubSpot in fact charges a dated one-time line at
+ * checkout anyway, this under-reports and the merchant is billed on a document
+ * nobody can amend — see the note on `startAppliesTo`.
  *
  * Distinct from `quoteTotals`, which is what the quote is WORTH. A quote can be
  * worth $299/mo and still owe $0 today.
