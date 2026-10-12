@@ -100,7 +100,10 @@ function NewProspectFlow() {
   // the lines, ordering-point count and derived platform/service lines they
   // imply come back derived. Declared above the HubSpot block because the
   // prefill seeds `channels`.
-  const [quoteType, setQuoteType] = useState<QuoteType>("all_in_one");
+  // NULL until the rep clicks a plan card. A new quote used to open on
+  // all_in_one, which showed a highlighted plan over an empty cart whenever the
+  // cart behind it failed to seed — and claimed an offer nobody had made.
+  const [quoteType, setQuoteType] = useState<QuoteType | null>(null);
   const [picks, setPicks]       = useState<ProductPick[]>([]);
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
   const [channels, setChannels] = useState<string[]>([]);
@@ -115,7 +118,7 @@ function NewProspectFlow() {
   // so they get the ticket/volume inputs, the statement upload and a quoted
   // rate — while still getting none of the POS hardware, install lines or
   // ordering points.
-  const rated = quoteHasProcessing(quoteType, picks, adjustments);
+  const rated = quoteType !== null && quoteHasProcessing(quoteType, picks, adjustments);
 
   // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
   // prefilled from the company on the deal — see prospects.ts's
@@ -311,6 +314,7 @@ function NewProspectFlow() {
 
   const hardBlocks: string[] = [];
   if (!deal || !hubspotCompany) hardBlocks.push("Open this quote from its HubSpot deal before sending the link.");
+  if (!quoteType) hardBlocks.push("Pick a plan — it sets the platform fee and what can go on the quote.");
   if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name — HubSpot doesn't have it, and it's saved back to the company.");
   if (!ownerContact.email.trim()) hardBlocks.push("Enter the customer's contact email.");
   hardBlocks.push(...malformedMessages);
@@ -376,7 +380,7 @@ function NewProspectFlow() {
     try {
       const { linkUrl, emailResult, smsResult, companySync } = await createProspectAction({
         business, ownerContact, processing: rated ? processing : null,
-        quoteRates, pricingModel, quoteType,
+        quoteRates, pricingModel, quoteType: quoteType!,
         quoteConfig: ticket > 0 && volume > 0 ? { avgTicket: ticket, monthlyVolume: volume } : null,
         analysis: rated ? analysis : null,
         // Only the picks cross the wire — prices and the tier are re-derived
@@ -403,7 +407,7 @@ function NewProspectFlow() {
   const reset = () => {
     setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier");
     setFile(null); setAnalysis(null); setPerCardOpen(false); setDetailsOpen(false);
-    setQuoteType("all_in_one"); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
+    setQuoteType(null); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
     clearDeal();
@@ -844,11 +848,9 @@ function NewProspectFlow() {
       <ProductConfigurator
         layout="document"
         /* This is the only host that STARTS a quote, so it is the only one
-           that gets the plan's opening position — the kit preselected and the
-           60-day billing start. The panels that reopen a saved quote must not:
-           an empty one there means a rate-only quote somebody built that way
-           on purpose. */
-        seedPlanDefaults
+           that can be sitting on no plan at all — everything else reopens one
+           that was already chosen. Clicking a card is what seeds its kit, its
+           included hardware and the 60-day billing start. */
         quoteType={quoteType}
         picks={picks}
         channels={channels}

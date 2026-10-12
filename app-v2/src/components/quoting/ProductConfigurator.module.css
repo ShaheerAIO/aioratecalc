@@ -872,7 +872,13 @@
   align-items: center;
 }
 
-.tileGrid .productRow:has(.confirmBox) { flex-wrap: wrap; }
+/* A tile is a name, a price and a stepper on ONE line, so it says nowrap —
+   which also pins any full-width child (`flex-basis: 100%`) into that same
+   line, where it has nowhere to go but through the name. The Website's
+   "Online ordering" checkbox squeezed .productMain to a few pixels and set
+   "$50.00/mo" one character per line. Both full-row children wrap. */
+.tileGrid .productRow:has(.confirmBox),
+.tileGrid .productRow:has(.fullRow) { flex-wrap: wrap; }
 .tileGrid .productRow[data-picked="true"] { border-color: var(--accent); }
 .tileGrid .productMain { flex: 1; }
 

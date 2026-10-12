@@ -81,7 +81,13 @@ function cleanUnit(unit: UnitAdjustment): UnitAdjustment {
 export type ConfiguredQuote = BuiltQuote;
 
 type Props = {
-  quoteType: QuoteType;
+  /**
+   * The plan this quote is being built on, or NULL for a quote whose rep
+   * hasn't chosen one yet — a new quote opens that way, with no card
+   * highlighted and nothing below the plan row (product owner, 2026-10-12).
+   * Hosts that REOPEN a saved quote always have a plan and never pass null.
+   */
+  quoteType: QuoteType | null;
   picks: ProductPick[];
   channels: string[];
   onQuoteTypeChange: (quoteType: QuoteType) => void;
@@ -125,17 +131,6 @@ type Props = {
   documentRate?: ReactNode;
   /** document layout: under the totals — the host's send controls. */
   documentFooter?: ReactNode;
-  /**
-   * Whether this host is starting a BRAND-NEW quote, in which case the chosen
-   * plan brings its own starting point: the hardware kit preselected, and the
-   * 60-day billing start the two POS plans open with.
-   *
-   * Off by default, and every host that REOPENS a saved quote leaves it off.
-   * A reopened rate-only quote has no picks and no adjustments either, so
-   * "looks empty" is not a safe proxy for "is new" — seeding off that would
-   * put a $4,000 kit onto a quote a rep deliberately cleared.
-   */
-  seedPlanDefaults?: boolean;
 };
 
 // Recurring prices read monthly (see fmtRecurring): everything AIO sells bills
@@ -167,7 +162,6 @@ export default function ProductConfigurator({
   rail = "gutter",
   layout = "panels",
   buildSlot, documentHeader, documentRate, documentFooter,
-  seedPlanDefaults = false,
 }: Props) {
   // The catalog is read from HubSpot server-side and cached there, so this is
   // one call per mount, not one per keystroke. It lives in here rather than in
@@ -196,12 +190,21 @@ export default function ProductConfigurator({
   }, []);
 
   const types = QUOTE_TYPES.filter(t => !selectableTypes || selectableTypes.includes(t.id));
-  const rated = isProcessingQuote(quoteType);
+
+  // Every derivation below this line needs A plan to derive from, and hooks
+  // can't be called conditionally — so until the rep picks one this stands in
+  // for it. Nothing computed from it is ever rendered or emitted: the
+  // component returns the plan row and nothing else while `quoteType` is null
+  // (see "Nothing chosen yet"). The two places that must tell "no plan" from
+  // "this plan" — which card is highlighted, and whether a click is a switch
+  // — read `quoteType` itself.
+  const planned: QuoteType = quoteType ?? "all_in_one";
+  const rated = isProcessingQuote(planned);
 
   // The picker only ever shows what this quote type may carry.
   const selectable = useMemo(
-    () => catalog.filter(p => isAllowedForQuoteType(p, quoteType)),
-    [catalog, quoteType]
+    () => catalog.filter(p => isAllowedForQuoteType(p, planned)),
+    [catalog, planned]
   );
   // The kit's products sit together at the top of the ordinary Hardware group,
   // in the kit's own order, with no label of their own. Static on purpose: the
@@ -209,7 +212,7 @@ export default function ProductConfigurator({
   // doesn't jump when its stepper moves and a rep always finds the kit in the
   // same place. A product at zero stays listed — that is how a removed item
   // gets added back.
-  const kit = kitFor(quoteType);
+  const kit = kitFor(planned);
   const groups = useMemo(() => {
     if (!kit) return groupProducts(selectable);
 
@@ -272,8 +275,8 @@ export default function ProductConfigurator({
   }, [selectable, picks]);
 
   const built = useMemo(
-    () => buildQuote(quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits),
-    [quoteType, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits]
+    () => buildQuote(planned, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits),
+    [planned, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits]
   );
   const {
     orderPoints, breakdown, platform, includedServices,
@@ -305,7 +308,7 @@ export default function ProductConfigurator({
   // tells them apart, and the rep needs them worded differently: one is a
   // package they built by picking hardware, the other is what the subscription
   // they chose includes.
-  const planName = PLATFORM_PRODUCTS[quoteType].name;
+  const planName = PLATFORM_PRODUCTS[planned].name;
   const planCoveredQty = useMemo(() => {
     const map = new Map<string, number>();
     for (const l of quoteLines) {
@@ -422,7 +425,10 @@ export default function ProductConfigurator({
   // derived state back up into a render loop.
   const emit = useRef(onDerivedChange);
   useEffect(() => { emit.current = onDerivedChange; });
-  useEffect(() => { emit.current(built); }, [built]);
+  // Nothing is emitted while there is no plan: `built` is then a quote derived
+  // from the `planned` stand-in, which belongs to nobody. The host keeps its
+  // null and gates its own send on that.
+  useEffect(() => { if (quoteType) emit.current(built); }, [built, quoteType]);
 
   // ── What a plan opens with ────────────────────────────────────────────────
   // A billing start waiting to be swept across the recurring lines, once there
@@ -436,25 +442,23 @@ export default function ProductConfigurator({
   // checkout, since clearing an adjustment deletes it.
   const [pendingStart, setPendingStart] = useState<BillingStart | null>(null);
 
-  // A NEW quote opens on a plan nobody clicked — `all_in_one` is the initial
-  // state — so the plan's own starting point (its kit, its menu boards, its
-  // 60-day start) was never applied, and a rep had to click the plan card that
-  // was already selected to get it. That is the "need to reselect for it to
-  // pop up" the product owner reported on 2026-10-09.
+  // A plan clicked BEFORE the catalog arrived has nothing to seed from, and
+  // the cart it opens with is most of what choosing it means — so the choice
+  // is remembered and re-applied the moment the products land. Without this a
+  // rep who clicks inside the first few hundred milliseconds gets a
+  // highlighted plan sitting over an empty cart, which is exactly the
+  // complaint this screen has now had twice.
   //
-  // Guarded three ways, because seeding the wrong quote hands over a $4,000
-  // kit: only a host that says it is starting a new quote, only once, and only
-  // while the quote is genuinely untouched.
-  const seeded = useRef(false);
+  // Only ever set from `changeType`, so it can't seed a quote nobody started.
+  const awaitingCatalog = useRef<QuoteType | null>(null);
   useEffect(() => {
-    if (seeded.current || !seedPlanDefaults || catalog.length === 0) return;
-    if (picks.length > 0 || Object.keys(adjustments).length > 0) return;
-    seeded.current = true;
-    changeType(quoteType);
-    // Deliberately keyed on the catalog arriving. Everything else is read at
-    // the moment it fires and must not re-trigger it.
+    const pending = awaitingCatalog.current;
+    if (!pending || catalog.length === 0) return;
+    awaitingCatalog.current = null;
+    changeType(pending);
+    // Keyed on the catalog arriving. Everything else is read when it fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalog, seedPlanDefaults]);
+  }, [catalog]);
 
   /**
    * What a plan opens with: its cart, and the billing start it bills from.
@@ -470,6 +474,10 @@ export default function ProductConfigurator({
    * empty cart, which is what makes "Clear cart, then click the plan" the way
    * to get the kit back — and what stops a stray click on the highlighted card
    * throwing away a configured quote.
+   *
+   * On a NEW quote there is no plan yet, so the first click counts as a switch
+   * — off nothing, onto something. That is this screen's only seeding path
+   * now: the plan a rep clicked is the only plan this quote has ever had.
    */
   const changeType = (next: QuoteType) => {
     const switching = next !== quoteType;
@@ -534,10 +542,12 @@ export default function ProductConfigurator({
         nextPicks.length === picks.length &&
         nextPicks.every(p => picks.some(q => q.hubspotProductId === p.hubspotProductId && q.qty === p.qty));
       if (!unchanged) onPicksChange(nextPicks);
-    } else if (switching && picks.length) {
-      // The catalog hasn't loaded, so there is nothing to seed — but the old
-      // plan's cart still must not survive onto the new one.
-      onPicksChange([]);
+    } else {
+      // The catalog hasn't loaded, so there is nothing to seed from yet — the
+      // effect above finishes the job when it lands. The old plan's cart still
+      // must not survive onto the new one in the meantime.
+      awaitingCatalog.current = next;
+      if (switching && picks.length) onPicksChange([]);
     }
 
     if (!isProcessingQuote(next) && channels.length) onChannelsChange([]);
@@ -548,7 +558,7 @@ export default function ProductConfigurator({
   const qtyOf = (id: string) => picks.find(p => p.hubspotProductId === id)?.qty ?? 0;
 
   // Every POS ships with an AMS1, so the terminal row can't go below the POS count.
-  const terminalFloor = minimumTerminalsFor(quoteType, picks);
+  const terminalFloor = minimumTerminalsFor(planned, picks);
 
   const setQtyFor = (id: string, next: number) => {
     const floor = id === AMS1_PRODUCT.hubspotProductId ? terminalFloor : 0;
@@ -561,7 +571,7 @@ export default function ProductConfigurator({
     // extras the rep added on top. Only the terminal has a floor under it
     // (`minimumTerminalsFor`); the other two are a convenience the rep can
     // step straight back down.
-    const companions = isProcessingQuote(quoteType) ? companionsFor(id) : [];
+    const companions = isProcessingQuote(planned) ? companionsFor(id) : [];
     if (companions.length) {
       const delta = qty - qtyOf(id);
       const asPicks = () => [...wanted].map(([hubspotProductId, q]) => ({ hubspotProductId, qty: q }));
@@ -569,7 +579,7 @@ export default function ProductConfigurator({
         const cid = companion.hubspotProductId;
         const moved = (wanted.get(cid) ?? 0) + delta;
         const n = cid === AMS1_PRODUCT.hubspotProductId
-          ? Math.max(moved, minimumTerminalsFor(quoteType, asPicks()))
+          ? Math.max(moved, minimumTerminalsFor(planned, asPicks()))
           : moved;
         if (n > 0) wanted.set(cid, n);
         else wanted.delete(cid);
@@ -1047,6 +1057,57 @@ export default function ProductConfigurator({
     </div>
   );
 
+  // ── Nothing chosen yet ────────────────────────────────────────────────────
+  // A new quote opens with NO plan highlighted (product owner, 2026-10-12). It
+  // used to open on All-in-One, which put an offer on the screen that nobody
+  // had made — and, whenever the cart behind that plan failed to seed, left a
+  // rep looking at a selected plan with nothing under it. Everything below the
+  // plan row is a decision ABOUT a plan: which hardware it carries, what the
+  // platform fee is, whether there's a rate at all. So it all waits for one,
+  // and the quote document says what the screen is waiting for.
+  //
+  // Hosts that reopen a saved quote always pass a plan and never reach this.
+  if (!quoteType) {
+    const prompt = (
+      <p className={styles.sectionNote}>
+        Pick a plan to start. It decides what can go on the quote, which platform fee applies,
+        and whether there&apos;s a processing rate at all.
+      </p>
+    );
+    if (layout === "document") {
+      return (
+        <div className={styles.docLayout}>
+          <div className={styles.buildCol}>
+            <section>
+              <h3 className={styles.buildHead}>Plan</h3>
+              {planCards}
+            </section>
+          </div>
+          <aside className={styles.docCol}>
+            <div className={styles.doc}>
+              {documentHeader}
+              {prompt}
+              {documentFooter}
+            </div>
+          </aside>
+        </div>
+      );
+    }
+    return (
+      <div className={styles.layout} data-rail={rail === "inline" ? "inline" : undefined}>
+        <div className={styles.mainCol}>
+          <div className={styles.panel}>
+            <div className={styles.sectionHead}>
+              <h2 className={styles.sectionTitle}>Quote Type</h2>
+            </div>
+            {planCards}
+            {prompt}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const globalControls = (
     <div className={styles.globalGrid}>
       <label className={styles.adjustField}>
@@ -1127,21 +1188,21 @@ export default function ProductConfigurator({
     const carriedBy = POS_COMPANIONS
       .filter(c => c.hubspotProductId === p.hubspotProductId)
       .flatMap(c => c.withProductIds.filter(id => qtyOf(id) > 0));
-    const autoAdded = isProcessingQuote(quoteType) && carriedBy.length > 0;
+    const autoAdded = isProcessingQuote(planned) && carriedBy.length > 0;
     // A kiosk SKU ships with its own AMS1, so nothing adds one for it — but a
     // rep selling kiosks for ordering still usually needs a terminal, and
     // might not for a marketing-only kiosk. Hence a reminder on the terminal
     // row rather than a quantity nobody asked for.
     const kioskNeedsTerminal =
       p.hubspotProductId === AMS1_PRODUCT.hubspotProductId &&
-      isProcessingQuote(quoteType) &&
+      isProcessingQuote(planned) &&
       !autoAdded &&
       picks.some(pick => KIOSK_PRODUCT_IDS.includes(pick.hubspotProductId) && pick.qty > 0);
     // The 2-year marketing plan LOANS its kiosk rather than discounting it, so
     // a price under the row reads as a charge the merchant is about to see on
     // the quote (product owner, 2026-10-09). The quote document still shows
     // what any EXTRA one costs, which is where that number belongs.
-    const loanedByPlan = quoteType === "marketing_term" && MARKETING_TERM_KIOSK_IDS.includes(p.hubspotProductId);
+    const loanedByPlan = planned === "marketing_term" && MARKETING_TERM_KIOSK_IDS.includes(p.hubspotProductId);
     return (
       <div key={p.hubspotProductId} className={styles.productRow} data-picked={n > 0}>
         <div className={styles.productMain}>
@@ -1214,7 +1275,7 @@ export default function ProductConfigurator({
             aria-label={`Add one ${p.name}`}
           >+</button>
         </div>
-        {p.hubspotProductId === WEBSITE_PRODUCT_ID && n > 0 && isMarketingQuote(quoteType) && onAdjustmentsChange && (
+        {p.hubspotProductId === WEBSITE_PRODUCT_ID && n > 0 && isMarketingQuote(planned) && onAdjustmentsChange && (
           <label className={`${styles.channel} ${styles.fullRow}`} data-on={websiteOn}>
             <input
               type="checkbox"
@@ -1466,7 +1527,7 @@ export default function ProductConfigurator({
               </div>
             )}
 
-            {isMarketingQuote(quoteType) && !websiteOn && (
+            {isMarketingQuote(planned) && !websiteOn && (
               <div className={styles.docLine} data-pending="true">
                 <div className={styles.docLineMain}>
                   <div className={styles.docLineName}>{PROCESSING_DISCLOSURE_PRODUCT.name}</div>
@@ -1676,7 +1737,7 @@ export default function ProductConfigurator({
             merchant, so "add a website and you can take card payments" is the
             conversation. The whole panel disappears on a POS quote, where none
             of this is a question. */}
-        {isMarketingQuote(quoteType) && (
+        {isMarketingQuote(planned) && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
               <h2 className={styles.sectionTitle}>Included With This Plan</h2>
@@ -1685,7 +1746,7 @@ export default function ProductConfigurator({
                 {MARKETING_INCLUDED_HARDWARE[0].qty} {MARKETING_INCLUDED_HARDWARE[0].name}s are free
                 — set the quantity above, and anything past that bills at list. TVs are not supplied
                 or installed by AIO.
-                {quoteType === "marketing_term" &&
+                {planned === "marketing_term" &&
                   " The kiosk is the Marketing Kit you pick above — the first one is free."}
               </p>
             </div>

@@ -144,3 +144,11 @@ Commas in monthly volume for clarity “100,000 instead of 10000”
  
 
 Allow customer to add more hardware when viewing the quote through easy OB. Ex. They look and realize then need an additional printer, so rather than going back to the sales rep they can add it with them.  
+
+10/12
+no plan selected at the start of a new quote — nothing highlighted, nothing in
+the cart. clicking a plan is what seeds its kit / website / menu boards.
+(DONE — the mount-seeding that used to do this on all_in_one is gone with it.)
+
+marketing product boxes: the Website tile's "online ordering" checkbox was
+squeezing the price into one character per line. (DONE — tiles wrap.)
