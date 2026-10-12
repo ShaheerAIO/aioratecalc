@@ -112,7 +112,7 @@ export default function QuoteSummary({ quote }: Props) {
                         in the totals: it changes the timing, not the amount. */}
                     {l.billingStart && (
                       <div className={styles.lineNote} data-tone="good">
-                        {describeBillingStart(l.billingStart)}
+                        {describeBillingStart(l.billingStart, l.billingFrequency)}
                       </div>
                     )}
                   </div>

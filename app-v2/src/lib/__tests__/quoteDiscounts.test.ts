@@ -125,7 +125,12 @@ describe("applyLineAdjustment", () => {
     expect(out.billingStart).toEqual({ mode: "days", days: 60 });
   });
 
-  it("strips a billing start from a one-time line — there is no schedule to delay", () => {
+  it("defers a one-time charge to a date — hardware held back to go-live", () => {
+    const out = applyLineAdjustment(line(), { billingStart: { mode: "date", date: "2026-11-01" } });
+    expect(out.billingStart).toEqual({ mode: "date", date: "2026-11-01" });
+  });
+
+  it("strips a DAY delay from a one-time line — a shape no such line has ever carried", () => {
     const out = applyLineAdjustment(line(), { billingStart: { mode: "days", days: 60 } });
     expect(out.billingStart).toBeUndefined();
   });
@@ -231,6 +236,40 @@ describe("quoteSanityBlockers", () => {
 
     it("counts nothing for a delayed recurring line", () => {
       expect(amountDueAtCheckout([plan({ billingStart: delayed }), comped])).toBe(0);
+    });
+
+    // Hardware held back to go-live is not money collected today, so the
+    // pre-auth line has to appear for it exactly as it does for a delayed
+    // plan. Unverified against a live paid quote — see amountDueAtCheckout.
+    it("counts nothing for a one-time line dated to a go-live", () => {
+      const deferred = line({ billingStart: { mode: "date", date: "2026-12-01" } });
+      expect(amountDueAtCheckout([deferred])).toBe(0);
+      expect(amountDueAtCheckout([deferred, line()])).toBe(749);
+      expect(checkoutAmountBlockers([deferred])).toHaveLength(1);
+    });
+
+    it("gives an all-deferred quote the pre-auth line, so it can still publish", () => {
+      const goLive = { mode: "date" as const, date: "2026-12-01" };
+      const built = buildQuote(
+        "all_in_one",
+        [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)],
+        [],
+        CATALOG,
+        {
+          // Everything the POS pick pulls in. The install and the training are
+          // comped to $0 by policy, so they collect nothing either way.
+          [POS_ID]: { billingStart: goLive },
+          [AMS1_ID]: { billingStart: goLive },
+          [WIFI_ID]: { billingStart: goLive },
+          [PLATFORM_ID]: { billingStart: { mode: "days", days: 60 } },
+        },
+        100
+      );
+      const preAuth = built.quoteLines.filter(l => l.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId);
+      expect(preAuth).toHaveLength(1);
+      // The fifty cents is the ONLY thing collected, and it rescues the publish.
+      expect(amountDueAtCheckout(built.quoteLines)).toBe(0.5);
+      expect(built.blockers.filter(b => b.includes("Nothing is due at checkout"))).toEqual([]);
     });
 
     it("refuses a worth-something quote that owes nothing today", () => {
@@ -410,12 +449,22 @@ describe("toLineItemProperties", () => {
     expect(props.hs_recurring_billing_start_date).toBeUndefined();
   });
 
-  it("never emits a delay on a one-time line, even if one somehow rode along", () => {
+  it("dates a one-time line — the only delay shape a one-time line has ever carried", () => {
+    const props = toLineItemProperties({
+      ...line(),
+      billingStart: { mode: "date", date: "2026-12-01" },
+    });
+    expect(props.hs_billing_start_delay_type).toBe("hs_recurring_billing_start_date");
+    expect(props.hs_recurring_billing_start_date).toBe("2026-12-01");
+  });
+
+  it("never emits a DAY delay on a one-time line, even if one somehow rode along", () => {
     const props = toLineItemProperties({
       ...line(),
       billingStart: { mode: "days", days: 60 },
     });
     expect(props.hs_billing_start_delay_type).toBeUndefined();
+    expect(props.hs_billing_start_delay_days).toBeUndefined();
   });
 
   it("still never emits hs_recurring_billing_period", () => {
@@ -621,13 +670,22 @@ describe("adjusting each unit separately", () => {
     expect(subLines(built.quoteLines).map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [2, null]]);
   });
 
-  it("drops a one-time line's billing start, same as the whole-line path", () => {
+  it("drops a one-time unit's DAY delay, same as the whole-line path", () => {
     const built = buildQuote("all_in_one", [toQuoteLine(posProduct, 2)], [], catalog, {
       [POS_ID]: { units: [{ discountPercent: 100 }, { billingStart: { mode: "days", days: 60 } }] },
     }, 100);
     const pos = built.quoteLines.filter(l => l.hubspotProductId === POS_ID);
     expect(pos.every(l => l.billingStart === undefined)).toBe(true);
     expect(pos.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [1, null]]);
+  });
+
+  it("dates ONE of two one-time units, splitting the line", () => {
+    const goLive = { mode: "date" as const, date: "2026-12-01" };
+    const built = buildQuote("all_in_one", [toQuoteLine(posProduct, 2)], [], catalog, {
+      [POS_ID]: { units: [{ billingStart: goLive }, {}] },
+    }, 100);
+    const pos = built.quoteLines.filter(l => l.hubspotProductId === POS_ID);
+    expect(pos.map(l => [l.qty, l.billingStart ?? null])).toEqual([[1, goLive], [1, null]]);
   });
 
   it("still enforces the discount cap and date validity per unit", () => {

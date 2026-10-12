@@ -1096,11 +1096,19 @@ export function quoteTotals(lines: QuoteLine[]): QuoteTotals {
 export const MIN_CHECKOUT_AMOUNT = 0.5;
 
 /**
- * What the merchant is charged at the moment they check out: every one-time
- * line, plus the FIRST payment of each recurring line that has no delayed
- * start. A recurring line with a `billingStart` takes nothing at checkout —
- * HubSpot reported `totalAmount: 0.00` for a quote whose only charge was a
- * $299/mo plan delayed 60 days, with its hardware comped by the plan.
+ * What the merchant is charged at the moment they check out: every line with
+ * no delayed start — in full if it is one-time, its first payment if it
+ * recurs. Any line carrying a `billingStart` takes nothing today. HubSpot
+ * reported `totalAmount: 0.00` for a quote whose only charge was a $299/mo
+ * plan delayed 60 days, with its hardware comped by the plan.
+ *
+ * ⚠️ VERIFIED FOR RECURRING LINES ONLY. A dated ONE-TIME line is read the same
+ * way here, which is what the property means, but AIO's portal has no paid
+ * quote that proves it: all 49 delayed one-time lines sit on three
+ * PAYMENT_NOT_ENABLED quotes (`299198595785`, `306949302000`, `330294198002`),
+ * so nothing was ever collected through one. If HubSpot in fact charges a
+ * dated one-time line at checkout anyway, this under-reports and the merchant
+ * is billed on a document nobody can amend — see the note on `startAppliesTo`.
  *
  * Distinct from `quoteTotals`, which is what the quote is WORTH. A quote can be
  * worth $299/mo and still owe $0 today.
@@ -1108,7 +1116,7 @@ export const MIN_CHECKOUT_AMOUNT = 0.5;
 export function amountDueAtCheckout(lines: QuoteLine[]): number {
   let due = 0;
   for (const line of lines) {
-    if (line.billingFrequency !== "one_time" && line.billingStart) continue;
+    if (line.billingStart) continue;
     due += lineNetAmount(line);
   }
   return Math.round(due * 100) / 100;
@@ -1526,14 +1534,31 @@ export const DEFAULT_QUOTE_LIMITS: QuoteLimits = {
 };
 
 /**
+ * Whether this kind of delay can go on this kind of line.
+ *
+ * A ONE-TIME line takes a DATE and nothing else. HubSpot accepts
+ * `hs_billing_start_delay_type` on a one-time line — 49 of them in AIO's own
+ * portal carry one — but every single one of those uses Custom Date, and the
+ * day and month modes appear on exactly zero one-time lines portal-wide. A
+ * deferred hardware charge is a go-live DATE in practice, so the shape AIO has
+ * evidence for is the only shape offered; "60 days after checkout" on a POS
+ * unit would be the first of its kind riding onto an unamendable document.
+ *
+ * Recurring lines take all three, as they always have.
+ */
+export function startAppliesTo(frequency: BillingFrequency, start: BillingStart): boolean {
+  return frequency !== "one_time" || start.mode === "date";
+}
+
+/**
  * Put a rep's edits onto a derived line.
  *
- * `billingStart` is STRIPPED from a one-time line rather than rejected: a
- * one-time charge has no billing schedule, HubSpot would ignore the property,
- * and the rep is never offered the control in the first place — so a value
- * arriving here is a shape artifact (a rep delayed a line, then swapped it for
- * a one-time product), not a decision worth stalling a quote over. A bad
- * discount is the opposite and is reported by `adjustmentBlockers`.
+ * A `billingStart` the line can't carry (see `startAppliesTo`) is STRIPPED
+ * rather than rejected: the rep is never offered that combination in the first
+ * place, so a value arriving here is a shape artifact — a rep delayed a line by
+ * N days, then swapped it for a one-time product — not a decision worth
+ * stalling a quote over. A bad discount is the opposite and is reported by
+ * `adjustmentBlockers`.
  */
 export function applyLineAdjustment(line: QuoteLine, adjustment: LineAdjustment | undefined): QuoteLine {
   if (!adjustment) return line;
@@ -1544,7 +1569,7 @@ export function applyLineAdjustment(line: QuoteLine, adjustment: LineAdjustment 
   else delete next.discountPercent;
 
   const start = adjustment.billingStart;
-  if (start && line.billingFrequency !== "one_time") next.billingStart = start;
+  if (start && startAppliesTo(line.billingFrequency, start)) next.billingStart = start;
   else delete next.billingStart;
 
   return next;
@@ -1775,8 +1800,17 @@ function isWifiLine(line: { hubspotProductId: string; name: string }): boolean {
   return line.hubspotProductId === WIFI_PRODUCT_ID || line.name.trim() === "AIO WiFi Network Package";
 }
 
-/** A one-line, rep- and customer-readable rendering of a delayed start. */
-export function describeBillingStart(start: BillingStart): string {
+/**
+ * A one-line, rep- and customer-readable rendering of a delayed start.
+ *
+ * A one-time charge is described as CHARGED on the date, not as billing
+ * "starting" then: nothing starts, the single charge simply lands later, and a
+ * merchant reading "billing starts" next to a POS unit could fairly expect a
+ * subscription. Frequency is optional so a caller that only has the start
+ * keeps the recurring wording, which is what every caller meant before.
+ */
+export function describeBillingStart(start: BillingStart, frequency?: BillingFrequency): string {
+  if (frequency === "one_time" && start.mode === "date") return `Charged ${start.date}`;
   return start.mode === "date"
     ? `Billing starts ${start.date}`
     : `Billing starts ${start.days} days after checkout`;

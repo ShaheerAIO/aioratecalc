@@ -738,11 +738,13 @@ export default function ProductConfigurator({
   // on us"), and doing it a row at a time means opening every drawer and
   // remembering which lines were recurring in the first place.
   //
-  // RECURRING LINES ONLY, and that is not a shortcut. A one-time charge has no
-  // billing schedule to move: `applyLineAdjustment` strips the property off
-  // one, HubSpot has nothing to apply it to, and the charge lands at checkout
-  // either way. Sweeping across everything would write adjustments that change
-  // nothing and then read back as edits the rep never made.
+  // RECURRING LINES ONLY, still, though one-time lines CAN now be dated. The
+  // old reason — that a one-time charge has nothing to move — is gone; this is
+  // the new one: the two are different concessions. "First month on us" is a
+  // whole-quote giveaway; holding hardware back to a go-live date is a choice
+  // about particular equipment, and sweeping it across the install, the
+  // onboarding and the WiFi package at once is not what a rep deferring a
+  // kiosk meant. Those stay per-line, where the rep can see each one.
   const recurringLines = useMemo(
     () => quoteLines.filter(l => l.billingFrequency !== "one_time"),
     [quoteLines]
@@ -823,6 +825,11 @@ export default function ProductConfigurator({
     const mode = start?.mode ?? "now";
     const discounted = (l.discountPercent ?? 0) > 0;
     const delayed = mode !== "now";
+    // A one-time charge CAN be deferred — hardware held back to a go-live date
+    // — but only to a date. "After N days" is a shape no one-time line in
+    // AIO's portal has ever carried, so it isn't offered here; see
+    // `startAppliesTo`, which strips it if one arrives anyway.
+    const oneTime = l.billingFrequency === "one_time";
     const unitMode = Array.isArray(adjustments[id]?.units) || openUnits.has(id);
     const units = unitMode ? unitsOf(id, l.qty) : [];
 
@@ -838,7 +845,7 @@ export default function ProductConfigurator({
           {discounted || delayed ? (
             <>
               {discounted && <span className={styles.savedTag}>−{fmt$(l.discountAmount)}</span>}
-              {delayed && <span className={styles.delayTag}>Starts later</span>}
+              {delayed && <span className={styles.delayTag}>{oneTime ? "Charged later" : "Starts later"}</span>}
             </>
           ) : (
             "Adjust"
@@ -870,19 +877,22 @@ export default function ProductConfigurator({
                           <span className={styles.pctSign}>%</span>
                         </span>
                       </label>
-                      {l.billingFrequency !== "one_time" && (
-                        <label className={styles.adjustField}>
-                          <span className={styles.adjustLabel}>Billing starts</span>
+                      <label className={styles.adjustField}>
+                          <span className={styles.adjustLabel}>{oneTime ? "Charged" : "Billing starts"}</span>
                           <span className={styles.startWrap}>
                             <select
                               className={styles.adjustSelect}
                               value={umode}
                               onChange={e => setUnitStartMode(id, l.qty, i, e.target.value as "now" | "date" | "days")}
-                              aria-label={`When billing starts for unit ${i + 1} of ${l.name}`}
+                              aria-label={
+                                oneTime
+                                  ? `When unit ${i + 1} of ${l.name} is charged`
+                                  : `When billing starts for unit ${i + 1} of ${l.name}`
+                              }
                             >
                               <option value="now">At checkout</option>
                               <option value="date">On a date</option>
-                              <option value="days">After N days</option>
+                              {!oneTime && <option value="days">After N days</option>}
                             </select>
                             {us?.mode === "date" && (
                               <input
@@ -890,7 +900,11 @@ export default function ProductConfigurator({
                                 className={styles.adjustInput}
                                 value={us.date}
                                 onChange={e => setUnit(id, l.qty, i, { billingStart: { mode: "date", date: e.target.value } })}
-                                aria-label={`Billing start date for unit ${i + 1} of ${l.name}`}
+                                aria-label={
+                                  oneTime
+                                    ? `Charge date for unit ${i + 1} of ${l.name}`
+                                    : `Billing start date for unit ${i + 1} of ${l.name}`
+                                }
                               />
                             )}
                             {us?.mode === "days" && (
@@ -907,7 +921,6 @@ export default function ProductConfigurator({
                             )}
                           </span>
                         </label>
-                      )}
                     </div>
                   );
                 })}
@@ -961,22 +974,22 @@ export default function ProductConfigurator({
             )}
             </div>
 
-            {/* One-time charges have no billing schedule to delay. */}
-            {l.billingFrequency !== "one_time" && (
-              <div className={styles.adjustBlock}>
-                <span className={styles.adjustBlockTitle}>When billing starts</span>
-              <label className={styles.adjustField}>
-                <span className={styles.adjustLabel}>First charge</span>
+            <div className={styles.adjustBlock}>
+              <span className={styles.adjustBlockTitle}>
+                {oneTime ? "When it's charged" : "When billing starts"}
+              </span>
+            <label className={styles.adjustField}>
+                <span className={styles.adjustLabel}>{oneTime ? "Charge" : "First charge"}</span>
                 <span className={styles.startWrap}>
                   <select
                     className={styles.adjustSelect}
                     value={mode}
                     onChange={e => setStartMode([id], e.target.value as "now" | "date" | "days")}
-                    aria-label={`When billing starts for ${l.name}`}
+                    aria-label={oneTime ? `When ${l.name} is charged` : `When billing starts for ${l.name}`}
                   >
                     <option value="now">At checkout</option>
                     <option value="date">On a date</option>
-                    <option value="days">After N days</option>
+                    {!oneTime && <option value="days">After N days</option>}
                   </select>
                   {start?.mode === "date" && (
                     <input
@@ -984,7 +997,7 @@ export default function ProductConfigurator({
                       className={styles.adjustInput}
                       value={start.date}
                       onChange={e => setAdjustment(id, { billingStart: { mode: "date", date: e.target.value } })}
-                      aria-label={`Billing start date for ${l.name}`}
+                      aria-label={oneTime ? `Charge date for ${l.name}` : `Billing start date for ${l.name}`}
                     />
                   )}
                   {start?.mode === "days" && (
@@ -1002,7 +1015,6 @@ export default function ProductConfigurator({
                 </span>
               </label>
               </div>
-            )}
             </>)}
 
             {/* Several units on one line: the rep may want them treated
@@ -1361,7 +1373,7 @@ export default function ProductConfigurator({
               {tag && <span className={styles.docTag} data-tag={tag}>{tag}</span>}
             </div>
             {why && <div className={styles.docWhy}>{why}</div>}
-            {l.billingStart && <div className={styles.docWhy}>{describeBillingStart(l.billingStart)}</div>}
+            {l.billingStart && <div className={styles.docWhy}>{describeBillingStart(l.billingStart, l.billingFrequency)}</div>}
           </div>
           <div className={styles.docAmount}>
             {list > net && <span className={styles.strike}>{fmt$(list)}</span>}{" "}
