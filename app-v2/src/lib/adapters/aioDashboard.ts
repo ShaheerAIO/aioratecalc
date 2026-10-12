@@ -412,9 +412,12 @@ export async function createAioLocation(
   // The LOCATION is where the restaurant physically is, so it takes the DBA
   // address when there is one. The tenant above keeps the legal address.
   const loc = locationAddress(biz);
-  // Prod rejects null coordinates here; geocode the location address. See
-  // geocodeUsAddress — this throws if the address can't be resolved, which is
-  // the right failure: step 1 already succeeded, so a resume re-runs just this.
+  // Prod rejects null coordinates here; geocode the location address. It NEVER
+  // throws and never stalls — see geocodeUsAddress, which falls back to a
+  // logged US-centroid placeholder. By the time this runs, step 1 has already
+  // minted a tenant under a globally unique alias that is never freed, so
+  // failing here over a geocoder outage would strand the merchant rather than
+  // save them anything.
   const { latitude, longitude } = await geocodeUsAddress(loc);
   const body = {
     businessId: args.businessId,

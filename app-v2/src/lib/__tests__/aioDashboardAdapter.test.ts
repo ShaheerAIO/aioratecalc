@@ -35,7 +35,35 @@ function res(body: unknown, status = 200) {
   } as unknown as Response;
 }
 
+// The geocoders `createAioLocation` consults before it ever reaches AIO. They
+// are ORDINARY `fetch` CALLS on the same global, so they have to be answered
+// out of band: a plain queue of responses hands the Census lookup whatever was
+// meant for the login, and the login then reads `.ok` off undefined. That is
+// exactly what happened when geocoding was added.
+const GEOCODER_HOSTS = ["geocoding.geo.census.gov", "nominatim.openstreetmap.org"];
+const isGeocoder = (input: unknown) => GEOCODER_HOSTS.some(h => String(input).includes(h));
+
+// A Census hit, in the shape `censusGeocode` reads: x is longitude, y latitude.
+const CENSUS_LAT = 37.2358;
+const CENSUS_LNG = -121.8197;
+const CENSUS_HIT = {
+  result: { addressMatches: [{ coordinates: { x: CENSUS_LNG, y: CENSUS_LAT } }] },
+};
+
+/**
+ * What the adapter sees. Records EVERY call, geocoders included, so the
+ * positional assertions below still read the call they mean — no test that
+ * indexes `fetchMock.mock.calls` goes through a geocoding path.
+ */
 let fetchMock: ReturnType<typeof vi.fn>;
+
+/**
+ * The AIO responses a test programs. Separate from `fetchMock` because a
+ * `mockResolvedValueOnce` queue is consumed in call order and cannot tell a
+ * geocoder apart from a login — these tests are about AIO's two first-call
+ * bugs, not about geocoding, and the queue should only ever serve AIO.
+ */
+let aio: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   __resetAioSession();
@@ -43,7 +71,13 @@ beforeEach(() => {
   process.env.AIO_DASHBOARD_BASE_URL = "https://backend.internal.dev.aioapp.com";
   process.env.AIO_DASHBOARD_USERNAME = "svc@aioapp.com";
   process.env.AIO_DASHBOARD_PASSWORD = "pw";
-  fetchMock = vi.fn();
+  aio = vi.fn();
+  // Census answers on the first try, so the Nominatim fallbacks never run and
+  // nothing logs the US-centroid warning. A test that wants the miss path
+  // overrides this.
+  fetchMock = vi.fn((input: unknown, init?: unknown) =>
+    isGeocoder(input) ? Promise.resolve(res(CENSUS_HIT)) : aio(input, init)
+  );
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -114,7 +148,7 @@ describe("pure helpers", () => {
 
 describe("session handling", () => {
   it("logs in once and reuses the token across calls", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { id: 5217, companyId: "com_x" } }))
       .mockResolvedValueOnce(res({ success: true, data: { id: 5218, companyId: "com_y" } }));
@@ -127,7 +161,7 @@ describe("session handling", () => {
   });
 
   it("sends BOTH auth headers — Bearer alone is rejected by most routes", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { id: 5217, companyId: null } }));
 
@@ -140,7 +174,7 @@ describe("session handling", () => {
   });
 
   it("collapses concurrent callers onto a single login", async () => {
-    fetchMock.mockImplementation(async (url: string) => {
+    aio.mockImplementation(async (url: string) => {
       if (String(url).includes("user-login")) return res(LOGIN_OK);
       return res({ success: true, data: { id: 5217, companyId: null } });
     });
@@ -156,7 +190,7 @@ describe("session handling", () => {
   });
 
   it("re-logs-in once on a 401, then gives up rather than looping", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res("unauthorized", 401))
       .mockResolvedValueOnce(res(LOGIN_OK))
@@ -170,7 +204,7 @@ describe("session handling", () => {
 
 describe("createAioBusiness", () => {
   it("returns the business id and the Check company the platform auto-creates", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { id: 5217, companyId: "com_7cFTDdes" } }));
 
@@ -179,7 +213,7 @@ describe("createAioBusiness", () => {
   });
 
   it("sends the merchant's real name first — getting the name right is the point", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { id: 5217 } }));
 
@@ -191,7 +225,7 @@ describe("createAioBusiness", () => {
   });
 
   it("normalises phones to E.164 for both the business and the contact", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { id: 5217 } }));
 
@@ -202,7 +236,7 @@ describe("createAioBusiness", () => {
   });
 
   it("disambiguates only when AIO says the name is taken", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ message: "Business name already exists" }, 400))
       .mockResolvedValueOnce(res({ success: true, data: { id: 5219 } }));
@@ -213,7 +247,7 @@ describe("createAioBusiness", () => {
   });
 
   it("does not retry a name that failed for any other reason", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ message: "Business alias already exists" }, 400));
 
@@ -225,7 +259,7 @@ describe("createAioBusiness", () => {
 describe("createAioLocation — the first-call schema bug", () => {
   it("retries exactly once when the per-tenant schema is not ready yet", async () => {
     vi.useFakeTimers();
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(
         res({ message: 'Error while performing operation :relation "tenant_5217.state" does not exist' }, 500)
@@ -241,7 +275,7 @@ describe("createAioLocation — the first-call schema bug", () => {
   });
 
   it("does NOT retry any other 500 — a blind retry could create two locations", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ message: "Internal server error" }, 500));
 
@@ -253,7 +287,7 @@ describe("createAioLocation — the first-call schema bug", () => {
   it("gives up after the one permitted retry", async () => {
     vi.useFakeTimers();
     const schemaErr = res({ message: 'relation "tenant_5217.state" does not exist' }, 500);
-    fetchMock.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValue(schemaErr);
+    aio.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValue(schemaErr);
 
     const p = createAioLocation(APP, { businessId: 5217, companyId: null });
     const assertion = expect(p).rejects.toThrow(/does not exist/);
@@ -265,13 +299,73 @@ describe("createAioLocation — the first-call schema bug", () => {
   });
 });
 
+describe("createAioLocation — the coordinates prod insists on", () => {
+  const LOCATION_OK = res({ statusCode: 200, response: { success: true, data: { id: 4690, workplaceId: "wrk_1" } } });
+  const createBody = () =>
+    JSON.parse(String(
+      (fetchMock.mock.calls.find(c => String(c[0]).includes("restaurant/post/create"))![1] as RequestInit).body
+    ));
+
+  it("sends the geocoded coordinates — prod 500s on a null pair", async () => {
+    aio.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValueOnce(LOCATION_OK);
+
+    await createAioLocation(APP, { businessId: 5217, companyId: "com_x" });
+
+    expect(createBody().restaurant).toMatchObject({
+      latitude: CENSUS_LAT,
+      longitude: CENSUS_LNG,
+    });
+  });
+
+  it("geocodes the LOCATION address, which is the DBA one when there is a DBA", async () => {
+    aio.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValueOnce(LOCATION_OK);
+
+    await createAioLocation(APP, { businessId: 5217, companyId: null });
+
+    const geo = fetchMock.mock.calls.find(c => isGeocoder(c[0]))!;
+    expect(String(geo[0])).toContain(encodeURIComponent("1 Probe St"));
+  });
+
+  it("falls back to a placeholder rather than stalling when every geocoder misses", async () => {
+    // Step 1 has already minted a tenant under an alias that is never freed,
+    // so failing here over a geocoder outage strands the merchant and saves
+    // nothing. Loud, but it continues.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockImplementation((input: unknown, init?: unknown) =>
+      isGeocoder(input) ? Promise.resolve(res({}, 500)) : aio(input, init)
+    );
+    aio.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValueOnce(LOCATION_OK);
+
+    await expect(createAioLocation(APP, { businessId: 5217, companyId: null }))
+      .resolves.toEqual({ locationId: 4690, workplaceId: "wrk_1" });
+
+    const { latitude, longitude } = createBody().restaurant;
+    expect(typeof latitude).toBe("number");
+    expect(typeof longitude).toBe("number");
+    expect(latitude).not.toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("survives a geocoder that throws outright, not just one that 500s", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockImplementation((input: unknown, init?: unknown) =>
+      isGeocoder(input) ? Promise.reject(new Error("ENOTFOUND")) : aio(input, init)
+    );
+    aio.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValueOnce(LOCATION_OK);
+
+    await expect(createAioLocation(APP, { businessId: 5217, companyId: null })).resolves.toBeTruthy();
+    warn.mockRestore();
+  });
+});
+
 describe("createAioAdyenOnboardingLink — the empty-url bug", () => {
   const REAL_URL =
     "https://onboarding-test.adyen.com/onboardingcomponents/ho/v1/xtl-AQ/legalEntities/LE3295D22322885Q2G7VW4SX3";
 
   it("treats a 201 with an empty url as NOT ready and retries", async () => {
     vi.useFakeTimers();
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { url: "", newOnboarding: true } }, 201))
       .mockResolvedValueOnce(res({ success: true, data: { url: REAL_URL, newOnboarding: false } }, 201));
@@ -286,7 +380,7 @@ describe("createAioAdyenOnboardingLink — the empty-url bug", () => {
 
   it("throws rather than ever returning an empty url to a merchant", async () => {
     vi.useFakeTimers();
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValue(res({ success: true, data: { url: "", newOnboarding: true } }, 201));
 
@@ -297,7 +391,7 @@ describe("createAioAdyenOnboardingLink — the empty-url bug", () => {
   });
 
   it("sends the location id in the body and the tenant id in the header", async () => {
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { url: REAL_URL } }, 201));
 
@@ -309,7 +403,7 @@ describe("createAioAdyenOnboardingLink — the empty-url bug", () => {
 
   it("mints a fresh link per call — the same legal entity, a different url", async () => {
     const second = REAL_URL.replace("xtl-AQ", "xtl-ZZ");
-    fetchMock
+    aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(res({ success: true, data: { url: REAL_URL } }, 201))
       .mockResolvedValueOnce(res({ success: true, data: { url: second } }, 201));
