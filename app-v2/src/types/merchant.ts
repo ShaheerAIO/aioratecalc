@@ -302,20 +302,12 @@ export type QuoteLine = {
 };
 
 /**
- * A delayed billing start. HubSpot sets this PER LINE ITEM — the quote has no
- * delay of its own — through `hs_billing_start_delay_type`, a discriminator
- * naming which sibling property carries the value. Both must be written
- * together or the delay is silently ignored.
- *
- * These are the two modes AIO actually uses. Portal counts, re-read 2026-10-12:
- * 428 lines on a custom date, 113 on a day delay (60 days on most of them).
- * The other two HubSpot offers stay absent: `milestone_based` is on no line at
- * all, and `hs_billing_start_delay_months` is on 14 — up from the 2 that made
- * us skip it, and now on paid quotes, so it is worth revisiting rather than a
- * closed question.
- *
- * A ONE-TIME line takes the `date` mode ONLY; see `startAppliesTo` in
- * `quoting.ts` for the evidence behind that asymmetry.
+ * A delayed billing start. Mirrors the two `hs_billing_start_delay_type` modes
+ * AIO actually uses — 286 lines on a custom date, 72 on a day delay (60 days on
+ * most of them). The other two modes HubSpot offers are deliberately absent:
+ * `hs_billing_start_delay_months` is used on 2 lines portal-wide and
+ * `milestone_based` on none, so neither earns a third code path through an
+ * irreversible publish.
  */
 export type BillingStart =
   /** A fixed calendar date, `yyyy-MM-dd` → `hs_recurring_billing_start_date`. */

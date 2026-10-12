@@ -111,7 +111,7 @@ function ReceiptLine({ line }: { line: QuoteLine }) {
       </div>
       <div className={styles.receiptMeta}>
         {line.qty} × {fmt$(line.unitPrice)}{cycle}
-        {line.billingStart && ` · ${describeBillingStart(line.billingStart, line.billingFrequency)}`}
+        {line.billingStart && ` · ${describeBillingStart(line.billingStart)}`}
       </div>
       <div className={styles.receiptAmount}>
         {discounted && <span className={styles.strike}>{fmt$(lineListAmount(line))}</span>}{" "}

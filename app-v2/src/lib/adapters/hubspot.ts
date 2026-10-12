@@ -1486,14 +1486,14 @@ export function toLineItemProperties(line: QuoteLine): Record<string, string> {
   // it names which of the sibling properties HubSpot reads, so the value and
   // the type must be written together or the delay is silently ignored.
   //
-  // A ONE-TIME line may carry a DATE and nothing else — the only shape AIO's
-  // portal has ever put on one (49 lines, all Custom Date; zero on the day or
-  // month modes). `applyLineAdjustment` already strips anything else via
-  // `startAppliesTo`; this is the backstop, on the side of the boundary that
-  // talks to HubSpot. Restated here rather than imported so the adapter stays
-  // readable on its own.
-  const startFits = line.billingFrequency !== "one_time" || line.billingStart?.mode === "date";
-  if (line.billingStart && startFits) {
+  // Guarded on frequency as well as presence, and this backstop MATTERS: a
+  // dated one-time line makes the quote unpublishable, `400
+  // NON_RECURRING_FUTURE_BILLED_LI_NOT_ALLOWED` (proven live 2026-10-12 — see
+  // the CLAUDE.md entry). HubSpot's own draft `hs_quote_amount` happily defers
+  // such a line, so nothing before the publish call reveals the problem.
+  // `applyLineAdjustment` strips the field; this is the last guard on the side
+  // of the boundary that talks to HubSpot.
+  if (line.billingStart && line.billingFrequency !== "one_time") {
     if (line.billingStart.mode === "date") {
       props.hs_billing_start_delay_type = "hs_recurring_billing_start_date";
       props.hs_recurring_billing_start_date = line.billingStart.date;
