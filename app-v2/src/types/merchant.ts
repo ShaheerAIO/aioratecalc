@@ -27,10 +27,14 @@ export const SELECTABLE_PRICING_MODELS: PricingModel[] = ["2-tier"];
  * and still computes the floor for the internal panel, but nothing sets a
  * margin and nothing refuses a quote for being under one.
  *
- * It is a flat default rather than a lookup because the ticket-size × volume
- * matrix that should choose the rate doesn't exist yet. When it does, it
- * replaces DEFAULT_QUOTE_RATES and nothing else has to move: a suggested rate
- * and a typed one are the same three numbers.
+ * The ticket-size × volume matrix now EXISTS (`lib/rateMatrix.ts`,
+ * admin-editable at /admin/settings/rate-matrix), and it suggests the rate
+ * whenever a merchant's volume and average ticket are both known. This stays
+ * as the fallback for when they aren't — a marketing-only quote, or a
+ * processing quote whose merchant hasn't produced a statement or a pair of
+ * figures. It did NOT get replaced: "no basis to look a rate up on" is a real
+ * and common state, and reading the matrix anyway would quote its dearest
+ * corner ($0–25K at a $10 ticket) to every merchant nobody has measured.
  *
  * Lives here rather than in `pricing.ts` for the same reason
  * SELECTABLE_PRICING_MODELS does — three rep surfaces need it, and importing
@@ -55,9 +59,9 @@ export type QuoteRates = {
 };
 
 /**
- * 2.49% on all four lanes plus $0.15, the rate every merchant is quoted until
- * the matrix exists. Editable on every rep surface; this is the starting
- * point, not a cap or a floor.
+ * 2.49% on all four lanes plus $0.15 — the rate a merchant is quoted when
+ * nothing is known about their volume or their ticket. Editable on every rep
+ * surface; this is the starting point, not a cap or a floor.
  *
  * All four are the SAME number today, which is not what the industry does and
  * not what HubSpot's rate card says — product-owner decision, 2026-10-06. The

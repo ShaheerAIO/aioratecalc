@@ -28,6 +28,14 @@ export async function getActivePaddingPolicy(): Promise<PaddingConfig> {
   };
 }
 
+/**
+ * NO UI as of 2026-10-12 — /admin/settings/pillow was deleted ("we are gonna
+ * work on margin stuff later"). The policy itself is untouched and still
+ * applied on every rep-facing price: `getActivePaddingPolicy` reads whatever
+ * row is saved, or DEFAULT_PADDING. This is kept rather than deleted with its
+ * editor because the padding is coming back, and because an admin-gated
+ * action with no button is cheaper than re-deriving the write path later.
+ */
 export async function updatePaddingPolicyAction(input: PaddingConfig): Promise<void> {
   const effective = await getEffectiveRole();
   if (!effective || effective.role !== "admin") throw new Error("Admin only");
@@ -55,8 +63,14 @@ export async function updatePaddingPolicyAction(input: PaddingConfig): Promise<v
 // accessor.
 
 /**
- * The most a rep may discount a single quote line. Falls back to the module
- * default when no policy row exists, for the same reason the quote-template
+ * The most a rep may discount a single quote line. EDITED AT
+ * /admin/settings/quote-limits since 2026-10-12 — it moved there with the
+ * deletion of the pillow page, which is where it should have been all along:
+ * the delay ceiling beside it is the same kind of knob, and raising either one
+ * IS the approval for going past it. Still stored on `margin_policy`; only the
+ * editor moved.
+ *
+ * Falls back to the module default when no policy row exists, for the same reason the quote-template
  * policy does: an unseeded settings table must never be able to block a quote.
  * It fails CLOSED — the fallback is the conservative cap, not 100.
  */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { isFromHubspotField, UNKNOWABLE_REVIEW_FIELDS, type AppliedReviewFields } from "@/lib/prefillMerge";
 import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
 import styles from "./MerchantDetailsForm.module.css";
@@ -36,17 +36,6 @@ export default function MerchantDetailsForm({
   business, ownerContact, processing, applied, showProcessing,
   onBusinessChange, onOwnerChange, onProcessingChange,
 }: Props) {
-  // Blank DBA address means "operates at the legal address", so the four
-  // fields stay folded until the rep says otherwise — or HubSpot already did.
-  // HubSpot often restates the legal address here; that's not "elsewhere".
-  const [elsewhere, setElsewhere] = useState(() => {
-    const same = (a: string | undefined, b: string) => !a?.trim() || a.trim().toLowerCase() === b.trim().toLowerCase();
-    return !(
-      same(business.dbaAddress, business.address) && same(business.dbaCity, business.city) &&
-      same(business.dbaState, business.state) && same(business.dbaZip, business.zip)
-    );
-  });
-
   const field = (
     path: string,
     label: string,
@@ -100,52 +89,66 @@ export default function MerchantDetailsForm({
         <span className={styles.dot} aria-hidden="true" /> from HubSpot · everything is editable, and what you type wins
       </p>
 
+      {/* The restaurant itself — the address HubSpot actually carries, because
+          the HubSpot Company IS the restaurant. Shown FIRST, and the legal
+          address below it is the one that comes back blank, which is the
+          right way round (product owner, 2026-10-12). */}
+      <section className={styles.group} aria-label="Operating">
+        <h3 className={styles.groupLabel} aria-hidden="true">Operating</h3>
+        <div className={styles.grid}>
+          {field("business.dbaAddress", "Operating street address", 4, business.dbaAddress ?? "", v => b({ dbaAddress: v }))}
+          {field("business.dbaCity", "City", 3, business.dbaCity ?? "", v => b({ dbaCity: v }))}
+          {field("business.dbaState", "State", 2, business.dbaState ?? "", v => b({ dbaState: v }), { placeholder: "CA" })}
+          {field("business.dbaZip", "ZIP", 3, business.dbaZip ?? "", v => b({ dbaZip: v }), { inputMode: "numeric", placeholder: "90210" })}
+        </div>
+      </section>
+
       {/* Everything that's on the registration, together: the name, the entity
           type and the address the state has on file. The legal name is
-          written back to the HubSpot company when the link is created. */}
+          written back to the HubSpot company when the link is created; the
+          legal address is written back when the customer submits their
+          onboarding form, which is where it is actually asked for. */}
       <section className={styles.group} aria-label="Legal">
         <h3 className={styles.groupLabel} aria-hidden="true">Legal</h3>
         <div className={styles.grid}>
           {field("business.legalName", "Legal name, as registered", 8, business.legalName, v => b({ legalName: v }), { placeholder: "Not in HubSpot · saved back to the company" })}
           {select("Entity type", 4, business.bizType, v => b({ bizType: v as BusinessInfo["bizType"] }),
             BIZ_TYPES.map(([t, label]) => <option key={t} value={t}>{label}</option>))}
-          {field("business.address", "Legal street address", 4, business.address, v => b({ address: v }))}
-          {field("business.city", "City", 3, business.city, v => b({ city: v }))}
+          {field("business.address", "Legal street address", 4, business.address, v => b({ address: v }), { placeholder: "The customer fills this in" })}
+          {field("business.city", "City", 3, business.city, v => b({ city: v }), { placeholder: "—" })}
           {field("business.state", "State", 2, business.state, v => b({ state: v }), { placeholder: "CA" })}
           {field("business.zip", "ZIP", 3, business.zip, v => b({ zip: v }), { inputMode: "numeric", placeholder: "90210" })}
         </div>
         <div className={styles.checkRow}>
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={!elsewhere}
-              onChange={e => {
-                setElsewhere(!e.target.checked);
-                if (e.target.checked) b({ dbaAddress: "", dbaCity: "", dbaState: "", dbaZip: "" });
-              }}
-            />
-            Operating address is the same as the legal address
-          </label>
+          {/* A COPY, triggered by the rep, not a checkbox that silently keeps
+              the two in step. HubSpot has no legal address — restating the
+              restaurant's own address as the registered one is a guess, and
+              Adyen and Check both verify this against the state. A rep who
+              knows they're the same says so; otherwise it stays blank and the
+              merchant answers it. */}
+          <button
+            type="button"
+            className={styles.copyButton}
+            onClick={() => b({
+              address: business.dbaAddress ?? "", city: business.dbaCity ?? "",
+              state: business.dbaState ?? "", zip: business.dbaZip ?? "",
+            })}
+            disabled={!(business.dbaAddress ?? "").trim()}
+          >
+            Same as operating address
+          </button>
           <span className={styles.tip}>
-            <button type="button" className={styles.tipButton} aria-describedby="operating-address-tip" aria-label="What's an operating address?">
+            <button type="button" className={styles.tipButton} aria-describedby="operating-address-tip" aria-label="What's the difference?">
               i
             </button>
             <span id="operating-address-tip" role="tooltip" className={styles.tipText}>
-              The legal address is where the business is registered with the state. The
-              operating address is where it actually trades — the restaurant itself.
-              They often differ when the owner registered at home or through an
-              accountant. Untick to enter the restaurant&apos;s address.
+              The operating address is where the business actually trades — the restaurant
+              itself, and what HubSpot holds. The legal address is where it is registered
+              with the state. They often differ when the owner registered at home or
+              through an accountant, so the customer confirms it on their onboarding form.
             </span>
           </span>
         </div>
-        {elsewhere && (
-          <div className={styles.grid}>
-            {field("business.dbaAddress", "Operating street address", 4, business.dbaAddress ?? "", v => b({ dbaAddress: v }))}
-            {field("business.dbaCity", "City", 3, business.dbaCity ?? "", v => b({ dbaCity: v }))}
-            {field("business.dbaState", "State", 2, business.dbaState ?? "", v => b({ dbaState: v }), { placeholder: "CA" })}
-            {field("business.dbaZip", "ZIP", 3, business.dbaZip ?? "", v => b({ dbaZip: v }), { inputMode: "numeric", placeholder: "90210" })}
-          </div>
-        )}
       </section>
 
       <section className={styles.group} aria-label="Business">

@@ -1,6 +1,7 @@
 // Phase 3: HubSpot bidirectional sync via Private App Token
 // Scopes required: crm.objects.deals.read/write, crm.objects.contacts.read/write
 
+import { paymentProcessingArr } from "@/lib/billing/processingArr";
 import type {
   BillingFrequency,
   CatalogProduct,
@@ -66,6 +67,25 @@ export const SALES_PIPELINE_STAGES: readonly SalesPipelineStage[] = [
 export function dealStageRank(stageId: string | null): number {
   if (!stageId) return -1;
   return SALES_PIPELINE_STAGES.findIndex(s => s.id === stageId);
+}
+
+/**
+ * Pure: is this deal stage at or past Closed Won?
+ *
+ * NOT the same question as `closed`, and that is the whole point. AIO's Sales
+ * pipeline puts Onboarding, Configuration, Deployment/Training and Deal
+ * Active AFTER Closed Won, and every one of those carries `closed: false` —
+ * so the existing "is it closed" gate waves through a deal that has already
+ * been won, implemented and gone live. Starting a quote there means quoting
+ * a merchant AIO is already billing.
+ *
+ * An id this build doesn't recognize ranks -1 and therefore passes, which is
+ * `dealStageRank`'s standing convention: a brand-new stage must not lock reps
+ * out of quoting until someone redeploys.
+ */
+export function isAtOrPastClosedWon(stageId: string | null): boolean {
+  const rank = dealStageRank(stageId);
+  return rank >= 0 && rank >= dealStageRank("closedwon");
 }
 
 /** Pure: the label and closed/won flags for a stage id, or nulls/false for one this build doesn't recognize. */
@@ -221,6 +241,15 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
   if (dealstage) {
     props.pipeline = HUBSPOT_DEAL_PIPELINE_ID;
     props.dealstage = dealstage;
+  }
+  // Only once the merchant has actually accepted. Before that it is a hope,
+  // and this property feeds `total_arr`, which the sales org reads as booked
+  // revenue. Null for a marketing-only quote and for one with no volume
+  // behind it — see lib/billing/processingArr.ts — and omitted rather than
+  // zeroed, because a 0 here reads as a measured zero.
+  if (app.quoteAcceptedAt) {
+    const arr = paymentProcessingArr(app);
+    if (arr !== null) props.payment_processing_arr = String(arr);
   }
   // No warn on the unmapped branch: STAGE_MAP is now a deliberately PARTIAL
   // milestone map (see its own comment), so an app.stage with no HubSpot
@@ -826,15 +855,34 @@ export type HubspotCompanyProfile = TenantCompany & {
   processingVolume: string | null;
   /** "legal_trading_name_as_registered_with_government" — the registered legal name. */
   legalName: string | null;
+  /**
+   * "legal_street_address_as_registered_with_government" / "..._city_..." —
+   * the registered address, as far as this portal carries one. There is no
+   * legal state or ZIP property; `address`/`city`/`state`/`zip` are the
+   * OPERATING address (the HubSpot Company is the restaurant).
+   */
+  legalStreet: string | null;
+  legalCity: string | null;
   /** "previous_processor" — free text, the processor the merchant is leaving. */
   previousProcessor: string | null;
   /** "mcc_code" — free text in HubSpot; hubspotPrefill only accepts a 4-digit code. */
   mccCode: string | null;
 };
 
-/** The Company properties EasyOB writes back from a rep's quote link. */
+/**
+ * The Company properties EasyOB writes back — from a rep's quote link, and
+ * from the merchant's own onboarding submission.
+ *
+ * The two legal-address properties are what the portal actually has: a legal
+ * STREET and a legal CITY, and no legal state or ZIP. EasyOB holds all four
+ * (Adyen and Check both want a complete registered address), so the two it
+ * can't store are simply not written rather than crammed into a property
+ * whose label says something else.
+ */
 export const COMPANY_WRITE_PROPS = {
   legalName: "legal_trading_name_as_registered_with_government",
+  legalStreet: "legal_street_address_as_registered_with_government",
+  legalCity: "legal_city_address_as_registered_with_government",
   previousProcessor: "previous_processor",
   mcc: "mcc_code",
 } as const;
@@ -866,6 +914,8 @@ function toCompanyProfile(obj: { id: string; properties: Record<string, string |
     modules: clean(p.moduels),
     processingVolume: clean(p.processing_volume),
     legalName: clean(p[COMPANY_WRITE_PROPS.legalName]),
+    legalStreet: clean(p[COMPANY_WRITE_PROPS.legalStreet]),
+    legalCity: clean(p[COMPANY_WRITE_PROPS.legalCity]),
     previousProcessor: clean(p[COMPANY_WRITE_PROPS.previousProcessor]),
     mccCode: clean(p[COMPANY_WRITE_PROPS.mcc]),
   };
@@ -873,6 +923,8 @@ function toCompanyProfile(obj: { id: string; properties: Record<string, string |
 
 export type CompanyMerchantDetails = {
   legalName?: string | null;
+  legalStreet?: string | null;
+  legalCity?: string | null;
   previousProcessor?: string | null;
   mcc?: string | null;
 };

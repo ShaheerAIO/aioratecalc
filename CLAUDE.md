@@ -80,7 +80,7 @@ There is **no build, install, or test tooling** in this repo (no `package.json`,
 ### Roles & the pillowed margin model (Phase 1.5)
 Three roles: **Customer** (no account — tokenized links only), **Rep**, **Admin**. `middleware.ts` guards `/rep/*` (rep or admin) and `/admin/*` (admin only) using NextAuth sessions. Roles live in `users.role` and are set by an admin at `/admin/users` — **not** derived from Entra groups or app roles (see "Entra ID staff sign-in").
 
-The core trust boundary: **reps must never see or derive AIO's true minimum profitable margin.** `pricing.ts`'s `getMarginFloor()` (true volume-tiered floor) and `calcAdyenCost`/`adyenRateOnVolume` (true per-transaction processing cost) are real numbers computed correctly everywhere internally, but a rep's UI/API responses only ever see a **pillowed** (padded) floor and, by default, no exact Adyen cost at all — controlled by an admin-editable global policy (`margin_policy` table, `/admin/settings/pillow`). This is enforced **server-side** in `derivePricingForRole()` (`pricing.ts`) via `src/lib/actions/pricing.ts`'s `getPricingPreviewAction()` — `PricingStep.tsx` has no client-side access to the true numbers at all, it only renders whatever the server decided this role gets to see. Don't move this computation back to the client.
+The core trust boundary: **reps must never see or derive AIO's true minimum profitable margin.** `pricing.ts`'s `getMarginFloor()` (true volume-tiered floor) and `calcAdyenCost`/`adyenRateOnVolume` (true per-transaction processing cost) are real numbers computed correctly everywhere internally, but a rep's UI/API responses only ever see a **pillowed** (padded) floor and, by default, no exact Adyen cost at all — controlled by a global policy (`margin_policy` table). **Its editor was deleted on 2026-10-12** (`/admin/settings/pillow` — "we are gonna work on margin stuff later"); the policy itself is untouched and still applied on every rep-facing price, reading whatever row is saved or `DEFAULT_PADDING`, and `updatePaddingPolicyAction` is kept for when the editor returns. The one control on that page that was NOT margin padding — the discount cap — moved to `/admin/settings/quote-limits`. This is enforced **server-side** in `derivePricingForRole()` (`pricing.ts`) via `src/lib/actions/pricing.ts`'s `getPricingPreviewAction()` — `PricingStep.tsx` has no client-side access to the true numbers at all, it only renders whatever the server decided this role gets to see. Don't move this computation back to the client.
 
 A **temporary, dev-only debug role switcher** (`src/lib/auth/debugRole.ts`, `src/components/dev/RoleSwitcher.tsx`) lets you click through Rep/Admin views without logging in/out, hard-gated on `ENABLE_DEBUG_ROLE_SWITCH` (must only ever be set in a local `.env.local`, never a Vercel project env — Preview deployments also run `NODE_ENV=production`, so that alone isn't a safe gate). It resolves to the real seeded `rep@aioapp.com`/`admin@aioapp.com` DB rows (not fake IDs) since `merchant_applications.owner_user_id` is a strict FK. Safe to delete later: that file, the component, `src/lib/actions/debugRole.ts`, and their two call sites in `middleware.ts`/`auth.config.ts` and `app/layout.tsx`.
 
@@ -197,11 +197,17 @@ app-v2/src/
   types/merchant.ts          ← canonical MerchantApplication type (no PII fields), CustomerSafeQuote
   lib/pricing.ts             ← MARGIN_REQS, getMarginFloor, derivePricing (true numbers, untouched)
                                 + getPillowedFloor/derivePricingForRole (role-scoped view, additive)
+  lib/rateMatrix.ts          ← the CARD-PRESENT RATE CARD: volume × average ticket → the rate a rep
+                                is offered (pricing guide §10.3, the $0.15/txn option). Pure; the
+                                live numbers are in `rate_matrix_policy`, admin-edited at
+                                /admin/settings/rate-matrix. SUGGESTS only — see the constraint below.
+  lib/billing/processingArr.ts ← paymentProcessingArr() — margin × monthly volume × 12, written to the
+                                HubSpot deal's `payment_processing_arr` at ACCEPTANCE only
   lib/claude.ts              ← analyzeStatement(), generateProposal() — server-side only
   lib/utils.ts               ← fmt$, fmtPct, fmtPct2, fmtBps, parseJSON
   lib/defaults.ts            ← DEFAULT_PROCESSOR (shared between client settings UI and server adapter)
   lib/db/
-    schema.ts                ← Drizzle tables: users, margin_policy, app_settings, merchant_applications, customer_submissions
+    schema.ts                ← Drizzle tables: users, margin_policy, rate_matrix_policy, app_settings, merchant_applications, customer_submissions
     client.ts                ← server-only Drizzle client (DATABASE_URL)
   lib/storage/
     storageInterface.ts      ← IStorage interface, scoped by { userId, role }
@@ -231,7 +237,8 @@ app-v2/src/
                                  from /api/lead/[token]/checkout. Kept for a rep sitting with them or
                                  finishing on the phone; nothing waits on it.
     quoteTemplates.ts         ← getQuoteTemplatePolicy, updateQuoteTemplatePolicyAction (admin-only),
-                                 listQuoteTemplatesAction — quoteType → HubSpot quote template mapping
+                                 listQuoteTemplatesAction — quoteType → HubSpot quote template mapping.
+                                 NO UI since 2026-10-12; the policy and the nightly audit still run
     debugRole.ts               ← setDebugRoleAction (no-ops unless ENABLE_DEBUG_ROLE_SWITCH=true)
   lib/adapters/
     aioDashboard.ts           ← THE way a merchant gets an Adyen account. createAioBusiness()
@@ -287,9 +294,10 @@ app-v2/src/
                                  closes it, and uses that to tell success from cancellation
     rep/proposals/new/        ← 5-step rep flow (upload→analysis→pricing→proposal→apply)
     rep/prospects/new/        ← rep sets a margin target + generates a customer self-serve link
-    rep/settings/             ← processor/tier config (rep-editable; pillow policy is admin-only, separate)
     admin/                    ← dashboard, session-gated (no more hardcoded password)
-    admin/settings/pillow/    ← admin-only margin pillow policy editor
+    admin/settings/rate-matrix/ ← admin-only rate card: the §10.3 grid, every cell editable
+    admin/settings/quote-limits/ ← admin-only: unit caps, the billing-delay ceiling, the DISCOUNT
+                                 CAP (moved here 2026-10-12) and the tablet visibility switch
     admin/?view=revenue       ← Phase G money view — a tab on the one admin surface, not a route of
                                  its own (the nav is capped at 4 items). See RevenuePanel.
     lead/[token]/             ← PUBLIC customer self-serve upload + instant quote (no auth, token-gated)
@@ -301,6 +309,9 @@ app-v2/src/
                                  the page confirms first. Never leaks a precondition message.
     api/auth/[...nextauth]/   ← NextAuth route handlers
   components/rep/
+    RateSuggestion.tsx         ← what the rate card says for this merchant, + "Use it". Auto-applies
+                                 ONLY on the two surfaces that start a quote, never when reopening
+                                 a saved one
     UploadStep.tsx            ← drag-drop, calls /api/analyze
     AnalysisStep.tsx          ← 3-way fee split display, two panes above 64rem
     PricingStep.tsx           ← model selector + margin slider; fetches role-scoped pricing from the server, never computes the true floor/cost itself
@@ -441,6 +452,21 @@ secret stays valid but you no longer have it).
 - **Don't delete the `preferred_username`/`upn` fallback in `readEntraIdentity`.** Entra emits the
   `email` claim only when the user has a `mail` attribute or the app requests it as an optional claim;
   without the fallback an AIO tenant whose users lack `mail` would match nobody.
+- **Three admin pages were deleted on 2026-10-12 and NONE of their policies were** — `/rep/settings`
+  (processors & tiers), `/admin/settings/pillow` (margin padding) and `/admin/settings/quote-templates`.
+  Product owner: "completely useless... we are gonna work on margin stuff later." Each policy still
+  runs server-side on its saved row or its default, and each write action is kept with a comment
+  saying it has no UI. Three consequences worth knowing before "cleaning up" the orphans:
+  - `getSettingsAction` is still READ by the proposal wizard and `EditQuotePanel` for the active
+    processor tier — that is what the internal panel prices AIO's own cost against. Only the editor
+    is gone.
+  - `updateQuoteTemplatePolicyAction` is the RECOVERY for `auditQuoteTemplatePolicy`'s nightly
+    "template retired" alert, which still fires. Delete it and that recovery becomes editing
+    `DEFAULT_TEMPLATE_IDS` and deploying — see the 2026-10-09 v3→v4 incident.
+  - The DISCOUNT CAP was on the pillow page and is live policy, not margin padding: raising it is
+    how a discount over 50% gets approved. It moved to `/admin/settings/quote-limits`, beside the
+    billing-delay ceiling, which is the same kind of knob. Deleting the page without moving it
+    would have silently removed the only way to grant one.
 - **Reps never see the true margin floor or true Adyen cost** — always go through `derivePricingForRole`/`getPricingPreviewAction`, never `derivePricing` directly from a rep-facing client component
 - `owner_user_id` (the rep who owns a deal, FK to `users.id`) and `ownerContact` (the merchant's own business contact person) are two different "owner" concepts — don't conflate them
 - `customer_link_token`/`customer_link_purpose` is a **generalized, reusable** token slot: `"lead_upload"` (Phase 1.5, pre-analysis self-serve) and `"kyc_handoff"` (Phase 2, post-proposal Adyen KYC) are different moments in the deal lifecycle sharing the same field — don't assume a token is one or the other without checking `customer_link_purpose`
@@ -517,6 +543,63 @@ secret stays valid but you no longer have it).
   - The link moved from the Company to the Deal in `f8c676d`, and the backfill was run on 2026-10-01: **603 of 615 deals** stamped, **30,714 companies** cleared of the old company-level link. The 12 unstamped deals have no company on them.
   - `DealPicker` still exists and is still used by `AccountsDashboard`, where the job is ADOPTING a deal onto an application that already exists. Its name search is scoped to ONE company, and `searchDealsByName` requires a `companyId` for that reason: it was once portal-wide, sitting directly under a list of the company's own deals, so typing a name there offered other restaurants' deals. It is NOT the escape hatch for a deal the index hasn't caught up with — it runs on the same lagging `deals/search` index the list does; `getDealById` is that escape hatch.
 - **HubSpot's `processing_volume` IS populated and IS mapped to `processing.monthlyVolume`.** An earlier comment in `hubspotPrefill.ts` claimed every volume property was empty portal-wide and listed it as structurally unknowable; it is not — 24 companies carried a value on 2026-09-25, checked against the live portal. Its near-namesake `monthly_card_volume` is the empty one (0 rows) and is deliberately NOT read: an empty property is worse than no property, because it looks authoritative. Zero and non-numeric values are dropped rather than prefilled, since `monthlyVolume` feeds the margin floor.
+- **The rate card SUGGESTS a card-present rate; it never sets one.** `lib/rateMatrix.ts` is the
+  pricing guide's §10.3 grid — nine volume bands × nine ticket columns, at $0.15/txn (§10.5 names
+  that the recommended default: it confines the "CP rate exceeds the CNP rate" crossover to one
+  cell, $0–25K at a $10 ticket, and a test asserts exactly that cell and no other). Five things
+  are load-bearing:
+  - **Its volume bands must stay identical to `MARGIN_REQS`'.** The matrix prices off a tier's
+    DESIRED margin and `belowMarginFloor` refuses against that same tier's MINIMUM; bands that
+    drifted apart would price off one tier and refuse against another. A test asserts the equality.
+  - **`DEFAULT_QUOTE_RATES` was NOT replaced.** A merchant with no volume and no average ticket on
+    file — every marketing-only quote, and every processing quote whose merchant hasn't produced a
+    statement — still gets the flat 2.49% + $0.15. `lookupCardPresentRate` returns null rather than
+    a fallback, because reading the grid anyway would quote its dearest corner to everyone nobody
+    has measured.
+  - **A ticket reads the column AT OR BELOW it** ($22.40 → the $20 column), never an interpolation
+    between two. Interpolating would be more precise and would mean a cell an admin typed is never
+    the rate anyone is quoted; reading down also rounds toward margin, the direction §12 rounds.
+  - **`RateSuggestion` auto-applies only where a quote is being STARTED** (the wizard's Pricing
+    step, prospect creation) and only while the rates are still untouched at the flat default, at
+    most once per mount. `EditQuotePanel` deliberately does not: those rates are a decision someone
+    already made, and a saved quote must not change because an admin edited the card and a rep
+    opened the panel.
+  - **Card-not-present is ONE flat number** (3.30%, §10.1), not a grid — product owner, 2026-10-12.
+    The notes ask for a separate online-ordering matrix eventually; it takes the CP grid's shape
+    when it arrives. Note the default is 3.30% where every quote before this carried CNP equal to
+    CP at 2.49%.
+  Rates are stored as whole BASIS POINTS: every figure on AIO's rate card is a two-decimal
+  percentage, exact in bps and not in a float, on a document nobody can amend.
+- **`payment_processing_arr` is written to the HubSpot deal at ACCEPTANCE, never at publish.** It is
+  `appliedTargetMargin × monthly volume × 12` (product owner, 2026-10-12), computed from the TRUE
+  margin — this is AIO's own forecast of AIO's own revenue on a record reps already read, and
+  padding it would make the number wrong rather than make a secret safe; the FLOOR is the secret and
+  is not derivable from it. Marketing-only quotes and quotes with no volume are OMITTED, not zeroed:
+  this property feeds HubSpot's calculated `total_arr`, which the sales org reads as booked revenue,
+  and a 0 there reads as a measured zero. `saas_revenue` is deliberately not written.
+- **"Is this deal closed?" is NOT "is this deal past Closed Won?"** AIO's Sales pipeline runs
+  Onboarding, Onboarding Delayed, Configuration, Deployment/Training and Deal Active AFTER
+  `closedwon`, and HubSpot flags every one of them `closed: false` — so until 2026-10-12 a rep could
+  start a quote on a merchant already signed, implemented and being billed. `isAtOrPastClosedWon`
+  (rank-based, so a stage inserted later is picked up automatically) refuses those;
+  `allowClosedWon` still excuses a deal sitting at exactly Closed Won, and must not be widened to
+  excuse the ones past it. An unrecognised stage ranks -1 and passes, which is `dealStageRank`'s
+  standing convention — a new stage must not lock reps out of quoting until someone redeploys.
+- **HubSpot's Company `address` is the OPERATING address, and it seeds nothing else** (product
+  owner, 2026-10-12). The HubSpot Company IS the restaurant. It used to seed the legal address as
+  well, on the grounds that the portal has no separate one — which passed the restaurant's own
+  address off as the registered one, on the form whose whole purpose is to state what the state has
+  on file and which Adyen and Check then verify. The merchant supplies the legal address on their
+  onboarding form (`validateOnboardingFields` requires it) and
+  `saveMyApplicationOnboardingAction` writes it back. Two consequences:
+  - **The portal has a legal STREET and a legal CITY and no legal state or ZIP**
+    (`legal_street_address_as_registered_with_government`, `legal_city_...`). EasyOB holds all four;
+    it writes the two that exist rather than cramming the others into a property labelled otherwise.
+  - **`createAioBusiness` reads `locationAddress(biz)`, not `biz.address`.** It read the legal one
+    directly, which only worked because HubSpot used to seed both. A merchant who pays before
+    filling in their onboarding form has no legal address yet and
+    `isEligibleForAioProvisioning` does not require one — so that would have created an AIO tenant
+    with a blank address, on an alias that is globally unique and never freed.
 - **Only `2-tier` is OFFERED, and the other two are HIDDEN, not disabled.** `SELECTABLE_PRICING_MODELS` (`types/merchant.ts`, beside the type) is the platform limit (Steve, 2026-07-23). Flat-rate and interchange-plus stay in the `PricingModel` type, in `MODEL_INFO` and in `pricing.ts`, which still prices both — the limit is on what can be SOLD today, and stored rows carry those values. They were rendered as disabled "Soon" cards until 2026-10-01, when the product owner asked for them gone outright; this REVERSES the earlier "all three are RENDERED" rule. That rule existed because a grid holding a single choice reads as a rendering bug, which is why `PricingStep`'s heading is now "Pricing" rather than "Select Pricing Model". The constant lives in `types/merchant.ts` because THREE rep surfaces offer this choice — `PricingStep`, prospect creation, `EditQuotePanel` — and each kept its own copy; two had drifted to offering all three as selectable.
 - **The margin slider is gone from `PricingStep` ONLY** (2026-10-01, product owner). That is the step a rep works through with the merchant in the room, and a margin that visibly slides is an invitation to negotiate it; the typed "Manual input (%)" stays, and every floor check is unchanged. Prospect creation and `EditQuotePanel` keep their sliders deliberately — neither is a screen a customer is looking at.
 - **Foodbuy has no API — don't reintroduce an `adapters/foodbuy.ts`, an onboarding-status enum, or a mint-fresh-link `/continue` route for it.** Enrollment is a signed paper agreement (`AIO_Foodbuy_Enrollment_Form_V1`) that the customer completes and hands off themselves; `lib/foodbuyForm.ts` only pre-fills what AIO already knows into a printable document. It asks for the Federal ID # (EIN) — never collect that field on AIO's side, same rule as Adyen/Check's EIN/bank/SSN prohibition.
@@ -665,6 +748,9 @@ AUTH_MICROSOFT_ENTRA_ID_ISSUER   # Phase 5 — https://login.microsoftonline.com
 SEED_ADMIN_PASSWORD         # Phase 5 — breakglass password for scripts/seed-users.ts; the
                             # seeded admin123 default is fine locally and nowhere else.
 ENABLE_DEBUG_ROLE_SWITCH    # Phase 1.5 — local dev only, never in Vercel project env
+                            # (NOTE: migration 0021 adds rate_matrix_policy — the admin-edited
+                            #  card-present rate card. No env var; an unmigrated DB falls back to
+                            #  the pricing guide's own numbers rather than blocking a quote.)
 AIO_DASHBOARD_ENABLED       # master switch, must be exactly "true". DEFAULT OFF.
 - AIO_DASHBOARD_BASE_URL — change "Internal dev today" → "https://backend.prod.aioapp.com (prod-verified 2026-10-09)"
 - AIO_DASHBOARD_USERNAME — change "a human super-admin today; a service account is an open ask" → "the operation service account shaheer.hasnain+easyob@aioapp.com (MFA disabled)"account is an open ask

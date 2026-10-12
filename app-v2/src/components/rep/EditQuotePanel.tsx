@@ -6,6 +6,7 @@ import { getSettingsAction } from "@/lib/actions/applications";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
 import RateFields from "@/components/rep/RateFields";
+import RateSuggestion from "@/components/rep/RateSuggestion";
 import { adjustmentsFromQuoteLines, picksFromQuoteLines, quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
 import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
@@ -245,6 +246,15 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
 
           <div>
             <RateFields value={quoteRates} onChange={setQuoteRates} />
+            {/* NO autoApply: these rates were already chosen and saved. The
+                card is shown so a rep can see they've drifted from it, and
+                taking it is their click. */}
+            <RateSuggestion
+              monthlyVolume={previewAnalysis?.totalVolume ?? 0}
+              avgTicket={previewAnalysis?.averageTicket ?? 0}
+              value={quoteRates}
+              onChange={setQuoteRates}
+            />
             {!canPreview && hasVolumeBasis && (
               <p style={{ opacity: 0.7, fontSize: 13, marginTop: 6 }}>
                 Loading preview…

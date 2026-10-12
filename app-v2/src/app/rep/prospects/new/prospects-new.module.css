@@ -70,40 +70,33 @@
 
 /* ---------- Merchant details drawer ---------- */
 
+/* A card, not a drawer: the fields are always on the page. */
 .details {
   margin-bottom: var(--space-xl);
-  border-bottom: 1px solid var(--rule);
+  padding: var(--space-lg);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-whisper);
   scroll-margin-top: calc(var(--nav-offset) + var(--space-md));
 }
 
-.detailsToggle {
-  width: 100%;
+.detailsHead {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-2xs) var(--space-sm);
-  padding: var(--space-sm) 0;
-  background: none;
-  border: none;
-  font-family: var(--font-body);
-  text-align: left;
-  cursor: pointer;
-  color: var(--ink);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--rule);
 }
 
-.detailsToggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
-
-.detailsChevron {
-  width: 0.9rem;
-  height: 0.9rem;
-  align-self: center;
-  color: var(--accent-text);
-  transition: transform 150ms var(--ease-out);
+.detailsTitle {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  margin: 0;
 }
-
-.detailsToggle[aria-expanded="true"] .detailsChevron { transform: rotate(90deg); }
-
-.detailsTitle { font-weight: 700; font-size: 0.9rem; }
 
 .detailsMeta {
   font-size: 0.8rem;
@@ -115,7 +108,7 @@
 
 .detailsNote { font-size: 0.8rem; color: var(--ink-3); }
 
-.detailsBody { padding: var(--space-sm) 0 var(--space-lg); }
+.detailsBody { padding-top: var(--space-md); }
 
 /* ---------- Card rate (the configurator's build slot) ---------- */
 
@@ -272,7 +265,7 @@
 .btnBlock { width: 100%; white-space: normal; }
 
 @media (prefers-reduced-motion: reduce) {
-  .detailsChevron, .affix { transition-duration: 1ms; }
+  .affix { transition-duration: 1ms; }
 }
 
 /* ---------- Panels ---------- */

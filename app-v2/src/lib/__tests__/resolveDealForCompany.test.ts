@@ -9,7 +9,13 @@ const getDealById = vi.fn();
 const listDealsForCompany = vi.fn();
 const createDeal = vi.fn();
 
-vi.mock("@/lib/adapters/hubspot", () => ({ getDealById, listDealsForCompany, createDeal }));
+// Partial: the three network calls are stubbed, but `isAtOrPastClosedWon` and
+// the stage table under it are pure and are exactly what the "past Closed
+// Won" refusal is being tested through.
+vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
+  getDealById, listDealsForCompany, createDeal,
+}));
 
 const where = vi.fn();
 const from = vi.fn(() => ({ where }));
@@ -106,6 +112,48 @@ describe("resolveDealForCompany — mode: existing", () => {
       choice: { mode: "existing", dealId: "deal-1" },
       allowClosedWon: true,
     });
+
+    expect(result.ok).toBe(true);
+  });
+
+  // AIO's pipeline runs Onboarding / Configuration / Deployment / Deal Active
+  // AFTER Closed Won, and HubSpot flags all four `closed: false` — so before
+  // 2026-10-12 a rep could start a quote for a merchant already signed, live
+  // and being billed.
+  it.each([
+    ["2992070353", "Onboarding"],
+    ["2986384064", "Configuration"],
+    ["2986384063", "Deployment/Training"],
+    ["3452539597", "Deal Active"],
+  ])("refuses a deal parked past Closed Won at %s (%s)", async (stageId, stageLabel) => {
+    getDealById.mockResolvedValue(deal({ closed: false, won: false, stageId, stageLabel }));
+
+    const result = await resolveDealForCompany({ companyId: COMPANY_ID, choice: { mode: "existing", dealId: "deal-1" } });
+
+    expect(result.ok).toBe(false);
+    expect((result as { code: string }).code).toBe("closed");
+    expect((result as { message: string }).message).toContain(stageLabel);
+  });
+
+  // allowClosedWon excuses Closed Won itself; it must not excuse a deal that
+  // has gone on past it.
+  it("still refuses a past-Closed-Won deal even with allowClosedWon", async () => {
+    getDealById.mockResolvedValue(deal({ closed: false, won: false, stageId: "3452539597", stageLabel: "Deal Active" }));
+
+    const result = await resolveDealForCompany({
+      companyId: COMPANY_ID,
+      choice: { mode: "existing", dealId: "deal-1" },
+      allowClosedWon: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect((result as { code: string }).code).toBe("closed");
+  });
+
+  it("lets a deal still working through the pipeline past", async () => {
+    getDealById.mockResolvedValue(deal({ stageId: "2767738593", stageLabel: "Signed/Awaiting Payment Info" }));
+
+    const result = await resolveDealForCompany({ companyId: COMPANY_ID, choice: { mode: "existing", dealId: "deal-1" } });
 
     expect(result.ok).toBe(true);
   });

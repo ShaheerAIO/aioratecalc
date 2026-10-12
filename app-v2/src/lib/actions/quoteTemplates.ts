@@ -56,6 +56,18 @@ export async function getQuoteTemplatePolicy(): Promise<QuoteTemplatePolicy> {
   return rowToPolicy(row);
 }
 
+/**
+ * NO UI as of 2026-10-12 — /admin/settings/quote-templates was deleted. The
+ * policy still runs: `resolveQuoteTemplate` reads it on every publish and
+ * `auditQuoteTemplatePolicy` still reports a retired template as a failed
+ * nightly cron run.
+ *
+ * Kept rather than deleted with its page because it is the RECOVERY for that
+ * alert. When AIO retires a template (it happened on 2026-10-09, stranding 13
+ * line items and a draft quote behind an inactive v3), repointing the policy
+ * is what unblocks publishing — without this, the only fix is editing
+ * DEFAULT_TEMPLATE_IDS and deploying.
+ */
 export async function updateQuoteTemplatePolicyAction(input: QuoteTemplatePolicy): Promise<void> {
   const effective = await getEffectiveRole();
   if (!effective || effective.role !== "admin") throw new Error("Admin only");

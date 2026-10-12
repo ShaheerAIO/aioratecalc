@@ -14,7 +14,9 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
-import { getDealById, listDealsForCompany, createDeal, type HubspotDeal } from "@/lib/adapters/hubspot";
+import {
+  getDealById, listDealsForCompany, createDeal, isAtOrPastClosedWon, type HubspotDeal,
+} from "@/lib/adapters/hubspot";
 
 export type DealChoice =
   | { mode: "existing"; dealId: string }
@@ -85,6 +87,20 @@ export async function resolveDealForCompany(input: {
         message: `Deal '${deal.name}' isn't associated with this company in HubSpot. Pick a deal that's actually on the company record, or paste a link to the right one.`,
       };
     }
+    // Two different refusals wearing one code.
+    //
+    // `closed` is HubSpot's own flag and catches Closed Lost, Non-Start,
+    // Cancelled Before Live and Churned. It does NOT catch a deal that has
+    // been won and gone live: AIO's pipeline runs Onboarding, Configuration,
+    // Deployment/Training and Deal Active AFTER Closed Won, and all four are
+    // `closed: false`. Quoting one of those means quoting a merchant AIO is
+    // already billing, which is what `isAtOrPastClosedWon` refuses (product
+    // owner, 2026-10-12: "block quote creations for when deal stage is past
+    // close won").
+    //
+    // `allowClosedWon` still excuses a deal that is EXACTLY Closed Won and
+    // nothing further — the one case where a rep legitimately means it, and
+    // the one the existing message already offered to confirm.
     if (deal.closed && !(allowClosedWon && deal.won)) {
       return {
         ok: false,
@@ -92,6 +108,15 @@ export async function resolveDealForCompany(input: {
         message: deal.won
           ? `Deal '${deal.name}' is Closed Won — confirm you mean to adopt an already-won deal before continuing.`
           : `Deal '${deal.name}' is closed (${deal.stageLabel ?? "closed"}) and can't be adopted. Reopen it in HubSpot or pick another.`,
+      };
+    }
+    if (!deal.closed && isAtOrPastClosedWon(deal.stageId)) {
+      return {
+        ok: false,
+        code: "closed",
+        message:
+          `Deal '${deal.name}' is already past Closed Won (${deal.stageLabel ?? "in onboarding"}), so this merchant ` +
+          `is signed and being set up. Start a new deal in HubSpot for anything else you're selling them.`,
       };
     }
 

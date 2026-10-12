@@ -55,6 +55,13 @@ export async function getSettingsAction(): Promise<AppSettings> {
   return postgresStorage.getSettings();
 }
 
+/**
+ * NO UI as of 2026-10-12 — /rep/settings (processors & tiers) was deleted.
+ * `getSettingsAction` is still read by the proposal wizard and EditQuotePanel
+ * for the active processor tier, which is what the internal panel prices
+ * AIO's own cost against; with no editor it stays on whatever row is saved, or
+ * DEFAULT_PROCESSOR.
+ */
 export async function saveSettingsAction(s: AppSettings): Promise<void> {
   await postgresStorage.saveSettings(await requireScope(), s);
 }

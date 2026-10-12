@@ -8,8 +8,10 @@
   padding: var(--space-2xl) var(--space-lg) var(--space-3xl);
 }
 
+/* Two columns of caps need the room; one column of them was a page you had
+   to scroll past rather than read. */
 .wrap {
-  max-width: 36rem;
+  max-width: 52rem;
   margin-inline: auto;
 }
 
@@ -29,7 +31,8 @@
 
 .header {
   margin-top: var(--space-md);
-  margin-bottom: var(--space-xl);
+  margin-bottom: var(--space-lg);
+  max-width: 44rem;
 }
 
 .headerTitle {
@@ -59,23 +62,44 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-whisper);
-  padding: var(--space-xl);
+  padding: var(--space-lg);
   margin-bottom: var(--space-lg);
 }
 
-.field { margin-bottom: var(--space-lg); }
-.field:last-child { margin-bottom: 0; }
+/* The two ceilings, side by side — they are the same KIND of decision
+   (raising one IS the approval for going past it), so they read as a pair. */
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--space-lg);
+}
+
+.field { min-width: 0; }
 
 .label {
   display: block;
   font-size: 0.78rem;
-  color: var(--ink-3);
+  font-weight: 600;
+  color: var(--ink-2);
   margin-bottom: var(--space-2xs);
 }
 
-.input {
-  width: 100%;
-  padding: var(--space-sm) var(--space-md);
+/* A number and its unit, so "90" is never read as dollars or percent. */
+.affix {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2xs);
+}
+
+.unit {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+
+.numInput {
+  width: 5.5rem;
+  text-align: right;
+  padding: var(--space-2xs) var(--space-sm);
   background: var(--paper);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -83,28 +107,18 @@
   font-family: var(--font-body);
   font-size: 0.9rem;
   outline: none;
-  transition: border-color 150ms var(--ease-out);
 }
 
-.input:focus-visible {
+.numInput:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
-.checkboxLabel {
-  display: flex;
-  gap: var(--space-sm);
-  align-items: center;
-  cursor: pointer;
-}
-
-.checkbox {
-  accent-color: var(--accent);
-}
-
-.checkboxText {
-  font-size: 0.85rem;
-  color: var(--ink-2);
+.hint {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+  margin: var(--space-2xs) 0 0;
 }
 
 .saveButton {
@@ -132,7 +146,7 @@
 .saveButton:active { transform: scale(0.97); }
 
 @media (prefers-reduced-motion: reduce) {
-  .input, .saveButton { transition-duration: 1ms; }
+  .saveButton { transition-duration: 1ms; }
 }
 
 /* ── Quote limits only ───────────────────────────────────────────────────── */
@@ -156,6 +170,13 @@
   margin-bottom: var(--space-lg);
 }
 
+/* Two columns of caps, filled COLUMN-WISE so the alphabetical order still
+   runs top-to-bottom down the first column rather than zig-zagging across. */
+.capGrid {
+  columns: 2;
+  column-gap: var(--space-xl);
+}
+
 /* One row per product. The name takes whatever is left so the boxes line up
    in a column the eye can run down — a cap is read by comparing it to the
    ones above and below it, not in isolation. */
@@ -165,9 +186,13 @@
   gap: var(--space-md);
   padding: var(--space-2xs) 0;
   border-bottom: 1px solid var(--rule);
+  /* Without this a row can be split across the column break. */
+  break-inside: avoid;
 }
 
-.capRow:last-child { border-bottom: none; }
+@media (max-width: 40rem) {
+  .capGrid { columns: 1; }
+}
 
 .capName {
   flex: 1;
@@ -197,14 +222,25 @@
 
 .toggleRow {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-sm);
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--rule);
   font-size: 0.85rem;
   color: var(--ink-2);
   cursor: pointer;
 }
 
-.toggleRow input { flex: none; }
+.toggleRow input { flex: none; margin-top: 0.2rem; accent-color: var(--accent); }
+
+.toggleHint {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+  margin-top: var(--space-2xs);
+}
 
 .actions {
   display: flex;

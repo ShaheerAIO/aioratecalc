@@ -32,6 +32,8 @@ const FULL: HubspotCompanyProfile = {
   modules: "POS;MPOS;Kiosk;Website;3PO",
   processingVolume: "230000",
   legalName: "Little Arabia Holdings LLC",
+  legalStreet: null,
+  legalCity: null,
   previousProcessor: null,
   mccCode: null,
 };
@@ -40,7 +42,8 @@ const EMPTY: HubspotCompanyProfile = {
   id: "1", name: "", tenantRef: null, adyenAccountHolderId: null, mid: null, phone: null, email: null,
   domain: null, website: null, address: null, city: null, state: null, zip: null, country: null,
   description: null, industryType: null, cuisineType: null, ownershipType: null, currentPos: null, modules: null,
-  processingVolume: null, legalName: null, previousProcessor: null, mccCode: null,
+  processingVolume: null, legalName: null, legalStreet: null, legalCity: null,
+  previousProcessor: null, mccCode: null,
 };
 
 const CONTACT: HubspotContact = {
@@ -317,13 +320,11 @@ describe("buildProspectPrefill", () => {
     expect(p.business).toEqual({
       legalName: "Little Arabia Holdings LLC",
       dba: "Little Arabia Restaurant",
-      address: "638 South Brookhurst Street",
-      city: "Anaheim",
-      state: "CA",
-      zip: "92804",
       phone: "714-833-5760",
       website: "https://littlearabiarestaurant.com",
-      // The company's address doubles as the DBA (operating-location) address.
+      // The company's address is the OPERATING address and nothing else. It
+      // used to seed the legal one too; see the comment in hubspotPrefill.ts
+      // for why that was wrong.
       dbaAddress: "638 South Brookhurst Street",
       dbaCity: "Anaheim",
       dbaState: "CA",
@@ -382,8 +383,7 @@ describe("buildProspectPrefill", () => {
   it("reports per-field provenance for exactly what HubSpot supplied", () => {
     const p = buildProspectPrefill(FULL, CONTACT);
     expect(p.fromHubspot).toEqual([
-      "business.legalName", "business.dba", "business.address", "business.city",
-      "business.state", "business.zip", "business.phone", "business.website",
+      "business.legalName", "business.dba", "business.phone", "business.website",
       "business.dbaAddress", "business.dbaCity", "business.dbaState", "business.dbaZip",
       "ownerContact.firstName", "ownerContact.lastName", "ownerContact.title",
       "ownerContact.email", "ownerContact.phone",
@@ -393,15 +393,25 @@ describe("buildProspectPrefill", () => {
     ]);
   });
 
-  it("prefills the DBA address from the company's own address, only as a whole", () => {
+  it("prefills the OPERATING address from the company's own address, only as a whole", () => {
     const p = buildProspectPrefill(FULL, CONTACT);
-    expect(p.business.dbaAddress).toBe(p.business.address);
-    expect(p.business.dbaCity).toBe(p.business.city);
-    expect(p.business.dbaState).toBe(p.business.state);
-    expect(p.business.dbaZip).toBe(p.business.zip);
-    // A city with no street is not a location: no DBA fields at all.
+    expect(p.business.dbaAddress).toBe("638 South Brookhurst Street");
+    expect(p.business.dbaCity).toBe("Anaheim");
+    expect(p.business.dbaState).toBe("CA");
+    expect(p.business.dbaZip).toBe("92804");
+    // A city with no street is not a location: no operating fields at all.
     const cityOnly = buildProspectPrefill({ ...FULL, address: null }, CONTACT);
     expect(Object.keys(cityOnly.business).filter(k => k.startsWith("dba") && k !== "dba")).toEqual([]);
+  });
+
+  it("never prefills the LEGAL address — HubSpot does not carry one", () => {
+    const p = buildProspectPrefill(FULL, CONTACT);
+    expect(p.business.address).toBeUndefined();
+    expect(p.business.city).toBeUndefined();
+    expect(p.business.state).toBeUndefined();
+    expect(p.business.zip).toBeUndefined();
+    expect(p.fromHubspot).not.toContain("business.address");
+    expect(p.fromHubspot).not.toContain("business.city");
   });
 
   it("returns empty, key-free partials for an empty company", () => {
@@ -421,14 +431,17 @@ describe("buildProspectPrefill", () => {
   it("omits missing fields rather than emitting empty strings", () => {
     const partial: HubspotCompanyProfile = { ...EMPTY, name: "Bojax", city: "Oakland", phone: "+1 510-969-5116" };
     const p = buildProspectPrefill(partial, null);
+    // The city alone buys nothing now: an operating address is filled as a
+    // whole, and the legal one isn't filled from HubSpot at all.
     expect(p.business).toEqual({
-      dba: "Bojax", city: "Oakland", phone: "510-969-5116",
+      dba: "Bojax", phone: "510-969-5116",
     });
+    expect("city" in p.business).toBe(false);
     expect("state" in p.business).toBe(false);
     expect("zip" in p.business).toBe(false);
     expect(p.ownerContact).toEqual({});
     expect(p.processing).toEqual({});
-    expect(p.fromHubspot).toEqual(["business.dba", "business.city", "business.phone"]);
+    expect(p.fromHubspot).toEqual(["business.dba", "business.phone"]);
   });
 
   it("falls back to the bare domain when there's no website", () => {
@@ -452,7 +465,7 @@ describe("buildProspectPrefill", () => {
     };
     const p = buildProspectPrefill(FULL, unreadable);
     expect(p.ownerContact).toEqual({ email: "hello@littlearabia.com" });
-    expect(p.business.city).toBe("Anaheim");
+    expect(p.business.dbaCity).toBe("Anaheim");
   });
 
   it("normalizes messy real-world state and address values", () => {
@@ -465,14 +478,18 @@ describe("buildProspectPrefill", () => {
       country: "United States",
     };
     const p = buildProspectPrefill(messy, null);
-    expect(p.business.address).toBe("12303 Limonite Ave Ste 710");
-    expect(p.business.state).toBe("CA");
+    expect(p.business.dbaAddress).toBe("12303 Limonite Ave Ste 710");
+    expect(p.business.dbaState).toBe("CA");
     expect(p.country).toBe("US");
   });
 
   it("keeps an unrecognised state string rather than dropping the rep's data", () => {
-    const p = buildProspectPrefill({ ...EMPTY, state: "Baja California" }, null);
-    expect(p.business.state).toBe("Baja California");
+    // Needs a street, since the operating address is only filled as a whole.
+    const p = buildProspectPrefill(
+      { ...EMPTY, address: "Av. Revolucion 1", city: "Tijuana", state: "Baja California" },
+      null
+    );
+    expect(p.business.dbaState).toBe("Baja California");
   });
 });
 

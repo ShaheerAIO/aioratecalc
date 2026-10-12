@@ -222,26 +222,33 @@ export function buildProspectPrefill(
   const business = compact<BusinessInfo>({
     legalName: (company.legalName ?? "").trim() || undefined,
     dba: name || undefined,
-    address: streetLine(company.address, company.city),
-    city: (company.city ?? "").trim() || undefined,
-    state: usStateCode(company.state ?? undefined),
-    zip: (company.zip ?? "").trim() || undefined,
+    // The LEGAL address is deliberately absent here — see the block below.
     phone: normalizePhone(company.phone),
     // `website` is the real URL; `domain` is the bare host and only a fallback.
     // Neither gets an https:// prefix here — adapters/adyen.ts already adds one.
     website: (company.website ?? "").trim() || (company.domain ?? "").trim() || undefined,
   });
 
-  // The HubSpot Company IS the restaurant, so its address is where the business
-  // operates — the DBA address. HubSpot has no separate legal address (the
-  // legal_*_address_* properties are empty portal-wide), so the same address
-  // also seeds the legal one above; the rep edits whichever differs. Only ever
-  // filled as a WHOLE: a city with no street is not a location, and a half
-  // DBA address would read as a deliberate override of the legal one.
-  const dbaStreet = streetLine(company.address, company.city);
-  if (dbaStreet) {
+  // The HubSpot Company IS the restaurant, so its `address` is where the
+  // business OPERATES, and that is the only thing it seeds (product owner,
+  // 2026-10-12: "pull operating addy from hubspot, it's the one most likely
+  // hubspot actually carries, then we ask for the legal addy").
+  //
+  // It used to seed the legal address as well, on the grounds that HubSpot
+  // has no separate legal one. That was the wrong trade: a merchant whose
+  // owner registered at home or through an accountant would have had the
+  // restaurant's own address passed off as the registered one — on a form
+  // whose whole purpose is to state what the state has on file, and which
+  // Adyen and Check then verify against. Blank is honest; the merchant fills
+  // it on their onboarding form, where `validateOnboardingFields` requires
+  // it, and `saveMyApplicationOnboardingAction` writes it back to HubSpot's
+  // own legal_*_as_registered_with_government properties.
+  //
+  // Only ever filled as a WHOLE: a city with no street is not a location.
+  const operatingStreet = streetLine(company.address, company.city);
+  if (operatingStreet) {
     Object.assign(business, compact<BusinessInfo>({
-      dbaAddress: dbaStreet,
+      dbaAddress: operatingStreet,
       dbaCity: (company.city ?? "").trim() || undefined,
       dbaState: usStateCode(company.state ?? undefined),
       dbaZip: (company.zip ?? "").trim() || undefined,

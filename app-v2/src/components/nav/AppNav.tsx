@@ -78,10 +78,12 @@ export function AppNav({ role, userName }: { role: NavRole; userName?: string })
               open={openMenu === "settings"}
               onToggle={() => setOpenMenu(m => (m === "settings" ? null : "settings"))}
             >
-              <MenuLink href="/rep/settings" pathname={pathname}>Processors &amp; tiers</MenuLink>
-              <MenuLink href="/admin/settings/pillow" pathname={pathname}>Margin padding</MenuLink>
+              {/* Processors & tiers, Margin padding and Quote templates were
+                  removed on 2026-10-12 — nobody used them. The policy behind
+                  each still runs server-side on its saved row or its default;
+                  only the editors are gone. */}
+              <MenuLink href="/admin/settings/rate-matrix" pathname={pathname}>Rate matrix</MenuLink>
               <MenuLink href="/admin/settings/quote-limits" pathname={pathname}>Quote limits</MenuLink>
-              <MenuLink href="/admin/settings/quote-templates" pathname={pathname}>Quote templates</MenuLink>
               <MenuLink href="/admin/users" pathname={pathname}>Users</MenuLink>
             </NavDropdown>
             <NavDropdown
@@ -113,7 +115,8 @@ export function AppNav({ role, userName }: { role: NavRole; userName?: string })
               </MenuLink>
             </NavDropdown>
 
-            <NavLink href="/rep/settings" pathname={pathname}>Settings</NavLink>
+            {/* No Settings item for a rep: every remaining settings page is
+                admin-only, and /rep/settings (processors & tiers) is gone. */}
 
             {userName && <span className={styles.navUser}>{userName}</span>}
             <form action={logoutAction}>

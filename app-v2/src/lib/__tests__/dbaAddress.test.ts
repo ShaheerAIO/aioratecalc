@@ -56,3 +56,18 @@ describe("monthly recurring presentation", () => {
     expect(fmtCycle("weekly")).toBe("week");
   });
 });
+
+// 2026-10-12: HubSpot's address stopped seeding the LEGAL address, so a
+// merchant who pays before filling in their onboarding form has an operating
+// address and no legal one. `createAioBusiness` used to read `biz.address`
+// directly and would have created a tenant with a blank address — on an alias
+// that is globally unique and never freed.
+describe("the AIO tenant address", () => {
+  it("is the operating address when one is on file", () => {
+    const loc = locationAddress({
+      address: "", city: "", state: "", zip: "",
+      dbaAddress: "638 S Brookhurst St", dbaCity: "Anaheim", dbaState: "CA", dbaZip: "92804",
+    });
+    expect(loc).toEqual({ address: "638 S Brookhurst St", city: "Anaheim", state: "CA", zip: "92804" });
+  });
+});

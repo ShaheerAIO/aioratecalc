@@ -6,6 +6,7 @@ import { fmt$, fmtPct2 } from "@/lib/utils";
 import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { StatementAnalysis, ProposalOutput, Processor, ProcessorTier, PricingModel, QuoteRates } from "@/types/merchant";
 import RateFields from "./RateFields";
+import RateSuggestion from "./RateSuggestion";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 import styles from "./PricingStep.module.css";
 
@@ -263,6 +264,16 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Rates</h2>
             <RateFields value={rates} onChange={setRates} />
+            {/* The statement supplies both figures, so the card almost always
+                has something to say here. autoApply, because this step starts
+                on the flat standard rate — the same posture as a new quote. */}
+            <RateSuggestion
+              monthlyVolume={analysis.totalVolume || 0}
+              avgTicket={analysis.averageTicket || 0}
+              value={rates}
+              onChange={setRates}
+              autoApply
+            />
           </div>
 
           {/* Margin target — AIO-internal, so it stays collapsed until the rep

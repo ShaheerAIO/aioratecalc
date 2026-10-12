@@ -19,6 +19,7 @@ import {
 } from "@/lib/adapters/check";
 import {
   findSubscriptionsForQuote, getQuoteSnapshot, syncDealFromApplication,
+  updateCompanyMerchantDetails,
 } from "@/lib/adapters/hubspot";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
@@ -180,6 +181,35 @@ async function syncDealBestEffort(app: MerchantApplication): Promise<MerchantApp
   return app;
 }
 
+/**
+ * Write the merchant's LEGAL address back onto the HubSpot Company.
+ *
+ * This is the other half of the 2026-10-12 split: HubSpot's own `address` is
+ * the OPERATING address (the Company is the restaurant), so EasyOB stopped
+ * passing it off as the registered one and asks the merchant instead. This is
+ * where the answer goes back — onto the two properties the portal actually
+ * has for it, which are a street and a city and nothing else.
+ *
+ * Best-effort, exactly like the rep-side `syncCompanyDetails` in
+ * prospects.ts: the submission is already saved, and a HubSpot hiccup must
+ * not make a merchant retype their address. Blank values are left out by
+ * `updateCompanyMerchantDetails`, so a half-filled form never erases what
+ * HubSpot had.
+ */
+async function syncLegalAddressBestEffort(app: MerchantApplication): Promise<void> {
+  const companyId = app.tenantLink?.hubspotCompanyId;
+  if (!companyId) return;
+  try {
+    await updateCompanyMerchantDetails(companyId, {
+      legalName: app.business?.legalName,
+      legalStreet: app.business?.address,
+      legalCity: app.business?.city,
+    });
+  } catch (err) {
+    console.error("HubSpot legal address sync failed", companyId, err);
+  }
+}
+
 export async function saveMyApplicationOnboardingAction(
   id: string,
   fields: { business: BusinessInfo; ownerContact: OwnerContact; processing: ProcessingInfo; agreement: AgreementInfo }
@@ -212,6 +242,7 @@ export async function saveMyApplicationOnboardingAction(
   // details — the ordering is inverted from the old flow, where submitting
   // details redirected straight to Adyen.
   app = await syncDealBestEffort(app);
+  await syncLegalAddressBestEffort(app);
 
   return { app, fieldErrors: hasFieldErrors ? errors : null };
 }
@@ -256,6 +287,7 @@ export async function updateMyApplicationDetailsAction(
   });
 
   app = await syncDealBestEffort(app);
+  await syncLegalAddressBestEffort(app);
 
   return { app, fieldErrors: hasFieldErrors ? errors : null };
 }

@@ -155,17 +155,49 @@ squeezing the price into one character per line. (DONE — tiles wrap.)
 
 10/12
 make the merchant details a static card, not in drawer
+(DONE — the toggle is gone; it's a card like every other panel on the page.)
+
 pull operating addy from hubspot. its the one most likley hubspot actually carries. Then we ask for the legal addy. push it back into hs once they submit
+(DONE — HubSpot's address now seeds ONLY the operating address. The merchant
+details form shows Operating first and Legal second, with a "Same as operating
+address" button that COPIES rather than a checkbox that silently keeps them in
+step. The legal address goes back to HubSpot on the customer's onboarding
+submit. NOTE: the portal carries a legal STREET and a legal CITY and no legal
+state or ZIP, so only those two are written. Also fixed: createAioBusiness read
+the legal address directly, which would now be blank for a merchant who paid
+before onboarding — it uses locationAddress() like the location create does.)
 
 figure out how to change quotes after publishing
 edit if not signed, make a new one if alr signed
 change old quote status to void (redundant confirmation)
+(DEFERRED by you, 10/12. The blocker: HubSpot refuses an API edit AND an API
+void on a published quote — setting hs_status: VOID is itself an edit, so both
+400 LOCKED. "Edit if not signed" isn't available to us at all; the only shape
+this can take is "publish a replacement, void the old one by hand in HubSpot".)
 
 matrix table, editable
+(DONE — §10.3 of the pricing guide, the $0.15/txn card, 9 volume bands × 9
+ticket columns. Admin → Settings → Rate matrix, shown as the same table with
+every cell editable and a save button. It SUGGESTS: a rep can type over it, and
+a quote with no volume/ticket on file still gets the flat 2.49% default. CNP is
+one flat editable number for now, DEFAULTED TO 3.30% per the guide — that is a
+change from today's 2.49%, and it's one box to change.)
+
 when quote is confirmed "payment_processing_arr" in hs = margin x monthly volume x 12
 not needed for marketing only.
+(DONE — written on the deal at ACCEPTANCE, never before: this feeds total_arr,
+which the sales org reads as booked revenue. Omitted rather than zeroed for
+marketing-only and for a quote with no volume.)
+
 for online ordering there should be a separate matrix, but dont put it back into hubspot because website arr is not important
+(NOT BUILT — you chose "keep CNP flat for now". The one flat number is on the
+same admin page; when it becomes a grid it takes the CP grid's shape.)
+
 block quote creations for when deal stage is past "close won" or just add diologue box
+(DONE, and it was a real hole: AIO's pipeline runs Onboarding, Configuration,
+Deployment/Training and Deal Active AFTER Closed Won, and HubSpot flags all four
+closed:false — so the existing "is it closed" check waved every one of them
+through. Closed Won itself still confirms rather than refuses.)
 
 LATER: comissions calculator, write to HS
 

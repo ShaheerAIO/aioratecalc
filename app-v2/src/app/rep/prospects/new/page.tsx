@@ -9,6 +9,7 @@ import ProductConfigurator, {
 } from "@/components/quoting/ProductConfigurator";
 import MerchantDetailsForm from "@/components/rep/MerchantDetailsForm";
 import RateFields from "@/components/rep/RateFields";
+import RateSuggestion from "@/components/rep/RateSuggestion";
 import { DecimalField, MoneyField } from "@/components/rep/NumberField";
 import {
   mergeChannels,
@@ -87,7 +88,6 @@ function NewProspectFlow() {
   // PADDED floor and never the number itself — this component only ever reads
   // the booleans, and `belowMarginFloor` is the one that refuses the send.
   const [floorCheck, setFloorCheck] = useState<{ belowMarginFloor: boolean } | null>(null);
-  const [detailsOpen, setDetailsOpen]   = useState(false);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
   const [smsSent, setSmsSent]           = useState(false);
@@ -300,11 +300,15 @@ function NewProspectFlow() {
   const malformedErrors = validateOnboardingFields(stripBlanks({ business, ownerContact }));
   const malformedMessages = Object.values(malformedErrors);
 
+  // The OPERATING address, which is the one HubSpot can supply. The legal
+  // address is expected to be blank here — it is asked for on the customer's
+  // own onboarding form, where it's required — so warning about it would
+  // warn on every single prospect.
   const missingWarnings: string[] = [];
-  if (!business.address.trim()) missingWarnings.push("street address");
-  if (!business.city.trim()) missingWarnings.push("city");
-  if (!business.state.trim()) missingWarnings.push("state");
-  if (!business.zip.trim()) missingWarnings.push("ZIP");
+  if (!(business.dbaAddress ?? "").trim()) missingWarnings.push("street address");
+  if (!(business.dbaCity ?? "").trim()) missingWarnings.push("city");
+  if (!(business.dbaState ?? "").trim()) missingWarnings.push("state");
+  if (!(business.dbaZip ?? "").trim()) missingWarnings.push("ZIP");
 
   // ONE copy of the volume and the ticket: the processing record's. They used
   // to be asked twice — once under Processing Details, once as the quote basis
@@ -410,7 +414,7 @@ function NewProspectFlow() {
 
   const reset = () => {
     setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier");
-    setFile(null); setAnalysis(null); setPerCardOpen(false); setDetailsOpen(false);
+    setFile(null); setAnalysis(null); setPerCardOpen(false);
     setQuoteType(null); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
@@ -501,21 +505,21 @@ function NewProspectFlow() {
     setPerCardOpen(false);
   };
 
-  // What the drawer holds, counted so its label says how much of it HubSpot
+  // What the card holds, counted so its header says how much of it HubSpot
   // already answered. bizType and the yes/no questions always carry a value,
   // so counting them would report a form as further along than it is.
   const detailFields = [
-    business.legalName, business.dba, business.address, business.city, business.state, business.zip,
+    business.legalName, business.dba,
+    business.dbaAddress, business.dbaCity, business.dbaState, business.dbaZip,
     business.phone, business.website, business.yearsInBusiness,
     ownerContact.firstName, ownerContact.lastName, ownerContact.title, ownerContact.phone,
     ...(rated ? [processing.mcc, processing.currentProcessor] : []),
   ];
   const knownCount = detailFields.filter(v => v?.trim()).length;
   const merchantBlocked = !business.legalName.trim() || malformedMessages.length > 0;
-  const openDetails = () => {
-    setDetailsOpen(true);
-    requestAnimationFrame(() => document.getElementById("merchant-details")?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  };
+  // The card is always open now, so this only has to bring it into view.
+  const openDetails = () =>
+    document.getElementById("merchant-details")?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   const dealContacts = contacts.filter(c => c.source === "deal");
   const companyContacts = contacts.filter(c => c.source !== "deal");
@@ -605,6 +609,15 @@ function NewProspectFlow() {
         </button>
       </div>
       {perCardShown && <RateFields value={quoteRates} onChange={setQuoteRates} hideNote />}
+      {/* Sits under the boxes rather than above them: the rep reads the rate
+          they're quoting first, and what the card would have said second. */}
+      <RateSuggestion
+        monthlyVolume={volume}
+        avgTicket={ticket}
+        value={quoteRates}
+        onChange={setQuoteRates}
+        autoApply
+      />
 
       <div className={styles.basisRow}>
         <label className={styles.field}>
@@ -804,49 +817,37 @@ function NewProspectFlow() {
 
       {dealNotice && <div className={styles.error}>{dealNotice}</div>}
 
+      {/* A card, not a drawer (product owner, 2026-10-12). Folded away, the
+          legal name — the one hard block on this page the rep alone can clear
+          — sat behind a click, and the count on the header was the only hint
+          anything was missing. */}
       <section id="merchant-details" className={styles.details}>
-        <button
-          type="button"
-          className={styles.detailsToggle}
-          aria-expanded={detailsOpen}
-          aria-controls="merchant-details-body"
-          onClick={() => setDetailsOpen(o => !o)}
-        >
-          <svg
-            className={styles.detailsChevron}
-            viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M9 5l7 7-7 7" />
-          </svg>
-          <span className={styles.detailsTitle}>Merchant details</span>
+        <div className={styles.detailsHead}>
+          <h2 className={styles.detailsTitle}>Merchant details</h2>
           <span className={styles.detailsMeta} data-warn={merchantBlocked ? "true" : undefined}>
             {merchantBlocked && !business.legalName.trim()
               ? "Legal name needed"
               : `${knownCount} of ${detailFields.length} known`}
           </span>
           <span className={styles.detailsNote}>The customer completes the rest on their onboarding form.</span>
-        </button>
-        {detailsOpen && (
-          <div id="merchant-details-body" className={styles.detailsBody}>
-            <MerchantDetailsForm
-              business={business}
-              ownerContact={ownerContact}
-              processing={processing}
-              applied={reviewApplied}
-              showProcessing={rated}
-              onBusinessChange={setBusiness}
-              onOwnerChange={setOwnerContact}
-              onProcessingChange={setProcessing}
-            />
-            {missingWarnings.length > 0 && (
-              <p className={styles.prefillNote}>
-                The customer will have to fill these in themselves: {missingWarnings.join(", ")}.
-              </p>
-            )}
-          </div>
-        )}
+        </div>
+        <div className={styles.detailsBody}>
+          <MerchantDetailsForm
+            business={business}
+            ownerContact={ownerContact}
+            processing={processing}
+            applied={reviewApplied}
+            showProcessing={rated}
+            onBusinessChange={setBusiness}
+            onOwnerChange={setOwnerContact}
+            onProcessingChange={setProcessing}
+          />
+          {missingWarnings.length > 0 && (
+            <p className={styles.prefillNote}>
+              The customer will have to fill these in themselves: {missingWarnings.join(", ")}.
+            </p>
+          )}
+        </div>
       </section>
 
       <ProductConfigurator

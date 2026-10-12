@@ -113,6 +113,30 @@
 .check input { accent-color: var(--accent); margin: 0; }
 
 .checkRow { display: flex; align-items: center; gap: var(--space-xs); margin-top: var(--space-sm); }
+
+/* An action the rep takes, not a state the form holds — see the comment on
+   it in MerchantDetailsForm.tsx. */
+.copyButton {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent-text);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.copyButton:hover:not(:disabled) { color: var(--ink); }
+.copyButton:disabled { color: var(--ink-3); cursor: default; text-decoration: none; }
+
+.copyButton:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 .checkRow .check { margin-top: 0; }
 .checkRow + .grid { margin-top: var(--space-sm); }
 

@@ -108,6 +108,33 @@ export const quoteLimitPolicy = pgTable("quote_limit_policy", {
   isActive: boolean("is_active").notNull().default(true),
 });
 
+// The card-present rate card — monthly volume × average ticket → the rate a
+// rep is offered. Structure (which nine volume bands, which nine ticket
+// columns) lives in code as RATE_MATRIX_VOLUME_BANDS / RATE_MATRIX_TICKETS;
+// only the NUMBERS are editable, which is what "show that same table and have
+// the values editable" asks for and is why one jsonb holds the whole grid.
+//
+// Its own table rather than more columns on margin_policy for the reason that
+// one already states: margin_policy is what a rep may LEARN about, or GIVE
+// AWAY of, AIO's margin. A rate card is neither — every figure on it is
+// printed on the merchant's own quote.
+//
+// Seeded empty, like quote_limit_policy: getRateMatrix() falls back to
+// DEFAULT_RATE_MATRIX (the pricing guide §10.3), so an unseeded table can
+// never leave a rep with no rate to quote.
+export const rateMatrixPolicy = pgTable("rate_matrix_policy", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // Row-major [volumeBand][ticketColumn], whole basis points. Bps because
+  // every figure on AIO's rate card is a two-decimal percentage, which is
+  // exact in bps and is not in a float — on a document nobody can amend.
+  cardPresentBps: jsonb("card_present_bps").$type<number[][]>().notNull().default([]),
+  cardNotPresentBps: integer("card_not_present_bps").notNull().default(330),
+  perTransactionFeeCents: integer("per_transaction_fee_cents").notNull().default(15),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
 // Replaces localStorage "clearrate:settings" / "clearrate:adyen_config".
 export const appSettings = pgTable("app_settings", {
   id: uuid("id").primaryKey().defaultRandom(),

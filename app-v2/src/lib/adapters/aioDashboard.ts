@@ -351,16 +351,25 @@ export async function createAioBusiness(
   const preferred = (biz.dba || biz.legalName || "").trim();
   if (!preferred) throw new Error("AIO dashboard business create requires a business name");
 
+  // The OPERATING address, same as `createAioLocation` below — what AIO calls
+  // a "Restaurant (Tenant)" is the restaurant, so the address on it is where
+  // it trades, not where it is registered. This read `biz.address` (the legal
+  // one) until 2026-10-12, which happened to work only because HubSpot's own
+  // address used to seed both. It no longer does (see hubspotPrefill.ts), and
+  // a merchant who pays before filling in their onboarding form has no legal
+  // address on file yet — `isEligibleForAioProvisioning` doesn't require one.
+  const loc = locationAddress(biz);
+
   const attempt = async (businessName: string) => {
     const json = await aioCall("/api/business/create", "business create", {
       businessInfo: {
         businessName,
         contactNo: toE164Phone(biz.phone) ?? "",
-        address: biz.address ?? "",
-        state: biz.state ?? "",
-        city: biz.city ?? "",
-        zipCode: biz.zip ?? "",
-        stateIso: biz.state ?? "",
+        address: loc.address,
+        state: loc.state,
+        city: loc.city,
+        zipCode: loc.zip,
+        stateIso: loc.state,
         logo: null,
         businessSince: new Date().toISOString(),
         // Only value observed in the wild; see open question about the enum.
