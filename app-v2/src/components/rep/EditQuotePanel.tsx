@@ -9,7 +9,7 @@ import RateFields from "@/components/rep/RateFields";
 import RateSuggestion from "@/components/rep/RateSuggestion";
 import { adjustmentsFromQuoteLines, picksFromQuoteLines, quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
-import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import { averageTicketOf, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 
@@ -251,7 +251,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
                 taking it is their click. */}
             <RateSuggestion
               monthlyVolume={previewAnalysis?.totalVolume ?? 0}
-              avgTicket={previewAnalysis?.averageTicket ?? 0}
+              avgTicket={previewAnalysis ? averageTicketOf(previewAnalysis) : 0}
               value={quoteRates}
               onChange={setQuoteRates}
             />

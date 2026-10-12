@@ -5,6 +5,7 @@ import {
   lookupCardPresentRate, matrixTicketIndex, matrixVolumeIndex, rateMatrixProblems,
 } from "@/lib/rateMatrix";
 import { MARGIN_REQS } from "@/lib/pricing";
+import { averageTicketOf } from "@/types/merchant";
 
 // The card-present rate card (pricing guide §10.3), the lookup that reads it,
 // and the validator that stands between an admin's typing and every quote.
@@ -181,5 +182,34 @@ describe("every published cell", () => {
       for (const t of RATE_MATRIX_TICKETS) seen.add(`${matrixVolumeIndex(vol)}:${matrixTicketIndex(t)}`);
     }
     expect(seen.size).toBe(MATRIX_ROWS * MATRIX_COLS);
+  });
+});
+
+// The statement path. A statement fills the rep's volume and ticket boxes and
+// those are what the rate card is looked up on — so a statement that doesn't
+// print an average ticket must still produce one, or the quote silently stays
+// on the flat standard rate. Reported live 2026-10-12: a statement was read,
+// the boxes stayed blank, and the rate never moved off 2.49%.
+describe("averageTicketOf", () => {
+  const base = { averageTicket: 0, totalVolume: 0, totalTransactions: 0 };
+
+  it("uses the figure the statement printed", () => {
+    expect(averageTicketOf({ ...base, averageTicket: 34.5, totalVolume: 100000, totalTransactions: 1 })).toBe(34.5);
+  });
+
+  it("derives it from volume ÷ transactions when the statement omits it", () => {
+    expect(averageTicketOf({ ...base, totalVolume: 100000, totalTransactions: 4000 })).toBe(25);
+  });
+
+  it("is 0 when neither is available, which reads as 'no basis'", () => {
+    expect(averageTicketOf(base)).toBe(0);
+    expect(averageTicketOf({ ...base, totalVolume: 100000 })).toBe(0);
+    expect(averageTicketOf({ ...base, totalTransactions: 4000 })).toBe(0);
+  });
+
+  it("feeds a real cell of the card", () => {
+    const ticket = averageTicketOf({ ...base, totalVolume: 100000, totalTransactions: 4000 });
+    // $100K/mo is the "$75K – $100K" band; a $25 ticket reads the $25 column.
+    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 100000, ticket)).toBeCloseTo(0.0214, 6);
   });
 });

@@ -21,7 +21,7 @@ import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidatio
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
-import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import { averageTicketOf, DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import { buildProspectPrefillForContact, contactOptionLabel } from "@/lib/hubspotPrefill";
@@ -279,7 +279,35 @@ function NewProspectFlow() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Analysis failed");
-        setAnalysis(data.analysis as StatementAnalysis);
+        const read = data.analysis as StatementAnalysis;
+        setAnalysis(read);
+
+        // The statement fills the two boxes, and OVERWRITES whatever was in
+        // them — which is exactly what the dropzone promises ("prices the
+        // quote on their real numbers, overriding the volume and ticket
+        // above"). Before this they stayed empty behind their placeholders:
+        // the rep saw "✓ Quote priced on this statement" over a blank volume
+        // and a $0.00 ticket, and the rate card had nothing to look a rate up
+        // on, so every statement quote stayed on the flat standard rate.
+        //
+        // Written into `processing` rather than read out of `analysis` at the
+        // point of use, because `processing` is deliberately the ONE copy of
+        // these two figures (see the note on `ticket`/`volume` below) — and
+        // because landing them in the boxes is what lets a rep correct a
+        // misread ticket instead of being stuck with it.
+        const vol = Math.round(read.totalVolume || 0);
+        const tkt = averageTicketOf(read);
+        if (vol > 0 || tkt > 0) {
+          setProcessing(p => ({
+            ...p,
+            ...(vol > 0 ? { monthlyVolume: String(vol) } : {}),
+            ...(tkt > 0 ? { avgTicket: tkt.toFixed(2) } : {}),
+          }));
+          // Re-asked, same as typing one: a statement read as $12M is still
+          // worth a second look, and it is now the number everything is
+          // priced on.
+          if (vol > 0) setVolumeConfirmed(false);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Analysis failed");
         setFile(null);
@@ -667,7 +695,7 @@ function NewProspectFlow() {
       )}
       <p className={styles.prefillNote}>
         {analysis
-          ? "The statement sets the volume their savings are figured on."
+          ? "Read off the statement — correct either one if it was misread. Their savings are figured on the volume."
           : basisHalfSet
             ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — until both are set, the customer uploads a statement before they see a quote.`
             : hasQuote

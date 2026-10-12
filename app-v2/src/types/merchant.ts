@@ -155,6 +155,30 @@ export type StatementAnalysis = {
   icEstimated?: boolean;
 };
 
+/**
+ * The statement's average ticket, derived from the volume and the transaction
+ * count when the analyzer didn't read one off the page directly.
+ *
+ * Not every statement prints an average ticket, and Claude returns 0 rather
+ * than inventing one — but volume ÷ transactions is the same number by
+ * definition, and both of those are on every statement. Worth having because
+ * the ticket is now half of what the rate card is looked up on
+ * (`lib/rateMatrix.ts`): without the fallback a statement that omits the line
+ * silently falls back to the flat standard rate.
+ *
+ * Lives here rather than in pricing.ts because the two callers are client
+ * components, and importing pricing.ts into one would ship AIO's true margin
+ * floors to the browser.
+ */
+export function averageTicketOf(
+  analysis: Pick<StatementAnalysis, "averageTicket" | "totalVolume" | "totalTransactions">
+): number {
+  if (analysis.averageTicket > 0) return analysis.averageTicket;
+  const txns = analysis.totalTransactions || 0;
+  const vol = analysis.totalVolume || 0;
+  return txns > 0 && vol > 0 ? vol / txns : 0;
+}
+
 export type ProposedRatesFlatRate = {
   pricingModel: "flat-rate";
   flatRate: number;

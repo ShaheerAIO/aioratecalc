@@ -52,11 +52,17 @@ export default function RateSuggestion({
   monthlyVolume, avgTicket, value, onChange, autoApply,
 }: RateSuggestionProps) {
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
-  // Auto-apply happens AT MOST ONCE per mount. Without this a rep who takes
-  // the suggestion, types over it, then corrects the ticket would have their
-  // typed rate replaced again — the auto-apply is a starting point, not a
-  // policy that keeps reasserting itself.
-  const autoApplied = useRef(false);
+  // The last rates this component put in the boxes itself. Auto-apply only
+  // ever overwrites the flat default or its OWN previous suggestion — the two
+  // states that mean "nobody has chosen these". Anything else is a rate a rep
+  // typed, and it is never touched.
+  //
+  // This replaced a one-shot-per-mount guard, which was too blunt: a rep who
+  // drops a statement after typing a volume has their volume and ticket
+  // replaced by the statement's, and the rate has to follow, or the quote
+  // goes out priced for the merchant they guessed at rather than the one on
+  // the page.
+  const lastApplied = useRef<QuoteRates | null>(null);
 
   useEffect(() => {
     if (!(monthlyVolume > 0) || !(avgTicket > 0)) { setSuggestion(null); return; }
@@ -73,13 +79,17 @@ export default function RateSuggestion({
   }, [monthlyVolume, avgTicket]);
 
   useEffect(() => {
-    if (!autoApply || !suggestion || autoApplied.current) return;
-    if (!sameRates(value, DEFAULT_QUOTE_RATES)) return;
-    autoApplied.current = true;
+    if (!autoApply || !suggestion) return;
+    const untouched =
+      sameRates(value, DEFAULT_QUOTE_RATES) ||
+      (lastApplied.current !== null && sameRates(value, lastApplied.current));
+    if (!untouched) return;
+    if (sameRates(value, suggestion.rates)) return;
+    lastApplied.current = suggestion.rates;
     onChange(suggestion.rates);
-    // `value` is read, not depended on: this fires when a suggestion arrives,
-    // and re-running it every keystroke in a rate box is the exact behaviour
-    // the once-only guard exists to prevent.
+    // `value` is read, not depended on: this fires when a SUGGESTION arrives.
+    // Depending on it would re-run on every keystroke in a rate box, and the
+    // `untouched` test above is what decides whether to act, not the trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suggestion, autoApply]);
 

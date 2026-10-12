@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import { fmt$, fmtPct2 } from "@/lib/utils";
-import { DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import { averageTicketOf, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { StatementAnalysis, ProposalOutput, Processor, ProcessorTier, PricingModel, QuoteRates } from "@/types/merchant";
 import RateFields from "./RateFields";
 import RateSuggestion from "./RateSuggestion";
@@ -269,7 +269,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
                 on the flat standard rate — the same posture as a new quote. */}
             <RateSuggestion
               monthlyVolume={analysis.totalVolume || 0}
-              avgTicket={analysis.averageTicket || 0}
+              avgTicket={averageTicketOf(analysis)}
               value={rates}
               onChange={setRates}
               autoApply
