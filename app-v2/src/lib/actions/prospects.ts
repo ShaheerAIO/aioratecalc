@@ -82,9 +82,19 @@ async function deliverLeadLink(
 }
 
 /**
- * Write the legal name, previous processor and MCC the rep entered onto the
- * HubSpot Company. Best-effort, like the link delivery: the row is already
- * saved, and a HubSpot hiccup must not undo a link the rep has to send.
+ * Write the merchant details the rep entered onto the HubSpot Company — the
+ * legal name and address, the previous processor and the MCC. Best-effort,
+ * like the link delivery: the row is already saved, and a HubSpot hiccup must
+ * not undo a link the rep has to send.
+ *
+ * The legal ADDRESS goes out from here as well as from the merchant's own
+ * onboarding submission (`syncLegalAddressBestEffort`, customer.ts), so a rep
+ * who already knows it doesn't have to wait for the merchant to retype it —
+ * which, since that form is behind a customer account, means waiting until
+ * after they've paid. The two writes can't fight: whoever answers later wins,
+ * and `updateCompanyMerchantDetails` LEAVES OUT blanks rather than sending
+ * "", so the usual case — the rep leaving those fields to the customer —
+ * sends nothing for them and erases nothing HubSpot already had.
  */
 async function syncCompanyDetails(
   companyId: string | null | undefined,
@@ -94,6 +104,8 @@ async function syncCompanyDetails(
   try {
     await updateCompanyMerchantDetails(companyId, {
       legalName: app.business?.legalName,
+      legalStreet: app.business?.address,
+      legalCity: app.business?.city,
       previousProcessor: app.processing?.currentProcessor,
       mcc: app.processing?.mcc,
     });

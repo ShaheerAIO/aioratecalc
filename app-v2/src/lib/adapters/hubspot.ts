@@ -820,14 +820,15 @@ export async function getTenantCompany(companyId: string): Promise<TenantCompany
 //
 // Property choice is driven by measured portal-wide fill rates (n=100), not by
 // what the schema offers. Deliberately NOT read, because they're empty portal
-// wide: legal_*_address_*, full_name, monthly_card_volume, of_locations, the
-// FEIN property, annualrevenue, founded_year. Note `moduels` — the typo is the
-// real internal name.
+// wide: full_name, monthly_card_volume, of_locations, the FEIN property,
+// annualrevenue, founded_year. Note `moduels` — the typo is the real internal
+// name.
 //
-// Three ARE read despite being near-empty, because EasyOB is what fills them:
-// `legal_trading_name_as_registered_with_government`, `previous_processor` and
-// `mcc_code` are written back by `updateCompanyMerchantDetails` whenever a rep
-// sends a quote link, so the next quote on the same company prefills them.
+// Every COMPANY_WRITE_PROPS property IS read despite being near-empty, because
+// EasyOB is what fills them: the legal name and address, `previous_processor`
+// and `mcc_code` are written back by `updateCompanyMerchantDetails` whenever a
+// rep sends a quote link and again when the merchant submits their onboarding
+// form, so the next quote on the same company prefills them.
 export type HubspotCompanyProfile = TenantCompany & {
   domain: string | null;
   website: string | null;

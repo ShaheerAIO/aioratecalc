@@ -404,7 +404,10 @@ describe("buildProspectPrefill", () => {
     expect(Object.keys(cityOnly.business).filter(k => k.startsWith("dba") && k !== "dba")).toEqual([]);
   });
 
-  it("never prefills the LEGAL address — HubSpot does not carry one", () => {
+  it("never derives the LEGAL address from the company's operating address", () => {
+    // FULL has a complete operating address and no legal one. None of it may
+    // leak across: the registered address is what the state has on file, and
+    // the restaurant's own address is not evidence of it.
     const p = buildProspectPrefill(FULL, CONTACT);
     expect(p.business.address).toBeUndefined();
     expect(p.business.city).toBeUndefined();
@@ -412,6 +415,30 @@ describe("buildProspectPrefill", () => {
     expect(p.business.zip).toBeUndefined();
     expect(p.fromHubspot).not.toContain("business.address");
     expect(p.fromHubspot).not.toContain("business.city");
+  });
+
+  it("reads the LEGAL address back from the legal properties EasyOB writes", () => {
+    const p = buildProspectPrefill(
+      { ...FULL, legalStreet: "4 Registered Agent Way", legalCity: "Sacramento" },
+      CONTACT
+    );
+    expect(p.business.address).toBe("4 Registered Agent Way");
+    expect(p.business.city).toBe("Sacramento");
+    expect(p.fromHubspot).toContain("business.address");
+    expect(p.fromHubspot).toContain("business.city");
+    // The operating address is untouched by it — the two are separate answers.
+    expect(p.business.dbaAddress).toBe("638 South Brookhurst Street");
+    expect(p.business.dbaCity).toBe("Anaheim");
+    // This portal has no legal state or ZIP property, so those stay for the
+    // merchant's onboarding form, which requires all four.
+    expect(p.business.state).toBeUndefined();
+    expect(p.business.zip).toBeUndefined();
+  });
+
+  it("needs a legal STREET: a legal city alone is not an address", () => {
+    const p = buildProspectPrefill({ ...FULL, legalStreet: null, legalCity: "Sacramento" }, CONTACT);
+    expect(p.business.address).toBeUndefined();
+    expect(p.business.city).toBeUndefined();
   });
 
   it("returns empty, key-free partials for an empty company", () => {

@@ -591,10 +591,21 @@ secret stays valid but you no longer have it).
   address off as the registered one, on the form whose whole purpose is to state what the state has
   on file and which Adyen and Check then verify. The merchant supplies the legal address on their
   onboarding form (`validateOnboardingFields` requires it) and
-  `saveMyApplicationOnboardingAction` writes it back. Two consequences:
+  `saveMyApplicationOnboardingAction` writes it back. Three consequences:
   - **The portal has a legal STREET and a legal CITY and no legal state or ZIP**
     (`legal_street_address_as_registered_with_government`, `legal_city_...`). EasyOB holds all four;
     it writes the two that exist rather than cramming the others into a property labelled otherwise.
+  - **The legal address is PUSHED from both sides and READ BACK from the legal properties only**
+    (2026-10-12). The merchant's onboarding form sits behind a customer account, which only exists
+    after they have paid — so until a rep could send it too, those properties stayed empty through
+    the entire pre-sale. `syncCompanyDetails` (prospects.ts) now sends `legalStreet`/`legalCity`
+    alongside the legal name, processor and MCC, at prospect creation and at quote save; blanks are
+    left out by `updateCompanyMerchantDetails`, so the usual case — the rep leaving those fields to
+    the customer — writes nothing and erases nothing, and whoever answers later wins.
+    `buildProspectPrefill` then reads them back, so a SECOND quote on the same company doesn't ask
+    again. **This does not relax the rule above**: the prefill reaches `legalStreet`/`legalCity` and
+    never `company.address`. Street-gated like the operating address, and state and ZIP stay blank
+    for the onboarding form to collect, since the portal has nowhere to keep them.
   - **`createAioBusiness` reads `locationAddress(biz)`, not `biz.address`.** It read the legal one
     directly, which only worked because HubSpot used to seed both. A merchant who pays before
     filling in their onboarding form has no legal address yet and

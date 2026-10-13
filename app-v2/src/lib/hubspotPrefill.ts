@@ -222,7 +222,7 @@ export function buildProspectPrefill(
   const business = compact<BusinessInfo>({
     legalName: (company.legalName ?? "").trim() || undefined,
     dba: name || undefined,
-    // The LEGAL address is deliberately absent here — see the block below.
+    // The legal address comes from the legal properties only — see both blocks below.
     phone: normalizePhone(company.phone),
     // `website` is the real URL; `domain` is the bare host and only a fallback.
     // Neither gets an https:// prefix here — adapters/adyen.ts already adds one.
@@ -252,6 +252,33 @@ export function buildProspectPrefill(
       dbaCity: (company.city ?? "").trim() || undefined,
       dbaState: usStateCode(company.state ?? undefined),
       dbaZip: (company.zip ?? "").trim() || undefined,
+    }));
+  }
+
+  // The LEGAL address reads back from the two legal properties, and ONLY from
+  // them. `company.address` is still barred from reaching these fields — the
+  // paragraph above is the whole reason this prefill exists in its current
+  // shape, and reading a registered address out of the operating one by
+  // another route would reverse it.
+  //
+  // What makes this worth reading at all is that EasyOB now fills those
+  // properties itself: the rep sends the legal address with the quote link
+  // (`syncCompanyDetails`) and the merchant confirms it on their onboarding
+  // form (`syncLegalAddressBestEffort`). So on a SECOND quote for the same
+  // company, the answer someone already gave comes back instead of being
+  // asked for again. On a first quote they're empty and nothing is seeded,
+  // which is the old behaviour exactly.
+  //
+  // Street-gated, same whole-or-nothing rule as the operating address. There
+  // is no legal state or ZIP property in this portal, so those two stay blank
+  // for the merchant's onboarding form to collect — a partly-known registered
+  // address is still better than none, since `validateOnboardingFields`
+  // requires all four and will stop a submission that's short.
+  const legalStreet = streetLine(company.legalStreet, company.legalCity);
+  if (legalStreet) {
+    Object.assign(business, compact<BusinessInfo>({
+      address: legalStreet,
+      city: (company.legalCity ?? "").trim() || undefined,
     }));
   }
 

@@ -13,6 +13,7 @@ const getEffectiveRole = vi.fn();
 const saveApplication = vi.fn();
 const getCompanyProfile = vi.fn();
 const listCompanyContacts = vi.fn();
+const updateCompanyMerchantDetails = vi.fn();
 const resolveDealForCompany = vi.fn();
 const sendLeadLinkEmail = vi.fn();
 const sendLeadLinkSms = vi.fn();
@@ -20,7 +21,7 @@ const listQuotableProductsAction = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { saveApplication } }));
-vi.mock("@/lib/adapters/hubspot", () => ({ getCompanyProfile, listCompanyContacts }));
+vi.mock("@/lib/adapters/hubspot", () => ({ getCompanyProfile, listCompanyContacts, updateCompanyMerchantDetails }));
 // The Company & Deal picker's resolution service — mocked so the real module
 // (which pulls in the server-only db client) is never loaded here.
 vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany }));
@@ -81,6 +82,7 @@ beforeEach(() => {
   resolveDealForCompany.mockResolvedValue({ ok: true, deal: DEAL, created: false });
   sendLeadLinkEmail.mockResolvedValue({ sent: true });
   sendLeadLinkSms.mockResolvedValue({ sent: false });
+  updateCompanyMerchantDetails.mockResolvedValue([]);
 });
 
 describe("createProspectAction — hard blocks", () => {
@@ -158,5 +160,31 @@ describe("createProspectAction — success", () => {
     await createProspectAction(baseInput({ deal: { mode: "create", dealName: "Torta Palace" } }));
     const [, app] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
     expect(app.dealLink?.origin).toBe("created");
+  });
+
+  // The legal address used to reach HubSpot only from the merchant's own
+  // onboarding form, which sits behind a customer account — i.e. not until
+  // after they'd paid. A rep who already knows it sends it with the link.
+  it("pushes the legal address to the Company as soon as the link is created", async () => {
+    await createProspectAction(baseInput());
+    expect(updateCompanyMerchantDetails).toHaveBeenCalledWith(COMPANY_ID, expect.objectContaining({
+      legalName: "Torta Palace LLC",
+      legalStreet: "1200 Wilshire Blvd",
+      legalCity: "Los Angeles",
+    }));
+  });
+
+  // The rep leaving those fields for the customer is the NORMAL case, and it
+  // must not erase an address HubSpot already holds — updateCompanyMerchantDetails
+  // leaves blanks out, so what matters here is that we pass them through as
+  // blank rather than inventing a value from the operating address.
+  it("sends a blank legal address rather than substituting the operating one", async () => {
+    await createProspectAction(baseInput({
+      business: { ...BUSINESS, address: "", city: "", dbaAddress: "9 Operating Way", dbaCity: "Pasadena" },
+    }));
+    expect(updateCompanyMerchantDetails).toHaveBeenCalledWith(COMPANY_ID, expect.objectContaining({
+      legalStreet: "",
+      legalCity: "",
+    }));
   });
 });
