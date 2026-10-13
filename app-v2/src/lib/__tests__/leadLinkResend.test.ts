@@ -12,6 +12,7 @@ const getApplication = vi.fn();
 const saveApplication = vi.fn();
 const sendLeadLinkEmail = vi.fn();
 const sendLeadLinkSms = vi.fn();
+const resolveSender = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({
@@ -40,6 +41,17 @@ vi.mock("@/lib/actions/pricing", () => ({
 // client) is never loaded here. This suite doesn't exercise deal resolution
 // at all (resendLeadLinkAction never calls it).
 vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany: vi.fn() }));
+// prospects.ts now also imports buildAndPublishBillingQuote (10/13, the
+// publish-at-send reversal) for createProspectAction's publishAtSend —
+// mocked for the same reason as the two above (it pulls in the server-only
+// db client). resendLeadLinkAction never calls buildAndPublishBillingQuote
+// itself, but it DOES call resolveSender (via resolveReplyToRep, same file)
+// to resolve a reply-to rep for the resend email — see "can the email go
+// through the sales rep?" in the 10/13 list. Defaulted to a clean refusal so
+// every pre-existing test here reads like it did before that feature existed
+// (no rep resolved, so no reply-to/display-name on the email); the dedicated
+// reply-to tests below override it per case.
+vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote: vi.fn(), resolveSender }));
 
 const { resendLeadLinkAction } = await import("@/lib/actions/prospects");
 
@@ -95,6 +107,7 @@ beforeEach(() => {
   saveApplication.mockResolvedValue(undefined);
   sendLeadLinkEmail.mockResolvedValue({ sent: true, devUrl: null });
   sendLeadLinkSms.mockResolvedValue({ sent: true, devUrl: null });
+  resolveSender.mockResolvedValue({ ok: false, code: "no_rep_email" });
 });
 
 describe("resendLeadLinkAction", () => {
@@ -210,5 +223,46 @@ describe("resendLeadLinkAction", () => {
   it("throws when nobody is signed in", async () => {
     getEffectiveRole.mockResolvedValue(null);
     await expect(resendLeadLinkAction("app-1")).rejects.toThrow("Not authenticated");
+  });
+});
+
+// "can the email go through the sales rep?" (2026-10-13) — resendLeadLinkAction
+// resolves a reply-to rep the same way createProspectAction does, via the
+// shared resolveReplyToRep/resolveSender. Covered here rather than only in
+// createProspect.test.ts because resendLeadLinkAction is a SEPARATE call site
+// that shares deliverLeadLink, and a wiring mistake in one without the other
+// is exactly the kind of drift CLAUDE.md warns about.
+describe("resendLeadLinkAction — reply-to rep", () => {
+  it("passes the verified rep as reply-to when resolveSender succeeds", async () => {
+    resolveSender.mockResolvedValue({ ok: true, email: "rita@aioapp.com", firstName: "Rita", lastName: "Rep", ownerId: "161" });
+
+    await resendLeadLinkAction("app-1");
+
+    expect(resolveSender).toHaveBeenCalledWith("rep-1");
+    expect(sendLeadLinkEmail).toHaveBeenCalledWith(
+      "jane@testco.com", expect.stringContaining("/lead/tok-live"), "Test Co",
+      undefined, { email: "rita@aioapp.com", name: "Rita Rep" },
+    );
+  });
+
+  it("omits the rep entirely (same 3-arg call as before) when resolveSender refuses", async () => {
+    resolveSender.mockResolvedValue({ ok: false, code: "not_a_portal_owner", repEmail: "rep@aioapp.com" });
+
+    await resendLeadLinkAction("app-1");
+
+    expect(sendLeadLinkEmail).toHaveBeenCalledWith(
+      "jane@testco.com", expect.stringContaining("/lead/tok-live"), "Test Co",
+    );
+  });
+
+  it("omits the rep when resolveSender itself throws — never blocks the resend", async () => {
+    resolveSender.mockRejectedValue(new Error("HubSpot owner lookup 403"));
+
+    const result = await resendLeadLinkAction("app-1");
+
+    expect(result.emailResult.sent).toBe(true);
+    expect(sendLeadLinkEmail).toHaveBeenCalledWith(
+      "jane@testco.com", expect.stringContaining("/lead/tok-live"), "Test Co",
+    );
   });
 });

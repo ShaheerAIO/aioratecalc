@@ -44,30 +44,48 @@ export const SELECTABLE_PRICING_MODELS: PricingModel[] = ["2-tier"];
 export type QuoteRates = {
   /** Visa / Mastercard / Discover, card present. e.g. 0.0249 for 2.49%. */
   cardPresentRate: number;
-  /** Visa / Mastercard / Discover, card not present. */
+  /**
+   * Visa / Mastercard / Discover, card not present. LOCKED on every rep
+   * surface as of 2026-10-13 ("lock cnp rates") — a rep sees whatever this
+   * holds but can't type over it. For a quote being built fresh it tracks
+   * AIO's rate card (`lib/rateMatrix.ts`'s `DEFAULT_CNP_RATE_BPS`,
+   * admin-edited at /admin/settings/rate-matrix) via `RateSuggestion`, which
+   * now always applies its suggestion (see that file). For an already-SAVED
+   * quote it is whatever was actually quoted — this field is never silently
+   * rewritten to match a policy the quote predates; see RateFields.tsx.
+   */
   cardNotPresentRate: number;
   /**
-   * American Express, card present. AMEX is its own pair because it settles at
-   * its own cost — the two brand groups are priced separately on every real
-   * rate card, AIO's included.
+   * American Express, card present. RETIRED as a distinct price (2026-10-13,
+   * "get rid of the dual rate (amex)" — reverses the 2026-10-06 "AMEX priced
+   * apart" decision). AMEX volume now prices at whatever `cardPresentRate`/
+   * `cardNotPresentRate` quote — see `derivePricing` in pricing.ts. This field
+   * (and its CNP twin below) stay on the type ONLY so a row saved before today
+   * still parses, same pattern as `StoredQuoteType`. Nothing on any rep
+   * surface offers them any more, and nothing WRITES a value into them that
+   * differs from the ordinary rate — every place that builds a fresh
+   * `QuoteRates` sets these equal to cardPresentRate/cardNotPresentRate.
    */
   amexCardPresentRate: number;
-  /** American Express, card not present. */
+  /** American Express, card not present. See amexCardPresentRate above. */
   amexCardNotPresentRate: number;
   /** Charged on every transaction, on top of the rate — not folded into it. */
   perTransactionFee: number;
 };
 
 /**
- * 2.49% on all four lanes plus $0.15 — the rate a merchant is quoted when
- * nothing is known about their volume or their ticket. Editable on every rep
- * surface; this is the starting point, not a cap or a floor.
+ * 2.49% on all four lanes plus $0.15 — the rate a quote prices at when
+ * nothing is known about the merchant's volume or ticket (the `ratesFor`
+ * fallback for a row with no `quoteRates` at all, and the starting point
+ * before any suggestion or stored value has reached the rep's screen).
  *
- * All four are the SAME number today, which is not what the industry does and
- * not what HubSpot's rate card says — product-owner decision, 2026-10-06. The
- * four fields still exist separately because they are four real prices that
- * will diverge; collapsing them to one while they happen to be equal would
- * mean rebuilding this the first time AMEX is priced on its own.
+ * The card-present rate is still rep-editable on every surface. The
+ * card-not-present rate is NOT (2026-10-13, "lock cnp rates") — see
+ * `cardNotPresentRate`'s doc comment above. The two AMEX fields are no longer
+ * priced or offered separately at all (same date, "get rid of the dual rate
+ * (amex)") — they stay on this constant equal to the ordinary rates purely so
+ * the object still satisfies `QuoteRates`' shape; nothing reads them as a
+ * distinct price any more.
  *
  * NOTE for whoever updates these: HubSpot's own rate-card product
  * (`AIO Processing Two Tiered Rate`, the $0 disclosure line) carries its rates
@@ -102,6 +120,28 @@ export const DEFAULT_QUOTE_RATES: QuoteRates = {
   amexCardNotPresentRate: 0.0249,
   perTransactionFee: 0.15,
 };
+
+/**
+ * The assumed card-present share when nobody has measured it yet — a rep's
+ * form default (rep/prospects/new's BLANK_PROCESSING, MerchantDetailsForm's
+ * placeholder), PricingStep's card-mix fallback before a statement sets one,
+ * and `pricing.ts`'s own CONFIG_QUOTE_ASSUMPTIONS / derivePricing /
+ * analyzeStatement fallback split all read this ONE constant now.
+ *
+ * It used to be Steve's 2026-07-23 90/10 blended default (restaurants run
+ * overwhelmingly card-present); raised to 95/5 on 2026-10-07 ("Default
+ * card-present share to 95% on new prospects", commit 453c588) — but that
+ * change only touched the rep form's starting value, leaving `pricing.ts` and
+ * `PricingStep.tsx` still quoting 90 under a screen that read 95. The
+ * disagreement, not either number, was the defect; 95 is the one the product
+ * owner actually asked for.
+ *
+ * Lives here, next to DEFAULT_QUOTE_RATES, and not in pricing.ts, for the same
+ * reason MAX_PLAUSIBLE_CARD_RATE does above — PricingStep and the prospect
+ * form are client components, and importing pricing.ts into one would ship
+ * AIO's true margin floors with it.
+ */
+export const DEFAULT_CARD_PRESENT_PCT = 0.95;
 
 export type DealStage =
   | "prospect_created"      // rep created a prospect + set a margin target, no link sent yet
@@ -191,8 +231,14 @@ export type ProposedRates2Tier = {
   cardPresentPerTxn: number;
   cardNotPresentRate: number;
   cardNotPresentPerTxn: number;
-  /** AMEX, priced separately from Visa/Mastercard/Discover. Absent on
-   *  proposals generated before 2026-10-06, which quoted two rates. */
+  /** AMEX. Absent on proposals generated before 2026-10-06, which quoted two
+   *  rates. Proposals generated 2026-10-06 through 2026-10-12 priced AMEX
+   *  apart and these can genuinely differ from the ordinary rates above; as
+   *  of 2026-10-13 ("get rid of the dual rate (amex)") a NEW proposal always
+   *  sets these equal to cardPresentRate/cardNotPresentRate — see
+   *  `derivePricing` in pricing.ts — and `ProposalStep` no longer renders
+   *  them as separate cards, so an old proposal with genuinely different AMEX
+   *  numbers still has them in the data but no longer shows them. */
   amexCardPresentRate?: number;
   amexCardNotPresentRate?: number;
   monthlyFee: number;
@@ -876,6 +922,24 @@ export type MerchantApplication = {
   proposal: ProposalOutput | null;
   business: BusinessInfo | null;
   ownerContact: OwnerContact | null;
+  /**
+   * Who AIO bills and sends subscription paperwork to, if different from the
+   * owner contact above (2026-10-13, "add billing contact"). Same shape and
+   * same no-PII rule as OwnerContact — no SSN/EIN/bank, Adyen/Check collect
+   * those on their own hosted pages. Optional (`?:`, not just `| null`) so
+   * this stays additive: every pre-existing literal `MerchantApplication` in
+   * the codebase (tests, other action files) is still valid without being
+   * touched, which a required field would have forced across every one of
+   * them for a feature none of them exercise.
+   *
+   * Deliberately NOT read anywhere near billing/publishBillingQuote.ts: the
+   * quote's signer is `ownerContact.email` only (CLAUDE.md is explicit that
+   * `acceptedByEmail` was removed on purpose), and this field must never
+   * become a second candidate for that. It exists purely so a rep can tell
+   * AIO's own CRM who to loop in on invoices/paperwork — see
+   * `syncBillingContact` in actions/prospects.ts for the HubSpot side.
+   */
+  billingContact?: OwnerContact | null;
   processing: ProcessingInfo | null;
   agreement: AgreementInfo | null;
 };

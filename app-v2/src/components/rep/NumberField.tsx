@@ -6,15 +6,30 @@ import { useEffect, useState } from "react";
  * Number inputs that look like the thing they hold, so a rep can see a typo
  * rather than having to notice one.
  *
- * Both exist for the same reason (product owner, 2026-10-09): a plain
- * `<input type="number">` shows whatever characters were typed. A rate reads
- * "2" or "2.5" or "20", a volume reads "10000" — and "10000" and "100000" are
- * the same shape at a glance, which is how a merchant gets quoted on a tenth
- * of their real volume.
+ * `DecimalField` and `MoneyField` exist for the same reason (product owner,
+ * 2026-10-09): a plain `<input type="number">` shows whatever characters were
+ * typed. A rate reads "2" or "2.5" or "20", a volume reads "10000" — and
+ * "10000" and "100000" are the same shape at a glance, which is how a
+ * merchant gets quoted on a tenth of their real volume.
  *
- * Both keep the half-typed text WHILE FOCUSED and reformat on blur. Formatting
- * on every keystroke fights the person typing: "2." loses its point, and a
- * cursor in the middle of a comma-grouped number jumps on each change.
+ * As of 2026-10-13 ("make avg ticket writeable like volume... no arrows")
+ * that discipline STOPS at Average Ticket specifically — it moved to
+ * `DecimalMoneyField` below, free-typed like `MoneyField`. The reasoning still
+ * holds for every RATE in the app (a rep typing a card rate can still turn
+ * 2.49 into 20 by a stray keystroke, and that typo is exactly the one this
+ * file exists to catch) and for monthly volume (same failure mode, an order
+ * of magnitude off and no visual cue). It never actually fit the ticket size:
+ * an average ticket is read, not typed against a floor or a typo risk the way
+ * a rate is, and forcing it to re-snap to "0.00" on every blur meant a rep
+ * could never actually clear the box to retype it — the exact bug this
+ * component family was built to prevent, just pointed at the wrong field.
+ *
+ * Both `DecimalField` and `MoneyField` keep the half-typed text WHILE FOCUSED
+ * and reformat on blur. Formatting on every keystroke fights the person
+ * typing: "2." loses its point, and a cursor in the middle of a comma-grouped
+ * number jumps on each change. `DecimalMoneyField` never reformats at all —
+ * see its own doc comment for why that's fine for a ticket size and wouldn't
+ * be for a rate.
  */
 
 /** What the field shows when it isn't being typed in. */
@@ -37,6 +52,9 @@ export type DecimalFieldProps = {
   min?: number;
   max?: number;
   className?: string;
+  /** Read-only display — used for the locked card-not-present rate (RateFields.tsx,
+   *  2026-10-13). `onChange` is still required by the type but never fires. */
+  disabled?: boolean;
   "aria-label": string;
 };
 
@@ -127,6 +145,68 @@ export function MoneyField({ value, onChange, placeholder, className, ...rest }:
         // partial fraction), and seeing the commas appear is what makes a
         // missing zero visible while it is still being typed.
         setDraft(next === "" ? "" : Number(next).toLocaleString("en-US"));
+        if (next !== value) onChange(next);
+      }}
+      onBlur={() => setDraft(null)}
+      {...rest}
+    />
+  );
+}
+
+export type DecimalMoneyFieldProps = {
+  /** Held as a STRING, same posture as MoneyField (ProcessingInfo.avgTicket is one). */
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  className?: string;
+  "aria-label"?: string;
+};
+
+/**
+ * A dollars-and-cents field, free-typed: "22", "22.5", "22.50", "" — whatever
+ * is actually in the box, the same posture as `MoneyField` and deliberately
+ * NOT `DecimalField`'s (2026-10-13, "make avg ticket writeable like volume...
+ * no arrows").
+ *
+ * Average Ticket used to be a `DecimalField`, which made it a native
+ * `type="number"` (spinner arrows a rep never wanted) that force-reformats to
+ * two decimals ON BLUR — so clearing the box to retype a number always
+ * snapped back to "0.00" before a keystroke could land. That discipline is
+ * right for a RATE (see NumberField.tsx's top-of-file comment — a typo there
+ * is a tenfold pricing mistake) and for Monthly Volume (`MoneyField`, same
+ * file). It was never right for a ticket size: nothing downstream treats a
+ * half-typed average ticket as dangerous the way it treats a half-typed rate,
+ * so the only effect of forcing it through `DecimalField` was making the box
+ * impossible to clear.
+ *
+ * `type="text"`, like `MoneyField` — a number input can't be emptied and
+ * retyped from scratch without flashing back to a formatted value in between.
+ * Unlike `MoneyField` this keeps a single decimal point rather than stripping
+ * it, and does NOT comma-group (ticket sizes don't run into the thousands
+ * where grouping would matter) and does NOT reformat on blur at all — the
+ * box simply holds whatever was typed, same as `ProcessingInfo.avgTicket`'s
+ * own storage shape.
+ */
+export function DecimalMoneyField({ value, onChange, placeholder, className, ...rest }: DecimalMoneyFieldProps) {
+  const [draft, setDraft] = useEditable(value);
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      className={className}
+      placeholder={placeholder}
+      value={draft ?? value}
+      onChange={e => {
+        // Digits and at most one decimal point — pasting "$22.50" lands as
+        // "22.50". A second "." typed after the first is dropped rather than
+        // moving the cursor somewhere confusing.
+        let next = e.target.value.replace(/[^\d.]/g, "");
+        const firstDot = next.indexOf(".");
+        if (firstDot !== -1) {
+          next = next.slice(0, firstDot + 1) + next.slice(firstDot + 1).replace(/\./g, "");
+        }
+        setDraft(next);
         if (next !== value) onChange(next);
       }}
       onBlur={() => setDraft(null)}

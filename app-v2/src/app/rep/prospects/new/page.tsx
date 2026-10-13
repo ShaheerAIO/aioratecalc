@@ -10,7 +10,7 @@ import ProductConfigurator, {
 import MerchantDetailsForm from "@/components/rep/MerchantDetailsForm";
 import RateFields from "@/components/rep/RateFields";
 import RateSuggestion from "@/components/rep/RateSuggestion";
-import { DecimalField, MoneyField } from "@/components/rep/NumberField";
+import { DecimalMoneyField, MoneyField } from "@/components/rep/NumberField";
 import {
   mergeChannels,
   mergeReviewPrefill,
@@ -21,8 +21,8 @@ import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidatio
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
-import { averageTicketOf, DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
-import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
+import { DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import { buildProspectPrefillForContact, contactOptionLabel } from "@/lib/hubspotPrefill";
 import type { HubspotCompanyProfile, HubspotContact, HubspotDeal } from "@/lib/adapters/hubspot";
@@ -64,7 +64,10 @@ const BLANK_BUSINESS: BusinessInfo = {
 };
 const BLANK_OWNER: OwnerContact = { firstName: "", lastName: "", title: "", email: "", phone: "" };
 const BLANK_PROCESSING: ProcessingInfo = {
-  monthlyVolume: "", avgTicket: "", cardPresentPct: "95", mcc: "", businessDescription: "",
+  // String(round(... * 100)), not a second "95" literal — see
+  // DEFAULT_CARD_PRESENT_PCT's doc comment for why this used to disagree with
+  // pricing.ts and PricingStep.tsx.
+  monthlyVolume: "", avgTicket: "", cardPresentPct: String(Math.round(DEFAULT_CARD_PRESENT_PCT * 100)), mcc: "", businessDescription: "",
   previouslyTerminated: "no", bankruptcy: "no", currentProcessor: "",
 };
 
@@ -78,10 +81,6 @@ function NewProspectFlow() {
 
   const [quoteRates, setQuoteRates] = useState<QuoteRates>(DEFAULT_QUOTE_RATES);
   const [pricingModel, setPricingModel] = useState<PricingModel>("2-tier");
-  // The four lanes collapse to one "x% + $y on every card" line until the rep
-  // asks for them, or until they stop agreeing — then the grid stays open so a
-  // lane that differs is never hidden behind a single figure.
-  const [perCardOpen, setPerCardOpen]   = useState(false);
   // "Yes, $1.2M a month really is their volume." Reset by any edit to it.
   const [volumeConfirmed, setVolumeConfirmed] = useState(false);
   // The server's role-scoped view of what the typed rates earn. Reps see a
@@ -114,13 +113,12 @@ function NewProspectFlow() {
   const [quote, setQuote]       = useState<ConfiguredQuote | null>(null);
 
   // A marketing-only quote has no processing behind it: no rate, no margin
-  // target, no statement, no processing details in Review. The server drops
-  // those fields for this type too — this is just not asking for them.
+  // target, no processing details in Review. The server drops those fields
+  // for this type too — this is just not asking for them.
   // Whether this quote carries a RATE. Not the same as "is this a POS deal":
   // a marketing merchant whose Website takes online orders sells through it,
-  // so they get the ticket/volume inputs, the statement upload and a quoted
-  // rate — while still getting none of the POS hardware, install lines or
-  // ordering points.
+  // so they get the ticket/volume inputs and a quoted rate — while still
+  // getting none of the POS hardware, install lines or ordering points.
   const rated = quoteType !== null && quoteHasProcessing(quoteType, picks, adjustments);
 
   // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
@@ -146,6 +144,29 @@ function NewProspectFlow() {
   // one contact arrives with it already chosen.
   const [contacts, setContacts]                 = useState<HubspotContact[]>([]);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+
+  // The Billing contact (2026-10-13) — optional, and separate from the owner
+  // contact above: who AIO bills doesn't have to be who signs the quote (see
+  // the constraint in CLAUDE.md on ownerContact.email staying the one and
+  // only signer). Shares the SAME deal+company contact list the "Quote for"
+  // dropdown reads from `contacts` above — no second portal-wide search.
+  const [billingContactId, setBillingContactId] = useState<string | null>(null);
+  const [billingContact, setBillingContact]     = useState<OwnerContact>(BLANK_OWNER);
+
+  const selectBillingContact = (id: string | null) => {
+    setBillingContactId(id);
+    if (!id) return; // "New contact" — leave whatever's already typed alone.
+    const contact = contacts.find(c => c.id === id);
+    if (!contact) return;
+    setBillingContact({
+      firstName: contact.firstName ?? "", lastName: contact.lastName ?? "", title: "",
+      email: contact.email ?? "", phone: contact.phone ?? "",
+    });
+  };
+  const copyBillingFromOwner = () => {
+    setBillingContactId(null);
+    setBillingContact({ ...ownerContact });
+  };
 
   // Latest form values, so applying a prefill from an async callback merges
   // against what's on screen now rather than whatever was there when the fetch
@@ -249,73 +270,10 @@ function NewProspectFlow() {
   };
 
 
-  // Optional statement upload — the rep path through the same /api/analyze
-  // route the proposal wizard uses. When it succeeds the analysis rides along
-  // on the application, so the customer opens the link to a prepared quote.
-  const [file, setFile]             = useState<File | null>(null);
-  const [analysis, setAnalysis]     = useState<StatementAnalysis | null>(null);
-  const [analyzing, setAnalyzing]   = useState(false);
-  const [dragOver, setDragOver]     = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-
   // A required line — the platform tier, or one of the always-included services
   // — is owed but the catalog didn't yield it. Blocks the save rather than
   // quietly shipping a quote with a hole in it; the server refuses it too.
   const quoteBlockers = quote?.blockers ?? [];
-
-  const handleFile = (f: File) => {
-    setFile(f);
-    setAnalysis(null);
-    setError(null);
-    setAnalyzing(true);
-    const r = new FileReader();
-    r.onload = async e => {
-      try {
-        const fileData = (e.target!.result as string).split(",")[1];
-        const res = await fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileData, mediaType: f.type }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Analysis failed");
-        const read = data.analysis as StatementAnalysis;
-        setAnalysis(read);
-
-        // The statement fills the two boxes, and OVERWRITES whatever was in
-        // them — which is exactly what the dropzone promises ("prices the
-        // quote on their real numbers, overriding the volume and ticket
-        // above"). Before this they stayed empty behind their placeholders:
-        // the rep saw "✓ Quote priced on this statement" over a blank volume
-        // and a $0.00 ticket, and the rate card had nothing to look a rate up
-        // on, so every statement quote stayed on the flat standard rate.
-        //
-        // Written into `processing` rather than read out of `analysis` at the
-        // point of use, because `processing` is deliberately the ONE copy of
-        // these two figures (see the note on `ticket`/`volume` below) — and
-        // because landing them in the boxes is what lets a rep correct a
-        // misread ticket instead of being stuck with it.
-        const vol = Math.round(read.totalVolume || 0);
-        const tkt = averageTicketOf(read);
-        if (vol > 0 || tkt > 0) {
-          setProcessing(p => ({
-            ...p,
-            ...(vol > 0 ? { monthlyVolume: String(vol) } : {}),
-            ...(tkt > 0 ? { avgTicket: tkt.toFixed(2) } : {}),
-          }));
-          // Re-asked, same as typing one: a statement read as $12M is still
-          // worth a second look, and it is now the number everything is
-          // priced on.
-          if (vol > 0) setVolumeConfirmed(false);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Analysis failed");
-        setFile(null);
-      }
-      setAnalyzing(false);
-    };
-    r.readAsDataURL(f);
-  };
 
   // ── Block on malformed, warn on missing ─────────────────────────────────
   // A malformed value is worse than an absent one — it reaches the customer as
@@ -341,7 +299,8 @@ function NewProspectFlow() {
   // ONE copy of the volume and the ticket: the processing record's. They used
   // to be asked twice — once under Processing Details, once as the quote basis
   // — and stored apart. A basis needs both; one alone (HubSpot often has the
-  // volume and never the ticket) just means the customer uploads a statement.
+  // volume and never the ticket) just means the quote goes out with priced
+  // lines and no rate, same as leaving both blank.
   const ticket = rated ? parseFloat(processing.avgTicket) || 0 : 0;
   const volume = rated ? parseFloat(processing.monthlyVolume) || 0 : 0;
   const basisHalfSet = (ticket > 0) !== (volume > 0);
@@ -355,8 +314,22 @@ function NewProspectFlow() {
   hardBlocks.push(...malformedMessages);
   hardBlocks.push(...quoteBlockers);
   if (floorCheck?.belowMarginFloor) {
+    // Kept as the SAME SENTENCE as the server refusal
+    // (marginFloorBlockers, lib/pricing.ts) by hand, not by a shared call —
+    // checked, not assumed: pricing.ts carries no "use server" directive, so
+    // unlike the Server Actions this file already imports (createProspectAction,
+    // getPricingPreviewAction, which compile down to an RPC stub), calling
+    // marginFloorBlockers directly would bundle pricing.ts's plain module code
+    // — MARGIN_REQS, the true minMargin table, included — into this client
+    // page. That's exactly what DEFAULT_CARD_PRESENT_PCT and
+    // MAX_PLAUSIBLE_CARD_RATE were moved out of pricing.ts to avoid (see their
+    // doc comments in types/merchant.ts). So this is a literal, not a call —
+    // if marginFloorBlockers' wording changes, this one has to change by hand
+    // to match, and it must never imply an admin can do anything about it:
+    // the margin-padding editor was deleted 2026-10-12 and there is no
+    // override today (see marginFloorBlockers' doc comment).
     hardBlocks.push(
-      "The card rate is below the minimum AIO can process this volume at. Raise it, or ask an admin to review the margin policy."
+      "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote."
     );
   }
   // A confirmation, not a veto — but it has to be answered, or it is a banner
@@ -376,17 +349,18 @@ function NewProspectFlow() {
   // rep quoting under cost; "card rate minimums are needed" (2026-10-09) is
   // that decision reversed, against the same table it always used.
   //
-  // Only askable with a volume behind it — a statement, or the rep's own
-  // volume/ticket. With neither there is no floor to clear, and the quote goes
-  // out as a rate the customer's own statement will later be priced against.
-  const hasFloorBasis = !!analysis || (volume > 0 && ticket > 0);
+  // Only askable with a volume behind it — the rep's own volume/ticket entry.
+  // There's no statement path any more on either side (2026-10-13: the rep box
+  // is gone here, and the customer was never given one to begin with), so with
+  // neither set there is no floor to clear and the quote goes out with priced
+  // lines and no rate at all.
+  const hasFloorBasis = volume > 0 && ticket > 0;
   useEffect(() => {
     if (!rated || !hasFloorBasis) { setFloorCheck(null); return; }
     let cancelled = false;
     const handle = setTimeout(() => {
       getPricingPreviewAction({
-        analysis,
-        quoteConfig: analysis ? null : { monthlyVolume: volume, avgTicket: ticket },
+        quoteConfig: { monthlyVolume: volume, avgTicket: ticket },
         quoteRates,
         pricingModel,
         feeOverrides: { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 },
@@ -399,7 +373,7 @@ function NewProspectFlow() {
     }, 200);
     return () => { cancelled = true; clearTimeout(handle); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rated, volume, ticket, analysis, quoteRates, pricingModel]);
+  }, [rated, volume, ticket, quoteRates, pricingModel]);
 
   const submit = async () => {
     if (hardBlocks.length) {
@@ -415,9 +389,13 @@ function NewProspectFlow() {
     try {
       const { linkUrl, emailResult, smsResult, companySync } = await createProspectAction({
         business, ownerContact, processing: rated ? processing : null,
+        // Only sent when an email is actually on it — a blank "New contact"
+        // section the rep never touched means no billing contact at all,
+        // same as today.
+        billingContact: billingContact.email.trim() ? billingContact : null,
+        billingContactId,
         quoteRates, pricingModel, quoteType: quoteType!,
         quoteConfig: ticket > 0 && volume > 0 ? { avgTicket: ticket, monthlyVolume: volume } : null,
-        analysis: rated ? analysis : null,
         // Only the picks cross the wire — prices and the tier are re-derived
         // server-side against the live catalog.
         picks,
@@ -442,20 +420,20 @@ function NewProspectFlow() {
 
   const reset = () => {
     setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier");
-    setFile(null); setAnalysis(null); setPerCardOpen(false);
     setQuoteType(null); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
     clearDeal();
     setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
+    setBillingContactId(null); setBillingContact(BLANK_OWNER);
     setPrefill(null); setReviewApplied(NO_REVIEW_PREFILL_APPLIED); appliedRef.current = { review: NO_REVIEW_PREFILL_APPLIED, channels: [] };
   };
 
-  // Matches the server's gate (hasQuoteBasis): a statement with no readable
-  // volume is not a quote, so don't promise the customer one. On a
+  // Matches the server's gate (hasQuoteBasis): no volume/ticket on a rated
+  // quote is not a basis for a rate, so don't promise the customer one. On a
   // marketing-only quote the lines are the quote — there's no rate to have.
   const hasQuote = rated
-    ? (analysis?.totalVolume ?? 0) > 0 || (ticket > 0 && volume > 0)
+    ? (ticket > 0 && volume > 0)
     : picks.length > 0;
 
   const merchantName = business.dba || business.legalName;
@@ -479,8 +457,8 @@ function NewProspectFlow() {
             </>
           ) : (
             <>
-              Share this link with <strong>{merchantName}</strong> — they&apos;ll upload their own
-              statement and get an instant quote, no account needed.
+              Share this link with <strong>{merchantName}</strong> — add their monthly volume and
+              average ticket above whenever you have them, and their rate will appear on the quote.
             </>
           )}
         </p>
@@ -516,23 +494,6 @@ function NewProspectFlow() {
     );
   }
 
-  // The rate line reads as one figure while all four lanes agree, which is
-  // the normal 2-tier quote. Once they differ the per-card grid stays open:
-  // collapsing it would show one number and charge four.
-  const ratesUniform =
-    quoteRates.cardNotPresentRate === quoteRates.cardPresentRate &&
-    quoteRates.amexCardPresentRate === quoteRates.cardPresentRate &&
-    quoteRates.amexCardNotPresentRate === quoteRates.cardPresentRate;
-  const perCardShown = perCardOpen || !ratesUniform;
-  const setEveryLane = (percent: number) => {
-    const r = percent / 100;
-    setQuoteRates({ ...quoteRates, cardPresentRate: r, cardNotPresentRate: r, amexCardPresentRate: r, amexCardNotPresentRate: r });
-  };
-  const oneRate = () => {
-    setEveryLane(quoteRates.cardPresentRate * 100);
-    setPerCardOpen(false);
-  };
-
   // What the card holds, counted so its header says how much of it HubSpot
   // already answered. bizType and the yes/no questions always carry a value,
   // so counting them would report a form as further along than it is.
@@ -552,35 +513,10 @@ function NewProspectFlow() {
   const dealContacts = contacts.filter(c => c.source === "deal");
   const companyContacts = contacts.filter(c => c.source !== "deal");
   const displayName = merchantName || hubspotCompany?.name || "";
-
-  const statement = (
-    <div
-      className={`${styles.dropzone} ${styles.statementBox}`}
-      data-state={analyzing ? "busy" : analysis ? "done" : dragOver ? "dragging" : undefined}
-      onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-      onClick={() => { if (!analyzing) fileRef.current?.click(); }}
-    >
-      <input
-        ref={fileRef} type="file" accept=".pdf,image/*" className={styles.fileInput}
-        onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-      />
-      {analyzing ? (
-        <p className={styles.dropzoneTitle}>Reading {file?.name}…</p>
-      ) : analysis ? (
-        <>
-          <p className={styles.dropzoneTitle} data-state="done">✓ {file?.name}</p>
-          <p className={styles.dropzoneSubtitle}>Quote priced on this statement · click to replace</p>
-        </>
-      ) : (
-        <>
-          <p className={styles.dropzoneTitle}>Drop their statement</p>
-          <p className={styles.dropzoneSubtitle}>PDF or image · prices the quote on their real numbers, overriding the volume and ticket above</p>
-        </>
-      )}
-    </div>
-  );
+  // The Billing section's "use existing contact" dropdown — the exact same
+  // roster as "Quote for" above, just restated as the plain {id, label}
+  // shape MerchantDetailsForm takes (so it stays HubSpot-adapter-unaware).
+  const billingContactOptions = contacts.map(c => ({ id: c.id, label: contactOptionLabel(c) }));
 
   // Sits under the plan cards: a processing quote's rate is part of the plan
   // being sold, so it's set where the plan is, not in a panel of its own.
@@ -600,51 +536,24 @@ function NewProspectFlow() {
         </div>
       )}
 
-      <div className={styles.rateLine}>
-        {perCardShown ? (
-          <span className={styles.rateHint}>Set per card type</span>
-        ) : (
-          <>
-            <span className={styles.affix}>
-              <DecimalField
-                value={Number(pct(quoteRates.cardPresentRate))}
-                max={MAX_PLAUSIBLE_CARD_RATE * 100}
-                onChange={setEveryLane}
-                className={styles.rateInput}
-                aria-label="Rate on every card, percent"
-              />
-              <span aria-hidden="true">%</span>
-            </span>
-            <span className={styles.rateHint}>+</span>
-            <span className={styles.affix}>
-              <span aria-hidden="true">$</span>
-              <DecimalField
-                value={quoteRates.perTransactionFee}
-                onChange={perTransactionFee => setQuoteRates({ ...quoteRates, perTransactionFee })}
-                className={styles.rateInput}
-                aria-label="Per-transaction fee, dollars"
-              />
-            </span>
-            <span className={styles.rateHint}>on every card</span>
-          </>
-        )}
-        <button
-          type="button"
-          className={styles.linkBtn}
-          onClick={() => (perCardShown ? oneRate() : setPerCardOpen(true))}
-        >
-          {perCardShown ? "Use one rate for every card" : "Set per card type"}
-        </button>
-      </div>
-      {perCardShown && <RateFields value={quoteRates} onChange={setQuoteRates} hideNote />}
+      {/* Card present is rep-editable; card not present is locked to AIO's
+          rate card and renders disabled — see RateFields.tsx. There's no
+          "one rate for every card" collapse any more (2026-10-13): that
+          relied on being able to set the CNP lane to match, which locking it
+          rules out. */}
+      {/* freshQuote: this page always starts a new quote at the flat
+          standard rate, often before a volume/ticket basis exists — see
+          RateFields.tsx's doc comment on that prop. */}
+      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote />
       {/* Sits under the boxes rather than above them: the rep reads the rate
-          they're quoting first, and what the card would have said second. */}
+          they're quoting first, and what the card would have said second. It
+          now ALWAYS applies what it suggests (2026-10-13, "get rid of the
+          'use it' and make it always override") — see RateSuggestion.tsx. */}
       <RateSuggestion
         monthlyVolume={volume}
         avgTicket={ticket}
         value={quoteRates}
         onChange={setQuoteRates}
-        autoApply
       />
 
       <div className={styles.basisRow}>
@@ -669,10 +578,10 @@ function NewProspectFlow() {
           <span className={styles.label}>Average ticket</span>
           <span className={styles.affix}>
             <span aria-hidden="true">$</span>
-            <DecimalField
-              value={parseFloat(processing.avgTicket) || 0}
-              onChange={n => setProcessing({ ...processing, avgTicket: n ? String(n) : "" })}
-              className={styles.rateInput}
+            <DecimalMoneyField
+              value={processing.avgTicket}
+              onChange={avgTicket => setProcessing({ ...processing, avgTicket })}
+              placeholder="22.50" className={styles.rateInput}
               aria-label="Average ticket, dollars"
             />
           </span>
@@ -694,15 +603,12 @@ function NewProspectFlow() {
         </div>
       )}
       <p className={styles.prefillNote}>
-        {analysis
-          ? "Read off the statement — correct either one if it was misread. Their savings are figured on the volume."
-          : basisHalfSet
-            ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — until both are set, the customer uploads a statement before they see a quote.`
-            : hasQuote
-              ? "The customer opens the link straight to this quote."
-              : "Optional. Leave blank and the customer uploads a statement before they see a quote."}
+        {basisHalfSet
+          ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — until both are set, this quote has no rate on it.`
+          : hasQuote
+            ? "The customer opens the link straight to this quote."
+            : "Optional. Leave both blank and this quote has no rate on it — the customer sees whatever's already priced, or that the quote is still being prepared if nothing is."}
       </p>
-      {statement}
     </section>
   );
 
@@ -710,16 +616,12 @@ function NewProspectFlow() {
     <div className={styles.docRate}>
       <span className={styles.docRateLabel}>Card processing</span>
       <span className={styles.docRateValue}>
-        {ratesUniform
-          ? `${pct(quoteRates.cardPresentRate)}% + ${fmt$(quoteRates.perTransactionFee)} per transaction`
-          : `${pct(quoteRates.cardPresentRate)}% in person · ${pct(quoteRates.cardNotPresentRate)}% online · Amex ${pct(quoteRates.amexCardPresentRate)}% / ${pct(quoteRates.amexCardNotPresentRate)}% · + ${fmt$(quoteRates.perTransactionFee)}`}
+        {`${pct(quoteRates.cardPresentRate)}% in person · ${pct(quoteRates.cardNotPresentRate)}% online · + ${fmt$(quoteRates.perTransactionFee)} per transaction`}
       </span>
       <span className={styles.docRateNote}>
-        {analysis && (analysis.totalVolume ?? 0) > 0
-          ? `Savings figured on their statement (${fmt$(analysis.totalVolume)}/mo)`
-          : hasQuote
-            ? `On about ${fmt$(volume)}/mo at a ${fmt$(ticket)} average ticket`
-            : "They upload a statement to see their savings"}
+        {hasQuote
+          ? `On about ${fmt$(volume)}/mo at a ${fmt$(ticket)} average ticket`
+          : "Add their monthly volume and average ticket above to quote this"}
       </span>
     </div>
   );
@@ -740,7 +642,7 @@ function NewProspectFlow() {
         </div>
       )}
       {error && <div className={styles.error}>{error}</div>}
-      <button onClick={submit} disabled={saving || analyzing || hardBlocks.length > 0} className={`${styles.btnPrimary} ${styles.btnBlock}`}>
+      <button onClick={submit} disabled={saving || hardBlocks.length > 0} className={`${styles.btnPrimary} ${styles.btnBlock}`}>
         {saving ? "Creating…" : hasQuote ? "Create Quote Link →" : "Create Link →"}
       </button>
       {ownerContact.email.trim() && (
@@ -869,6 +771,12 @@ function NewProspectFlow() {
             onBusinessChange={setBusiness}
             onOwnerChange={setOwnerContact}
             onProcessingChange={setProcessing}
+            contactOptions={billingContactOptions}
+            billingContactId={billingContactId}
+            billing={billingContact}
+            onBillingContactIdChange={selectBillingContact}
+            onBillingChange={setBillingContact}
+            onCopyBillingFromOwner={copyBillingFromOwner}
           />
           {missingWarnings.length > 0 && (
             <p className={styles.prefillNote}>

@@ -1,6 +1,5 @@
 "use client";
 
-import type React from "react";
 import { isFromHubspotField, UNKNOWABLE_REVIEW_FIELDS, type AppliedReviewFields } from "@/lib/prefillMerge";
 import { contactOptionLabel } from "@/lib/hubspotPrefill";
 import type { HubspotContact } from "@/lib/adapters/hubspot";
@@ -192,20 +191,6 @@ export default function ReviewSection({
           </div>
           <div className={styles.row}>
             {field("processing.currentProcessor", "Current Processor", processing.currentProcessor, v => onProcessingChange({ ...processing, currentProcessor: v }), { placeholder: "Stripe" })}
-          </div>
-          <div className={styles.row}>
-            <label className={styles.label}>
-              Business Description
-              {isFromHubspotField(applied, "processing.businessDescription", processing.businessDescription) && (
-                <span className={styles.badgeHubspot}>from HubSpot</span>
-              )}
-            </label>
-            <textarea
-              value={processing.businessDescription}
-              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => onProcessingChange({ ...processing, businessDescription: e.target.value })}
-              placeholder="Briefly describe the nature of the business…"
-              className={`${styles.input} ${styles.textarea}`}
-            />
           </div>
           <div className={`${styles.inlineRow} ${styles.row}`}>
             <div className={styles.field}>

@@ -72,6 +72,17 @@
   margin: 0 0 var(--space-xl);
 }
 
+/* The ordering-point count — a configuration fact, not a price, so it gets
+   the same quiet grey treatment as .lineFootnote rather than anything that
+   would read as an inclusion or a justification. */
+.orderPointsNote {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+  line-height: 1.6;
+  text-align: center;
+  margin: 0 0 var(--space-lg);
+}
+
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }

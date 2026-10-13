@@ -98,6 +98,15 @@
   outline-offset: 1px;
 }
 
+/* The legal address fields while "Same as operating address" is checked —
+   derived, not typed, so they read differently from an ordinary blank or
+   filled field. */
+.input:disabled {
+  background: var(--paper-2);
+  color: var(--ink-2);
+  cursor: not-allowed;
+}
+
 .textarea { resize: vertical; min-height: 3.5rem; line-height: 1.45; }
 
 .check {
@@ -114,9 +123,13 @@
 
 .checkRow { display: flex; align-items: center; gap: var(--space-xs); margin-top: var(--space-sm); }
 
-/* An action the rep takes, not a state the form holds — see the comment on
-   it in MerchantDetailsForm.tsx. */
+/* An action the rep takes, not a state the form holds — the Billing
+   section's "Same as owner contact" button. (Re-added 2026-10-13; this rule
+   existed before for the legal-address copy button, which became a checkbox
+   the same day — see the "Legal" section's own comment in the .tsx file.) */
 .copyButton {
+  align-self: flex-start;
+  margin-top: calc(var(--space-3xs) + 0.1rem);
   font-family: var(--font-body);
   font-size: 0.78rem;
   font-weight: 600;
@@ -137,6 +150,7 @@
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
+
 .checkRow .check { margin-top: 0; }
 .checkRow + .grid { margin-top: var(--space-sm); }
 

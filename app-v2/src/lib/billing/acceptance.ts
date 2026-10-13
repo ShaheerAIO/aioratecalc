@@ -25,6 +25,7 @@ import { db } from "@/lib/db/client";
 import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { syncDealFromApplication } from "@/lib/adapters/hubspot";
+import { writeCommissionToDeal } from "@/lib/billing/commissionWriteback";
 import { hasBillingCompleted } from "@/lib/onboardingModules";
 import { shouldAdvance } from "@/lib/stages";
 import type { MerchantApplication } from "@/types/merchant";
@@ -122,11 +123,45 @@ export async function recordAcceptance(
     try {
       await syncDealFromApplication(accepted);
     } catch (err) {
-      console.error(
-        `[acceptance] ${app.id}: HubSpot deal sync failed`,
-        err instanceof Error ? err.message : err
-      );
+      // This PATCH is what carries `payment_processing_arr` (lib/billing/
+      // processingArr.ts) onto the deal, and until now a failure here was
+      // ONLY a console.error — which is exactly how that property went
+      // unwritten on every accepted deal: `recordAcceptance` never runs again
+      // for a row once `quoteAcceptedAt` is set (the guard at the top of this
+      // function, and of applyDetectedAcceptance, is a hard no-op), so this
+      // is the ONE chance this row ever gets. Persisted to the same
+      // `hubspotIds.lastSyncError` convention every other sync failure in
+      // this codebase uses, so it's visible on the rep's billing panel
+      // instead of vanishing into a Vercel log. Best-effort, like the write
+      // this function is already inside of: the acceptance is committed
+      // either way, and a failed error-write just means the nightly cron's
+      // resync (hubspot-billing-sync, for a row that's already accepted) is
+      // the next chance this gets.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[acceptance] ${app.id}: HubSpot deal sync failed`, message);
+      try {
+        await db.update(merchantApplications)
+          .set({
+            hubspotIds: { ...accepted.hubspotIds!, lastSyncError: message, lastSyncErrorAt: new Date().toISOString() },
+            updatedAt: new Date(),
+          })
+          .where(eq(merchantApplications.id, app.id));
+      } catch (writeErr) {
+        console.error(
+          `[acceptance] ${app.id}: could not persist the deal sync error`,
+          writeErr instanceof Error ? writeErr.message : writeErr
+        );
+      }
     }
+
+    // Commission writeback — gated on COMMISSION_WRITEBACK_ENABLED (default
+    // off) and never throws; see lib/billing/commissionWriteback.ts's module
+    // comment for why it stays off by default (an unidentified HubSpot-side
+    // automation is already populating the same two properties on ~700 live
+    // deals) and why this sits beside, not inside, the deal-sync try/catch
+    // above — a commission-write failure must never be mistaken for a deal
+    // sync failure in `lastSyncError`, and vice versa.
+    await writeCommissionToDeal(accepted);
   }
 
   await sendAccountLink(accepted);

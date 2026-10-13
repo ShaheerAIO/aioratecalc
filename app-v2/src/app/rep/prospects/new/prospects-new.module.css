@@ -310,58 +310,7 @@
   outline-offset: 1px;
 }
 
-/* ---------- Statement dropzone ---------- */
-
-.dropzone {
-  margin-top: var(--space-2xs);
-  border: 2px dashed var(--rule);
-  border-radius: var(--radius-md);
-  background: var(--paper);
-  padding: var(--space-lg);
-  text-align: center;
-  cursor: pointer;
-  transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out);
-}
-
-.dropzone[data-state="dragging"] {
-  border-color: var(--accent);
-  background: oklch(69% 0.17 32 / 0.06);
-}
-
-.dropzone[data-state="done"] {
-  border-color: var(--success);
-  background: var(--success-bg);
-}
-
-.dropzone[data-state="busy"] { cursor: progress; }
-
-.dropzoneTitle {
-  font-size: 0.88rem;
-  font-weight: 700;
-  color: var(--ink);
-  margin: 0 0 var(--space-3xs);
-}
-
-.dropzoneTitle[data-state="done"] { color: var(--success); }
-
-.dropzoneSubtitle {
-  font-size: 0.78rem;
-  color: var(--ink-3);
-  margin: 0;
-}
-
 .dropzoneCompact { margin-top: 0; padding: var(--space-sm) var(--space-md); border-width: 1.5px; }
-
-/* The statement drop, in its own box under the rate: a darker well than the
-   paper-2 block it sits in, so it reads as a target rather than another field. */
-.statementBox {
-  margin-top: var(--space-md);
-  background: oklch(91% 0.014 32);
-  border-color: oklch(64% 0.010 32);
-}
-.statementBox:hover { border-color: var(--ink-2); }
-
-.fileInput { display: none; }
 
 /* ---------- Model pills ---------- */
 
@@ -536,7 +485,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .modelPill, .btnPrimary, .btnGhost, .btnCopy, .input, .dropzone {
+  .modelPill, .btnPrimary, .btnGhost, .btnCopy, .input {
     transition-duration: 1ms;
   }
 }

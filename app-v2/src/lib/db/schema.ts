@@ -135,6 +135,32 @@ export const rateMatrixPolicy = pgTable("rate_matrix_policy", {
   isActive: boolean("is_active").notNull().default(true),
 });
 
+// Admin-controlled commission rates (2026-10-13, migration 0022). The
+// processing-commission split — 5% at signing, 5% at activation, each off
+// total ARR — is NOT stored here: it's a FIXED constant in lib/commission.ts,
+// because it mirrors a split HubSpot's own automation already computes
+// natively on ~700 live deals (product owner, 2026-10-13), not a number an
+// admin gets to tune. The ONE rate this table holds is hardware commission,
+// because the product owner has not given it yet: nullable, and null means
+// "contributes exactly zero" — see `hardwareCommission` in lib/commission.ts,
+// and that file's module comment for why hardware MARGIN (the thing this rate
+// is a percentage of) isn't computable at all today regardless of this rate.
+// Its own table rather than a column on margin_policy, for the same reason
+// rate_matrix_policy and quote_limit_policy get their own: this is neither
+// "what a rep may learn of AIO's margin" nor "what a rep may give away of
+// it" — a commission rate for a different purpose entirely. Single active
+// row, admin-owned, same shape as every other *_policy table here.
+export const commissionPolicy = pgTable("commission_policy", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // Whole basis points (500 = 5.00%), same convention as rate_matrix_policy —
+  // every commission figure here is a two-decimal percentage, exact in bps
+  // and not in a float, feeding a number that pays people. NULL = unset.
+  hardwareCommissionBps: integer("hardware_commission_bps"),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
 // Replaces localStorage "clearrate:settings" / "clearrate:adyen_config".
 export const appSettings = pgTable("app_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -213,6 +239,10 @@ export const merchantApplications = pgTable("merchant_applications", {
   proposal: jsonb("proposal").$type<ProposalOutput | null>(),
   business: jsonb("business").$type<BusinessInfo | null>(),
   ownerContact: jsonb("owner_contact").$type<OwnerContact | null>(),
+  // Who AIO bills, if different from ownerContact — see MerchantApplication's
+  // own comment on billingContact. Added migration 0023; null on every row
+  // before it and on every row where the rep never set one.
+  billingContact: jsonb("billing_contact").$type<MerchantApplication["billingContact"]>(),
   processing: jsonb("processing").$type<ProcessingInfo | null>(),
   agreement: jsonb("agreement").$type<AgreementInfo | null>(),
   // What a 2-tier quote is priced on since 2026-10-06: both card rates and the

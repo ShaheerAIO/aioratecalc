@@ -86,8 +86,8 @@ export type OnboardingModulesOpts = {
   // carries the same link. Defaults to the authenticated path; the token host
   // MUST pass its quote route instead, or the row's CTA 404s.
   billingHref?: string;
-  // Whether there's a quote ready to show (a rep-configured basis or a
-  // readable statement). MUST be computed by the caller via `hasQuoteBasis`
+  // Whether there's a quote ready to show (a rep-configured rate basis, or
+  // priced lines). MUST be computed by the caller via `hasQuoteBasis`
   // in leadQuote.ts, never here — that module imports pricing.ts, and
   // pulling it into this file would ship MARGIN_REQS, AIO's true margin
   // floors, into the browser bundle. Defaults to false.

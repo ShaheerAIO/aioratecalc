@@ -97,6 +97,19 @@ export default function QuoteSummary({ quote }: Props) {
         </p>
       )}
 
+      {/* The ordering-point COUNT — a fact about what's being deployed, never
+          the reason for any price. Order points stopped pricing anything on
+          2026-10-05 (the platform fee is set by the plan now), so this is
+          deliberately NOT placed next to the platform line or any other price
+          — that juxtaposition is exactly what implied the causal link the old
+          "Based on N ordering points" copy was deleted for. It sits here, with
+          the rest of the configuration, on its own. */}
+      {quote.orderPoints && quote.orderPoints.total > 0 && (
+        <p className={styles.orderPointsNote}>
+          Configured for {quote.orderPoints.total} ordering point{quote.orderPoints.total === 1 ? "" : "s"}.
+        </p>
+      )}
+
       {quote.lines.length > 0 && quote.lineTotals && (
         <div className={styles.lines}>
           {recurringLines.length > 0 && (

@@ -26,6 +26,13 @@ import type {
 // HubSpot currently charges rather than what someone typed here once. Writing
 // "$399/mo" into one of these strings reintroduces a number that goes stale
 // silently — which is what they all did until 2026-10-06.
+// Order here is the picker's display order — nothing reads this array
+// positionally. `quoteTypeOf` above matches on the id directly, and
+// AccountsDashboard's QUOTE_TYPE_LABELS is a Map keyed by id, so both are
+// order-independent; only ProductConfigurator's `planCards` renders `types`
+// in array order. The order was swapped to lead with All-in-One on 10/6, then
+// swapped back to lead with Order & Pay Only on 10/13 at the product owner's
+// request — this is the original order.
 export const QUOTE_TYPES: Array<{ id: QuoteType; label: string; note: string }> = [
   {
     id: "order_pay_only",

@@ -5,8 +5,14 @@
 //   maxMargin     = soft ceiling (above it the rep gets a non-blocking warning)
 //   desiredArr    = target annual revenue per account — reference only, not used in math
 
-import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
+// DEFAULT_CARD_PRESENT_PCT lives in types/merchant.ts, not here, so the client
+// components that need it (PricingStep, the prospect form) can import it
+// without pulling in MARGIN_REQS — see its doc comment there for the full
+// history of the 90→95 disagreement this constant fixes.
+import { DEFAULT_QUOTE_RATES, DEFAULT_CARD_PRESENT_PCT, MAX_PLAUSIBLE_CARD_RATE } from "@/types/merchant";
 import type { ProcessorTier, QuoteConfig, QuoteRates, StatementAnalysis } from "@/types/merchant";
+import { totalRevenue, totalTakeRate, wholesalePctFor } from "@/lib/wholesale";
+import { commissionFromTotalArr, sumArrOrNull, type CommissionFromArr } from "@/lib/commission";
 
 export const MARGIN_REQS = [
   { maxVol: 25000,    minMargin: 0.0067, desiredMargin: 0.0133,   maxMargin: 0.0200, desiredArr: 2000 },
@@ -70,19 +76,17 @@ export function blendedInterchangeEstimate(cpPct: number, cnpPct: number): numbe
 // to when a statement omits them — so a config quote and a statement quote
 // that happen to agree on volume/ticket price identically.
 //
-// PROVISIONAL, pending PRICING-QUESTIONS-FOR-STEVE #4: the 90/10 split is
-// Steve's blended default, not a per-MCC one. A restaurant is overwhelmingly
-// card-present, so if the answer ever becomes MCC-aware this is the constant
-// that moves. Interchange itself is NOT provisional — INTERCHANGE_ESTIMATE
-// above carries Steve's 2026-07-23 answer to question #1.
+// Interchange itself is NOT provisional — INTERCHANGE_ESTIMATE above carries
+// Steve's 2026-07-23 answer to question #1. Only the split (see
+// DEFAULT_CARD_PRESENT_PCT) is provisional.
 //
 // Deliberately absent: an assumed CURRENT effective rate. Quoting savings
 // without a statement would mean inventing what the merchant pays today
 // (PRICING-QUESTIONS #2, unanswered), so the config path quotes a rate and
 // leaves CustomerSafeQuote's savings fields null instead.
 export const CONFIG_QUOTE_ASSUMPTIONS = {
-  cardPresentPct: 0.9,
-  cardNotPresentPct: 0.1,
+  cardPresentPct: DEFAULT_CARD_PRESENT_PCT,
+  cardNotPresentPct: 1 - DEFAULT_CARD_PRESENT_PCT,
 };
 
 // Projects a rep-entered quoteConfig into the analysis shape the rest of the
@@ -148,9 +152,18 @@ export type DerivedPricing = {
   flatRate: number;
   cpRate: number;
   cnpRate: number;
+  /**
+   * MIRRORS cpRate/cnpRate as of 2026-10-13 — AMEX is no longer priced apart
+   * (see the note in derivePricing). Kept on this type only because
+   * `generateProposal` (claude.ts) destructures these to fill
+   * `ProposedRates2Tier.amexCardPresentRate`/`amexCardNotPresentRate`, which in
+   * turn exist only so a proposal generated before today still renders.
+   */
   amexCpRate: number;
   amexCnpRate: number;
-  /** Volume attributed to AMEX. 0 with no statement — see the note in derivePricing. */
+  /** Volume attributed to AMEX, REPORTING ONLY as of 2026-10-13 — it no longer
+   *  carves anything out of cpVol/cnpVol. 0 with no statement — see the note
+   *  in derivePricing. */
   amexVol: number;
   bps: number;                 // interchange-plus basis points (above IC)
   perTxnFee: number;           // effective per-txn fee used
@@ -196,13 +209,14 @@ export function derivePricing(
   // Only the unsellable models still work backwards from a margin.
   const margin = getDesiredMargin(vol);
 
-  // CP/CNP split — default 90/10 (Steve 2026-07-23) when the statement gives neither.
-  // 0 means "unknown" (the analyzer coerces invalid pcts to 0), so a genuine 0 only
-  // survives when the other lane is explicitly provided (e.g. a 100%-CNP rep override).
+  // CP/CNP split — default DEFAULT_CARD_PRESENT_PCT when the statement gives
+  // neither. 0 means "unknown" (the analyzer coerces invalid pcts to 0), so a
+  // genuine 0 only survives when the other lane is explicitly provided (e.g. a
+  // 100%-CNP rep override).
   const rawCp  = analysis.cardPresentPct    || 0;
   const rawCnp = analysis.cardNotPresentPct || 0;
-  const cpPct  = (rawCp > 0 || rawCnp > 0) ? rawCp  : 0.9;
-  const cnpPct = (rawCp > 0 || rawCnp > 0) ? (rawCnp || 1 - rawCp) : 0.1;
+  const cpPct  = (rawCp > 0 || rawCnp > 0) ? rawCp  : DEFAULT_CARD_PRESENT_PCT;
+  const cnpPct = (rawCp > 0 || rawCnp > 0) ? (rawCnp || 1 - rawCp) : 1 - DEFAULT_CARD_PRESENT_PCT;
   const cpVol  = analysis.cardPresentVolume    || vol * cpPct;
   const cnpVol = analysis.cardNotPresentVolume || vol * cnpPct;
 
@@ -228,26 +242,20 @@ export function derivePricing(
   const derivedCPRate  = quoted.cardPresentRate;
   const derivedCNPRate = quoted.cardNotPresentRate;
 
-  // AMEX is priced apart from Visa/Mastercard/Discover, so the volume splits
-  // four ways: two brand groups x two lanes.
+  // AMEX is priced at the ordinary V/MC/Discover rates, not apart from them
+  // (2026-10-13, "get rid of the dual rate (amex)" — reverses the 2026-10-06
+  // "AMEX priced apart" decision from the product owner). AMEX volume is no
+  // longer carved out of cpVol/cnpVol: it is already part of them (cpVol/cnpVol
+  // are the WHOLE merchant's card-present/not-present split), so folding AMEX
+  // back in is simply not subtracting it out any more.
   //
-  // The statement gives an AMEX total and a card-present split, but never the
-  // cross-tab of the two — so AMEX is assumed to split CP/CNP in the same
-  // ratio as the merchant overall. It is the only assumption available, and it
-  // errs small: the two rates are equal by default, so it moves nothing until
-  // someone prices AMEX differently.
-  //
-  // With NO statement there is no AMEX figure at all, and none is invented
-  // (product-owner decision, 2026-10-06) — `analysisFromQuoteConfig` leaves
-  // amexVolume at 0, so a config quote prices every dollar at the V/MD rates.
-  // The AMEX rates still appear on the quote; they just don't move the
-  // projection. Assuming a share would be quoting a saving off a number
-  // nobody supplied.
+  // `QuoteRates.amexCardPresentRate`/`amexCardNotPresentRate` still exist —
+  // rows saved before today carry real numbers in them and have to keep
+  // parsing, same pattern as `StoredQuoteType` — but nothing here reads them
+  // for pricing purposes any more. `amexVol` is kept as a REPORTING figure
+  // only (how much of this merchant's statement volume is AMEX); it no longer
+  // carves anything out of the fee math below.
   const amexVol = Math.max(0, Math.min(vol, analysis.amexVolume || 0));
-  const amexCpVol  = amexVol * cpPct;
-  const amexCnpVol = amexVol * cnpPct;
-  const baseCpVol  = Math.max(0, cpVol  - amexCpVol);
-  const baseCnpVol = Math.max(0, cnpVol - amexCnpVol);
 
   const bps        = Math.round(margin * 10000);
   const perTxnFee  = pricingModel === "2-tier"
@@ -261,10 +269,10 @@ export function derivePricing(
     // One per-transaction fee across both lanes, which is how the rate card
     // reads ("+ $0.15" on every line) and how a merchant checks their
     // statement. The old per-lane overrides are gone with the margin input
-    // they shipped beside.
+    // they shipped beside. cpVol/cnpVol is EVERY dollar in that lane, AMEX
+    // included (see the note above) — there is no longer a separate AMEX term.
     projectedMonthlyFees =
-      baseCpVol * derivedCPRate + baseCnpVol * derivedCNPRate +
-      amexCpVol * quoted.amexCardPresentRate + amexCnpVol * quoted.amexCardNotPresentRate +
+      cpVol * derivedCPRate + cnpVol * derivedCNPRate +
       txns * perTxnFee +
       (feeOverrides.monthlyFee || 0);
   } else {
@@ -289,8 +297,8 @@ export function derivePricing(
     flatRate: derivedFlatRate,
     cpRate: derivedCPRate,
     cnpRate: derivedCNPRate,
-    amexCpRate: quoted.amexCardPresentRate,
-    amexCnpRate: quoted.amexCardNotPresentRate,
+    amexCpRate: derivedCPRate,
+    amexCnpRate: derivedCNPRate,
     amexVol,
     bps, perTxnFee,
     appliedTargetMargin: effectiveMargin,
@@ -331,6 +339,29 @@ export type RoleScopedPricing = DerivedPricing & {
   adyenCostRate: number | null; // null when hidden from this role (reps, per paddingAdyenCostHide)
   desiredMargin: number;      // per-tier default target (rep-visible)
   maxMargin: number;          // per-tier soft ceiling (rep-visible)
+  /**
+   * What a REP sees of their commission (2026-10-13 — "the only thing to
+   * display... is the margin, cuz thats how reps see their commission").
+   * ESTIMATED signing + activation commission on THIS quote, computed off
+   * the SAME wholesale-table commission margin lib/billing/processingArr.ts
+   * uses for `payment_processing_arr` — via wholesale.ts directly, since
+   * there's no MerchantApplication yet at preview time to hand
+   * `paymentProcessingArrBreakdown` — plus `recurringArr` below, which is
+   * itself an ESTIMATE (`estimatedRecurringArrFromQuoteLines`,
+   * lib/commission.ts), not a live HubSpot read. This figure is NOT what
+   * `lib/billing/commissionWriteback.ts` actually writes — that function
+   * reads HubSpot's real `saas_revenue` at acceptance instead, because the
+   * two provably diverge (see that estimate function's doc comment). The UI
+   * must label this "(est.)" for that reason — don't let a rep read it as a
+   * guarantee of what they'll be paid.
+   *
+   * NOT role-scoped or padded: this margin is already the one
+   * processingArr.ts's own comment calls "AIO's own forecast... not a
+   * secret", so admin and rep get the identical number — the trade the
+   * product owner accepted is that margin % + this wholesale table let a rep
+   * back out AIO's cost basis, not a bug to solve here.
+   */
+  projectedCommission: CommissionFromArr;
 };
 
 // Returns a pricing view scoped to who's asking. Admins get the true
@@ -344,7 +375,16 @@ export function derivePricingForRole(
   feeOverrides: FeeOverrides,
   role: "admin" | "rep",
   activeTier: ProcessorTier | null,
-  padding: PaddingConfig
+  padding: PaddingConfig,
+  /**
+   * An ESTIMATE of annualised recurring (SaaS/hardware subscription) revenue
+   * already known for this quote — not a HubSpot read. Null/omitted on
+   * PricingStep, where no products are configured yet — the commission shown
+   * there reflects processing margin only, not the eventual platform-fee
+   * ARR. EditQuotePanel passes the configurator's live totals, so its figure
+   * is the fuller (still estimated) one.
+   */
+  recurringArr: number | null = null
 ): RoleScopedPricing {
   const result = derivePricing(analysis, rates, pricingModel, feeOverrides);
   const appliedMargin = result.appliedTargetMargin;
@@ -352,6 +392,7 @@ export function derivePricingForRole(
   const tier = getMarginFloor(vol);
   const trueAdyenCostRate = activeTier ? adyenRateOnVolume(activeTier, analysis.totalVolume, analysis.totalTransactions) : 0;
   const belowCostFloor = !!activeTier && appliedMargin - trueAdyenCostRate < 0;
+  const projectedCommission = commissionFromTotalArr(sumArrOrNull(projectedProcessingArr(analysis, rates), recurringArr));
 
   if (role === "admin") {
     return {
@@ -361,6 +402,7 @@ export function derivePricingForRole(
       adyenCostRate: activeTier ? trueAdyenCostRate : null,
       desiredMargin: tier.desiredMargin,
       maxMargin: tier.maxMargin,
+      projectedCommission,
     };
   }
 
@@ -375,5 +417,78 @@ export function derivePricingForRole(
     adyenCostRate: padding.paddingAdyenCostHide ? null : trueAdyenCostRate,
     desiredMargin: tier.desiredMargin,
     maxMargin: tier.maxMargin,
+    projectedCommission,
   };
+}
+
+/**
+ * The processing half of `projectedCommission` above: this quote's annualised
+ * commission margin (wholesale.ts's Total Take Rate minus Wholesale %, over a
+ * year), computed DIRECTLY off the live rates/analysis rather than through
+ * `paymentProcessingArrBreakdown` (lib/billing/processingArr.ts) — there is no
+ * `MerchantApplication` yet at preview time to hand that function. Same
+ * formula, same guards (no ticket → no basis; an implausible quoted rate →
+ * no number, not a typo annualised), reused rather than reimplemented: both
+ * this and processingArr.ts call the identical wholesale.ts primitives.
+ */
+function projectedProcessingArr(
+  analysis: Parameters<typeof derivePricing>[0],
+  rates: QuoteRates | null | undefined
+): number | null {
+  const vol = analysis.totalVolume || 0;
+  const txns = analysis.totalTransactions || 0;
+  if (!(vol > 0) || !(txns > 0)) return null;
+  const avgTicket = vol / txns;
+  if (!(avgTicket > 0)) return null;
+
+  const quoted = ratesFor(rates);
+  const maxQuotedRate = Math.max(quoted.cardPresentRate, quoted.cardNotPresentRate, quoted.amexCardPresentRate, quoted.amexCardNotPresentRate);
+  if (maxQuotedRate > MAX_PLAUSIBLE_CARD_RATE) return null;
+
+  const revenue = totalRevenue(quoted.cardPresentRate, vol, avgTicket, quoted.perTransactionFee);
+  const takeRate = totalTakeRate(revenue, vol);
+  const margin = takeRate - wholesalePctFor(avgTicket);
+  const arr = margin * vol * 12;
+  return Number.isFinite(arr) && arr > 0 ? Math.round(arr) : null;
+}
+
+/**
+ * The write-side half of the 2026-10-09 decision ("card rate minimums are
+ * needed"): a rep's typed rates are refused server-side when they don't clear
+ * AIO's margin floor for the volume on file, same as the rep form
+ * (rep/prospects/new/page.tsx) and EditQuotePanel already refuse to submit
+ * client-side.
+ *
+ * Takes an ALREADY-COMPUTED RoleScopedPricing (from `derivePricingForRole` via
+ * `getPricingPreviewAction`, the exact function the UI calls) rather than
+ * deriving a second one — a write path computing its own copy of this check
+ * is how the two drift apart again.
+ *
+ * The message never states the floor itself, only that the rate is under it —
+ * CLAUDE.md is explicit that reps must never see or derive AIO's true
+ * minimum, and `belowMarginFloor` is itself computed against the PADDED floor
+ * for a rep (see `derivePricingForRole`), so even "no" is answered against the
+ * pillowed number, never the true one. A rep retrying with a slightly higher
+ * rate only ever hears "yes" or the same "no" — never a number to
+ * binary-search against.
+ *
+ * This is a HARD refusal with exactly ONE recovery: raise the rate. There is
+ * deliberately NO admin override today, and the message must not imply one.
+ * `/admin/settings/pillow` — the margin-padding editor — was deleted
+ * 2026-10-12 ("we are gonna work on margin stuff later"; see
+ * `updatePaddingPolicyAction` in actions/pricing.ts, which has zero callers
+ * and a comment saying so), and the true floor (`MARGIN_REQS` /
+ * `getMarginFloor`) is a hardcoded table in this file that was never
+ * admin-editable in the first place — reaching it means editing the constant
+ * and redeploying, the exact failure shape CLAUDE.md already flags in the
+ * 2026-10-09 quote-template incident. Before this function existed, a
+ * below-floor rate could still be pushed through as a client-side courtesy;
+ * this turns that into a wall with no door, so don't point a rep at an admin
+ * who has nothing to click.
+ */
+export function marginFloorBlockers(pricing: Pick<RoleScopedPricing, "belowMarginFloor">): string[] {
+  if (!pricing.belowMarginFloor) return [];
+  return [
+    "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote.",
+  ];
 }

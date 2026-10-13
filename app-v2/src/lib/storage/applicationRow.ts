@@ -45,6 +45,7 @@ export function rowToApp(row: ApplicationRow): MerchantApplication {
     proposal: row.proposal,
     business: row.business,
     ownerContact: row.ownerContact,
+    billingContact: row.billingContact,
     processing: row.processing,
     agreement: row.agreement,
   };
@@ -82,6 +83,7 @@ export function appToRow(app: MerchantApplication) {
     proposal: app.proposal,
     business: app.business,
     ownerContact: app.ownerContact,
+    billingContact: app.billingContact ?? null,
     processing: app.processing,
     agreement: app.agreement,
     updatedAt: new Date(),

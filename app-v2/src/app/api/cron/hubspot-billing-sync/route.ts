@@ -4,10 +4,13 @@ import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import {
   findSubscriptionsForQuote,
+  getDealProcessingArr,
   listQuotesModifiedSince,
+  patchDealProcessingArr,
   type QuoteSnapshot,
 } from "@/lib/adapters/hubspot";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
+import { paymentProcessingArr } from "@/lib/billing/processingArr";
 import { rowToApp, type ApplicationRow as FullApplicationRow } from "@/lib/storage/applicationRow";
 import { rollUpSubscriptionStatus, type HubspotIds, type HubspotSubscriptionSnapshot } from "@/types/merchant";
 
@@ -118,7 +121,8 @@ export async function GET(req: NextRequest) {
       // nothing here depends on syncedAt advancing, so an unchanged row is left
       // completely alone rather than churning updatedAt across the whole table
       // every night.
-      if (snapshotChanged(hubspotIds, next)) {
+      const snapshotMoved = snapshotChanged(hubspotIds, next);
+      if (snapshotMoved) {
         await db
           .update(merchantApplications)
           .set({ hubspotIds: { ...next, syncedAt: new Date().toISOString() }, updatedAt: new Date() })
@@ -132,8 +136,70 @@ export async function GET(req: NextRequest) {
       // between the two writes, or a row whose subscription was already cached
       // by the on-view refresh). Idempotent either way — see acceptance.ts.
       const before = rowToApp({ ...row, hubspotIds: next });
+      const alreadyAccepted = !!before.quoteAcceptedAt;
       const after = await applyDetectedAcceptance(before);
       if (!before.quoteAcceptedAt && after.quoteAcceptedAt) summary.accepted++;
+
+      // Re-affirm `payment_processing_arr` — and ONLY that one property —
+      // for a row that was ALREADY accepted coming into this run.
+      // `recordAcceptance` only ever calls `syncDealFromApplication` ONCE, in
+      // the same breath `quoteAcceptedAt` is first set; `applyDetectedAcceptance`
+      // above already made that attempt for a row accepted FOR THE FIRST TIME
+      // just now (`!alreadyAccepted`). But if that one-shot attempt ever
+      // failed — or simply ran before the analysis/quoteConfig volume this
+      // property needs had landed on the row — `quoteAcceptedAt` is already
+      // committed and nothing would ever retry it: `buildDealProperties`'s
+      // gate on `quoteAcceptedAt` persists forever, but nothing was calling
+      // it again. This sweep only revisits a quote while ITS OWN
+      // `hs_lastmodifieddate` is inside the lookback window, so it is not a
+      // guarantee for every accepted row forever — a one-time
+      // scripts/backfill-processing-arr.ts exists for the deals that already
+      // fell outside it — but for a row still being touched this is a real
+      // retry.
+      //
+      // Deliberately `patchDealProcessingArr`, NOT `syncDealFromApplication`:
+      // the latter sends the WHOLE `buildDealProperties` bag, and for a row
+      // this app itself created (`dealLink?.origin === "created"`) that bag
+      // includes `dealname` and `amount` — a HubSpot portal workflow renames
+      // deals on its own schedule (see buildDealProperties's own comment),
+      // and `amount` here is 12× gross card volume, not revenue (see the
+      // flagged conflict with `saas_revenue`). Those are fine as ONE-TIME
+      // writes at creation/acceptance; turning this into a NIGHTLY re-push
+      // would fight the portal's own renaming automation every night and
+      // re-assert a wrong `amount` over any correction a rep or the portal
+      // made during the day. This block's job is "make ARR land", nothing
+      // else, so it computes and writes exactly that one property.
+      if (alreadyAccepted && after.hubspotDealId) {
+        const computedArr = paymentProcessingArr(after);
+        // null means nothing to state (marketing-only, or no volume yet) —
+        // never write a 0, same rule as buildDealProperties.
+        if (computedArr !== null) {
+          try {
+            const current = await getDealProcessingArr(after.hubspotDealId);
+            // Skip the write entirely when it's already right, so a dormant
+            // accepted row doesn't take a pointless HubSpot write every night.
+            if (current !== String(computedArr)) {
+              await patchDealProcessingArr(after.hubspotDealId, computedArr);
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`[cron hubspot-billing-sync] ARR resync failed for ${row.id}`, message);
+            try {
+              await db.update(merchantApplications)
+                .set({
+                  hubspotIds: { ...next, lastSyncError: message, lastSyncErrorAt: new Date().toISOString() },
+                  updatedAt: new Date(),
+                })
+                .where(eq(merchantApplications.id, row.id));
+            } catch (writeErr) {
+              console.error(
+                `[cron hubspot-billing-sync] could not persist ARR resync error for ${row.id}`,
+                writeErr instanceof Error ? writeErr.message : writeErr
+              );
+            }
+          }
+        }
+      }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       console.error(`[cron hubspot-billing-sync] application ${row.id} failed`, error);

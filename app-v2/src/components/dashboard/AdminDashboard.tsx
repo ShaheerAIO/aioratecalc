@@ -13,6 +13,7 @@ import { fmt$ } from "@/lib/utils";
 import { countHubspotSyncErrors } from "@/lib/billingView";
 import { AccountsDashboard } from "./AccountsDashboard";
 import RevenuePanel from "./RevenuePanel";
+import CommissionsPanel from "./CommissionsPanel";
 import { parseAdminView, type AdminView } from "@/lib/adminView";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
 import type { MerchantApplication, CustomerSubmission } from "@/types/merchant";
@@ -47,6 +48,11 @@ const VIEW_TABS: { id: AdminView; label: string }[] = [
   // which the settlement ingest has been filling all along with nothing
   // looking at it. See RevenuePanel.
   { id: "revenue",  label: "Revenue" },
+  // The per-deal commission breakdown that moved OFF the rep-facing pricing
+  // screens on 2026-10-13 — AIO Revenue, processor cost, net margin, the
+  // true floor, and the signing/activation/hardware commission split. See
+  // CommissionsPanel.
+  { id: "commissions", label: "Commissions" },
 ];
 
 // useSearchParams (?view=/?rep= below) needs a Suspense boundary above it.
@@ -212,7 +218,13 @@ function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps
         </div>
       )}
 
-      {view !== "reps" && view !== "revenue" && (
+      {view === "commissions" && (
+        <div className={styles.top}>
+          <CommissionsPanel />
+        </div>
+      )}
+
+      {view !== "reps" && view !== "revenue" && view !== "commissions" && (
         <AccountsDashboard
           role="admin"
           userId={userId}

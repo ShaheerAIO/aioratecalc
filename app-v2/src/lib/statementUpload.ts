@@ -1,7 +1,10 @@
-// Client-side statement upload helpers, shared by the rep flow (UploadStep) and
-// the public lead flow (LeadUploadStep). Both post the same
-// { fileData, mediaType } payload to their own analyze route, and both used to
-// do it with a bare fetch, no size limit, and a single `loading` boolean.
+// Client-side statement upload helpers for the rep flow (UploadStep), which
+// posts { fileData, mediaType } to /api/analyze. It used to do that with a bare
+// fetch, no size limit, and a single `loading` boolean.
+//
+// The public lead flow shared these until 2026-10-13, when the customer-side
+// statement upload was removed outright — a merchant is never asked for a
+// statement now, so /api/lead/[token]/analyze and its caller are gone.
 //
 // Two jobs here:
 //   1. prepareStatement() — downscale oversized photos before they go over the

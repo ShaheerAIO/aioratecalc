@@ -10,7 +10,7 @@
 // pricing.ts itself. Client components receive the returned CustomerSafeQuote
 // as a prop; they never import this module.
 import { analysisFromQuoteConfig, derivePricing, type FeeOverrides } from "@/lib/pricing";
-import { isMarketingQuote, quoteHasProcessing, quoteTotals, quoteTypeOf } from "@/lib/quoting";
+import { quoteHasProcessing, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import type {
   CustomerSafeQuote, OrderPoints, QuoteConfig, QuoteLine, QuoteRates, StatementAnalysis, StoredQuoteType,
 } from "@/types/merchant";
@@ -80,31 +80,38 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
 
   const analysis = quotableAnalysis(basis);
 
-  // Marketing with no rate behind it: priced lines and no rate half at all.
-  // Null (not a $0 rate) when there are no lines, so an empty marketing quote
-  // reads as "no quote yet" exactly like a missing statement does on the rated
-  // path.
+  // No rate behind it: priced lines and no rate half at all. Null (not a $0
+  // rate) when there are no lines either, so a quote with nothing on it reads
+  // as "no quote yet" exactly like a missing statement does on the rated path.
   //
-  // Reached in two ways now, and they must land in the same place: a marketing
-  // quote with no website on it (never had a rate), and one WITH a website but
-  // no volume to price it on yet (the rep hasn't entered a ticket and volume,
-  // or the merchant hasn't uploaded a statement). The second is a half-built
-  // quote, not a different kind of quote — showing their hardware and holding
-  // the rate back beats showing nothing, and the rate appears as soon as there
-  // is something to compute it from.
-  if (!analysis && isMarketingQuote(quoteTypeOf(basis.quoteType))) {
+  // This used to be MARKETING-ONLY, and that is what put a real merchant on
+  // the statement-upload screen (2026-10-13): an `order_pay_only` quote with
+  // 13 lines and an already-published HubSpot document had no volume on file,
+  // so this returned null and the public quote page fell through to its
+  // dropzone — leaving them no route to the checkout we had just published for
+  // them. Holding the rate back and showing the hardware is the right answer
+  // for every plan, not just the marketing one: the rep hasn't entered a
+  // ticket and volume yet, which is a half-built quote rather than a different
+  // kind of quote, and the rate appears as soon as there is something to
+  // compute it from. There is no longer a customer-side upload that could fill
+  // it in, so "ask them for a statement" is not an alternative.
+  if (!analysis) {
     if (!lines.length) return null;
     return {
       basis: "products",
       lines,
       lineTotals: quoteTotals(lines),
-      orderPoints: null,
+      // Was hard-coded `null` regardless of what the row actually carried —
+      // harmless for an honest marketing-only quote (deriveQuoteLines never
+      // records a count for one), but WRONG for exactly the half-built
+      // processing quote this branch exists for since 10/13: a rep who has
+      // picked POS units and kiosks but hasn't entered a ticket/volume yet
+      // has a real, non-null `orderPoints` on the row, and it was being
+      // thrown away here. Same fix as the rated branch below.
+      orderPoints: basis.orderPoints ?? null,
     };
   }
 
-  // A PROCESSING plan with no readable rate basis stays null, unchanged: that
-  // quote is the rate, so there is nothing to show without one.
-  if (!analysis) return null;
   const fromStatement = !!basis.analysis;
   const vol = analysis.totalVolume;
 

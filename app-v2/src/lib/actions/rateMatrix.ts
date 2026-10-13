@@ -74,6 +74,32 @@ export async function updateRateMatrixAction(input: RateMatrixPolicy): Promise<v
   }
 }
 
+/**
+ * AIO's flat card-not-present rate, alone — independent of any volume/ticket
+ * basis, because CNP doesn't vary by either (see rateMatrix.ts's doc comment
+ * on `DEFAULT_CNP_RATE_BPS`; it's a scalar, not a grid).
+ *
+ * Added 2026-10-13, the same day CNP was locked on every rep surface
+ * (`RateFields.tsx`), to fix a regression the lock introduced: `getSuggestedRatesAction`
+ * below returns the live CNP figure too, but only as part of a full
+ * suggestion gated on BOTH `monthlyVolume > 0` AND `avgTicket > 0` — the
+ * gate CP's matrix lookup genuinely needs. A quote where the rep hasn't
+ * entered both yet (average ticket is often blank at first) never got a
+ * suggestion at all, so the now-disabled CNP box sat on
+ * `DEFAULT_QUOTE_RATES.cardNotPresentRate` (2.49%, a flat placeholder) with
+ * no way for a rep to correct it — before the lock that was just a starting
+ * point a rep could fix; locked, it was a silent 81bps-under-policy number.
+ * `RateFields` calls this directly, on a FRESH quote only, to confirm CNP
+ * the moment it mounts rather than waiting on CP's basis.
+ */
+export async function getCnpPolicyRateAction(): Promise<number> {
+  const effective = await getEffectiveRole();
+  if (!effective) throw new Error("Not authenticated");
+
+  const matrix = await getRateMatrix();
+  return matrix.cardNotPresentBps / 10000;
+}
+
 export type RateSuggestion = {
   rates: QuoteRates;
   /** The cell the card-present rate was read off, for the line that says where it came from. */
@@ -89,9 +115,12 @@ export type RateSuggestion = {
  * Postgres — and because the three rep surfaces that need it are client
  * components, which is the same reason `getPricingPreviewAction` exists.
  *
- * AMEX tracks its V/MD twin, which is what `RateFields` does by default and
- * what every quote carries today. The rate card has no AMEX column; when it
- * grows one this is where it lands, and nothing else has to move.
+ * AMEX stopped being priced apart from V/MC/Discover 2026-10-13 ("get rid of
+ * the dual rate (amex)"), so the AMEX fields below are set equal to the
+ * ordinary rate purely so the returned object still satisfies `QuoteRates`'
+ * shape — `RateFields` no longer offers them, and nothing prices off them
+ * (see pricing.ts's `derivePricing`). The rate card itself has no AMEX
+ * column and never grows one now.
  */
 export async function getSuggestedRatesAction(input: {
   monthlyVolume: number;

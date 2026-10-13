@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getRateMatrix, updateRateMatrixAction } from "@/lib/actions/rateMatrix";
 import {
-  DEFAULT_RATE_MATRIX, RATE_MATRIX_TICKETS, VOLUME_BAND_LABELS,
+  DEFAULT_RATE_MATRIX, RATE_MATRIX_TICKETS, TICKET_COLUMN_LABELS, VOLUME_BAND_LABELS,
   type RateMatrixPolicy,
 } from "@/lib/rateMatrix";
 import styles from "./rate-matrix.module.css";
@@ -87,8 +87,8 @@ export default function RateMatrixSettingsPage() {
               <thead>
                 <tr>
                   <th scope="col" className={styles.corner}>Volume \ Ticket</th>
-                  {RATE_MATRIX_TICKETS.map(t => (
-                    <th key={t} scope="col" className={styles.colHead}>${t}</th>
+                  {RATE_MATRIX_TICKETS.map((t, c) => (
+                    <th key={t} scope="col" className={styles.colHead}>{TICKET_COLUMN_LABELS[c]}</th>
                   ))}
                 </tr>
               </thead>
@@ -104,7 +104,7 @@ export default function RateMatrixSettingsPage() {
                             className={styles.cellInput}
                             value={(matrix.cardPresentBps[r][c] / 100).toFixed(2)}
                             onChange={e => setCell(r, c, e.target.value)}
-                            aria-label={`Card-present rate for ${band} a month at a $${t} average ticket, percent`}
+                            aria-label={`Card-present rate for ${band} a month at a ${TICKET_COLUMN_LABELS[c]} ticket, percent`}
                           />
                           <span aria-hidden="true">%</span>
                         </span>

@@ -238,3 +238,79 @@ deal and OWNED by Elizabeth. Not an @mention: this portal's NOTE object has no
 hs_at_mentioned_owner_ids, so the API can't raise that notification — a HubSpot
 workflow on "note created, owner = Elizabeth" would. Needs crm.objects.notes.write
 on the EasyOB Billing app or every push 403s.)
+
+
+10/13
+make quote publish as soon as link is sent
+make llc blank
+make operating addy checkbox again
+DBA should not go back and rewrite the company name
+add email to owner contact - dropdown for exisitng or make a new one add to hs
+add billing contact - same thing
+overwrite the billing conact in hs. 
+elizabeth update category types for uncategeorized
+can the email go through the sales rep?
+ordering points must show up on quote
+make avg ticket writeable like volume (i should just be able to type in to in and how delete the old value of 0.00), no arrows
+commissions calculator
+lock cnp rates
+get rid of the dual rate (amex)
+retire the "drop statement" make sure the cnp rate hows as whats locked in the settings
+make matrix bucketing explicit
+get rid of the "use it" and make it always override
+the only thing to display from the cole message is the margin, cuz thats how reps see their commission. the other stuff calculate it and store it in an admin only view somewhere
+"hardware comissions" underneath pkage saings and discounts, this can go negatice
+make discounts also a subtraction
+switch to product library
+
+immediatley work on payments stuff
+make sure value writes back to payments ARR hubspot property (payment_processing_arr) OVERWRITES
+make sure the quote email sends
+
+Total Revenue  = (CP Rate * VolMon) + ((VOlMon/Avg Ticket) * Txn Fee)
+Total Take Rate = Total Revenue / Monthly Volume
+Margin = Total Take Rate %  - Whole %
+Wholesale % is 
+
+
+Avg Ticket 
+
+$10 
+
+$15 
+
+$20 
+
+$25 
+
+$30 
+
+$40 
+
+$50 
+
+$75 
+
+$100 
+
+Total Wholesale % 
+
+3.50% 
+
+2.87% 
+
+2.55% 
+
+2.36% 
+
+2.23% 
+
+2.08% 
+
+1.98% 
+
+1.85% 
+
+1.79% 
+
+ 

@@ -19,6 +19,7 @@ import {
   ORDER_POINT_RULES,
   PICKER_EXCLUDED_PRODUCT_NAMES,
   PLATFORM_PRODUCTS,
+  QUOTE_TYPES,
   UNCATEGORIZED_GROUP,
   buildQuote,
   deriveOrderPoints,
@@ -151,6 +152,12 @@ describe("picker exclusions", () => {
 });
 
 describe("quote types", () => {
+  it("shows Order & Pay Only before All-in-One in the picker (10/13: reverted to original order)", () => {
+    expect(QUOTE_TYPES.map(t => t.id)).toEqual([
+      "order_pay_only", "all_in_one", "marketing_only", "marketing_term",
+    ]);
+  });
+
   it("maps the retired values onto the plan that replaced them", () => {
     // Their platform products are deactivated in HubSpot, so a row left on one
     // couldn't resolve a platform line at all. All-in-One is the successor.

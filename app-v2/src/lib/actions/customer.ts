@@ -116,8 +116,9 @@ export async function getMyApplicationAction(id: string): Promise<MerchantApplic
 // an id belonging to someone else simply doesn't resolve — same gate as
 // getMyApplicationAction. Returns the CustomerSafeQuote and nothing else: the
 // application row it was built from never crosses to the client.
-// Null means "no quote to show" — either the id isn't theirs, or the row has no
-// statement and no rep-entered configs to price from (hasQuoteBasis).
+// Null means "no quote to show" — either the id isn't theirs, or the row has
+// nothing on it at all: no statement, no rep-entered configs and no priced
+// lines (hasQuoteBasis).
 export async function getMyQuoteAction(id: string): Promise<CustomerSafeQuote | null> {
   const { userId } = await requireCustomer();
   const app = await postgresStorage.getApplicationForCustomer(userId, id);

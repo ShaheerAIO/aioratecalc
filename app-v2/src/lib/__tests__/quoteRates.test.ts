@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { analysisFromQuoteConfig, derivePricing, getDesiredMargin, ratesFor, type FeeOverrides } from "@/lib/pricing";
-import { DEFAULT_QUOTE_RATES, type QuoteRates, type StatementAnalysis } from "@/types/merchant";
+import { analysisFromQuoteConfig, CONFIG_QUOTE_ASSUMPTIONS, derivePricing, getDesiredMargin, ratesFor, type FeeOverrides } from "@/lib/pricing";
+import { DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, type QuoteRates, type StatementAnalysis } from "@/types/merchant";
 
 // Rates became the pricing INPUT on 2026-10-06, inverting what this engine
 // did: AIO used to decide the margin it needed and work the rates back from
@@ -142,11 +142,19 @@ describe("the two unsellable models still price off the margin matrix", () => {
   });
 });
 
-// AMEX settles at its own cost, so it is priced apart from Visa/Mastercard/
-// Discover — four rates across two brand groups and two lanes. They all
-// default to the same number, which is exactly why these tests set them apart:
-// equal rates hide every bug in the split.
-describe("AMEX is priced apart from Visa/Mastercard/Discover", () => {
+// AMEX used to settle at its own cost and price apart from Visa/Mastercard/
+// Discover (2026-10-06). REVERSED 2026-10-13 ("get rid of the dual rate
+// (amex)") — product owner decided the four-box split wasn't worth a rep
+// reading past, so AMEX volume now prices at whatever the ordinary rate
+// quotes, same as every other card. `QuoteRates.amexCardPresentRate`/
+// `amexCardNotPresentRate` still exist (a row saved 2026-10-06 through
+// 2026-10-12 can carry real, divergent numbers in them and has to keep
+// parsing), so these tests now assert that derivePricing IGNORES them for
+// pricing purposes — the opposite of what they asserted before.
+describe("AMEX prices at the ordinary rate, not apart from it", () => {
+  // Rates where AMEX genuinely still differs — exactly the shape a
+  // pre-2026-10-13 row can carry. If derivePricing ever reads these again,
+  // these tests catch it.
   const SPLIT: QuoteRates = {
     cardPresentRate: 0.02,
     cardNotPresentRate: 0.03,
@@ -158,58 +166,89 @@ describe("AMEX is priced apart from Visa/Mastercard/Discover", () => {
   // $100k, 90/10 card-present, of which $20k is AMEX.
   const WITH_AMEX = { ...ANALYSIS, amexVolume: 20_000 } as StatementAnalysis;
 
-  it("splits volume four ways: two brand groups × two lanes", () => {
-    // AMEX is assumed to split CP/CNP in the merchant's overall ratio, the
-    // only cross-tab a statement gives us. So: AMEX 18k CP + 2k CNP, and
-    // V/MD takes the remainder, 72k CP + 8k CNP.
+  it("prices AMEX volume at the ordinary CP/CNP rates, ignoring the stored AMEX rates", () => {
+    // Old behavior carved AMEX out and charged it 0.04/0.05. Now the whole
+    // 90k/10k CP/CNP split prices at 0.02/0.03 regardless of how much of it
+    // the statement attributes to AMEX.
     const p = derivePricing(WITH_AMEX, SPLIT, "2-tier", NO_FEES);
-    expect(p.amexVol).toBe(20_000);
-    expect(p.projectedMonthlyFees).toBeCloseTo(
-      72_000 * 0.02 + 8_000 * 0.03 + 18_000 * 0.04 + 2_000 * 0.05, 6
-    );
-  });
-
-  it("quotes all four rates back", () => {
-    const p = derivePricing(WITH_AMEX, SPLIT, "2-tier", NO_FEES);
-    expect([p.cpRate, p.cnpRate, p.amexCpRate, p.amexCnpRate]).toEqual([0.02, 0.03, 0.04, 0.05]);
-  });
-
-  it("charges the AMEX rate on AMEX volume, not the V/MD rate", () => {
-    const dearAmex = derivePricing(WITH_AMEX, SPLIT, "2-tier", NO_FEES);
-    const flat = derivePricing(
-      WITH_AMEX,
-      { ...SPLIT, amexCardPresentRate: 0.02, amexCardNotPresentRate: 0.03 },
-      "2-tier", NO_FEES
-    );
-    expect(dearAmex.projectedMonthlyFees).toBeGreaterThan(flat.projectedMonthlyFees);
-  });
-
-  it("prices every dollar at the V/MD rates when the statement shows no AMEX", () => {
-    const p = derivePricing(ANALYSIS, SPLIT, "2-tier", NO_FEES);
-    expect(p.amexVol).toBe(0);
     expect(p.projectedMonthlyFees).toBeCloseTo(90_000 * 0.02 + 10_000 * 0.03, 6);
   });
 
-  it("invents no AMEX share on a statement-less quote", () => {
-    // Product-owner decision, 2026-10-06: the config path has no AMEX figure
-    // and none is assumed. The AMEX rates still appear on the quote; they just
-    // don't move the projection, because quoting a saving off a number nobody
-    // supplied is worse than quoting none.
+  it("reports amexVol but no longer uses it to carve anything out of cpVol/cnpVol", () => {
+    const withAmex = derivePricing(WITH_AMEX, SPLIT, "2-tier", NO_FEES);
+    const withoutAmex = derivePricing(ANALYSIS, SPLIT, "2-tier", NO_FEES);
+    expect(withAmex.amexVol).toBe(20_000);
+    expect(withoutAmex.amexVol).toBe(0);
+    // Same cpVol/cnpVol, same fees, whether or not the statement reports an
+    // AMEX figure — amexVol is reporting-only now.
+    expect(withAmex.cpVol).toBe(withoutAmex.cpVol);
+    expect(withAmex.cnpVol).toBe(withoutAmex.cnpVol);
+    expect(withAmex.projectedMonthlyFees).toBeCloseTo(withoutAmex.projectedMonthlyFees, 6);
+  });
+
+  it("mirrors amexCpRate/amexCnpRate onto the ordinary rates rather than quoting the stored AMEX ones back", () => {
+    // SPLIT asks for 0.04/0.05 on AMEX; the engine no longer has anywhere to
+    // put that, so it reports the same two rates everyone else gets.
+    const p = derivePricing(WITH_AMEX, SPLIT, "2-tier", NO_FEES);
+    expect([p.cpRate, p.cnpRate]).toEqual([0.02, 0.03]);
+    expect([p.amexCpRate, p.amexCnpRate]).toEqual([p.cpRate, p.cnpRate]);
+  });
+
+  it("never lets a bad AMEX figure do anything — not even clamp pricing — since it isn't priced", () => {
+    // Read off a statement by an LLM, so it can be nonsense (e.g. AMEX volume
+    // above total volume). It used to need clamping because it was subtracted
+    // from cpVol/cnpVol; now it's purely reported, so an absurd figure can't
+    // drive anything negative.
+    const p = derivePricing({ ...ANALYSIS, amexVolume: 500_000 } as StatementAnalysis, SPLIT, "2-tier", NO_FEES);
+    expect(p.amexVol).toBe(100_000); // still clamped to total volume for display
+    expect(p.projectedMonthlyFees).toBeCloseTo(90_000 * 0.02 + 10_000 * 0.03, 6);
+  });
+
+  it("invents no AMEX share on a statement-less quote (unchanged reasoning, now moot for pricing)", () => {
+    // Product-owner decision, 2026-10-06, still true: the config path has no
+    // AMEX figure and none is assumed. It no longer matters for pricing
+    // either way — see the tests above — but amexVol still reports 0 here.
     const config = analysisFromQuoteConfig({ avgTicket: 40, monthlyVolume: 100_000 });
     expect(config.amexVolume).toBe(0);
 
     const p = derivePricing(config, SPLIT, "2-tier", NO_FEES);
     expect(p.amexVol).toBe(0);
-    expect(p.projectedMonthlyFees).toBeCloseTo(90_000 * 0.02 + 10_000 * 0.03, 6);
+    // 95/5 statement-less default (DEFAULT_CARD_PRESENT_PCT), not the 90/10
+    // explicit split ANALYSIS/SPLIT above use.
+    expect(p.projectedMonthlyFees).toBeCloseTo(95_000 * 0.02 + 5_000 * 0.03, 6);
+  });
+});
+
+// The 2026-10-07 defect: the rep form defaulted its card-present field to 95
+// (commit 453c588) while pricing.ts and PricingStep.tsx kept quoting 90 —
+// three copies of the same assumption that had drifted apart. Fixed by
+// collapsing all of them onto DEFAULT_CARD_PRESENT_PCT (types/merchant.ts,
+// where client components can read it without pulling in pricing.ts's
+// MARGIN_REQS). These tests are the regression guard against a future caller
+// reintroducing its own 0.9 (or any other) literal instead of importing it.
+describe("DEFAULT_CARD_PRESENT_PCT — one constant, not three", () => {
+  it("is 95%, the 2026-10-07 value, not Steve's original 90%", () => {
+    expect(DEFAULT_CARD_PRESENT_PCT).toBe(0.95);
   });
 
-  it("never lets a bad AMEX figure exceed the merchant's own volume", () => {
-    // Read off a statement by an LLM, so it can be nonsense. Clamped rather
-    // than trusted: an AMEX total above total volume would drive the V/MD
-    // lanes negative and quote a merchant less than nothing.
-    const p = derivePricing({ ...ANALYSIS, amexVolume: 500_000 } as StatementAnalysis, SPLIT, "2-tier", NO_FEES);
-    expect(p.amexVol).toBe(100_000);
-    expect(p.projectedMonthlyFees).toBeCloseTo(90_000 * 0.04 + 10_000 * 0.05, 6);
-    expect(p.projectedMonthlyFees).toBeGreaterThan(0);
+  it("CONFIG_QUOTE_ASSUMPTIONS (pricing.ts) is derived from it, not a second literal", () => {
+    expect(CONFIG_QUOTE_ASSUMPTIONS.cardPresentPct).toBe(DEFAULT_CARD_PRESENT_PCT);
+    expect(CONFIG_QUOTE_ASSUMPTIONS.cardNotPresentPct).toBeCloseTo(1 - DEFAULT_CARD_PRESENT_PCT, 10);
+  });
+
+  it("derivePricing's own fallback (a statement with neither lane) uses the same constant", () => {
+    // Distinct from analysisFromQuoteConfig's path (covered above, "invents no
+    // AMEX share…") — this exercises derivePricing's OWN rawCp/rawCnp === 0
+    // fallback directly, which a config-built analysis never reaches because
+    // analysisFromQuoteConfig already fills in a concrete cardPresentPct.
+    const noCardMixInfo = {
+      totalVolume: 100_000, totalTransactions: 2_500,
+      interchangeRate: 0.018, icEstimated: false,
+      // cardPresentPct/cardNotPresentPct omitted entirely — "unmeasured".
+    } as StatementAnalysis;
+
+    const p = derivePricing(noCardMixInfo, DEFAULT_QUOTE_RATES, "2-tier", NO_FEES);
+    expect(p.cpVol).toBeCloseTo(100_000 * DEFAULT_CARD_PRESENT_PCT, 6);
+    expect(p.cnpVol).toBeCloseTo(100_000 * (1 - DEFAULT_CARD_PRESENT_PCT), 6);
   });
 });

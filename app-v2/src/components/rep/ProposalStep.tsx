@@ -40,17 +40,14 @@ export default function ProposalStep({ analysis, proposal, onBack, onApply, onSe
       ratesHtml = `<div class="rate-card"><div class="rate-lbl">All Cards</div><div class="rate-val">${fmtP2(rates.flatRate)}</div><div class="rate-sub">single flat rate</div></div>`
         + `<div class="rate-card"><div class="rate-lbl">Per Transaction</div><div class="rate-val">$${(rates.perTransaction || 0).toFixed(2)}</div><div class="rate-sub">auth fee</div></div>`;
     } else if (proposal.pricingModel === "2-tier" && rates.pricingModel === "2-tier") {
-      // Four cards, except on a proposal generated before AMEX was priced
-      // separately (2026-10-06) — those carry two rates and must still render
-      // the two they have rather than two blanks.
+      // Two cards — AMEX stopped being a separate price 2026-10-13 ("get rid
+      // of the dual rate (amex)"), so it no longer gets its own card here even
+      // on a proposal whose stored `rates.amexCardPresentRate`/
+      // `amexCardNotPresentRate` genuinely differ (proposals generated
+      // 2026-10-06 through 2026-10-12 priced AMEX apart). The data survives;
+      // the document just doesn't print it as a distinct rate any more.
       ratesHtml = `<div class="rate-card"><div class="rate-lbl">V/MC/Disc Card Present</div><div class="rate-val">${fmtP2(rates.cardPresentRate)}</div><div class="rate-sub">+ $${(rates.cardPresentPerTxn || 0).toFixed(2)}/txn</div></div>`
-        + `<div class="rate-card"><div class="rate-lbl">V/MC/Disc Not Present</div><div class="rate-val">${fmtP2(rates.cardNotPresentRate)}</div><div class="rate-sub">+ $${(rates.cardNotPresentPerTxn || 0).toFixed(2)}/txn</div></div>`
-        + (rates.amexCardPresentRate != null
-            ? `<div class="rate-card"><div class="rate-lbl">AMEX Card Present</div><div class="rate-val">${fmtP2(rates.amexCardPresentRate)}</div><div class="rate-sub">+ $${(rates.cardPresentPerTxn || 0).toFixed(2)}/txn</div></div>`
-            : "")
-        + (rates.amexCardNotPresentRate != null
-            ? `<div class="rate-card"><div class="rate-lbl">AMEX Not Present</div><div class="rate-val">${fmtP2(rates.amexCardNotPresentRate)}</div><div class="rate-sub">+ $${(rates.cardNotPresentPerTxn || 0).toFixed(2)}/txn</div></div>`
-            : "");
+        + `<div class="rate-card"><div class="rate-lbl">V/MC/Disc Not Present</div><div class="rate-val">${fmtP2(rates.cardNotPresentRate)}</div><div class="rate-sub">+ $${(rates.cardNotPresentPerTxn || 0).toFixed(2)}/txn</div></div>`;
     } else if (rates.pricingModel === "interchange-plus") {
       ratesHtml = `<div class="rate-card"><div class="rate-lbl">Markup</div><div class="rate-val">${rates.basisPoints} BPS</div><div class="rate-sub">above interchange</div></div>`
         + `<div class="rate-card"><div class="rate-lbl">Per Transaction</div><div class="rate-val">$${(rates.perTransaction || 0).toFixed(2)}</div><div class="rate-sub">auth fee</div></div>`;
@@ -222,18 +219,15 @@ export default function ProposalStep({ analysis, proposal, onBack, onApply, onSe
         <div className={styles.section}>
           <h2 className={styles.sectionTitle}>Proposed Rates</h2>
           <div className={styles.rateGrid}>
+            {/* AMEX stopped being a separate price 2026-10-13 ("get rid of the
+                dual rate (amex)") — see the doc comment on
+                ProposedRates2Tier.amexCardPresentRate in types/merchant.ts.
+                Only the two ordinary cards render, even for an older proposal
+                whose stored AMEX figures genuinely differ. */}
             {rates.pricingModel === "2-tier" && (
               <>
                 <div className={styles.rateCard}><div className={styles.rateLbl}>V/MC/Disc Card Present</div><div className={styles.rateVal}>{fmtPct2(rates.cardPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardPresentPerTxn || 0).toFixed(2)}/txn</div></div>
                 <div className={styles.rateCard}><div className={styles.rateLbl}>V/MC/Disc Not Present</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>{fmtPct2(rates.cardNotPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardNotPresentPerTxn || 0).toFixed(2)}/txn</div></div>
-                {/* Absent on proposals generated before AMEX was priced on its
-                    own — those render the two rates they actually carry. */}
-                {rates.amexCardPresentRate != null && (
-                  <div className={styles.rateCard}><div className={styles.rateLbl}>AMEX Card Present</div><div className={styles.rateVal}>{fmtPct2(rates.amexCardPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardPresentPerTxn || 0).toFixed(2)}/txn</div></div>
-                )}
-                {rates.amexCardNotPresentRate != null && (
-                  <div className={styles.rateCard}><div className={styles.rateLbl}>AMEX Not Present</div><div className={`${styles.rateVal} ${styles["rateVal--alt"]}`}>{fmtPct2(rates.amexCardNotPresentRate)}</div><div className={styles.rateSub}>+${(rates.cardNotPresentPerTxn || 0).toFixed(2)}/txn</div></div>
-                )}
               </>
             )}
             {rates.pricingModel === "interchange-plus" && (

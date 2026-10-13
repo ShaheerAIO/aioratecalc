@@ -155,6 +155,20 @@
       "when": 1791927000000,
       "tag": "0021_rate_matrix_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792013000000,
+      "tag": "0022_commission_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792013500000,
+      "tag": "0023_billing_contact",
+      "breakpoints": true
     }
   ]
 }

@@ -8,7 +8,7 @@ import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/c
 import RateFields from "@/components/rep/RateFields";
 import RateSuggestion from "@/components/rep/RateSuggestion";
 import { adjustmentsFromQuoteLines, picksFromQuoteLines, quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
-import { fmt$ } from "@/lib/utils";
+import { fmt$, fmtPct2 } from "@/lib/utils";
 import { averageTicketOf, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
@@ -122,6 +122,11 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
 
   // Debounced re-preview, same 150ms shoulder as PricingStep — the server
   // computes the pillowed floor/cost view; this component never derives it.
+  // `recurringArr` comes off the configurator's own live totals (annualised),
+  // so the projected commission shown below reflects this quote's platform
+  // fee too, not processing margin alone — the one thing PricingStep can't
+  // know yet because no products are configured at that point in the wizard.
+  const recurringArr = quote ? Math.round(quote.totals.monthlyEquivalent * 12) || null : null;
   useEffect(() => {
     if (!canPreview) { setPricing(null); return; }
     const handle = setTimeout(() => {
@@ -131,12 +136,13 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         pricingModel,
         feeOverrides: ZERO_FEES,
         activeTier,
+        recurringArr,
       }).then(setPricing).catch(() => setPricing(null));
     }, 150);
     return () => clearTimeout(handle);
     // previewAnalysis is a derived value (app.analysis, or the once-fetched
     // configAnalysis), not a ref-stable dependency worth excluding — include it.
-  }, [canPreview, previewAnalysis, quoteRates, pricingModel, activeTier]);
+  }, [canPreview, previewAnalysis, quoteRates, pricingModel, activeTier, recurringArr]);
 
   // Reported, never enforced — floor enforcement went with the margin input on
   // 2026-10-06. A rate under the floor warns the rep and still saves.
@@ -246,9 +252,16 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
 
           <div>
             <RateFields value={quoteRates} onChange={setQuoteRates} />
-            {/* NO autoApply: these rates were already chosen and saved. The
-                card is shown so a rep can see they've drifted from it, and
-                taking it is their click. */}
+            {/* Used to deliberately skip auto-apply here ("these rates were
+                already chosen and saved"). OVERRIDDEN 2026-10-13 ("get rid of
+                the 'use it' and make it always override") — RateSuggestion no
+                longer has a gate to opt out of at all, so reopening a saved
+                quote can now change its rates to match the live rate card.
+                This is safe against the one thing it must never touch: a
+                PUBLISHED (or accepted) quote never reaches this line —
+                `frozen`, above, returns a locked notice before this component
+                tree (and therefore RateFields/RateSuggestion) ever mounts, so
+                there is no path from here back through that freeze. */}
             <RateSuggestion
               monthlyVolume={previewAnalysis?.totalVolume ?? 0}
               avgTicket={previewAnalysis ? averageTicketOf(previewAnalysis) : 0}
@@ -268,9 +281,16 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
               </p>
             )}
             {canPreview && pricing && (
+              // Reduced to exactly three figures (2026-10-13, product owner):
+              // the fee projection the merchant sees anyway, the margin %,
+              // and the commission the rep would earn. AIO revenue (shown
+              // here with NO gate at all before this change) moved to
+              // /admin?view=commissions along with processor cost, net
+              // margin and the floor — see CommissionsPanel.
               <div style={{ marginTop: 10, fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
                 <div>Projected fees: <strong>{fmt$(pricing.projectedMonthlyFees)}/mo</strong></div>
-                <div>AIO revenue: <strong>{fmt$(pricing.aioRevenue)}/mo</strong></div>
+                <div>Margin at this rate: <strong>{pricing.appliedTargetMargin == null ? "—" : fmtPct2(pricing.appliedTargetMargin)}</strong></div>
+                <div>Your commission (est., signing + activation): <strong>{pricing.projectedCommission.total == null ? "—" : `${fmt$(pricing.projectedCommission.total)}/yr`}</strong></div>
                 {belowFloor && (
                   <div style={{ color: "var(--danger, #e5484d)" }}>
                     Below cost — AIO loses money on this deal at this rate. Not blocked, but don&rsquo;t

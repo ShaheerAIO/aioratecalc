@@ -6,6 +6,7 @@ describe("parseAdminView", () => {
     expect(parseAdminView("accounts")).toBe("accounts");
     expect(parseAdminView("leads")).toBe("leads");
     expect(parseAdminView("revenue")).toBe("revenue");
+    expect(parseAdminView("commissions")).toBe("commissions");
   });
 
   it("defaults to the rep breakdown for absent or unknown values", () => {

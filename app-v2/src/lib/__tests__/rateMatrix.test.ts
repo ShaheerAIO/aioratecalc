@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_RATE_MATRIX, MATRIX_COLS, MATRIX_ROWS, MAX_RATE_BPS,
-  RATE_MATRIX_TICKETS, RATE_MATRIX_VOLUME_BANDS, VOLUME_BAND_LABELS,
+  RATE_MATRIX_TICKETS, RATE_MATRIX_VOLUME_BANDS, TICKET_COLUMN_LABELS, VOLUME_BAND_LABELS,
   lookupCardPresentRate, matrixTicketIndex, matrixVolumeIndex, rateMatrixProblems,
 } from "@/lib/rateMatrix";
 import { MARGIN_REQS } from "@/lib/pricing";
@@ -51,6 +51,38 @@ describe("the shipped card", () => {
       .flatMap((row, r) => row.map((bps, c) => ({ r, c, bps })))
       .filter(cell => cell.bps > DEFAULT_RATE_MATRIX.cardNotPresentBps);
     expect(over).toEqual([{ r: 0, c: 0, bps: 333 }]);
+  });
+});
+
+// The admin page used to print bare point headers ("$20") with only a prose
+// caption explaining that a ticket reads the column it's at or above — so the
+// bucket a cell actually covers was never on the header itself. 2026-10-13,
+// "make matrix bucketing explicit": the header prints the real range, derived
+// from RATE_MATRIX_TICKETS rather than a second hardcoded list that could
+// drift from it.
+describe("TICKET_COLUMN_LABELS", () => {
+  it("has one label per column", () => {
+    expect(TICKET_COLUMN_LABELS).toHaveLength(MATRIX_COLS);
+  });
+
+  it("labels each column with the range it covers, one cent short of the next point", () => {
+    expect(TICKET_COLUMN_LABELS[0]).toBe("$10 – $14.99");
+    expect(TICKET_COLUMN_LABELS[1]).toBe("$15 – $19.99");
+    expect(TICKET_COLUMN_LABELS[2]).toBe("$20 – $24.99");
+    expect(TICKET_COLUMN_LABELS[6]).toBe("$50 – $74.99");
+  });
+
+  it("leaves the last column open-ended — there's no point above it to stop at", () => {
+    expect(TICKET_COLUMN_LABELS[MATRIX_COLS - 1]).toBe("$100+");
+  });
+
+  it("stays derived from RATE_MATRIX_TICKETS rather than a second hardcoded copy", () => {
+    // If someone ever widens the grid, the labels have to follow without a
+    // second edit — this fails the moment the two disagree in length or in
+    // the point each column starts at.
+    RATE_MATRIX_TICKETS.forEach((t, i) => {
+      expect(TICKET_COLUMN_LABELS[i].startsWith(`$${t}`)).toBe(true);
+    });
   });
 });
 

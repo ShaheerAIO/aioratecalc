@@ -2,7 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
-import { marginPolicy, quoteLimitPolicy } from "@/lib/db/schema";
+import { marginPolicy, quoteLimitPolicy, commissionPolicy } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import {
   analysisFromQuoteConfig, derivePricingForRole,
@@ -12,6 +12,7 @@ import {
   DEFAULT_MAX_APPROVED_DELAY_DAYS, DEFAULT_MAX_DISCOUNT_PERCENT, DEFAULT_SHOW_TABLETS,
   DEFAULT_UNIT_CAPS, MAX_BILLING_DELAY_DAYS, type QuoteLimits,
 } from "@/lib/quoting";
+import { DEFAULT_HARDWARE_COMMISSION_POLICY, type HardwareCommissionPolicy } from "@/lib/commission";
 import type { StatementAnalysis, ProcessorTier, QuoteConfig, QuoteRates } from "@/types/merchant";
 
 // paddingPct is a proportion (0.5 = +50%). It is persisted in the existing integer
@@ -112,6 +113,14 @@ export async function getPricingPreviewAction(input: {
   pricingModel: string;
   feeOverrides: FeeOverrides;
   activeTier: ProcessorTier | null;
+  /**
+   * Annualised recurring (platform fee / subscription hardware) revenue
+   * already known for this quote, so the projected commission can include it.
+   * See `recurringArr` on `derivePricingForRole` (pricing.ts) — PricingStep
+   * has no products configured yet and omits this; EditQuotePanel passes the
+   * configurator's live totals.
+   */
+  recurringArr?: number | null;
 }): Promise<RoleScopedPricing> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
@@ -120,8 +129,41 @@ export async function getPricingPreviewAction(input: {
   const padding = await getActivePaddingPolicy();
   return derivePricingForRole(
     analysis, input.quoteRates, input.pricingModel, input.feeOverrides,
-    effective.role, input.activeTier, padding
+    effective.role, input.activeTier, padding, input.recurringArr ?? null
   );
+}
+
+// ── Hardware commission rate ────────────────────────────────────────────────
+// The one knob on `commission_policy` (migration 0022) — see lib/commission.ts
+// for why it's a single nullable rate rather than a richer policy, and why
+// null ("unset") is the only state that actually does anything useful today.
+
+export async function getHardwareCommissionPolicy(): Promise<HardwareCommissionPolicy> {
+  const [row] = await db.select().from(commissionPolicy).where(eq(commissionPolicy.isActive, true)).limit(1);
+  if (!row) return DEFAULT_HARDWARE_COMMISSION_POLICY;
+  return { hardwareCommissionBps: row.hardwareCommissionBps };
+}
+
+export async function updateHardwareCommissionPolicyAction(hardwareCommissionBps: number | null): Promise<void> {
+  const effective = await getEffectiveRole();
+  if (!effective || effective.role !== "admin") throw new Error("Admin only");
+  if (
+    hardwareCommissionBps !== null &&
+    (!Number.isInteger(hardwareCommissionBps) || hardwareCommissionBps < 0 || hardwareCommissionBps > 10000)
+  ) {
+    throw new Error(
+      "The hardware commission rate has to be a whole number of basis points between 0 and 10000 " +
+      "(0%–100%), or cleared to leave it unset."
+    );
+  }
+
+  const [existing] = await db.select({ id: commissionPolicy.id }).from(commissionPolicy).where(eq(commissionPolicy.isActive, true)).limit(1);
+  const values = { hardwareCommissionBps, updatedByUserId: effective.userId, updatedAt: new Date() };
+  if (existing) {
+    await db.update(commissionPolicy).set(values).where(eq(commissionPolicy.id, existing.id));
+  } else {
+    await db.insert(commissionPolicy).values(values);
+  }
 }
 
 // ── Quantity caps and the billing-delay ceiling ─────────────────────────────

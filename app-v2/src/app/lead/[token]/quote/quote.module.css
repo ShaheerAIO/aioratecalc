@@ -1,6 +1,6 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app
- * The page chrome LeadUploadStep used to own (title/subtitle/shell) — pared
- * out of that component and moved here, since it's a page-level concern.
+ * The page chrome (title/subtitle/shell) for the public quote route. The quote
+ * itself brings its own, so the title here is only for the no-quote-yet state.
  */
 
 .page {

@@ -39,6 +39,22 @@ export const RATE_MATRIX_VOLUME_BANDS = [
  */
 export const RATE_MATRIX_TICKETS = [10, 15, 20, 25, 30, 40, 50, 75, 100] as const;
 
+/**
+ * The bucket each column ACTUALLY covers, derived from `RATE_MATRIX_TICKETS`
+ * rather than a second hardcoded list (2026-10-13, "make matrix bucketing
+ * explicit"). The admin page used to print bare point headers ("$20") with
+ * only a prose caption explaining that a ticket reads the column it's at or
+ * above — which means the $20 column silently covers $20–$24.99, and nothing
+ * on the header itself said so. A column's upper bound is one cent under the
+ * NEXT point (`matrixTicketIndex` reads "at or above", so $24.99 is the last
+ * ticket still in the $20 column); the last column is open-ended, because
+ * there is no point above $100 to stop at.
+ */
+export const TICKET_COLUMN_LABELS: string[] = RATE_MATRIX_TICKETS.map((t, i) => {
+  const next = RATE_MATRIX_TICKETS[i + 1];
+  return next === undefined ? `$${t}+` : `$${t} – $${(next - 0.01).toFixed(2)}`;
+});
+
 export const VOLUME_BAND_LABELS = [
   "$0 – $25K", "$25K – $50K", "$50K – $75K", "$75K – $100K", "$100K – $125K",
   "$125K – $150K", "$150K – $175K", "$175K – $200K", "$200K+",

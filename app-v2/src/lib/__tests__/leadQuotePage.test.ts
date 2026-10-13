@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// /lead/[token]/quote/page.tsx — the token host's quote/upload step.
+// /lead/[token]/quote/page.tsx — the token host's quote step.
 
 const buildCustomerSafeQuote = vi.fn();
 
@@ -59,6 +59,21 @@ function baseRow(extra: Partial<Row> = {}): Row {
 
 const page = () => LeadQuotePage({ params: Promise.resolve({ token: TOKEN }) });
 
+// The rendered tree flattened to "every string in it, plus the name of every
+// component in it". JSON.stringify can't be used on a tree holding a component
+// reference (LeadQuoteView) — it's circular — and the component's NAME is
+// exactly what these tests need to assert on anyway.
+function flatten(node: unknown, out: string[] = []): string[] {
+  if (node == null || typeof node === "boolean") return out;
+  if (typeof node === "string" || typeof node === "number") { out.push(String(node)); return out; }
+  if (Array.isArray(node)) { for (const n of node) flatten(n, out); return out; }
+  const el = node as { type?: unknown; props?: { children?: unknown } };
+  if (typeof el.type === "function") out.push((el.type as { name?: string }).name ?? "");
+  flatten(el.props?.children, out);
+  return out;
+}
+const text = async () => flatten(await page()).join(" ").toLowerCase();
+
 beforeEach(() => {
   buildCustomerSafeQuote.mockReset();
   row = baseRow();
@@ -69,6 +84,25 @@ describe("the quote step", () => {
     buildCustomerSafeQuote.mockReturnValue({ basis: "config", monthlyVolume: 1000 });
     await page();
     expect(buildCustomerSafeQuote).toHaveBeenCalledTimes(1);
+  });
+
+  // The statement upload is GONE from the customer side (2026-10-13). It used
+  // to be what this page rendered whenever buildCustomerSafeQuote came back
+  // null, which is how a merchant with a published HubSpot quote ended up
+  // being asked for a statement instead of being sent to their checkout.
+  it("never asks the customer for a statement when there is no quote", async () => {
+    buildCustomerSafeQuote.mockReturnValue(null);
+    const rendered = await text();
+    expect(rendered).not.toContain("statement");
+    expect(rendered).not.toContain("upload");
+    expect(rendered).toContain("your quote is on its way");
+  });
+
+  it("renders the quote itself, and no page-level fallback, when there is one", async () => {
+    buildCustomerSafeQuote.mockReturnValue({ basis: "products", lines: [], lineTotals: null, orderPoints: null });
+    const rendered = await text();
+    expect(rendered).toContain("leadquoteview");
+    expect(rendered).not.toContain("your quote is on its way");
   });
 });
 

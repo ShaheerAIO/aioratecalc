@@ -1,7 +1,8 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
 
-/* Reads as a note under the rate boxes, not as an alert. It is advice, and a
-   rep who has deliberately typed a different rate shouldn't feel corrected. */
+/* Reads as a note under the rate boxes, not as an alert — it states what was
+   just applied (2026-10-13: this always applies its suggestion), rather than
+   asking the rep to decide anything. */
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -24,25 +25,3 @@
 .row[data-matches] .rate { font-weight: 600; }
 
 .basis { white-space: nowrap; }
-
-.apply {
-  flex: none;
-  font-family: var(--font-body);
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: var(--accent);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.apply:hover { color: var(--ink); }
-
-.apply:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
-}

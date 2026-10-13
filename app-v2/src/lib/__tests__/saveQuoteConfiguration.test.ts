@@ -40,14 +40,38 @@ vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms: vi.fn() }));
 // client) is never loaded here. This suite doesn't exercise deal resolution
 // at all (saveQuoteConfigurationAction never calls it).
 vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany: vi.fn() }));
+// prospects.ts now also imports buildAndPublishBillingQuote (10/13, the
+// publish-at-send reversal) for createProspectAction's publishAtSend —
+// mocked for the same reason as the one above (it pulls in the server-only
+// db client), and because saveQuoteConfigurationAction never calls it either.
+vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote: vi.fn() }));
 // Default 50% pillow, matching actions/pricing.ts's DEFAULT_PADDING — the
 // true-floor-enforcement tests below rely on this exact ratio.
+const PADDING = { paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true };
 vi.mock("@/lib/actions/pricing", () => ({
-  getActivePaddingPolicy: vi.fn().mockResolvedValue({
-    paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
-  }),
+  getActivePaddingPolicy: vi.fn().mockResolvedValue(PADDING),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
   getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90, showTablets: false }),
+  // A thin re-implementation of the real getPricingPreviewAction (actions/pricing.ts),
+  // not a stub that always says "fine": saveQuoteConfigurationAction now calls the
+  // real one to enforce the margin floor server-side (see assertRateAboveFloor in
+  // prospects.ts), and the tests below assert on that enforcement — they need the
+  // REAL margin math (derivePricingForRole, unmocked in this file) against the SAME
+  // padding this mock returns above, or they'd prove nothing about the guard they
+  // exist to test. Can't vi.importActual the real action: it imports the Drizzle db
+  // client, which has nothing to connect to in this suite.
+  getPricingPreviewAction: vi.fn(async (input: {
+    analysis?: unknown; quoteConfig?: unknown; quoteRates?: unknown; pricingModel: string; feeOverrides: unknown; activeTier: unknown;
+  }) => {
+    const { analysisFromQuoteConfig, derivePricingForRole } = await import("@/lib/pricing");
+    const effective = await getEffectiveRole();
+    const analysis = input.analysis ?? (input.quoteConfig ? analysisFromQuoteConfig(input.quoteConfig as never) : null);
+    if (!analysis) throw new Error("A statement or a volume and ticket is needed to price a quote.");
+    return derivePricingForRole(
+      analysis as never, input.quoteRates as never, input.pricingModel, input.feeOverrides as never,
+      effective.role, input.activeTier as never, PADDING
+    );
+  }),
 }));
 
 const { saveQuoteConfigurationAction } = await import("@/lib/actions/prospects");
@@ -99,7 +123,10 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
     foodbuyIds: null,
     hubspotIds: null,
     quoteType: "all_in_one",
-    quoteConfig: { monthlyVolume: 10000, avgTicket: 50 },
+    // No volume basis by default — see the doc comment on "the margin floor"
+    // describe block below for why: it keeps every OTHER test in this file
+    // from incidentally tripping the (now-enforced) margin-floor guard.
+    quoteConfig: null,
     quoteLines: null,
     orderPoints: null,
     quoteAcceptedAt: null,
@@ -323,8 +350,11 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 });
 
 // saveQuoteConfigurationAction is now the single write path for quote
-// configuration (wizard + the account-detail Edit Quote panel). The guard is
-// enforced PER ROLE, not against one shared "true" number:
+// configuration (wizard + the account-detail Edit Quote panel), and as of
+// this change it ENFORCES the margin floor again — see assertRateAboveFloor /
+// marginFloorBlockers in prospects.ts/pricing.ts and the 2026-10-09 decision
+// ("card rate minimums are needed") recorded there. The guard is enforced PER
+// ROLE, not against one shared "true" number:
 //   - admin → the true floor (getMarginFloor's minMargin) — admins already
 //     see true numbers everywhere else.
 //   - rep   → the PADDED floor (derivePricingForRole's pillow) — the same
@@ -336,51 +366,74 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 //     is always ≥ the true floor, so this is a strictly stricter limit for
 //     reps, never a looser one.
 //
-// Fixture volume is 10000 (app()'s default quoteConfig), which sits in
-// MARGIN_REQS' first tier (maxVol 25000): true minMargin 0.0067, and — with
-// the default 50% admin pillow (mocked above) — a padded floor of ~0.01005.
-describe("saveQuoteConfigurationAction — rates, and the floor that no longer blocks", () => {
-  it("saves a rate far below AIO's cost without complaint", async () => {
-    // Floor enforcement was removed on 2026-10-06 with the margin input it
-    // checked (product-owner decision). 0.5% is below the true floor for every
-    // volume tier AND below AIO's processing cost; it saves anyway. The rep is
-    // still WARNED — derivePricingForRole computes belowCostFloor and both rep
-    // surfaces render it — but nothing refuses.
-    const updated = await saveQuoteConfigurationAction({
+// `app()`'s own default carries NO quoteConfig (see its definition above) —
+// deliberately, so every OTHER describe block in this file (re-derivation,
+// the delayed-billing note, the acceptance guard) has no volume basis, which
+// makes assertRateAboveFloor a no-op for them — the floor is never askable
+// without a volume to clear it against (see assertRateAboveFloor's own doc
+// comment). That's fine for those ~14 tests; none of them is about the floor.
+// If a future edit puts a quoteConfig back on the shared app() default,
+// expect a wave of unrelated failures in THIS file, not a sign anything here
+// is broken — give those tests their own basis instead of reverting this.
+//
+// These tests supply their own basis via WITH_BASIS(): volume 10000, which
+// sits in MARGIN_REQS' first tier (maxVol 25000, true minMargin 0.0067) —
+// padded floor, with the default 50% admin pillow (mocked above), ~0.01005.
+describe("saveQuoteConfigurationAction — the margin floor", () => {
+  const WITH_BASIS = () => app({ quoteConfig: { monthlyVolume: 10000, avgTicket: 50 } });
+
+  it("refuses a rate far below AIO's cost, and never names the floor it failed", async () => {
+    getApplication.mockResolvedValue(WITH_BASIS());
+    const attempt = saveQuoteConfigurationAction({
       applicationId: "app-1",
       picks: [],
       channels: [],
+      // 0.5% nets a NEGATIVE margin at this volume once the estimated
+      // interchange is backed out — below the true floor for every volume
+      // tier, not just this one's padded line.
       quoteRates: { cardPresentRate: 0.005, cardNotPresentRate: 0.005, amexCardPresentRate: 0.005, amexCardNotPresentRate: 0.005, perTransactionFee: 0 },
       pricingModel: "2-tier",
     });
 
-    expect(updated.quoteRates).toEqual({
-      cardPresentRate: 0.005, cardNotPresentRate: 0.005,
-      amexCardPresentRate: 0.005, amexCardNotPresentRate: 0.005, perTransactionFee: 0,
-    });
-    expect(saveApplication).toHaveBeenCalled();
+    // Pinned verbatim, not just a substring match: this is a HARD refusal
+    // with no override today (the margin-policy editor was deleted
+    // 2026-10-12 — see marginFloorBlockers' doc comment), so the wording
+    // must not promise an admin review that doesn't exist. The only honest
+    // recovery is raising the rate, and that's what the message says.
+    await expect(attempt).rejects.toThrow(
+      "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote."
+    );
+    expect(saveApplication).not.toHaveBeenCalled();
+
+    // CLAUDE.md: reps must never see or derive AIO's true minimum. The
+    // refusal says "no", never the number it's measured against — not the
+    // true floor (0.67%), not the padded one (~1.005%), not a raw 0.0067 or
+    // 0.01005 either, and never an admin escape hatch that doesn't exist.
+    const message = await attempt.catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(message).not.toMatch(/0\.0067|0\.67\s*%|0\.01005|1\.005\s*%/);
+    expect(message).not.toMatch(/admin/i);
   });
 
-  it("refuses nothing for a rep that it would allow an admin", async () => {
-    // The old guard was scoped per role — admins held to the true floor, reps
-    // to the padded one — specifically because a refusal is an oracle a rep
-    // could binary-search. With no refusal there is no oracle, and the two
-    // roles save identically. Worth re-reading the note in prospects.ts before
-    // enforcement comes back against a typed rate.
+  it("refuses a rep at a rate an admin may still save — the guard is scoped per role", async () => {
+    // 3.00% nets ~0.88% margin here (3.00% − ~2.12% estimated interchange):
+    // ABOVE the true floor (0.67%) but BELOW the rep's padded one (~1.005%).
+    // Picked precisely to land in that gap, so this proves the scoping —
+    // not just that a sufficiently bad rate gets refused for everyone.
+    getApplication.mockResolvedValue(WITH_BASIS());
     const low = {
       applicationId: "app-1",
       picks: [],
       channels: [],
-      quoteRates: { cardPresentRate: 0.008, cardNotPresentRate: 0.008, amexCardPresentRate: 0.008, amexCardNotPresentRate: 0.008, perTransactionFee: 0 },
+      quoteRates: { cardPresentRate: 0.03, cardNotPresentRate: 0.03, amexCardPresentRate: 0.03, amexCardNotPresentRate: 0.03, perTransactionFee: 0 },
       pricingModel: "2-tier" as const,
     };
 
     getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
-    const asRep = await saveQuoteConfigurationAction(low);
-    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
-    const asAdmin = await saveQuoteConfigurationAction(low);
+    await expect(saveQuoteConfigurationAction(low)).rejects.toThrow(/below the minimum/i);
 
-    expect(asRep.quoteRates).toEqual(asAdmin.quoteRates);
+    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
+    getApplication.mockResolvedValue(WITH_BASIS());
+    await expect(saveQuoteConfigurationAction(low)).resolves.toBeDefined();
   });
 
   it("keeps the row's existing rates when the caller sends none", async () => {

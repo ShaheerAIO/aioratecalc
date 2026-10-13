@@ -12,7 +12,7 @@ import { EMPTY_HUBSPOT_IDS, type HubspotIds } from "@/types/merchant";
 // THE MERCHANT'S OWN DOOR TO BILLING — and the one-way door with it.
 //
 // Public and unauthenticated by design, same token-is-the-auth model as
-// ../analyze and ../accept.
+// ../accept.
 //
 // Until 2026-09-25 the HubSpot quote was published by the REP, from a "Send
 // Quote to Customer" button, and a merchant who opened their link before that
@@ -25,6 +25,15 @@ import { EMPTY_HUBSPOT_IDS, type HubspotIds } from "@/types/merchant";
 //
 // and this route is the third arrow. It builds and publishes the HubSpot quote
 // on demand and hands back the hosted URL to redirect to.
+//
+// UNCHANGED, but no longer the ONLY door (10/13/2026, product owner): the rep's
+// own link-send now usually publishes the quote first (`publishAtSend` in
+// `lib/actions/prospects.ts`, called from `createProspectAction`), so most
+// merchants who get this far find `app.hubspotIds?.publishedAt` already set
+// and this route just hands back the existing link below. This remains the
+// FALLBACK for whatever wasn't publishable at send time — most commonly a
+// rate-only quote or one with nothing picked yet — and everything below is
+// unchanged: same preconditions, same idempotency, same irreversibility.
 //
 // WHAT THE MERCHANT IS TOLD FIRST. Publishing cannot be undone — no API edit
 // (400 LOCKED), no delete, no void — so the page puts an explicit confirmation

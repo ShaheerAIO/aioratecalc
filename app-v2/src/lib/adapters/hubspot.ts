@@ -428,11 +428,51 @@ export async function syncDealFromApplication(app: MerchantApplication): Promise
   return app.hubspotDealId;
 }
 
+/**
+ * Reads back a deal's CURRENT `payment_processing_arr`, and nothing else —
+ * the one property scripts/backfill-processing-arr.ts needs to print its
+ * before/after diff. Deliberately NOT folded into DEAL_READ_PROPERTIES/
+ * getDealById: those back three other call sites (listDealsForCompany,
+ * searchDealsByName, the rep-facing deal-adoption picker) that have no
+ * reason to carry this property around, and HubspotDeal has no field for it.
+ */
+export async function getDealProcessingArr(dealId: string): Promise<string | null> {
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v3/objects/deals/${dealId}?properties=payment_processing_arr`,
+    { headers: billingHeaders() }
+  );
+  if (!res.ok) {
+    throw hubspotErr(`HubSpot deal ${dealId} payment_processing_arr read failed`, res.status, await res.text());
+  }
+  const data = await res.json() as { properties?: { payment_processing_arr?: string | null } };
+  return data.properties?.payment_processing_arr ?? null;
+}
+
+/**
+ * Writes ONLY `payment_processing_arr` on a deal. `syncDealFromApplication`
+ * is the normal write path, but it necessarily carries whatever
+ * `buildDealProperties` decides for dealname/amount/pipeline/dealstage too —
+ * and the one-time backfill this exists for touches ~700 live production
+ * deals to fix exactly the ARR the product owner asked for, never a rep's
+ * own `amount` forecast or a stage a rep has since moved the deal past.
+ */
+export async function patchDealProcessingArr(dealId: string, arr: number): Promise<void> {
+  const res = await fetch(`${BASE}/crm/v3/objects/deals/${dealId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: { payment_processing_arr: String(arr) } }),
+  });
+  if (!res.ok) {
+    throw hubspotErr(`HubSpot deal ${dealId} payment_processing_arr write failed`, res.status, await res.text());
+  }
+}
+
 // ── Deal reads, and adoption of an EXISTING deal ────────────────────────────
 // Nothing above this point ever read a deal back except getDealStage's single
-// `dealstage` property (for the forward-only guard). This is the wider read
-// side: what a rep sees while picking a deal to attach an application to,
-// instead of EasyOB always minting a new one. All on billingHeaders() — the
+// `dealstage` property (for the forward-only guard) and getDealProcessingArr's
+// single `payment_processing_arr` (for the ARR backfill script). This is the
+// wider read side: what a rep sees while picking a deal to attach an
+// application to, instead of EasyOB always minting a new one. All on billingHeaders() — the
 // general app has no deals scope at all.
 //
 // `associations.company` deals/search filter and the `?associations=companies`
@@ -1917,6 +1957,59 @@ export async function ensureQuoteContact(input: QuoteContactInput): Promise<stri
   if (!res.ok) throw hubspotErr(`HubSpot contact create for ${email} failed`, res.status, await res.text());
   const data = await res.json() as { id: string };
   return data.id;
+}
+
+/**
+ * A single Contact's current record, by id — the baseline `syncBillingContact`
+ * (actions/prospects.ts) diffs the rep's typed values against before deciding
+ * what to PATCH. Narrower than `listCompanyContacts`/`listDealContacts` (which
+ * read a whole roster off an association): this is one id, read fresh at
+ * submit time rather than reused from whatever the dropdown loaded minutes
+ * earlier, so a contact edited elsewhere in the meantime doesn't get its
+ * changes silently clobbered by a stale comparison.
+ */
+export async function getContactById(
+  contactId: string
+): Promise<Pick<HubspotContact, "firstName" | "lastName" | "jobTitle" | "email" | "phone"> | null> {
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v3/objects/contacts/${contactId}?properties=${CONTACT_PROPS.join(",")}`,
+    { headers: billingHeaders() }
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw hubspotErr(`HubSpot contact ${contactId} read failed`, res.status, await res.text());
+  const data = await res.json() as { properties: Record<string, string | null> };
+  const p = data.properties;
+  return {
+    firstName: clean(p.firstname),
+    lastName: clean(p.lastname),
+    jobTitle: clean(p.jobtitle),
+    email: clean(p.email),
+    phone: clean(p.phone) ?? clean(p.mobilephone),
+  };
+}
+
+/** Only the properties `updateContactDetails` is allowed to touch — see its own comment. */
+export type ContactDetailsPatch = Partial<{ firstname: string; lastname: string; jobtitle: string; phone: string }>;
+
+/**
+ * A narrow PATCH onto an EXISTING Contact — only the properties the caller
+ * actually supplies. Built for the billing contact's "overwrite in HS"
+ * (2026-10-13): unlike `ensureQuoteContact`, which only finds-or-creates, a
+ * rep picking an existing contact and then editing a field here is expected
+ * to push that edit back — but narrowly, never a blanket rewrite of a record
+ * EasyOB didn't populate. `email` is deliberately NOT a patchable property:
+ * it is the lookup key everywhere else in this file (`findContactIdByEmail`,
+ * `ensureQuoteContact`), so "changing" it means addressing a different
+ * contact next time, not editing this one. An empty patch makes no call.
+ */
+export async function updateContactDetails(contactId: string, patch: ContactDetailsPatch): Promise<void> {
+  if (Object.keys(patch).length === 0) return;
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/contacts/${contactId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: patch }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot contact ${contactId} update failed`, res.status, await res.text());
 }
 
 // ── Line-item network calls ─────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app
  * macrostructure: Public lead-gen (no rep/admin nav, per design.md) — this file
- * only styles the invalid/expired-link state; the main upload flow lives in
- * LeadUploadStep.tsx, styled separately.
+ * only styles the invalid/expired-link state; the quote itself lives one route
+ * below, in LeadQuoteView.tsx, styled separately.
  */
 
 .centered {

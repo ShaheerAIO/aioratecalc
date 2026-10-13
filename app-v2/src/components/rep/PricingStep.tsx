@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import { fmt$, fmtPct2 } from "@/lib/utils";
-import { averageTicketOf, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import { averageTicketOf, DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { StatementAnalysis, ProposalOutput, Processor, ProcessorTier, PricingModel, QuoteRates } from "@/types/merchant";
 import RateFields from "./RateFields";
 import RateSuggestion from "./RateSuggestion";
@@ -57,7 +57,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   // default rather than from a server preview: there is no matrix to look one
   // up in, so the starting rate is a constant both sides already agree on.
   const [rates, setRates]         = useState<QuoteRates>(DEFAULT_QUOTE_RATES);
-  const [cpPct, setCpPct]         = useState<number>(analysis.cardPresentPct && analysis.cardPresentPct > 0 ? analysis.cardPresentPct : 0.9);
+  const [cpPct, setCpPct]         = useState<number>(analysis.cardPresentPct && analysis.cardPresentPct > 0 ? analysis.cardPresentPct : DEFAULT_CARD_PRESENT_PCT);
   const [feeOverrides, setFees]   = useState<FeeOverrides>({ monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 });
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState<string | null>(null);
@@ -103,13 +103,13 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   // the floor and the quote went out. Both are computed server-side from the
   // rates the rep typed, against a floor that is padded before they see it.
   //
-  // `belowFloor` — under the true Adyen COST — stays a warning. It is the
-  // sharper of the two, but it depends on the processor tier on file rather
-  // than on anything this screen can change.
-  const belowFloor  = pricing?.belowCostFloor ?? false;
+  // AIO Revenue, processor cost, net margin, `belowFloor` (the true-cost
+  // warning) and the ceiling (`aboveMax`) all moved OFF this screen on
+  // 2026-10-13 ("the only thing to display [to a rep] is the margin... the
+  // other stuff calculate it and store it in an admin only view somewhere")
+  // — see /admin?view=commissions (CommissionsPanel) for the full picture.
   const belowMin    = pricing?.belowMarginFloor ?? false;
   const earnedMargin = pricing?.appliedTargetMargin ?? null;
-  const aboveMax    = !!pricing && earnedMargin != null && earnedMargin > pricing.maxMargin;
 
   const generate = async () => {
     setLoading(true);
@@ -197,15 +197,17 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
                   </div>
                 )}
                 {model === "2-tier" && (
-                  /* All four, because all four are quoted. The per-transaction
+                  /* Two, not four — AMEX stopped pricing apart from
+                     V/MC/Discover 2026-10-13 ("get rid of the dual rate
+                     (amex)"); pricing.amexCpRate/amexCnpRate now just mirror
+                     these two (see derivePricing in pricing.ts), so showing
+                     them here would be two duplicate boxes. The per-transaction
                      fee is one number across every lane, so it reads under
-                     each of them rather than being four separate figures. */
+                     each of them rather than being a separate figure. */
                   <div className={styles.rateGrid}>
                     {[
                       { lbl: "V/MC/Disc Card Present", val: pricing.cpRate, tone: styles["value--info"] },
                       { lbl: "V/MC/Disc Not Present", val: pricing.cnpRate, tone: styles["value--warning"] },
-                      { lbl: "AMEX Card Present", val: pricing.amexCpRate, tone: styles["value--info"] },
-                      { lbl: "AMEX Not Present", val: pricing.amexCnpRate, tone: styles["value--warning"] },
                     ].map(r => (
                       <div key={r.lbl} className={styles.box}>
                         <div className={styles.boxLabel}>{r.lbl}</div>
@@ -263,16 +265,18 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
               the rep edits them in front of them. */}
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Rates</h2>
-            <RateFields value={rates} onChange={setRates} />
+            {/* freshQuote: this step always starts on the flat standard
+                rate — see RateFields.tsx's doc comment on that prop for why
+                CNP needs to confirm itself here rather than wait on a basis. */}
+            <RateFields value={rates} onChange={setRates} freshQuote />
             {/* The statement supplies both figures, so the card almost always
-                has something to say here. autoApply, because this step starts
-                on the flat standard rate — the same posture as a new quote. */}
+                has something to say here, and it always applies what it says
+                (2026-10-13 — see RateSuggestion.tsx). */}
             <RateSuggestion
               monthlyVolume={analysis.totalVolume || 0}
               avgTicket={averageTicketOf(analysis)}
               value={rates}
               onChange={setRates}
-              autoApply
             />
           </div>
 
@@ -292,49 +296,29 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
             </button>
             {internalOpen && (
               <div id="pricing-internal" className={styles.disclosureBody}>
-              {/* Margin is REPORTED here, not set. It stopped being an input
-                  on 2026-10-06: the rep quotes a rate and this is what that
-                  rate leaves over interchange. Nothing below blocks — the
-                  floor is shown so a rep knows where they are, and a quote
-                  under it still saves. */}
+              {/* Reduced to exactly two figures (2026-10-13, product owner):
+                  the margin %, and the commission dollars the rep would earn.
+                  AIO Revenue, processor cost, net margin and the floor $ all
+                  moved to /admin?view=commissions — see the note above
+                  `belowMin`. Margin is REPORTED here, not set: it stopped
+                  being an input on 2026-10-06, and nothing below blocks on it
+                  except belowMin, which still refuses the save. */}
               <div className={styles.sliderHeader}>
                 <span className={styles.sliderLabel}>Margin at this rate</span>
                 <span className={styles.sliderValue}>{earnedMargin == null ? "—" : fmtPct2(earnedMargin)}</span>
               </div>
               {pricing && (
-                <>
-                  <div className={styles.miniRow}>
-                    <span className={styles.miniRowLabel}>AIO Revenue</span>
-                    <span className={`${styles.miniRowValue} ${styles["value--accent"]}`}>{fmt$(pricing.aioRevenue)}/mo</span>
-                  </div>
-                  {pricing.adyenCostRate != null && (
-                    <>
-                      <div className={styles.miniRow}>
-                        <span className={styles.miniRowLabel}>− {activeProcessor?.name || "Processor"} Cost</span>
-                        <span className={`${styles.miniRowValue} ${styles["value--warning"]}`}>{fmtPct2(pricing.adyenCostRate)}</span>
-                      </div>
-                      <div className={styles.miniRow}>
-                        <span className={styles.miniRowLabel}>= Net Margin to AIO</span>
-                        <span className={`${styles.miniRowValue} ${belowFloor ? styles["value--danger"] : styles["value--success"]}`}>{earnedMargin == null ? "—" : fmtPct2(earnedMargin - pricing.adyenCostRate)}</span>
-                      </div>
-                    </>
-                  )}
-                  {belowFloor && (
-                    <div className={styles.alertDanger}>
-                      <strong>Below cost.</strong> AIO loses money on this deal at this rate. Not blocked — but don&rsquo;t send it without asking.
-                    </div>
-                  )}
-                  {belowMin && (
-                    <div className={styles.alertDanger}>
-                      <strong>Below margin floor.</strong> This rate earns less than AIO&rsquo;s minimum of {fmt$(pricing.marginFloor)}/mo at this volume. Raise it to generate the proposal.
-                    </div>
-                  )}
-                  {aboveMax && (
-                    <div className={styles.alertWarning}>
-                      Above the ceiling of {fmtPct2(pricing.maxMargin)} for this volume tier — allowed, but the merchant may be overpaying.
-                    </div>
-                  )}
-                </>
+                <div className={styles.miniRow}>
+                  <span className={styles.miniRowLabel}>Your Commission (est., signing + activation)</span>
+                  <span className={`${styles.miniRowValue} ${styles["value--success"]}`}>
+                    {pricing.projectedCommission.total == null ? "—" : `${fmt$(pricing.projectedCommission.total)}/yr`}
+                  </span>
+                </div>
+              )}
+              {belowMin && (
+                <div className={styles.alertDanger}>
+                  <strong>Below margin floor.</strong> This rate earns less than AIO&rsquo;s minimum for this volume. Raise it to generate the proposal.
+                </div>
               )}
               </div>
             )}

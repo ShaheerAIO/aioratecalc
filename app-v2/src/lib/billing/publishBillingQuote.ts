@@ -3,12 +3,18 @@
 // Turns a configured EasyOB quote into a PUBLISHED HubSpot quote with a hosted
 // checkout link, in one server-side pass.
 //
-// The trigger is the rep's Send Quote click (`sendQuoteAction`), BEFORE the
-// merchant has accepted anything — because signing and paying that hosted
-// quote is now how they accept (lib/billing/acceptance.ts). It briefly ran
-// inside the merchant's own acceptance POST instead, with no human in the
-// loop at all; `canPublishBillingQuote` still applies strictly before the
-// first write, and is now belt as well as braces.
+// The PRIMARY trigger (10/13/2026, product owner) is `publishAtSend`
+// (lib/actions/prospects.ts), called from `createProspectAction` the moment
+// a rep creates a prospect and its lead link goes out — before the merchant
+// has seen or accepted anything. Two more entry points call this same
+// function and are now fallbacks rather than THE path: the merchant's own
+// "Continue to Billing" click (`/api/lead/[token]/checkout`), for a quote
+// that wasn't publishable yet at send time, and `sendQuoteAction`, the staff
+// escape hatch, for a rep sitting with a merchant. All three share one
+// orchestrator on purpose — `canPublishBillingQuote` applies identically no
+// matter which one gets there first, and the one-way-door/`400 LOCKED`-is-
+// success rules make a second or third attempt on an already-published quote
+// a no-op, never a risk.
 //
 // Graph (PHASE-E-SPEC.md §3.1):
 //   Contact ──69/702──▶ Quote ──67──▶ line items
@@ -148,8 +154,16 @@ function resolveSigner(
  * it removes the only remaining way the two can disagree (a rep whose EasyOB
  * row says `R.Rep@…` and whose portal user says `rita@…`). The `users.name`
  * split survives only as the fallback for an owner with no name on file.
+ *
+ * EXPORTED (2026-10-13) so `actions/prospects.ts` can reuse the exact same
+ * verified-sender resolution for the reply-to address on EasyOB's own
+ * merchant-facing email (see `resolveReplyToRep` there and the "can the email
+ * go through the sales rep?" item) — rather than re-deriving a second,
+ * un-synced notion of "the rep's real address" next to the one that already
+ * gates `hs_sender_email`. Nothing about the publish path changes; this is
+ * still the one function that decides it, just visible outside this file now.
  */
-async function resolveSender(ownerUserId: string): Promise<SenderResolution> {
+export async function resolveSender(ownerUserId: string): Promise<SenderResolution> {
   const [rep] = await db
     .select({ email: users.email, name: users.name })
     .from(users)
@@ -475,6 +489,28 @@ export async function buildAndPublishBillingQuote(
       lastSyncErrorAt: null,
     };
     await persist(app.id, ids);
+
+    // The merchant's own copy of this quote is NOT sent by anything in this
+    // codebase — there is no explicit "send quote" endpoint in HubSpot's v3/v4
+    // Quotes API (checked 2026-10-13 against HubSpot's own docs: create, read,
+    // update, associate, nothing resembling send/email). It is an ASSUMED
+    // implicit side effect of this very publish, specifically of associating
+    // a signer contact (702) with `hs_acceptance_method: "esignature"` — never
+    // asserted by code or a test, only by this comment and the 2026-08-24 gate
+    // run. Logged here, at the one place that side effect is being relied on,
+    // so the dependency is VISIBLE rather than silently assumed. The actual
+    // mitigation is `sendLeadLinkEmail` now carrying this same `quoteLink` as
+    // its own "Go straight to billing" path (adapters/email.ts) whenever the
+    // rep's link-send happens to publish the quote (see publishAtSend in
+    // actions/prospects.ts) — a delivery path EasyOB controls, alongside this
+    // one it doesn't.
+    if (!published.alreadyPublished) {
+      console.log(
+        `[billing] published ${ids.quoteId} — the merchant's copy of this quote now depends on ` +
+        `HubSpot's own implicit e-signature-request email (association 702); EasyOB sends no ` +
+        `explicit "quote ready" email of its own for this address. hs_quote_link: ${published.quoteLink ?? "(pending)"}`
+      );
+    }
 
     return {
       status: "published",

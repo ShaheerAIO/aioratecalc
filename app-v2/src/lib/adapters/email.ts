@@ -78,7 +78,31 @@ async function graphToken(): Promise<string> {
   return data.access_token;
 }
 
-async function sendViaGraph(to: string, subject: string, html: string): Promise<void> {
+/**
+ * Who a reply to this email should reach, and whose name should be on it —
+ * 2026-10-13, "can the email go through the sales rep?" NOT a way to send AS
+ * the rep: Graph app-only sending is fenced by an Exchange
+ * ApplicationAccessPolicy scoped to `aiodocuments@aioapp.com` alone (see
+ * CLAUDE.md's "Transactional email"), and `sendViaGraph`'s own `from` is
+ * hardcoded to that same mailbox for exactly that reason — setting `from` to
+ * an arbitrary rep's address would 403 `ErrorAccessDenied`, and widening the
+ * policy to cover every rep mailbox is a tenant-admin decision (an Exchange
+ * `ApplicationAccessPolicy`/Send-As grant), not something this file can do.
+ * So the mailbox a merchant's reply actually lands in stays the shared one;
+ * this only changes the REPLY-TO header (Graph and Resend both honor it
+ * independently of `from`) and the display name, which cost nothing to add
+ * and need no tenant change. `email` must already be the rep's VERIFIED
+ * address — see `resolveReplyToRep` in actions/prospects.ts, which reuses
+ * `resolveSender`'s portal-owner check so a seeded dev row like
+ * `rep@aioapp.com` never reaches a real merchant here either.
+ */
+export type ReplyToRep = { email: string; name?: string };
+
+function senderDisplayName(rep?: ReplyToRep | null): string {
+  return rep?.name ? `${rep.name} (AIO Payments)` : MAIL_FROM_NAME;
+}
+
+async function sendViaGraph(to: string, subject: string, html: string, rep?: ReplyToRep | null): Promise<void> {
   const token = await graphToken();
   const res = await fetch(
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(MAIL_FROM!)}/sendMail`,
@@ -90,9 +114,11 @@ async function sendViaGraph(to: string, subject: string, html: string): Promise<
           subject,
           body: { contentType: "HTML", content: html },
           toRecipients: [{ emailAddress: { address: to } }],
-          // Same address the request is addressed to, so this only renames the
-          // sender rather than asking for SendAs rights we don't have.
-          from: { emailAddress: { address: MAIL_FROM, name: MAIL_FROM_NAME } },
+          // ADDRESS stays the shared mailbox the request is addressed to —
+          // changing it is what would need SendAs rights we don't have. Only
+          // the display NAME varies with the rep; see senderDisplayName.
+          from: { emailAddress: { address: MAIL_FROM, name: senderDisplayName(rep) } },
+          ...(rep ? { replyTo: [{ emailAddress: { address: rep.email, name: rep.name } }] } : {}),
         },
         // These are transactional one-way sends; a copy in the shared mailbox's
         // Sent Items is what makes "did the merchant get their link?" answerable
@@ -112,11 +138,23 @@ async function sendViaGraph(to: string, subject: string, html: string): Promise<
 // merchants. Set RESEND_FROM_EMAIL once a real sending domain is verified.
 const FROM = process.env.RESEND_FROM_EMAIL || "AIO Payments <onboarding@resend.dev>";
 
-async function sendViaResend(to: string, subject: string, html: string): Promise<void> {
+// The address half of FROM, reused below so a per-rep display name can be
+// substituted without hand-parsing the whole "Name <addr>" string twice.
+const FROM_ADDRESS = FROM.match(/<([^>]+)>/)?.[1] ?? FROM;
+
+async function sendViaResend(to: string, subject: string, html: string, rep?: ReplyToRep | null): Promise<void> {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: FROM, to, subject, html }),
+    body: JSON.stringify({
+      from: `${senderDisplayName(rep)} <${FROM_ADDRESS}>`,
+      to,
+      subject,
+      html,
+      // Resend's own reply_to param — honored independently of `from`, same
+      // as Graph's replyTo above.
+      ...(rep ? { reply_to: rep.email } : {}),
+    }),
   });
   if (!res.ok) throw new Error(`Resend send failed: ${await res.text()}`);
 }
@@ -134,12 +172,14 @@ async function sendViaResend(to: string, subject: string, html: string): Promise
  * on its own, and a duplicate is a far better outcome than a merchant who paid
  * us and never receives the link that creates their account.
  */
-async function send(to: string, subject: string, html: string, fallbackUrl: string): Promise<SendMagicLinkResult> {
+async function send(
+  to: string, subject: string, html: string, fallbackUrl: string, rep?: ReplyToRep | null
+): Promise<SendMagicLinkResult> {
   let graphError: unknown = null;
 
   if (graphConfigured()) {
     try {
-      await sendViaGraph(to, subject, html);
+      await sendViaGraph(to, subject, html, rep);
       return { sent: true, devUrl: null };
     } catch (err) {
       graphError = err;
@@ -149,7 +189,7 @@ async function send(to: string, subject: string, html: string, fallbackUrl: stri
 
   if (process.env.RESEND_API_KEY) {
     try {
-      await sendViaResend(to, subject, html);
+      await sendViaResend(to, subject, html, rep);
       if (graphError) console.warn("Graph send failed; delivered via Resend instead.");
       return { sent: true, devUrl: null };
     } catch (err) {
@@ -217,6 +257,33 @@ type Template = {
   url: string;
   /** Small print under the button: what the link is good for. */
   footnote: string;
+  /**
+   * A second, independent path to the SAME quote — specifically HubSpot's own
+   * `hs_quote_link`, the hosted page the merchant actually signs and pays on.
+   * Added 10/13/2026. There is no explicit "send quote" endpoint in HubSpot's
+   * v3/v4 Quotes API (checked against HubSpot's own docs: create, read,
+   * update, associate — nothing resembling send/email); the only thing that
+   * has ever delivered this link to a merchant is HubSpot's own IMPLICIT
+   * e-signature-request email, triggered as a side effect of publishing with
+   * a signer contact (association 702, see publishBillingQuote.ts). That
+   * side effect has never been asserted by code or a test — only by a
+   * comment and the 2026-08-24 gate run. This field is the fix available to
+   * us: a path to the quote that EasyOB itself sends and controls, so the
+   * merchant's copy no longer depends entirely on an undocumented mechanism.
+   * Optional, because most quotes aren't publishable yet when this email goes
+   * out (no HubSpot company link, rate-only, no lines) — the primary
+   * cta/url above (our own `/lead` page) always works regardless.
+   */
+  secondary?: { cta: string; url: string; note: string };
+  /**
+   * The rep's first name, when `sendLeadLinkEmail` was given a verified one —
+   * changes only the closing line's wording (see `render`'s footer below) to
+   * say replying reaches them by name, rather than the generic "one of our
+   * representatives". The reply-to header itself is set independently in
+   * `send`/`sendViaGraph`/`sendViaResend`; this is cosmetic, not what actually
+   * routes the reply.
+   */
+  repName?: string;
 };
 
 function render(t: Template): string {
@@ -259,6 +326,11 @@ function render(t: Template): string {
         </td>
       </tr></table>
       <p style="margin:0 0 20px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.ink3};">${esc(t.footnote)}</p>
+      ${t.secondary ? `
+      <div style="border-top:1px solid ${C.rule};padding-top:18px;padding-bottom:18px;">
+        <p style="margin:0 0 6px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.ink2};">${esc(t.secondary.note)}</p>
+        <p style="margin:0;font-family:${FONT};font-size:13px;line-height:1.5;"><a href="${esc(t.secondary.url)}" style="color:#be260b;font-weight:700;text-decoration:underline;">${esc(t.secondary.cta)}</a></p>
+      </div>` : ""}
       <div style="border-top:1px solid ${C.rule};padding-top:18px;">
         <p style="margin:0 0 6px;font-family:${FONT};font-size:12px;line-height:1.5;color:${C.ink3};">Button not working? Paste this into your browser:</p>
         <p style="margin:0;font-family:${FONT};font-size:12px;line-height:1.5;word-break:break-all;"><a href="${url}" style="color:#be260b;text-decoration:underline;">${url}</a></p>
@@ -266,7 +338,9 @@ function render(t: Template): string {
     </td></tr>
 
     <tr><td style="padding:20px 4px 0;font-family:${FONT};font-size:12px;line-height:1.6;color:${C.ink3};">
-      Sent by AIO Payments because you&rsquo;re working with one of our representatives. Questions? Just reply to this email.
+      ${t.repName
+        ? `Sent by AIO Payments on behalf of ${esc(t.repName)}, your AIO representative. Questions? Just reply to this email — it goes straight to them.`
+        : "Sent by AIO Payments because you&rsquo;re working with one of our representatives. Questions? Just reply to this email."}
     </td></tr>
 
   </table>
@@ -298,7 +372,25 @@ export async function sendMagicLinkEmail(to: string, url: string): Promise<SendM
 
 // Phase 4 — the prospect-creation link, a 14-day `lead_upload` token, not the
 // short-lived KYC-handoff one above. Same transport, different copy/TTL.
-export async function sendLeadLinkEmail(to: string, url: string, merchantName?: string): Promise<SendMagicLinkResult> {
+//
+// `quoteLink` (10/13/2026): HubSpot's `hs_quote_link`, when the quote already
+// published by the time this goes out. As of item 1 of the 10/13 list, that
+// is now the common case — `createProspectAction` attempts the publish
+// before this email is sent, not after the merchant clicks through. See the
+// `secondary` field on Template for why this is wired in at all: it's the one
+// delivery path for the quote EasyOB actually controls, rather than leaning
+// on HubSpot's own implicit signer email. Optional and additive — the
+// primary CTA (our own `/lead` page) is unaffected either way.
+//
+// `rep` (10/13/2026, "can the email go through the sales rep?"): the owning
+// rep's VERIFIED identity, when `actions/prospects.ts`'s `resolveReplyToRep`
+// could establish one. See `ReplyToRep`'s own comment above for why this is a
+// reply-to + display name, never a true send-as. Both trailing params are
+// optional and independent of each other — a quote with no rep resolved still
+// carries its quoteLink, and vice versa.
+export async function sendLeadLinkEmail(
+  to: string, url: string, merchantName?: string, quoteLink?: string | null, rep?: ReplyToRep | null
+): Promise<SendMagicLinkResult> {
   const name = merchantName?.trim();
   return send(
     to,
@@ -313,7 +405,16 @@ export async function sendLeadLinkEmail(to: string, url: string, merchantName?: 
       cta: "View your quote",
       url,
       footnote: "This link is valid for 14 days.",
+      secondary: quoteLink
+        ? {
+            cta: "Go straight to billing",
+            url: quoteLink,
+            note: "Ready to move forward now? This opens your quote directly on our billing partner's secure page, where you can review it, sign, and set up payment.",
+          }
+        : undefined,
+      repName: rep?.name,
     }),
-    url
+    url,
+    rep
   );
 }

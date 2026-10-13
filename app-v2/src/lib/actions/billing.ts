@@ -2,28 +2,48 @@
 
 // Publishing a billing quote from the STAFF side.
 //
-// ⚠️ This is no longer how a quote reaches a merchant. It used to be: the rep
-// clicked "Send Quote to Customer", that published the HubSpot quote, and only
-// then did the merchant's own link show them anything they could sign. Which
-// meant a merchant could open the link they had just been emailed, read their
-// quote, and have no way to accept it — waiting on a click from a rep who had
-// already sent them the link. Product-owner decision, 2026-09-25: scrap the
-// gate. The MERCHANT opens the one-way door now, from their own quote page
-// (`/api/lead/[token]/checkout`), the moment they choose to go to billing.
+// ⚠️ UPDATED 2026-10-13 (product-owner decision), REVERSING the posture this
+// file had held since 2026-09-25 and described below. The PRIMARY trigger for
+// a publish is now `publishAtSend` (`lib/actions/prospects.ts`), called from
+// `createProspectAction` the instant a rep creates a prospect and its lead
+// link goes out — before the merchant has seen anything, let alone accepted
+// it. "Make quote publish as soon as link is sent," not whenever the merchant
+// happens to click through on their own.
 //
-// What survives here is the staff ESCAPE HATCH for the case the merchant's own
-// click can't cover: a rep sitting with a merchant, or one finishing a deal
-// over the phone. Same preconditions, same irreversibility, same single
-// publish — it is simply no longer on the critical path, and nothing waits on
-// it.
+// History, for why the OLD posture existed and why none of its reasoning is
+// actually undone: before 2026-09-25, the rep clicked "Send Quote to Customer"
+// — this very action — and only THEN did the merchant's own link show them
+// anything they could sign. A merchant could open the link they'd just been
+// emailed and have no way to accept it, waiting on a separate click from the
+// same rep who'd already sent them the link. That problem doesn't reappear
+// here: the rep's link-send now usually clears the publish itself (most of
+// `canPublishBillingQuote`'s preconditions are already met by the time a
+// prospect is created — company and deal are resolved first), so the merchant
+// typically arrives at an already-published quote. For the prospects that
+// AREN'T publishable yet at send time (rate-only, no products picked), the
+// MERCHANT's own door — `/api/lead/[token]/checkout` — is UNCHANGED and
+// remains the fallback; this file did not take anything back from it.
 //
-// Still NO re-publish and no "unsend". A published HubSpot quote cannot be
-// edited (400 LOCKED), deleted (PUBLISHED_QUOTE_CANNOT_BE_DELETED) or voided
-// through the API, and the merchant authorizes an ACH mandate against it. This
-// refuses outright once `publishedAt` is set.
+// What this action is NOW: the staff ESCAPE HATCH, same as before — a rep
+// sitting with a merchant, or finishing a deal over the phone, where neither
+// send-time nor the merchant's own click has cleared the gate yet (a tenant
+// company just got linked, a quote just got its first line). It is the
+// THIRD possible path to the same publish, not the first or only one —
+// harmless, because the one-way door and `publishQuote`'s `400 LOCKED`-means-
+// already-published rule make a repeat attempt on an already-published quote
+// a no-op rather than a risk.
+//
+// Still NO re-publish and no "unsend", from any of the three entry points. A
+// published HubSpot quote cannot be edited (400 LOCKED), deleted
+// (PUBLISHED_QUOTE_CANNOT_BE_DELETED) or voided through the API, and the
+// merchant authorizes an ACH mandate against it. This refuses outright once
+// `publishedAt` is set.
 //
 // Publishing also makes HubSpot email the signer the e-signature request
-// itself (association 702).
+// itself (association 702) — the only thing that currently delivers the
+// quote link to the merchant at all; see the comment in
+// publishBillingQuote.ts on why that is now logged rather than merely
+// assumed, and adapters/email.ts for the one path EasyOB itself controls.
 
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";

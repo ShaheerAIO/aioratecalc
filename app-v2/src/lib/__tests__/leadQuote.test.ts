@@ -34,15 +34,15 @@ describe("analysisFromQuoteConfig", () => {
     expect(a.totalVolume).toBe(50_000);
   });
 
-  it("splits volume on the 90/10 default and blends interchange from it", () => {
+  it("splits volume on the 95/5 default and blends interchange from it", () => {
     const a = analysisFromQuoteConfig(CONFIG);
-    expect(CP).toBe(0.9);
-    expect(CNP).toBe(0.1);
-    expect(a.cardPresentVolume).toBe(90_000);
-    expect(a.cardNotPresentVolume).toBe(10_000);
-    // 0.9 × 2.10% + 0.1 × 2.50% = 2.14%
-    expect(a.interchangeRate).toBeCloseTo(0.0214, 10);
-    expect(a.interchangeFees).toBeCloseTo(2140, 6);
+    expect(CP).toBe(0.95);
+    expect(CNP).toBeCloseTo(0.05, 10); // 1 - 0.95 is 0.050000000000000044 in floating point
+    expect(a.cardPresentVolume).toBe(95_000);
+    expect(a.cardNotPresentVolume).toBeCloseTo(5_000, 6);
+    // 0.95 × 2.10% + 0.05 × 2.50% = 2.12%
+    expect(a.interchangeRate).toBeCloseTo(0.0212, 10);
+    expect(a.interchangeFees).toBeCloseTo(2120, 6);
   });
 
   it("marks interchange as estimated so derivePricing uses the per-lane estimate", () => {
@@ -89,8 +89,8 @@ describe("buildCustomerSafeQuote — config basis", () => {
       analysis: null, quoteConfig: CONFIG, targetMargin: null, pricingModel: "2-tier",
       quoteRates: { cardPresentRate: 0.0249, cardNotPresentRate: 0.035, amexCardPresentRate: 0.0249, amexCardNotPresentRate: 0.035, perTransactionFee: 0.15 },
     }));
-    // 90/10 split on $100k, the statement-less default.
-    const expectedMonthly = 90_000 * 0.0249 + 10_000 * 0.035 + 2_500 * 0.15;
+    // 95/5 split on $100k, the statement-less default.
+    const expectedMonthly = 95_000 * 0.0249 + 5_000 * 0.035 + 2_500 * 0.15;
     expect(split.projectedMonthlyCost).toBeCloseTo(expectedMonthly, 6);
     expect(split.projectedMonthlyCost).toBeGreaterThan(quote.projectedMonthlyCost);
   });
@@ -358,6 +358,31 @@ describe("buildCustomerSafeQuote — marketing-only", () => {
   });
 });
 
+// The 2026-10-13 fix: the "products" (no-rate) branch used to hard-code
+// `orderPoints: null` no matter what the row carried. Harmless for an honest
+// marketing-only quote (orderPoints is always null there already — see the
+// describe block above), but wrong for the half-built PROCESSING quote this
+// branch exists for (the comment above buildCustomerSafeQuote's `if
+// (!analysis)` — a rep who's picked hardware but hasn't entered a ticket/
+// volume yet): that row has a real, non-null orderPoints, and it was being
+// thrown away.
+describe("buildCustomerSafeQuote — a half-built processing quote (products basis, no rate yet)", () => {
+  const PICKED_LINES = [
+    { hubspotProductId: "217445755632", name: "POS Unit", qty: 2, unitPrice: 749, billingFrequency: "one_time", productType: "inventory" },
+  ] as const;
+
+  it("carries the order-point count through even with no rate basis", () => {
+    const quote = buildCustomerSafeQuote({
+      quoteType: "all_in_one",
+      analysis: null, quoteConfig: null, quoteRates: null, targetMargin: null, pricingModel: null,
+      quoteLines: [...PICKED_LINES],
+      orderPoints: { hardware: { "POS Unit": 2 }, channels: [], total: 2 },
+    })!;
+    expect(quote.basis).toBe("products");
+    expect(quote.orderPoints).toEqual({ hardware: { "POS Unit": 2 }, channels: [], total: 2 });
+  });
+});
+
 // The two rep flows (/rep/proposals/new and /rep/prospects/new) write the same
 // merchant_applications row and now end at the same customer link, so the
 // customer quote must depend only on the stored columns and not on which flow
@@ -495,12 +520,26 @@ describe("buildCustomerSafeQuote — marketing with a website", () => {
     expect(buildCustomerSafeQuote({ ...basis, quoteLines: [], quoteConfig: CONFIG })).toBeNull();
   });
 
-  it("leaves a PROCESSING plan with no rate basis null, not products-only", () => {
-    // Unchanged, and deliberately not folded into the fallback above: a POS
-    // quote IS the rate, so there is nothing to show without one.
-    expect(buildCustomerSafeQuote({
+  it("shows a PROCESSING plan with no rate basis as products-only, not null", () => {
+    // REVERSED 2026-10-13. This used to be null, on the reading that a POS
+    // quote IS the rate so there is nothing to show without one — which left
+    // the public quote page with nothing to render and falling back to a
+    // statement upload, for a merchant whose lines were already a published
+    // HubSpot document. The upload is gone; holding the rate back and showing
+    // the hardware is the answer for every plan.
+    const quote = buildCustomerSafeQuote({
       quoteType: "all_in_one" as const, analysis: null, quoteConfig: null,
       quoteRates: null, targetMargin: null, pricingModel: null, quoteLines: [PLATFORM],
+    })!;
+    expect(quote.basis).toBe("products");
+    expect(quote.lines).toEqual([PLATFORM]);
+    expect(quote).not.toHaveProperty("effectiveRate");
+  });
+
+  it("is still null for a PROCESSING plan with no rate basis AND no lines", () => {
+    expect(buildCustomerSafeQuote({
+      quoteType: "all_in_one" as const, analysis: null, quoteConfig: null,
+      quoteRates: null, targetMargin: null, pricingModel: null, quoteLines: [],
     })).toBeNull();
   });
 });

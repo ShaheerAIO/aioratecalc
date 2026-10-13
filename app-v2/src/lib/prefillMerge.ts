@@ -218,7 +218,13 @@ export function customerOnboardInitial(
   const a = app.analysis;
 
   const business: BusinessInfo = {
-    legalName: a?.merchantName || "", dba: a?.merchantName || "",
+    // legalName is NOT seeded from the statement's merchantName (2026-10-13,
+    // "make llc blank") — merchantName is a TRADING name, and the legal name
+    // is what the state has on file; the two often differ, and guessing one
+    // from the other is the thing the product owner flagged as wrong. dba
+    // keeps the seed, since that field IS the trading name the statement
+    // actually names.
+    legalName: "", dba: a?.merchantName || "",
     bizType: "llc", address: "", city: "", state: "", zip: "",
     phone: "", website: "", yearsInBusiness: "", annualRevenue: "",
     ...compact(app.business),

@@ -9,7 +9,7 @@ import shellStyles from "../../customer/customer.module.css";
 
 // Public route — not matched by middleware.ts, no auth. The token itself
 // (validated here, server-side) is the only gate. This is the checklist host:
-// the statement upload/quote it used to open on lives at /lead/[token]/quote.
+// the quote it used to open on lives at /lead/[token]/quote.
 export default async function LeadPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const lookup = await getLeadApplicationByToken(token);

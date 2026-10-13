@@ -14,11 +14,15 @@ import { resolveLeadLinkIssue } from "@/lib/customerLink";
 import { resolveDealForCompany, type DealChoice, type DealRefusalCode, type DealResolution } from "@/lib/hubspotDeal";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import type { StorageScope } from "@/lib/storage/storageInterface";
-import { sendLeadLinkEmail, type SendMagicLinkResult } from "@/lib/adapters/email";
+import { sendLeadLinkEmail, type ReplyToRep, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
-import { createDealNote, deleteQuoteLineItem, getQuoteSnapshot, updateCompanyMerchantDetails } from "@/lib/adapters/hubspot";
-import { analysisFromQuoteConfig } from "@/lib/pricing";
-import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
+import {
+  createDealNote, deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot,
+  updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
+} from "@/lib/adapters/hubspot";
+import { buildAndPublishBillingQuote, resolveSender } from "@/lib/billing/publishBillingQuote";
+import { analysisFromQuoteConfig, marginFloorBlockers } from "@/lib/pricing";
+import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "@/lib/actions/pricing";
 import {
   buildQuote, isAllowedForQuoteType, isProcessingQuote, longestBillingDelayDays, quoteHasProcessing,
   quoteNoteBlockers, quoteTypeOf, toQuoteLine, DELAY_NOTE_THRESHOLD_DAYS, QUOTE_NOTE_WATCHER,
@@ -53,6 +57,28 @@ function mintLeadLink(now: Date) {
   };
 }
 
+// Called with the exact same arguments `sendLeadLinkEmail` was already given
+// whenever there's nothing extra to report — so a caller with neither a quote
+// link nor a resolved rep (every existing one, before 10/13) makes the exact
+// 3-argument call it always did. That arity matters: `toHaveBeenCalledWith(a,
+// b, c)` in Jest/Vitest does NOT match a call made as `fn(a, b, c, undefined)`
+// — an explicitly-passed trailing `undefined` is a real 4th argument, not the
+// same as omitting it — so this avoids silently widening every existing call
+// site. `rep` (10/13, "can the email go through the sales rep?") follows the
+// same rule as `quoteLink`: a call with a rep but no quoteLink still has to
+// pass something in the 4th slot to reach the 5th, so that one case alone
+// passes an explicit `undefined` — never reachable by the pre-existing tests,
+// which never resolve a rep at all (see `resolveReplyToRep`'s own comment).
+function sendLeadLinkEmailWithOptionalQuoteLink(
+  to: string, url: string, merchantName: string | undefined,
+  quoteLink: string | null | undefined, rep: ReplyToRep | null | undefined,
+) {
+  if (quoteLink && rep) return sendLeadLinkEmail(to, url, merchantName, quoteLink, rep);
+  if (quoteLink) return sendLeadLinkEmail(to, url, merchantName, quoteLink);
+  if (rep) return sendLeadLinkEmail(to, url, merchantName, undefined, rep);
+  return sendLeadLinkEmail(to, url, merchantName);
+}
+
 // Best-effort delivery shared by create and resend. A Resend/Twilio hiccup
 // must not undo the persisted row — the caller always has the raw URL to
 // hand the merchant themselves.
@@ -63,14 +89,29 @@ async function deliverLeadLink(
   phone: string | null | undefined,
   /** A second address to send the same link to. Best-effort; its result isn't reported. */
   altEmail?: string | null,
+  /**
+   * HubSpot's `hs_quote_link`, when the quote already published by the time
+   * this link goes out (10/13/2026 — see publishAtSend below). Carried onto
+   * the email as a second path to the quote; see sendLeadLinkEmail's own
+   * comment for why.
+   */
+  quoteLink?: string | null,
+  /**
+   * The owning rep's verified reply-to identity, when `resolveReplyToRep`
+   * could establish one (10/13/2026). Best-effort and independent of
+   * everything else here — a failed lookup just means this email reads like
+   * every one sent before today.
+   */
+  rep?: ReplyToRep | null,
 ): Promise<{ emailResult: SendMagicLinkResult; smsResult: SendSmsResult | null }> {
-  const emailResult = await sendLeadLinkEmail(email, url, merchantName).catch(err => {
+  const emailResult = await sendLeadLinkEmailWithOptionalQuoteLink(email, url, merchantName, quoteLink, rep).catch(err => {
     console.error("lead link email failed", err);
     return { sent: false, devUrl: url };
   });
   const alt = altEmail?.trim();
   if (alt && alt.toLowerCase() !== email.trim().toLowerCase()) {
-    await sendLeadLinkEmail(alt, url, merchantName).catch(err => console.error("lead link email (second address) failed", err));
+    await sendLeadLinkEmailWithOptionalQuoteLink(alt, url, merchantName, quoteLink, rep)
+      .catch(err => console.error("lead link email (second address) failed", err));
   }
   const smsResult = phone
     ? await sendLeadLinkSms(phone, url).catch(err => {
@@ -79,6 +120,72 @@ async function deliverLeadLink(
       })
     : null;
   return { emailResult, smsResult };
+}
+
+/**
+ * The owning rep's verified reply-to identity for EasyOB's own merchant-facing
+ * mail (2026-10-13, "can the email go through the sales rep?"). Reuses
+ * `resolveSender` VERBATIM — the exact same check that gates HubSpot's
+ * `hs_sender_email` — rather than inventing a second, looser notion of "the
+ * rep's real address" next to it. That matters because the cheap version
+ * (just read `users.email`) is exactly what let a seeded dev row like
+ * `rep@aioapp.com` reach a real merchant before `hs_sender_email` was
+ * verified; the same hazard applies here and the same fix closes it.
+ *
+ * Returns null — never throws — on ANY refusal (`no_rep_email`,
+ * `not_a_portal_owner`, `owner_lookup_failed`) or network failure: this is a
+ * cosmetic reply-to/display-name, not a precondition for anything, so the
+ * email still goes out exactly as it did before today's change, just without
+ * the rep's name on it.
+ */
+async function resolveReplyToRep(ownerUserId: string): Promise<ReplyToRep | null> {
+  try {
+    const resolved = await resolveSender(ownerUserId);
+    if (!resolved.ok) return null;
+    const name = [resolved.firstName, resolved.lastName].filter(Boolean).join(" ").trim();
+    return { email: resolved.email, name: name || undefined };
+  } catch (err) {
+    console.error("resolveReplyToRep failed", ownerUserId, err);
+    return null;
+  }
+}
+
+/**
+ * Attempt to publish this prospect's HubSpot billing quote right now, instead
+ * of waiting for the merchant to click "Continue to Billing" on their own
+ * link later. Product owner, 10/13 — REVERSES the 2026-09-25 decision
+ * recorded in billing.ts's header and in CLAUDE.md's acceptance section ("THE
+ * MERCHANT OPENS THE DOOR"): publish as soon as the rep sends the link, not
+ * whenever the merchant happens to get around to it. Nothing about the door
+ * itself changes — same preconditions (`canPublishBillingQuote`), same
+ * single irreversible publish, same `400 LOCKED`-means-already-published
+ * rule. Only WHEN the first attempt happens moves earlier.
+ *
+ * MUST NEVER THROW past this point. The prospect row is already saved and the
+ * lead link is about to go out regardless — same posture as the email/SMS
+ * sends in `deliverLeadLink` and the HubSpot company sync in
+ * `syncCompanyDetails`. `buildAndPublishBillingQuote` already treats "not
+ * publishable yet" (no quote lines, rate-only — the common case for a
+ * brand-new prospect with nothing picked; `no_tenant_company`/`no_deal` are
+ * unreachable here, since the company and deal above are already resolved
+ * before this is ever called) as a QUIET SKIP, not an error, and it persists
+ * any real precondition refusal or HubSpot failure onto
+ * `hubspotIds.lastSyncError` itself. The one thing it does NOT wrap in its
+ * own try/catch is its initial DB build-claim write, which is what this
+ * try/catch is for.
+ *
+ * The merchant's own "Continue to Billing" (`/api/lead/[token]/checkout`)
+ * is UNCHANGED and remains the fallback for every quote that wasn't
+ * publishable yet at send time, and for the rare case this attempt fails.
+ */
+async function publishAtSend(app: MerchantApplication): Promise<string | null> {
+  try {
+    const outcome = await buildAndPublishBillingQuote(app);
+    return outcome.status === "published" ? outcome.quoteLink : null;
+  } catch (err) {
+    console.error("createProspectAction: publish-at-send failed", app.id, err);
+    return null;
+  }
 }
 
 /**
@@ -113,6 +220,62 @@ async function syncCompanyDetails(
   } catch (err) {
     console.error("HubSpot company details sync failed", companyId, err);
     return { synced: false };
+  }
+}
+
+/**
+ * Push the billing contact to HubSpot — "add billing contact" / "overwrite
+ * the billing contact in hs" (2026-10-13). Best-effort, like the company sync
+ * above: the prospect row is already saved, and a HubSpot hiccup here must
+ * never undo it.
+ *
+ * Two shapes, chosen by whether the rep picked an existing contact:
+ *  - No `existingContactId` (the rep typed a brand-new person): find-or-create
+ *    by email, reusing `ensureQuoteContact` VERBATIM (hubspot.ts:1925) — the
+ *    exact function the quote's signer contact already uses. Not a second
+ *    search-then-create implementation next to it.
+ *  - `existingContactId` set (the rep picked someone off the dropdown —
+ *    `mergeDealAndCompanyContacts`'s list, reused rather than a new portal-wide
+ *    search): read that contact's CURRENT record fresh, diff it against what
+ *    the rep is submitting, and PATCH only the fields that differ and are
+ *    non-blank. That is the "overwrite" half — narrow by construction, since
+ *    an unchanged field never enters the patch and a blank one can't clobber
+ *    something HubSpot already had. `email` is excluded from the diff/patch
+ *    entirely (see `updateContactDetails`'s own comment).
+ */
+async function syncBillingContact(
+  billingContact: OwnerContact | null | undefined,
+  existingContactId: string | null | undefined,
+): Promise<void> {
+  if (!billingContact || !billingContact.email.trim()) return;
+  try {
+    if (existingContactId) {
+      const current = await getContactById(existingContactId);
+      if (current) {
+        const patch: ContactDetailsPatch = {};
+        const firstName = billingContact.firstName.trim();
+        const lastName = billingContact.lastName.trim();
+        const title = billingContact.title.trim();
+        const phone = billingContact.phone.trim();
+        if (firstName && firstName !== (current.firstName ?? "")) patch.firstname = firstName;
+        if (lastName && lastName !== (current.lastName ?? "")) patch.lastname = lastName;
+        if (title && title !== (current.jobTitle ?? "")) patch.jobtitle = title;
+        if (phone && phone !== (current.phone ?? "")) patch.phone = phone;
+        await updateContactDetails(existingContactId, patch);
+        return;
+      }
+      // The id the rep picked no longer resolves (deleted/merged in HubSpot
+      // since the dropdown loaded) — fall through to find-or-create by email
+      // rather than silently dropping the billing contact.
+    }
+    await ensureQuoteContact({
+      firstName: billingContact.firstName,
+      lastName: billingContact.lastName,
+      email: billingContact.email,
+      phone: billingContact.phone,
+    });
+  } catch (err) {
+    console.error("HubSpot billing contact sync failed", existingContactId ?? "(new)", err);
   }
 }
 
@@ -320,25 +483,68 @@ function tenantLinkFromCompany(company: TenantCompany, linkedByUserId: string): 
 /** What the rep picked. Prices and the derived tier are the server's business. */
 export type QuotePick = { hubspotProductId: string; qty: number };
 
-// ── Floor enforcement: OFF ───────────────────────────────────────────────────
-// Deleted 2026-10-06 along with the margin target it checked. Rates are the
-// pricing input now (see QuoteRates): a rep types 2.49% and whatever margin
-// that leaves is whatever it leaves, so there is no margin for a write path to
-// refuse. Any rate a rep types saves — product-owner decision, taken knowing
-// that a below-cost rate can now reach a merchant.
+// ── Floor enforcement: ON, server-side, as of this change ───────────────────
+// Deleted 2026-10-06 along with the margin target it checked — rates became
+// the pricing input (see QuoteRates), a rep types 2.49% and whatever margin
+// that leaves is whatever it leaves, and nothing refused a quote for being
+// under one. That stood until 2026-10-09 ("card rate minimums are needed"),
+// which reversed it — but only the CLIENT side was ever reconnected
+// (rep/prospects/new/page.tsx's hardBlocks, EditQuotePanel's `disabled`). The
+// write paths here were never updated to match, so a stale client, a direct
+// Server Action call, or any caller that skips the browser entirely could
+// still save a rate under AIO's minimum. This closes that gap.
 //
-// The machinery it used is INTACT and still runs: MARGIN_REQS, getMarginFloor
-// and getPaddedFloorRate still feed `derivePricingForRole`, which still tells
-// a rep's collapsed internal panel whether the rates they typed land under the
-// floor. What's gone is only the refusal.
+// `marginFloorBlockers` (pricing.ts) is the one check, called from both
+// `createProspectAction` and `saveQuoteConfigurationAction` below against a
+// `RoleScopedPricing` fetched through `getPricingPreviewAction` — the exact
+// function both rep-facing forms already call for their own (now redundant,
+// but harmless) client-side check. Nothing here derives a second number.
 //
-// Worth re-reading before enforcement comes back, because it was subtle: the
-// guard was scoped PER ROLE (admins held to the true floor, reps to the padded
-// one) because a refusal is an oracle — a rep calling the Server Action
-// directly could binary-search the margin, refuse/refuse/succeed, and recover
-// AIO's true floor to arbitrary precision. Enforcing the padded floor for reps
-// closed that, at no cost, since the padded floor is strictly stricter. The
-// same trap is waiting for whoever re-enforces this against a typed rate.
+// Scoped PER ROLE, not against one shared "true" number, same as the deleted
+// guard was: admins are held to the true floor (they already see true numbers
+// everywhere else), reps to the PADDED one — because a refusal is an oracle.
+// A rep calling this Server Action directly, refused against the TRUE floor,
+// could binary-search the margin (refuse, refuse, succeed) and recover AIO's
+// true minimum to arbitrary precision. The padded floor is always ≥ the true
+// floor, so refusing reps against it is strictly stricter, never looser, and
+// the refusal message never states the number either way — see
+// `marginFloorBlockers`'s doc comment.
+
+// No fee overrides are persisted on an application (they only ever lived in
+// the wizard's ephemeral PricingStep state — see EditQuotePanel's identical
+// ZERO_FEES), so the floor is checked against zero rather than guessing at
+// what the original proposal used.
+const ZERO_FEE_OVERRIDES = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
+
+/**
+ * Refuses when `quoteRates` don't clear AIO's margin floor for this volume —
+ * the shared guard both `createProspectAction` and `saveQuoteConfigurationAction`
+ * call. A no-op with no basis to check (no statement, no rep-entered
+ * volume/ticket): the same `hasFloorBasis`/`hasVolumeBasis` condition the two
+ * client forms already gate their own preview on, because there is no floor to
+ * clear until there's a volume to clear it against — a config-less or
+ * rate-less quote goes out as a rate the customer's own statement will later
+ * be priced against.
+ */
+async function assertRateAboveFloor(
+  rated: boolean,
+  analysis: StatementAnalysis | null,
+  quoteConfig: QuoteConfig | null,
+  quoteRates: QuoteRates | null | undefined,
+  pricingModel: PricingModel
+): Promise<void> {
+  if (!rated || !(analysis || quoteConfig)) return;
+  const pricing = await getPricingPreviewAction({
+    analysis,
+    quoteConfig: analysis ? null : quoteConfig,
+    quoteRates: quoteRates ?? DEFAULT_QUOTE_RATES,
+    pricingModel,
+    feeOverrides: ZERO_FEE_OVERRIDES,
+    activeTier: null,
+  });
+  const blockers = marginFloorBlockers(pricing);
+  if (blockers.length) throw new Error(blockers.join(" "));
+}
 
 async function deriveQuoteLines(
   quoteType: QuoteType,
@@ -423,6 +629,14 @@ export async function createProspectAction(input: {
   // send it.
   business: BusinessInfo;
   ownerContact: OwnerContact;
+  // Who AIO bills, if different from ownerContact (2026-10-13, "add billing
+  // contact"). Optional and independent of the signer: see `billingContact`'s
+  // own comment on MerchantApplication. `billingContactId`, when set, is the
+  // HubSpot contact the rep picked off the dropdown (mergeDealAndCompanyContacts'
+  // list) rather than typed fresh — it's what lets `syncBillingContact` PATCH
+  // that contact's record instead of searching by email.
+  billingContact?: OwnerContact | null;
+  billingContactId?: string | null;
   // Optional — a marketing-only quote's Review section still asks for
   // contact info, but processing details (mcc, current processor, …) don't
   // apply to it, so the form may omit this section entirely.
@@ -434,9 +648,10 @@ export async function createProspectAction(input: {
   pricingModel: PricingModel;
   // Dual statement path. Either (or both) may be supplied: the rep can enter
   // ticket/volume configs, upload the statement themselves (analysis already
-  // run through /api/analyze), or neither — in which case the customer is
-  // asked for a statement on the lead page as before. When both exist the
-  // analysis wins for pricing; quoteConfig stays as what the rep quoted on.
+  // run through /api/analyze), or neither — in which case the quote shows the
+  // priced lines and no rate, because the customer is never asked for a
+  // statement (2026-10-13). When both exist the analysis wins for pricing;
+  // quoteConfig stays as what the rep quoted on.
   quoteConfig?: QuoteConfig | null;
   analysis?: StatementAnalysis | null;
   // Which PLAN this quote is on. Every selection rule hangs off it, so it's
@@ -536,6 +751,11 @@ export async function createProspectAction(input: {
       : null;
   const analysis = rated ? input.analysis ?? null : null;
 
+  // Server-side mirror of the rep form's own floor check — see the comment
+  // above `assertRateAboveFloor` and the 2026-10-09 decision recorded above
+  // `ZERO_FEE_OVERRIDES`.
+  await assertRateAboveFloor(rated, analysis, quoteConfig, input.quoteRates, input.pricingModel);
+
   const quoteNote = (input.quoteNote ?? "").trim() || null;
   const { quoteLines, orderPoints } = await deriveQuoteLines(
     quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {}, quoteNote
@@ -557,7 +777,8 @@ export async function createProspectAction(input: {
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     // The link goes out with a quote already on it when the rep supplied a
-    // basis; otherwise it's still the "upload your statement" link.
+    // basis or priced any lines; otherwise it opens on "your rep is preparing
+    // your quote" — there is nothing for the customer to do until there is.
     stage: hasQuote ? "quote_sent" : "lead_link_sent",
     hubspotDealId: dealResolution.deal.id,
     dealLink,
@@ -594,11 +815,22 @@ export async function createProspectAction(input: {
     // let a stale/overridden field silently revert to whatever HubSpot holds.
     business: input.business,
     ownerContact: input.ownerContact,
+    billingContact: input.billingContact ?? null,
     processing: input.processing ?? null,
     agreement: null,
   };
 
   await postgresStorage.saveApplication({ userId: effective.userId, role: effective.role }, app);
+
+  // Publish the HubSpot billing quote right here, at send time — see
+  // publishAtSend's own comment for the 10/13 reversal this is. Before the
+  // email goes out, so a quote that's already publishable (most new
+  // prospects aren't) can carry its `hs_quote_link` on that email too.
+  const quoteLink = await publishAtSend(app);
+
+  // Best-effort, same posture as publishAtSend above — a failed resolution
+  // just means the email goes out without the rep's name on it.
+  const rep = await resolveReplyToRep(app.ownerUserId);
 
   // Best-effort from here — the prospect row is already saved, so a Resend or
   // Twilio hiccup must not undo it or block the response. The rep always has
@@ -609,8 +841,11 @@ export async function createProspectAction(input: {
     app.business?.dba || app.business?.legalName,
     app.ownerContact!.phone,
     app.ownerContact!.altEmail,
+    quoteLink,
+    rep,
   );
   const companySync = await syncCompanyDetails(input.hubspotCompanyId, app);
+  await syncBillingContact(input.billingContact, input.billingContactId);
   await mirrorQuoteNote(app, null);
 
   return { app, linkUrl: link.url, emailResult, smsResult, companySync };
@@ -707,17 +942,28 @@ export async function saveQuoteConfigurationAction(input: {
   }
 
   const quoteType: QuoteType = quoteTypeOf(input.quoteType);
+
+  const quoteConfig =
+    input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0
+      ? input.quoteConfig
+      : app.quoteConfig;
+
+  // Whether this quote carries a rate at all — same predicate EditQuotePanel
+  // uses for its own floor preview. The statement isn't resubmitted on a save
+  // (only the wizard's upload step sets it), so `app.analysis` is the basis,
+  // same as `EditQuotePanel`'s `previewAnalysis`.
+  const rated = quoteHasProcessing(quoteType, input.picks ?? [], input.adjustments ?? {});
+  await assertRateAboveFloor(
+    rated, app.analysis ?? null, quoteConfig ?? null,
+    input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES, input.pricingModel
+  );
+
   const quoteNote = input.quoteNote === undefined
     ? app.quoteNote ?? null
     : (input.quoteNote ?? "").trim() || null;
   const { quoteLines, orderPoints } = await deriveQuoteLines(
     quoteType, input.picks ?? [], input.channels ?? [], input.adjustments ?? {}, quoteNote
   );
-
-  const quoteConfig =
-    input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0
-      ? input.quoteConfig
-      : app.quoteConfig;
 
   // A draft HubSpot quote from an earlier, failed publish is now describing a
   // quote that no longer exists. `buildAndPublishBillingQuote` pairs its saved
@@ -882,12 +1128,18 @@ export async function resendLeadLinkAction(
     };
   }
 
+  // Best-effort, same posture as every other lookup in this file — a failed
+  // resolution just means this resend reads like every one sent before today.
+  const rep = await resolveReplyToRep(updated.ownerUserId);
+
   const { emailResult, smsResult } = await deliverLeadLink(
     email,
     linkUrl,
     merchantName,
     updated.ownerContact?.phone,
     updated.ownerContact?.altEmail,
+    undefined,
+    rep,
   );
 
   return { app: updated, linkUrl, emailResult, smsResult };

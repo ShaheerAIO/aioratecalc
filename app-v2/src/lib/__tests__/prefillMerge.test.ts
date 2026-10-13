@@ -232,15 +232,21 @@ describe("customerOnboardInitial", () => {
     expect(r.prefilled).toEqual(["business.bizType"]);
   });
 
-  it("seeds processing from the statement analysis and marks it pre-filled", () => {
+  it("seeds processing and dba from the statement analysis, but NOT legalName, and marks it pre-filled", () => {
     const r = customerOnboardInitial({ ...NO_SOURCE, analysis: ANALYSIS });
-    expect(r.business.legalName).toBe("Little Arabia");
+    // 2026-10-13, "make llc blank": merchantName is a TRADING name read off
+    // the statement, not what the state has on file — see the comment on
+    // this seed in prefillMerge.ts. dba still seeds from it; legalName does
+    // not, and is absent from `prefilled` because nothing filled it.
+    expect(r.business.legalName).toBe("");
+    expect(r.business.dba).toBe("Little Arabia");
     expect(r.processing.monthlyVolume).toBe("124500");
     expect(r.processing.avgTicket).toBe("40");
     expect(r.processing.cardPresentPct).toBe("80");
     expect(r.processing.currentProcessor).toBe("Clover");
     expect(r.prefilled).toContain("processing.monthlyVolume");
     expect(r.prefilled).toContain("business.dba");
+    expect(r.prefilled).not.toContain("business.legalName");
     expect(r.prefilled).not.toContain("processing.mcc");
   });
 
@@ -386,7 +392,9 @@ describe("flattenSections", () => {
   it("keys every field by its dotted path", () => {
     const initial = customerOnboardInitial({ ...NO_SOURCE, analysis: ANALYSIS });
     const flat = flattenSections(initial);
-    expect(flat["business.legalName"]).toBe("Little Arabia");
+    // legalName is deliberately blank here too — see "make llc blank" above.
+    expect(flat["business.legalName"]).toBe("");
+    expect(flat["business.dba"]).toBe("Little Arabia");
     expect(flat["ownerContact.title"]).toBe("Owner");
     expect(flat["processing.currentProcessor"]).toBe("Clover");
     // The `prefilled` list must not leak into the flattened values.

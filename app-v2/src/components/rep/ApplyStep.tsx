@@ -23,7 +23,15 @@ type Props = {
 export default function ApplyStep({ app, onSaved, onBack, onSkip }: Props) {
   const initial = app.analysis;
   const [biz, setBiz] = useState<Partial<BusinessInfo>>(app.business || {
-    legalName: initial?.merchantName || "", dba: initial?.merchantName || "",
+    // legalName is deliberately NOT seeded from the statement's merchantName
+    // (2026-10-13, "make llc blank"). merchantName is a TRADING name read off
+    // the statement; the legal name is what the state has on file, and the
+    // two are often not the same string at all. Guessing one from the other
+    // is exactly the thing the product owner flagged — better a blank the rep
+    // (or the merchant, on their own onboarding form) fills in deliberately
+    // than a trading name silently standing in for a legal one. dba keeps the
+    // merchantName seed: that field IS the trading name.
+    legalName: "", dba: initial?.merchantName || "",
     bizType: "llc", address: "", city: "", state: "", zip: "",
     phone: "", website: "", yearsInBusiness: "", annualRevenue: "",
   });
@@ -158,10 +166,6 @@ export default function ApplyStep({ app, onSaved, onBack, onSkip }: Props) {
             </div>
             <div className={styles.row}>
               {input("Current Processor", proc.currentProcessor || "", setProcF("currentProcessor") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Stripe")}
-            </div>
-            <div className={styles.row}>
-              <label className={styles.label}>Business Description</label>
-              <textarea value={proc.businessDescription || ""} onChange={setProcF("businessDescription") as (e: React.ChangeEvent<HTMLTextAreaElement>) => void} placeholder="Briefly describe the nature of the business..." className={`${styles.input} ${styles.textarea}`} />
             </div>
             <div className={`${styles.inlineRow} ${styles.row}`}>
               <div className={styles.field}>

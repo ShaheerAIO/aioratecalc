@@ -1,4 +1,5 @@
 import { parseJSON } from "./utils";
+import { DEFAULT_CARD_PRESENT_PCT } from "@/types/merchant";
 import type { StatementAnalysis, ProposalOutput, PricingModel, ProposedRates, QuoteRates } from "@/types/merchant";
 import { derivePricing, blendedInterchangeEstimate, type FeeOverrides } from "./pricing";
 
@@ -179,8 +180,8 @@ Use 0 for unknown numerics. Never null.`,
   if (vol > 0 && (parsed.interchangeFees || 0) === 0 && !parsed.interchangeNotShown) {
     const rawCp  = (parsed.cardPresentPct    || 0) as number;
     const rawCnp = (parsed.cardNotPresentPct || 0) as number;
-    const cpPct  = (rawCp > 0 || rawCnp > 0) ? rawCp  : 0.9;
-    const cnpPct = (rawCp > 0 || rawCnp > 0) ? (rawCnp || 1 - rawCp) : 0.1;
+    const cpPct  = (rawCp > 0 || rawCnp > 0) ? rawCp  : DEFAULT_CARD_PRESENT_PCT;
+    const cnpPct = (rawCp > 0 || rawCnp > 0) ? (rawCnp || 1 - rawCp) : 1 - DEFAULT_CARD_PRESENT_PCT;
     parsed.interchangeRate = blendedInterchangeEstimate(cpPct, cnpPct);
     parsed.icEstimated = true;
   }

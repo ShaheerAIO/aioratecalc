@@ -2,10 +2,9 @@
 // the quote step). Kept out of applicationRow.ts (which is
 // deliberately DB-handle-free) because this one holds the query.
 //
-// The two API routes (accept, analyze) do NOT use this — they were already
-// built and tested with the lookup inlined, and touching working, tested
-// routes for a cosmetic dedupe isn't worth the risk. This exists so the THREE
-// new pages this task adds don't triple that duplication.
+// /api/lead/[token]/accept does NOT use this — it was already built and tested
+// with the lookup inlined, and touching a working, tested route for a cosmetic
+// dedupe isn't worth the risk. This exists so the pages don't duplicate it.
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";

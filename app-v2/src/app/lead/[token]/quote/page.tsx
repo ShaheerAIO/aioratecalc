@@ -4,13 +4,20 @@ import { rowToApp } from "@/lib/storage/applicationRow";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
 import { refreshLeadBilling } from "@/lib/billing/leadRefresh";
 import { hasSignedWithoutPaying } from "@/lib/onboardingModules";
-import LeadUploadStep from "@/components/customer/LeadUploadStep";
+import LeadQuoteView from "@/components/customer/LeadQuoteView";
 import styles from "./quote.module.css";
 import leadStyles from "../lead.module.css";
 
-// The upload/quote step — the same content LeadUploadStep/LeadQuoteView once
-// rendered directly at /lead/[token], one level down now that /lead/[token] is
-// the checklist.
+// The customer's quote, one level below /lead/[token] (the checklist).
+//
+// THERE IS NO STATEMENT UPLOAD HERE ANY MORE (2026-10-13, product owner). This
+// page used to open on a dropzone whenever buildCustomerSafeQuote came back
+// null, on the theory that a customer with no quote could generate one by
+// uploading their statement. In practice the state it actually fired in was a
+// quote the rep HAD built — lines, HubSpot document, published checkout — on a
+// merchant whose volume nobody had entered, so the merchant was asked for a
+// statement instead of being shown the quote they came to sign. The quote is
+// the rep's to build; this page only ever renders one.
 export default async function LeadQuotePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const lookup = await getLeadApplicationByToken(token);
@@ -52,8 +59,7 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
   // not, or they'd be accepting twice. See /api/lead/[token]/accept.
   const canAcceptHere = (app.quoteLines?.length ?? 0) === 0;
 
-  // The same projection used on the checklist page and by
-  // /api/lead/[token]/analyze.
+  // The same projection the checklist page gates its quote row on.
   const preparedQuote = buildCustomerSafeQuote({
     quoteType: app.quoteType,
     analysis: app.analysis,
@@ -70,30 +76,34 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
       <div className={styles.container}>
         <Link href={`/lead/${token}`} className={styles.backLink}>← Back to checklist</Link>
 
-        {/* Only shown for the plain-upload state — a prepared quote (or one the
-            customer just generated) renders its own heading via LeadQuoteView,
-            and duplicating a page-level title above it would be redundant. */}
-        {!preparedQuote && (
+        {/* Nothing priced on the application yet — no lines and no rate basis.
+            There is no action the merchant can take from here, so this says so
+            rather than offering one. It matches the checklist's own wording
+            for the same state ("Your rep is preparing your quote"), which is
+            where they came from. A prepared quote renders its own heading via
+            LeadQuoteView, so the page-level title is only for this state. */}
+        {preparedQuote ? (
+          <LeadQuoteView
+            token={token}
+            quote={preparedQuote}
+            businessName={businessName}
+            contactEmail={contactEmail}
+            checkoutUrl={checkoutUrl}
+            canAcceptHere={canAcceptHere}
+            alreadyAccepted={!!app.quoteAcceptedAt}
+            signedWithoutPaying={signedWithoutPaying}
+          />
+        ) : (
           <>
             <h1 className={styles.title}>
-              {businessName ? `Hi ${businessName}, upload your statement` : "Upload Your Statement"}
+              {businessName ? `Hi ${businessName}, your quote is on its way` : "Your Quote Is On Its Way"}
             </h1>
             <p className={styles.subtitle}>
-              Upload a recent processing statement (PDF or image) and get an instant estimate of your savings with AIO.
+              Your AIO representative is still putting your quote together. We&apos;ll let you know the
+              moment it&apos;s ready to review.
             </p>
           </>
         )}
-
-        <LeadUploadStep
-          token={token}
-          businessName={businessName}
-          contactEmail={contactEmail}
-          preparedQuote={preparedQuote}
-          checkoutUrl={checkoutUrl}
-          canAcceptHere={canAcceptHere}
-          alreadyAccepted={!!app.quoteAcceptedAt}
-          signedWithoutPaying={signedWithoutPaying}
-        />
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { paymentProcessingArr } from "@/lib/billing/processingArr";
+import { paymentProcessingArr, paymentProcessingArrBreakdown } from "@/lib/billing/processingArr";
 import { buildDealProperties, isAtOrPastClosedWon, SALES_PIPELINE_STAGES } from "@/lib/adapters/hubspot";
-import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
+import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE } from "@/types/merchant";
 import type { MerchantApplication, StoredQuoteType } from "@/types/merchant";
 
 // `payment_processing_arr` on the HubSpot deal, and the gate that keeps it
@@ -24,14 +24,13 @@ function app(over: Partial<MerchantApplication> = {}): MerchantApplication {
 }
 
 describe("paymentProcessingArr", () => {
-  it("is the quoted margin over interchange, annualised", () => {
+  it("is the take-rate-minus-wholesale commission margin, annualised", () => {
     const arr = paymentProcessingArr(app());
     expect(arr).not.toBeNull();
 
-    // 2.49% quoted against the 90/10 config blend of the 2.10%/2.50%
-    // interchange estimate, plus $0.15 on each of 100000/30 transactions.
-    // Whatever that comes to, the identity that matters is that ARR is twelve
-    // times one month of it.
+    // 2.49% CP rate + $0.15/txn on a $30 avg ticket (100000/30 txns) against
+    // the $30 wholesale column (2.23%) — whatever that comes to, the identity
+    // that matters is that ARR is twelve times one month of it.
     const monthly = arr! / 12;
     expect(monthly).toBeGreaterThan(0);
     expect(monthly).toBeLessThan(100000); // never more than the volume itself
@@ -84,6 +83,73 @@ describe("paymentProcessingArr", () => {
   it("is a whole number of dollars", () => {
     expect(Number.isInteger(paymentProcessingArr(app())!)).toBe(true);
   });
+
+  // The 20.00%-instead-of-2.0% typo (Elizabeth, 10/9 notes): a quoted rate
+  // this far out isn't an unusually profitable merchant, it's bad input —
+  // and this figure feeds rep commission (total_arr → signing/activation
+  // commission), so a wrong number must never go out as a right-looking one.
+  it("is null when a quoted rate exceeds MAX_PLAUSIBLE_CARD_RATE", () => {
+    expect(paymentProcessingArr(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: 0.20 },
+    }))).toBeNull();
+  });
+
+  it("checks all four rate fields, not just cardPresentRate", () => {
+    expect(paymentProcessingArr(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, cardNotPresentRate: 0.20 },
+    }))).toBeNull();
+    expect(paymentProcessingArr(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, amexCardPresentRate: 0.20 },
+    }))).toBeNull();
+    expect(paymentProcessingArr(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, amexCardNotPresentRate: 0.20 },
+    }))).toBeNull();
+  });
+
+  it("is not tripped by a rate exactly at the ceiling, only past it", () => {
+    expect(paymentProcessingArr(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: MAX_PLAUSIBLE_CARD_RATE },
+    }))).not.toBeNull();
+  });
+
+  // perTransactionFee is a flat dollar amount, not a percentage — must never
+  // be compared against a rate ceiling.
+  it("does not flag a large flat per-transaction fee as an implausible rate", () => {
+    expect(paymentProcessingArr(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, perTransactionFee: 10 },
+    }))).not.toBeNull();
+  });
+
+  it("null quoteRates falls back to DEFAULT_QUOTE_RATES and is never implausible", () => {
+    expect(paymentProcessingArr(app({ quoteRates: null }))).not.toBeNull();
+  });
+});
+
+describe("paymentProcessingArrBreakdown — the implausible-rate guard", () => {
+  it("reports the offending rate when arr is null for this reason, and the rest of the breakdown stays populated", () => {
+    const b = paymentProcessingArrBreakdown(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: 0.20 },
+    }));
+    expect(b.arr).toBeNull();
+    expect(b.implausibleRate).toBe(0.20);
+    expect(b.monthlyVolume).toBeGreaterThan(0);
+    expect(b.takeRate).not.toBeNull();
+    expect(b.wholesalePct).not.toBeNull();
+    expect(b.commissionMargin).not.toBeNull();
+  });
+
+  it("leaves implausibleRate null for every other reason arr is null", () => {
+    expect(paymentProcessingArrBreakdown(app({ quoteType: "marketing_only" as StoredQuoteType })).implausibleRate).toBeNull();
+    expect(paymentProcessingArrBreakdown(app({ quoteConfig: null })).implausibleRate).toBeNull();
+  });
+
+  it("reports both halves of the margin: take rate and the wholesale % the ticket read", () => {
+    // $30 avg ticket reads the $30 wholesale column exactly: 2.23%.
+    const b = paymentProcessingArrBreakdown(app());
+    expect(b.wholesalePct).toBeCloseTo(0.0223, 4);
+    expect(b.takeRate).not.toBeNull();
+    expect(b.commissionMargin).toBeCloseTo(b.takeRate! - b.wholesalePct!, 10);
+  });
 });
 
 describe("buildDealProperties — payment_processing_arr", () => {
@@ -106,6 +172,13 @@ describe("buildDealProperties — payment_processing_arr", () => {
 
   it("omits it when there is no volume", () => {
     expect(buildDealProperties(app({ quoteConfig: null }))).not.toHaveProperty("payment_processing_arr");
+  });
+
+  // The guard this whole file is about: a rep's decimal-point slip must not
+  // reach the deal and pay a commission computed off it.
+  it("omits it when a quoted rate exceeds MAX_PLAUSIBLE_CARD_RATE, even though the merchant has accepted", () => {
+    const props = buildDealProperties(app({ quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: 0.20 } }));
+    expect(props).not.toHaveProperty("payment_processing_arr");
   });
 });
 
