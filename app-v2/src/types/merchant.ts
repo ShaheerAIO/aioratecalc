@@ -288,6 +288,33 @@ export type CatalogProduct = {
   price: number;
   billingFrequency: BillingFrequency;
   productType: string; // HubSpot hs_product_type: "inventory" | "Software" | "Service" | "AIO Payment Processing"
+  /**
+   * Hardware commission inputs (2026-10-13), read from HubSpot PRODUCT
+   * properties `cost_to_rep` / `rep_commission` / `rsm_commission`. Named
+   * away from HubSpot's own names on purpose: the DEAL object has properties
+   * spelled `rep_commission`/`rsm_commission` too, but those are DOLLAR
+   * amounts, where these are PERCENTAGES — the product-vs-deal collision this
+   * file must never blur. `costToRep` is the product owner's "AE Cost".
+   *
+   * Optional (not just nullable) so every existing literal `CatalogProduct`
+   * in this codebase's tests keeps compiling without the three new fields.
+   *
+   * null means the property is unset in HubSpot ("nobody has told us yet"),
+   * never 0 — see commission.ts for why that distinction matters to the math.
+   * As of 2026-10-13, 0 of 39 active products carry a commission rate and all
+   * 8 populated `cost_to_rep` values are literally 0 (expected: Elizabeth
+   * uploads real values after this ships).
+   *
+   * `repCommissionBps`/`rsmCommissionBps` are stored in BASIS POINTS, matching
+   * rateMatrix.ts/wholesale.ts and for the same reason (exact, not a float).
+   * HubSpot's property is labelled "Rep Commission %", so `toCatalogProduct`
+   * ASSUMES a stored `6` means 6% → 600 bps. This is unconfirmed against real
+   * data (every row is null today) — see `percentToBps` in commission.ts,
+   * the one place this conversion happens.
+   */
+  costToRep?: number | null;
+  repCommissionBps?: number | null;
+  rsmCommissionBps?: number | null;
 };
 
 // What kind of quote this is — and, since 2026-10-05, WHICH PLAN the merchant
@@ -373,6 +400,19 @@ export type QuoteLine = {
    * would round the discount and make our totals disagree with HubSpot's.
    */
   coveredByPackage?: string | null;
+  /**
+   * Hardware commission inputs, SNAPSHOT from `CatalogProduct` at
+   * `toQuoteLine` time — same rule as `unitPrice`/`billingFrequency` above: a
+   * saved quote must keep computing the same commission even after the
+   * catalog's rates change later, or reopening it would silently recompute
+   * someone's pay. See `CatalogProduct` for what each field means and the
+   * percent→bps assumption, and commission.ts for the math. Never written to
+   * HubSpot — `toLineItemProperties` allow-lists its own properties and does
+   * not spread this type.
+   */
+  costToRep?: number | null;
+  repCommissionBps?: number | null;
+  rsmCommissionBps?: number | null;
 };
 
 /**

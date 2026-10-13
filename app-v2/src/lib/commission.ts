@@ -42,7 +42,7 @@
 // percentage (5.00%, 10.00%) that is exact in bps and not in a float, feeding
 // a number that pays people.
 
-import { quoteTotals } from "@/lib/quoting";
+import { lineNetAmount, quoteTotals } from "@/lib/quoting";
 import type { QuoteLine } from "@/types/merchant";
 
 // ── Processing commission ───────────────────────────────────────────────────
@@ -138,7 +138,20 @@ export function estimatedRecurringArrFromQuoteLines(lines: QuoteLine[]): number 
   return arr > 0 ? arr : null;
 }
 
-// ── Hardware commission ─────────────────────────────────────────────────────
+// ── Hardware commission (SUPERSEDED — see "Per-product hardware commission"
+//    below) ───────────────────────────────────────────────────────────────
+//
+// SUPERSEDED 2026-10-13. This section predates the discovery that HubSpot's
+// product library already carries per-product `cost_to_rep`/`rep_commission`/
+// `rsm_commission` (see CatalogProduct in types/merchant.ts and the
+// per-product functions at the bottom of this file). A single admin-typed
+// global bps rate applied to a margin nobody could compute was always a
+// placeholder for the real, per-product design below — not a feature to keep
+// alongside it. Kept, not deleted: `commission_policy` (migration 0022) still
+// exists with no rows and no UI, and `lib/billing/commissionReport.ts` still
+// calls `hardwareCommission` — that call site is owned by another agent and
+// will switch to `quoteHardwareCommission` separately. Don't build new
+// callers against this; it is dead-end math (no cost data ever reaches it).
 
 export type HardwareCommissionPolicy = {
   /** null = unset = this module contributes exactly zero. Set by an admin at
@@ -174,4 +187,151 @@ export const DEFAULT_HARDWARE_COMMISSION_POLICY: HardwareCommissionPolicy = {
 export function hardwareCommission(hardwareMargin: number, policy: HardwareCommissionPolicy): number {
   if (policy.hardwareCommissionBps == null) return 0;
   return hardwareMargin * (policy.hardwareCommissionBps / 10000);
+}
+
+// ── Per-product hardware commission (2026-10-13) ────────────────────────────
+//
+// Replaces the global-rate design above. HubSpot's product library carries
+// real per-product inputs — `cost_to_rep` ("AE Cost"), `rep_commission` and
+// `rsm_commission` (both PERCENTAGES) — read into `CatalogProduct` and
+// snapshotted onto `QuoteLine` at `toQuoteLine` time (see both types'
+// doc comments in types/merchant.ts). This section is the math over those
+// snapshotted fields. As of 2026-10-13 every rate is null and 8 populated
+// costs are all 0, so every real quote computes to "no commissions yet" —
+// that is the correct, expected state until Elizabeth uploads real values,
+// not a bug.
+//
+// Formula (product owner, verbatim, 2026-10-13):
+//   rep commission for a line = ((qty * price after discount) - (qty * AE
+//     Cost)) * Rep Commission %
+//   rsm commission = same, with RSM Commission %
+//
+// Three rules, all explicit product-owner decisions — do not revisit:
+//   1. ONE-TIME LINES ONLY. Both HubSpot deal properties this feeds are
+//      labelled "Rep/RSM HARDWARE Commission", and mixing a monthly
+//      "price after discount" into one-time hardware dollars mixes units
+//      (the same reason quoteTotals keeps one-time and recurring separate).
+//      A recurring line that nonetheless carries a commission rate is
+//      reported via `recurringWithRate`, never silently included or dropped.
+//   2. NEGATIVE IS INTENDED, NEVER CLAMPED. A package-covered line sits at
+//      100% off, so `netAmount - cost*qty` is negative by construction — "this
+//      can go negative" (product owner, 10/13). Don't add a Math.max(0, ...)
+//      anywhere in this section.
+//   3. null IS NOT 0. A line contributes a commission only when BOTH its cost
+//      and its rate are non-null — a missing cost means "nobody has told us
+//      yet", and treating it as 0 would pay commission on the full sale
+//      price. Lines missing a cost are reported via `missingCost`. A LITERAL
+//      0 (a real, known zero cost) is honoured and does participate.
+
+/**
+ * HubSpot's "Rep Commission %"/"RSM Commission %" product properties store a
+ * plain percentage (e.g. a product owner entering "6" means 6%). This
+ * function is the ONE place that percent is converted to the basis-points
+ * unit the rest of this codebase's commission math uses (rateMatrix.ts,
+ * wholesale.ts, and SIGNING/ACTIVATION_COMMISSION_BPS above) — flip it here
+ * if that reading turns out wrong.
+ *
+ * ASSUMPTION TO CONFIRM WITH THE PRODUCT OWNER WHEN REAL VALUES LAND: every
+ * `rep_commission`/`rsm_commission` row in the portal is null today (2026-10-13,
+ * 0 of 39 active products populated), so this reading is UNVERIFIED against
+ * real data. It is deliberately isolated to one named, exported, tested
+ * function so correcting it later (e.g. if HubSpot actually stores "0.06" for
+ * 6%) is a one-line change rather than a hunt through call sites.
+ */
+export function percentToBps(percent: number | null): number | null {
+  if (percent === null || !Number.isFinite(percent)) return null;
+  return Math.round(percent * 100);
+}
+
+/** One line's rep/rsm hardware commission, or the reason it didn't produce one. */
+export type LineHardwareCommission = {
+  hubspotProductId: string;
+  name: string;
+  rep: number | null;
+  rsm: number | null;
+};
+
+/**
+ * The commission formula for a single line. Returns null for both figures —
+ * never 0 — when the line is excluded (not one-time) or missing an input
+ * (cost or rate null); `quoteHardwareCommission` below is what turns those
+ * exclusions into the reportable warning lists, since a single line can't
+ * report anything about itself other than its own two numbers.
+ *
+ * SURFACING HAZARD, accepted knowingly by the product owner (2026-10-13): the
+ * rep-facing UI shows `rep` on this line. A rep who already knows their own
+ * `repCommissionBps` can invert the formula — cost = netAmount -
+ * rep/rateDecimal — to recover AIO's exact per-unit hardware cost. This is
+ * NOT treated as secret the way the true margin floor is
+ * (`derivePricingForRole`); nobody asked for it to be hidden, but don't
+ * later assume it is, because it visibly is not.
+ */
+export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission {
+  const base: Pick<LineHardwareCommission, "hubspotProductId" | "name"> = {
+    hubspotProductId: line.hubspotProductId,
+    name: line.name,
+  };
+
+  if (line.billingFrequency !== "one_time") return { ...base, rep: null, rsm: null };
+
+  const cost = line.costToRep ?? null;
+  if (cost === null) return { ...base, rep: null, rsm: null };
+
+  const marginTotal = lineNetAmount(line) - cost * line.qty;
+  const repBps = line.repCommissionBps ?? null;
+  const rsmBps = line.rsmCommissionBps ?? null;
+
+  return {
+    ...base,
+    rep: repBps === null ? null : marginTotal * (repBps / 10000),
+    rsm: rsmBps === null ? null : marginTotal * (rsmBps / 10000),
+  };
+}
+
+/** Totals + per-line detail + warnings over a whole quote's lines. */
+export type QuoteHardwareCommission = {
+  /** Sum of every line's non-null rep commission. 0 when nothing qualified. */
+  rep: number;
+  /** Sum of every line's non-null rsm commission. 0 when nothing qualified. */
+  rsm: number;
+  perLine: LineHardwareCommission[];
+  /** Names of one-time lines with cost or rate missing (no commission computed). */
+  missingCost: string[];
+  /** Names of RECURRING lines that nonetheless carry a commission rate — excluded, flagged. */
+  recurringWithRate: string[];
+};
+
+/**
+ * The quote-level rollup `lib/billing/commissionReport.ts` and any rep/admin
+ * UI should build on going forward — see the SUPERSEDED note on
+ * `hardwareCommission` above for why the old global-rate function is not it.
+ */
+export function quoteHardwareCommission(lines: QuoteLine[]): QuoteHardwareCommission {
+  const perLine: LineHardwareCommission[] = [];
+  const missingCost: string[] = [];
+  const recurringWithRate: string[] = [];
+  let rep = 0;
+  let rsm = 0;
+
+  for (const line of lines) {
+    if (line.billingFrequency !== "one_time") {
+      const hasRate = line.repCommissionBps != null || line.rsmCommissionBps != null;
+      if (hasRate) recurringWithRate.push(line.name);
+      continue;
+    }
+
+    // Literally "cost is missing" — not gated on a rate being set too, since
+    // 0/39 products carry a rate today and gating this on "AND a rate exists"
+    // would make the warning useless until rates are populated. A line with
+    // a cost but no rate contributes nothing either (see lineHardwareCommission),
+    // which is visible in `perLine` (rep/rsm both null) without a separate list.
+    if (line.costToRep == null) missingCost.push(line.name);
+
+    const result = lineHardwareCommission(line);
+    perLine.push(result);
+    rep += result.rep ?? 0;
+    rsm += result.rsm ?? 0;
+  }
+
+  return { rep, rsm, perLine, missingCost, recurringWithRate };
 }

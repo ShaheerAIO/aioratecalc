@@ -3,9 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getCommissionReportAction } from "@/lib/actions/commissions";
-import { getHardwareCommissionPolicy, updateHardwareCommissionPolicyAction } from "@/lib/actions/pricing";
 import { fmt$, fmtPct2 } from "@/lib/utils";
-import type { DealCommissionRow } from "@/lib/billing/commissionReport";
+import type { DealCommissionRow, CommissionDataGaps } from "@/lib/billing/commissionReport";
 import styles from "./AdminDashboard.module.css";
 
 // THE FULL PICTURE — everything that moved OFF PricingStep/EditQuotePanel on
@@ -16,11 +15,17 @@ import styles from "./AdminDashboard.module.css";
 // whole action chain is admin-gated (getCommissionReportAction throws for
 // anyone else), not because the UI merely hides a button.
 //
-// The hardware commission rate lives here too (a plain number input, not a
-// separate settings page): it's the one knob on commission_policy, it starts
-// unset, and every row below shows $0.00 for it until an admin sets a rate —
-// see lib/commission.ts for why that's structurally true regardless of the
-// rate (no hardware cost data exists anywhere in this codebase yet).
+// HARDWARE commission here is PER-PRODUCT, read from the HubSpot product
+// library's `cost_to_rep`/`rep_commission`/`rsm_commission` and snapshotted
+// onto each quote line at quote time (lib/commission.ts). There is no more
+// global rate to set here — that design (migration 0022's `commission_policy`,
+// a single admin-typed bps number applied to a margin nobody could compute)
+// is superseded; see the SUPERSEDED comment in lib/actions/pricing.ts. As of
+// 2026-10-13 the catalog itself is the blocker (0 of 39 active products carry
+// a commission rate), which is why the "needs attention" section below is the
+// most useful thing on this panel right now — it says WHICH products still
+// need a cost or a rate, instead of every deal just reading "$0, nothing to
+// see."
 
 function dash(v: number | null | undefined): string {
   return v == null ? "—" : fmt$(v);
@@ -31,17 +36,14 @@ function dashPct(v: number | null | undefined): string {
 
 export default function CommissionsPanel() {
   const [rows, setRows] = useState<DealCommissionRow[] | null>(null);
-  const [hardwareBps, setHardwareBps] = useState<number | null>(null);
-  const [rateInput, setRateInput] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [gaps, setGaps] = useState<CommissionDataGaps | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
-    Promise.all([getCommissionReportAction(), getHardwareCommissionPolicy()])
-      .then(([report, policy]) => {
-        setRows(report);
-        setHardwareBps(policy.hardwareCommissionBps);
-        setRateInput(policy.hardwareCommissionBps == null ? "" : (policy.hardwareCommissionBps / 100).toString());
+    getCommissionReportAction()
+      .then(report => {
+        setRows(report.rows);
+        setGaps(report.gaps);
         setError(null);
       })
       .catch(e => setError(e instanceof Error ? e.message : "Could not load commissions"));
@@ -49,77 +51,80 @@ export default function CommissionsPanel() {
 
   useEffect(load, []);
 
-  const saveRate = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      const bps = rateInput.trim() === "" ? null : Math.round(parseFloat(rateInput) * 100);
-      await updateHardwareCommissionPolicyAction(Number.isNaN(bps as number) ? null : bps);
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the hardware commission rate");
-    }
-    setSaving(false);
-  };
+  const hasGaps = gaps !== null && (gaps.missingCost.length > 0 || gaps.zeroCost.length > 0 || gaps.recurringWithRate.length > 0);
 
-  const cols = "1fr 110px 110px 100px 100px 110px 110px 110px 110px 110px";
+  const cols = "1fr 110px 110px 100px 100px 110px 110px 110px 110px 110px 110px";
 
   return (
     <>
       <div className={styles.revenueHead}>
         <p className={styles.revenueCaption}>
           The full per-deal picture that moved off the rep-facing pricing screens on 2026-10-13: AIO
-          Revenue, processor cost, net margin, the true margin floor, and the commission split (10% of
-          total ARR — 5% at signing, 5% at activation). Admin only.
+          Revenue, processor cost, net margin, the true margin floor, the processing commission split
+          (10% of total ARR — 5% at signing, 5% at activation), and per-product hardware commission.
+          Admin only.
         </p>
         <p className={styles.revenueCaption}>
-          <strong>Recurring ARR, total ARR, and both commission figures below are ESTIMATES</strong> —
-          built from this quote&rsquo;s own line items, not a live read of HubSpot&rsquo;s actual{" "}
-          <code>saas_revenue</code>. They can and do differ from what actually gets written to the deal:
-          the real write (behind <code>COMMISSION_WRITEBACK_ENABLED</code>, off today) reads
-          HubSpot&rsquo;s own <code>saas_revenue</code> at the moment of acceptance instead of estimating
-          it — see lib/billing/commissionWriteback.ts.
+          <strong>Recurring ARR, total ARR, and the two processing-commission figures below are
+          ESTIMATES</strong> — built from this quote&rsquo;s own line items, not a live read of
+          HubSpot&rsquo;s actual <code>saas_revenue</code>. They can and do differ from what actually
+          gets written to the deal: the real write (behind <code>COMMISSION_WRITEBACK_ENABLED</code>,
+          off today) reads HubSpot&rsquo;s own <code>saas_revenue</code> at the moment of acceptance
+          instead of estimating it — see lib/billing/commissionWriteback.ts.
         </p>
-      </div>
-
-      <div className={styles.panel} style={{ marginBottom: "var(--space-md, 16px)" }}>
-        <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>Hardware commission rate</h2>
-        </div>
         <p className={styles.revenueCaption}>
-          A percentage of hardware MARGIN (price minus cost). Unset by default — every row&rsquo;s
-          hardware commission shows $0.00 until a rate is saved here, and even then it stays $0.00
-          today: EasyOB has no hardware COST data anywhere (the catalog carries HubSpot&rsquo;s list
-          price only), so there is no margin to apply this rate to yet. See lib/commission.ts.
+          <strong>Rep/RSM hardware commission is the real formula</strong> — (price after discount −
+          cost) × rate — over each product&rsquo;s own <code>cost_to_rep</code>/<code>rep_commission</code>/
+          <code>rsm_commission</code> from the HubSpot product library, one-time lines only. A dash
+          means no cost and rate are on file for that line, not a measured zero.
         </p>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-          <input
-            type="number" step="0.01" min="0" max="100"
-            placeholder="unset"
-            value={rateInput}
-            onChange={e => setRateInput(e.target.value)}
-            style={{ width: 100 }}
-            aria-label="Hardware commission rate, percent"
-          />
-          <span>%</span>
-          <button type="button" onClick={saveRate} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </button>
-          <span style={{ opacity: 0.7, fontSize: 13 }}>
-            {hardwareBps == null ? "Currently unset." : `Currently ${(hardwareBps / 100).toFixed(2)}%.`}
-          </span>
-        </div>
       </div>
 
       {error && <div className={styles.emptyState}>{error}</div>}
+
+      {gaps && hasGaps && (
+        <div className={styles.panel} style={{ marginBottom: "var(--space-md, 16px)", borderColor: "var(--warning)" }}>
+          <div className={styles.sectionHead}>
+            <h2 className={styles.sectionTitle}>Needs attention — hardware commission catalog gaps</h2>
+          </div>
+          <p className={styles.revenueCaption}>
+            Hardware commission is computed per product from the HubSpot product library. These are the
+            products on file across every deal that leave that computation incomplete or questionable.
+          </p>
+          {gaps.missingCost.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <strong>No cost on file ({gaps.missingCost.length})</strong> — these lines contribute no
+              commission at all until a &ldquo;Cost to Rep&rdquo; is entered.
+              <div style={{ opacity: 0.85, fontSize: 13, marginTop: 4 }}>{gaps.missingCost.join(", ")}</div>
+            </div>
+          )}
+          {gaps.zeroCost.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <strong>Costed at a literal $0 ({gaps.zeroCost.length})</strong> — honoured as a real
+              zero, so the entire sale price pays commission. Almost certainly means nobody has entered
+              a real cost yet, not that the product truly costs nothing.
+              <div style={{ opacity: 0.85, fontSize: 13, marginTop: 4 }}>{gaps.zeroCost.join(", ")}</div>
+            </div>
+          )}
+          {gaps.recurringWithRate.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <strong>Recurring product carrying a commission rate ({gaps.recurringWithRate.length})</strong> —
+              hardware commission is one-time-dollars only, so these rates are excluded from every total.
+              Likely a misconfigured product.
+              <div style={{ opacity: 0.85, fontSize: 13, marginTop: 4 }}>{gaps.recurringWithRate.join(", ")}</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {rows === null && !error && <div className={styles.panel}><div className={styles.emptyState}>Loading commissions…</div></div>}
 
       {rows && rows.length === 0 && (
         <div className={styles.panel}>
           <div className={styles.emptyState}>
-            Nothing to report yet — no application has a statement, a rep-entered volume/ticket, or
-            any quote lines to compute a commission basis from.
+            Nothing to report yet — no application has a statement, a rep-entered volume/ticket, any
+            quote lines to compute a commission basis from, or any hardware line with both a cost and a
+            rate on file.
           </div>
         </div>
       )}
@@ -129,7 +134,8 @@ export default function CommissionsPanel() {
           <div className={styles.tableHeader} style={{ gridTemplateColumns: cols }}>
             {[
               "Merchant", "AIO Rev/mo", "Proc. Cost", "Net Margin", "True Floor/mo",
-              "Processing ARR", "Recurring ARR (est.)", "Signing (est.)", "Activation (est.)", "Hardware",
+              "Processing ARR", "Recurring ARR (est.)", "Signing (est.)", "Activation (est.)",
+              "Rep HW Comm.", "RSM HW Comm.",
             ].map(h => (
               <div key={h} className={styles.tableHeaderCell}>{h}</div>
             ))}
@@ -148,7 +154,8 @@ export default function CommissionsPanel() {
               <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Recurring ARR">{dash(r.recurringArr)}</div>
               <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Signing">{dash(r.signingCommission)}</div>
               <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Activation">{dash(r.activationCommission)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Hardware">{fmt$(r.hardwareCommission)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Rep HW Comm.">{dash(r.repHardwareCommission)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="RSM HW Comm.">{dash(r.rsmHardwareCommission)}</div>
             </div>
           ))}
         </div>

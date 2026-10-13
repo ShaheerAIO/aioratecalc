@@ -2,6 +2,7 @@
 // Scopes required: crm.objects.deals.read/write, crm.objects.contacts.read/write
 
 import { paymentProcessingArr } from "@/lib/billing/processingArr";
+import { percentToBps, quoteHardwareCommission } from "@/lib/commission";
 import type {
   BillingFrequency,
   CatalogProduct,
@@ -149,9 +150,14 @@ function billingHeaders() {
   return tokenHeaders(process.env.HUBSPOT_BILLING_PRIVATE_APP_TOKEN, "HUBSPOT_BILLING_PRIVATE_APP_TOKEN");
 }
 
-// Every property this adapter reads or writes on a DEAL, and the only ones
-// that exist on the portal's DEAL object — the five the payload used to also
-// carry (`current_processor`,
+// NOT every property this adapter reads or writes on a DEAL — just these four,
+// confirmed to exist on the portal's DEAL object. `payment_processing_arr`
+// (written conditionally, below) and the hardware-commission pair
+// `rep_commission`/`rsm_commission` (also conditional — see their own comment)
+// are deliberately left off this list: each is independently verified live and
+// documented at its own write site, so this stays the original, narrower list
+// the "five phantom properties" bug below was fixed against. The five the
+// payload used to also carry (`current_processor`,
 // `current_monthly_fees`, `projected_annual_savings`, `proposed_effective_rate`,
 // `mcc_code`) were never created there, and HubSpot v3 rejects the ENTIRE
 // request with 400 PROPERTY_DOESNT_EXIST when any name is unknown, so every
@@ -250,6 +256,54 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
   if (app.quoteAcceptedAt) {
     const arr = paymentProcessingArr(app);
     if (arr !== null) props.payment_processing_arr = String(arr);
+  }
+  // Hardware commission — "Calculate both RSM & AE commission and map back to
+  // the rep_commission & rsm_commission fields on the [Deal] object
+  // respectively" (product owner, verbatim, 2026-10-13). Verified live against
+  // portal 244508708: both are DEAL properties, type number, writable — and
+  // distinct from the identically-named PRODUCT properties, which store a
+  // PERCENTAGE (read into CatalogProduct as repCommissionBps/rsmCommissionBps).
+  // These two are dollar amounts.
+  //
+  // Deliberately NOT gated on app.quoteAcceptedAt, unlike payment_processing_arr
+  // above — that gate exists because payment_processing_arr feeds HubSpot's
+  // calculated total_arr, which the sales org reads as booked revenue, so a
+  // pre-acceptance figure there would be a forecast masquerading as a booking.
+  // These two feed nothing downstream; they're a standalone payout figure a
+  // rep or RSM wants to see while the deal is still open, so every sync writes
+  // the current figure.
+  //
+  // Same "omit rather than zero" rule as everywhere else in this file, but
+  // applied per property rather than as one combined gate: `rep` and `rsm` are
+  // independently nullable per line (a line can have a cost and a rep rate but
+  // no rsm rate, or vice versa — see lineHardwareCommission in commission.ts),
+  // so `quoteHardwareCommission`'s summed `rep`/`rsm` are 0 whenever NO line
+  // contributed to that side, and a 0 there would read as "this deal earns no
+  // commission" when the truth today (0 of 39 active HubSpot products carry a
+  // rep_commission/rsm_commission rate) is "nobody has loaded the cost/rate
+  // data yet". So each property is written only when at least one line in
+  // `perLine` actually produced a non-null figure for that side. Rounded to
+  // CENTS, not the dollar — unlike `amount` and `payment_processing_arr`
+  // above, which are large derived aggregates where a dollar is noise, these
+  // two are a payout: a figure a salesperson reconciles against what they are
+  // actually paid, and $134.82 silently becoming $135 is a real discrepancy in
+  // someone's compensation. Nothing requires dollar rounding either — the
+  // HubSpot property is type `number` and carries decimals happily (the
+  // portal's own `AIO Pre Auth` product is priced $0.50), and the portal's
+  // existing `signing_commission`/`activation_commission` properties (5% of
+  // `total_arr`) carry cents for the same reason. commission.ts itself stays
+  // unrounded, since rounding here is a HubSpot-write concern, not a math one.
+  // Negative totals are written as-is — never floored at zero, a
+  // package-covered line priced at 100% off legitimately nets a negative
+  // margin.
+  if (app.quoteLines) {
+    const commission = quoteHardwareCommission(app.quoteLines);
+    if (commission.perLine.some(line => line.rep !== null)) {
+      props.rep_commission = String(Math.round(commission.rep * 100) / 100);
+    }
+    if (commission.perLine.some(line => line.rsm !== null)) {
+      props.rsm_commission = String(Math.round(commission.rsm * 100) / 100);
+    }
   }
   // No warn on the unmapped branch: STAGE_MAP is now a deliberately PARTIAL
   // milestone map (see its own comment), so an app.stage with no HubSpot
@@ -1211,7 +1265,13 @@ async function listAssociatedContacts(
 // the crm.objects.line_items scopes do NOT cover the Products API.
 
 // Products with no recurringbillingfrequency are one-time (hardware, install).
-const PRODUCT_PROPS = ["name", "price", "hs_product_type", "recurringbillingfrequency", "hs_status"];
+// cost_to_rep/rep_commission/rsm_commission are the 2026-10-13 hardware-
+// commission inputs — see CatalogProduct in types/merchant.ts for the
+// product-vs-deal name-collision note and the percent→bps assumption.
+const PRODUCT_PROPS = [
+  "name", "price", "hs_product_type", "recurringbillingfrequency", "hs_status",
+  "cost_to_rep", "rep_commission", "rsm_commission",
+];
 
 // Scratch/placeholder entries a rep should never be able to put on a quote.
 const EXCLUDED_PRODUCT_NAMES = ["AIO Platform fee TEST - do not use"];
@@ -1227,6 +1287,14 @@ function toCatalogProduct(obj: { id: string; properties: Record<string, string |
     billingFrequency: (p.recurringbillingfrequency as BillingFrequency) || "one_time",
     productType: (p.hs_product_type ?? "").trim(),
     status: (p.hs_status ?? "").trim(),
+    // `num()` (below) is absent/empty/non-numeric -> null, never 0 — a missing
+    // cost or rate means "unset", not "zero". `cost_to_rep` is a dollar
+    // figure; the two commission rates stay PERCENTAGES here (HubSpot's own
+    // unit) and are converted to bps in commission.ts's `percentToBps`, the
+    // one place that conversion happens.
+    costToRep: num(p.cost_to_rep),
+    repCommissionBps: percentToBps(num(p.rep_commission)),
+    rsmCommissionBps: percentToBps(num(p.rsm_commission)),
   };
 }
 

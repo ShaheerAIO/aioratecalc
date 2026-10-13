@@ -148,7 +148,11 @@ export const PRODUCT_PARTS: Record<string, SheetKey[]> = {
   "223511653104": ["printer"],            // Thermal Printer
   "222497165011": ["drawer"],             // Cash Drawer
   "223511653103": ["menuboard"],          // Menu Board Computer
-  "281351401209": ["wifi"],               // AIO WiFi Network Package
+  // AIO retired "AIO WiFi Network Package" (281351401209) 2026-10-13 and
+  // replaced it with the Unifi variant quoting.ts now derives — see
+  // WIFI_PRODUCT_ID / RETIRED_WIFI_PRODUCTS there. The sheet slot and its MSRP
+  // are unchanged; only the id a cart line must carry to fill it moves.
+  "338690209525": ["wifi"],               // AIO Wifi Network Package - Unifi
 };
 
 /** The MSRP of a whole HubSpot product — the sum of what it is made of — or null if unmapped. */

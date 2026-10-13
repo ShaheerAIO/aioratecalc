@@ -15,7 +15,7 @@ import {
   parseDealIdInput,
 } from "@/lib/adapters/hubspot";
 import { STAGE_RANK } from "@/lib/stages";
-import type { DealStage, MerchantApplication, TenantLink } from "@/types/merchant";
+import type { DealStage, MerchantApplication, QuoteLine, TenantLink } from "@/types/merchant";
 
 // Ids this module used to write that no longer exist on the live pipeline at
 // all (verified 2026-09-21, portal 244508708 — don't re-probe): `3262845631`
@@ -284,6 +284,120 @@ describe("buildDealProperties", () => {
     expect(props).not.toHaveProperty("dealstage");
     expect(props).not.toHaveProperty("pipeline");
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  // ── Hardware commission: rep_commission / rsm_commission ──────────────────
+  // "Calculate both RSM & AE commission and map back to the rep_commission &
+  // rsm_commission fields on the Deal object respectively" (product owner,
+  // 2026-10-13). These are DEAL properties, dollar amounts — distinct from
+  // the identically-named PRODUCT properties, which are percentages. See
+  // lib/commission.ts's `quoteHardwareCommission` for the underlying math;
+  // these tests only cover the wiring into buildDealProperties.
+  describe("hardware commission (rep_commission / rsm_commission)", () => {
+    const hwLine = (over: Partial<QuoteLine> = {}): QuoteLine => ({
+      hubspotProductId: "hw-1",
+      name: "POS Unit",
+      qty: 2,
+      unitPrice: 500,
+      billingFrequency: "one_time",
+      productType: "Hardware",
+      ...over,
+    });
+
+    it("writes both properties, as rounded DOLLAR totals, not percentages or bps", () => {
+      // 2 units @ $500 = $1,000 net. Cost $300/unit = $600. Margin $400.
+      // 10% rep / 5% rsm -> rep $40, rsm $20 — never "1000"/"500" (bps) or
+      // "10"/"5" (percent).
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({ costToRep: 300, repCommissionBps: 1000, rsmCommissionBps: 500 })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(props.rep_commission).toBe("40");
+      expect(props.rsm_commission).toBe("20");
+    });
+
+    it("rounds to CENTS, not the dollar — a payout figure, not a derived aggregate", () => {
+      // 1 unit @ $699.07 = $699.07 net. Cost $517.42. Margin $181.65.
+      // 74.25% rep -> $134.8751... -> whole-dollar rounding would destroy the
+      // cents and silently become "$135" on a salesperson's payout.
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({
+          unitPrice: 699.07, qty: 1, costToRep: 517.42, repCommissionBps: 7425, rsmCommissionBps: null,
+        })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(props.rep_commission).toBe("134.88");
+    });
+
+    it("writes NEITHER property when no line has both a cost and a rate — today's real state (0 of 39 active products carry a commission rate)", () => {
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({ costToRep: null, repCommissionBps: null, rsmCommissionBps: null })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(props).not.toHaveProperty("rep_commission");
+      expect(props).not.toHaveProperty("rsm_commission");
+    });
+
+    it("writes neither property when there are no quote lines at all", () => {
+      const props = buildDealProperties(appAt("merchant_filling", { quoteLines: null } as unknown as Partial<MerchantApplication>));
+      expect(props).not.toHaveProperty("rep_commission");
+      expect(props).not.toHaveProperty("rsm_commission");
+    });
+
+    it("omits rep_commission alone when only the rsm rate is set, and vice versa — independent per side, never a coupled zero", () => {
+      const rsmOnly = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({ costToRep: 300, repCommissionBps: null, rsmCommissionBps: 500 })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(rsmOnly).not.toHaveProperty("rep_commission");
+      expect(rsmOnly.rsm_commission).toBe("20");
+
+      const repOnly = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({ costToRep: 300, repCommissionBps: 1000, rsmCommissionBps: null })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(repOnly.rep_commission).toBe("40");
+      expect(repOnly).not.toHaveProperty("rsm_commission");
+    });
+
+    it("lets a negative commission (a 100%-off package-covered line) survive to the property string, unclamped", () => {
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({
+          costToRep: 300, discountPercent: 100, coveredByPackage: "QSR Kit", repCommissionBps: 1000,
+        })],
+      } as unknown as Partial<MerchantApplication>));
+      // net = 0; cost = 600; margin = -600; 10% of -600 = -60.
+      expect(props.rep_commission).toBe("-60");
+    });
+
+    it("is written regardless of quoteAcceptedAt — unlike payment_processing_arr, it is not gated on acceptance", () => {
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteAcceptedAt: null,
+        quoteLines: [hwLine({ costToRep: 300, repCommissionBps: 1000 })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(props.rep_commission).toBe("40");
+      // Confirms the regression guard below isn't accidentally satisfied by
+      // this test's own fixture lacking volume/analysis data.
+      expect(props).not.toHaveProperty("payment_processing_arr");
+    });
+  });
+
+  // ── Regression: payment_processing_arr's acceptance gate is unchanged ─────
+  // Guards against the hardware-commission change above accidentally loosening
+  // (or the two blocks' logic getting merged into) the pre-existing gate.
+  describe("payment_processing_arr acceptance gate (regression)", () => {
+    const PROCESSING_QUOTE = {
+      quoteAcceptedAt: "2026-10-13T00:00:00.000Z",
+      analysis: { totalVolume: 50000, totalTransactions: 500 },
+    };
+
+    it("omits payment_processing_arr when the quote has not been accepted, even with volume on file", () => {
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteAcceptedAt: null,
+        analysis: PROCESSING_QUOTE.analysis,
+      } as unknown as Partial<MerchantApplication>));
+      expect(props).not.toHaveProperty("payment_processing_arr");
+    });
+
+    it("writes payment_processing_arr once accepted, given a computable margin", () => {
+      const props = buildDealProperties(appAt("quote_accepted", PROCESSING_QUOTE as unknown as Partial<MerchantApplication>));
+      expect(props).toHaveProperty("payment_processing_arr");
+    });
   });
 });
 

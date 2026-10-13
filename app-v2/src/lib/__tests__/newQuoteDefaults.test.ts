@@ -28,7 +28,7 @@ const P: Array<[string, string, number, CatalogProduct["billingFrequency"], stri
   ["223511653104", "Thermal Printer", 199, "one_time", "inventory"],
   ["222497165011", "Cash Drawer", 70, "one_time", "inventory"],
   ["223511653103", "Menu Board Computer", 99, "one_time", "inventory"],
-  ["281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"],
+  ["338690209525", "AIO Wifi Network Package - Unifi", 698, "one_time", "inventory"],
   ["223452690133", "Onsite Installation", 999, "one_time", "Service"],
   ["223152695032", "System Onboarding and Training", 499, "one_time", "Service"],
   ["335280960199", "Additional Software License", 19, "monthly", "Software"],

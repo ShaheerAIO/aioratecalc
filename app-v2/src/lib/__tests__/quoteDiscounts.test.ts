@@ -48,7 +48,7 @@ const p = (
 const PLATFORM_ID = "335283119838";
 const INSTALL_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "Onsite Installation")!.hubspotProductId;
 const TRAINING_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "System Onboarding and Training")!.hubspotProductId;
-const WIFI_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "AIO WiFi Network Package")!.hubspotProductId;
+const WIFI_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "AIO Wifi Network Package - Unifi")!.hubspotProductId;
 const POS_ID = "217445755632";
 const AMS1_ID = "223511653105";
 
@@ -57,7 +57,7 @@ const CATALOG: CatalogProduct[] = [
   p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p(POS_ID, "POS Unit", 749, "one_time", "inventory"),
   p(AMS1_ID, "Payment Terminal - AMS1", 300, "one_time", "inventory"),
-  p(WIFI_ID, "AIO WiFi Network Package", 999, "one_time", "inventory"),
+  p(WIFI_ID, "AIO Wifi Network Package - Unifi", 698, "one_time", "inventory"),
   p(INSTALL_ID, "Onsite Installation", 999, "one_time", "Service"),
   p(TRAINING_ID, "System Onboarding and Training", 499, "one_time", "Service"),
   p(PRE_AUTH_PRODUCT.hubspotProductId, PRE_AUTH_PRODUCT.name, 0.5, "one_time", "Service"),
@@ -281,10 +281,10 @@ describe("buildQuote with adjustments", () => {
     const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
     expect(install.discountPercent).toBe(100);
     expect(lineNetAmount(install)).toBe(0);
-    // $999 wifi + $749 POS + $300 AMS1 (one per POS). The install AND the
+    // $698 wifi + $749 POS + $300 AMS1 (one per POS). The install AND the
     // training are both comped — the install by this adjustment, the training
     // by standing AIO policy (see COMPED_SERVICE_PRODUCT_IDS).
-    expect(built.totals.oneTime).toBe(2048);
+    expect(built.totals.oneTime).toBe(1747);
     expect(built.blockers).toEqual([]);
   });
 

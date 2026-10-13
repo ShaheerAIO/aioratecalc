@@ -9,21 +9,27 @@
 
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { listApplicationsAction, getSettingsAction } from "@/lib/actions/applications";
-import { getHardwareCommissionPolicy } from "@/lib/actions/pricing";
-import { buildCommissionReport, type DealCommissionRow } from "@/lib/billing/commissionReport";
+import {
+  buildCommissionReport, buildCommissionDataGaps,
+  type DealCommissionRow, type CommissionDataGaps,
+} from "@/lib/billing/commissionReport";
 import type { ProcessorTier } from "@/types/merchant";
 
-export async function getCommissionReportAction(): Promise<DealCommissionRow[]> {
+export type CommissionReport = {
+  rows: DealCommissionRow[];
+  gaps: CommissionDataGaps;
+};
+
+export async function getCommissionReportAction(): Promise<CommissionReport> {
   const effective = await getEffectiveRole();
   if (!effective || effective.role !== "admin") throw new Error("Admin only");
 
   // listApplicationsAction is already role-scoped (admin -> every account);
   // getSettingsAction gives the processor tier the true cost figures are
   // computed against, same source PricingStep/EditQuotePanel already read.
-  const [apps, settings, hardwarePolicy] = await Promise.all([
+  const [apps, settings] = await Promise.all([
     listApplicationsAction(),
     getSettingsAction(),
-    getHardwareCommissionPolicy(),
   ]);
 
   const activeTier: ProcessorTier | null =
@@ -31,5 +37,8 @@ export async function getCommissionReportAction(): Promise<DealCommissionRow[]> 
     ?? settings.processors?.[0]?.tiers?.[0]
     ?? null;
 
-  return buildCommissionReport(apps, activeTier, hardwarePolicy);
+  return {
+    rows: buildCommissionReport(apps, activeTier),
+    gaps: buildCommissionDataGaps(apps),
+  };
 }

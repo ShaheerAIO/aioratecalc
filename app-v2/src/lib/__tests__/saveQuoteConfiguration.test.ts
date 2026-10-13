@@ -91,7 +91,7 @@ const FULL_CATALOG: CatalogProduct[] = [
   p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p("217445755632", "POS Unit", 749, "one_time", "inventory"),
   p("223511653105", "Payment Terminal - AMS1", 300, "one_time", "inventory"),
-  p("281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"),
+  p("338690209525", "AIO Wifi Network Package - Unifi", 698, "one_time", "inventory"),
   p("223452690133", "Onsite Installation", 999, "one_time", "Service"),
   p("223152695032", "System Onboarding and Training", 499, "one_time", "Service"),
   // The marketing plans and the hardware they include — enough to prove an
@@ -206,7 +206,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
     const names = updated.quoteLines!.map(l => l.name).sort();
     expect(names).toEqual([
-      "AIO WiFi Network Package",
+      "AIO Wifi Network Package - Unifi",
       "All-in-One Platform",
       "Onsite Installation",
       "POS Unit",
@@ -312,10 +312,16 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
   it("reopening a saved quote and re-saving it unchanged does not duplicate the platform line or the included services", async () => {
     // Simulate a quote that was already saved once: derived lines (platform +
-    // the three included services) plus one picked POS unit.
+    // the three included services) plus one picked POS unit. The WiFi line is
+    // the RETIRED $999 product (281351401209) — pre-2026-10-13 quotes carry
+    // it, and the catalog no longer does, so re-derivation must replace it
+    // with the current Unifi line rather than fail to recognise it.
     const savedLines: QuoteLine[] = [
       toQuoteLine(FULL_CATALOG.find(c => c.name === "All-in-One Platform")!, 1),
-      toQuoteLine(FULL_CATALOG.find(c => c.name === "AIO WiFi Network Package")!, 1),
+      toQuoteLine(
+        { hubspotProductId: "281351401209", name: "AIO WiFi Network Package", price: 999, billingFrequency: "one_time", productType: "inventory" },
+        1
+      ),
       toQuoteLine(FULL_CATALOG.find(c => c.name === "Onsite Installation")!, 1),
       toQuoteLine(FULL_CATALOG.find(c => c.name === "System Onboarding and Training")!, 1),
       toQuoteLine(FULL_CATALOG.find(c => c.name === "POS Unit")!, 1),
@@ -338,11 +344,13 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
     const platformLines = updated.quoteLines!.filter(l => l.name === "All-in-One Platform");
     const installLines = updated.quoteLines!.filter(l => l.name === "Onsite Installation");
-    const wifiLines = updated.quoteLines!.filter(l => l.name === "AIO WiFi Network Package");
+    const wifiLines = updated.quoteLines!.filter(l => l.name === "AIO Wifi Network Package - Unifi");
     const trainingLines = updated.quoteLines!.filter(l => l.name === "System Onboarding and Training");
     expect(platformLines).toHaveLength(1);
     expect(installLines).toHaveLength(1);
+    // Re-derived onto the CURRENT product, not duplicated alongside the old one.
     expect(wifiLines).toHaveLength(1);
+    expect(updated.quoteLines!.filter(l => l.name === "AIO WiFi Network Package")).toHaveLength(0);
     expect(trainingLines).toHaveLength(1);
     expect(updated.quoteLines).toHaveLength(6);
     expect(updated.quoteLines!.filter(l => l.name === "Payment Terminal - AMS1")).toHaveLength(1);

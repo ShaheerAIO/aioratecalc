@@ -120,7 +120,7 @@ export const WEBSITE_PRODUCT_ID = "333275576048";
  */
 export const DEFAULT_UNIT_CAPS: Record<string, number> = {
   "333275576048": 1,  // Website
-  "281351401209": 1,  // AIO WiFi Network Package
+  "338690209525": 1,  // AIO Wifi Network Package - Unifi
   "217445755632": 10, // POS Unit
   "223452690130": 10, // POS Unit - With Customer Facing Display
   "318736467644": 10, // Customer Facing Display
@@ -410,12 +410,30 @@ export function isAllowedForQuoteType(product: CatalogProduct, quoteType: QuoteT
 //     nothing to install, no network to run and nothing to train on. Declared
 //     ordering channels do NOT pull them in — a website-ordering merchant has
 //     no on-site anything for a $999 install or a $999 WiFi package to cover.
-export const WIFI_PRODUCT_ID = "281351401209";
+// AIO deactivated the original "AIO WiFi Network Package" (281351401209,
+// $999) on 2026-10-13 and replaced it with two vendor-specific variants:
+// "AIO Wifi Network Package - Unifi" (338690209525, $698) and "... - Pronto"
+// (338691650250, $490). Product owner: point the always-included line at
+// Unifi; Pronto is deliberately unreachable from EasyOB for now. See
+// RETIRED_WIFI_PRODUCTS for how the old line is still recognised.
+export const WIFI_PRODUCT_ID = "338690209525";
 
 export const INCLUDED_SERVICE_PRODUCTS = [
-  { name: "AIO WiFi Network Package", hubspotProductId: WIFI_PRODUCT_ID },
+  { name: "AIO Wifi Network Package - Unifi", hubspotProductId: WIFI_PRODUCT_ID },
   { name: "Onsite Installation", hubspotProductId: "223452690133" },
   { name: "System Onboarding and Training", hubspotProductId: "223152695032" },
+] as const;
+
+/**
+ * The retired WiFi package id/name. Deactivated in HubSpot 2026-10-13, so it
+ * can never be resolved or written again — but six already-published quotes
+ * and any saved draft still carry this line at $999, and `isWifiLine` /
+ * `isDroppedOnReopen` must keep recognising it so the rep's remove-toggle and
+ * reopen-a-saved-quote logic keep working on those rows. Same pattern as
+ * `RETIRED_PLATFORM_PRODUCTS`.
+ */
+const RETIRED_WIFI_PRODUCTS = [
+  { name: "AIO WiFi Network Package", hubspotProductId: "281351401209" },
 ] as const;
 
 /**
@@ -1125,7 +1143,13 @@ export function groupProducts(products: CatalogProduct[]): Array<{ type: string;
     .map(([type, list]) => ({ type, label: PRODUCT_GROUP_LABELS[type] ?? type, products: list }));
 }
 
-/** Snapshot a catalog product onto the quote. Price and frequency are frozen here. */
+/**
+ * Snapshot a catalog product onto the quote. Price and frequency are frozen
+ * here — and so, as of 2026-10-13, are the hardware-commission inputs
+ * (`costToRep`/`repCommissionBps`/`rsmCommissionBps`), for the same reason:
+ * a saved quote must keep paying the same commission even if the catalog's
+ * rates change later. See the fields' own doc comments on `QuoteLine`.
+ */
 export function toQuoteLine(product: CatalogProduct, qty: number): QuoteLine {
   return {
     hubspotProductId: product.hubspotProductId,
@@ -1134,6 +1158,9 @@ export function toQuoteLine(product: CatalogProduct, qty: number): QuoteLine {
     unitPrice: product.price,
     billingFrequency: product.billingFrequency,
     productType: product.productType,
+    costToRep: product.costToRep ?? null,
+    repCommissionBps: product.repCommissionBps ?? null,
+    rsmCommissionBps: product.rsmCommissionBps ?? null,
   };
 }
 
@@ -1302,6 +1329,10 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "Thermal Printer": { pointsPerUnit: 0, hubspotProductId: "223511653104" },
   "Epson Sticky Printer": { pointsPerUnit: 0, hubspotProductId: "250458906315" },
   "Cash Drawer": { pointsPerUnit: 0, hubspotProductId: "222497165011" },
+  "AIO Wifi Network Package - Unifi": { pointsPerUnit: 0, hubspotProductId: "338690209525" },
+  // Retired 2026-10-13 (deactivated in HubSpot, replaced by the Unifi
+  // variant above). A saved quote may still carry this line; keep counting
+  // it at 0 rather than flag it unclassified.
   "AIO WiFi Network Package": { pointsPerUnit: 0, hubspotProductId: "281351401209" },
   // Deactivated in HubSpot 2026-10, so a rep can't pick these any more. The
   // rules stay: a saved quote that already carries one must keep counting it
@@ -1512,6 +1543,10 @@ function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
   return (
     isPlatformProduct(line.name, line.hubspotProductId) ||
     isIncludedServiceProduct(line.hubspotProductId, line.name) ||
+    // The retired $999 WiFi line isn't in INCLUDED_SERVICE_PRODUCTS any more
+    // (it points at the Unifi replacement now), so it needs its own check
+    // here or a pre-10/13 quote would reopen offering it back as a pick.
+    isWifiLine(line) ||
     line.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId ||
     isPreAuthProduct(line.hubspotProductId, line.name) ||
     isSoftwareLicenseProduct(line.hubspotProductId, line.name) ||
@@ -1962,7 +1997,10 @@ export function adjustmentsFromQuoteLines(
 }
 
 function isWifiLine(line: { hubspotProductId: string; name: string }): boolean {
-  return line.hubspotProductId === WIFI_PRODUCT_ID || line.name.trim() === "AIO WiFi Network Package";
+  const trimmed = line.name.trim();
+  const current = INCLUDED_SERVICE_PRODUCTS.find(s => s.hubspotProductId === WIFI_PRODUCT_ID)!;
+  if (line.hubspotProductId === current.hubspotProductId || trimmed === current.name) return true;
+  return RETIRED_WIFI_PRODUCTS.some(p => p.hubspotProductId === line.hubspotProductId || p.name === trimmed);
 }
 
 /** A one-line, rep- and customer-readable rendering of a delayed start. */

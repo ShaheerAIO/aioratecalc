@@ -84,7 +84,7 @@ const CATALOG: CatalogProduct[] = [
   p("276754193118", "Clock in Tablet", 199, "one_time", "inventory"),
   p("252941875920", "QSR POS Hardware Bundle", 1110, "one_time", "inventory"),
   // The three always-included services.
-  p("281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"),
+  p("338690209525", "AIO Wifi Network Package - Unifi", 698, "one_time", "inventory"),
   p("223452690133", "Onsite Installation", 999, "one_time", "Service"),
   p("223152695032", "System Onboarding and Training", 499, "one_time", "Service"),
   p("281354281678", "AIO Pre Auth", 0.5, "one_time", "Service"),
@@ -110,7 +110,7 @@ describe("picker exclusions", () => {
       "AIO Marketing Platform (2-year term)",
       "AIO Pre Auth",
       "AIO Processing Two Tiered Rate",
-      "AIO WiFi Network Package",
+      "AIO Wifi Network Package - Unifi",
       "Additional Software License",
       "All-in-One (Order & Pay only)",
       "All-in-One Platform",
@@ -208,7 +208,7 @@ describe("always-included services", () => {
       const { lines, missing } = resolveIncludedServices(quoteType, SOMETHING, CATALOG);
       expect(missing).toEqual([]);
       expect(lines.map(l => l.name)).toEqual([
-        "AIO WiFi Network Package",
+        "AIO Wifi Network Package - Unifi",
         "Onsite Installation",
         "System Onboarding and Training",
       ]);
@@ -216,9 +216,9 @@ describe("always-included services", () => {
       // Only the WiFi package is CHARGED. The install and the training are on
       // the quote at MSRP and comped to $0 — AE price sheet, effective
       // 2026-09-18. See COMPED_SERVICE_PRODUCT_IDS.
-      expect(quoteTotals(lines).oneTime).toBe(999);
+      expect(quoteTotals(lines).oneTime).toBe(698);
       const byName = new Map(lines.map(l => [l.name, l]));
-      expect(byName.get("AIO WiFi Network Package")!.discountPercent).toBeUndefined();
+      expect(byName.get("AIO Wifi Network Package - Unifi")!.discountPercent).toBeUndefined();
       expect(byName.get("Onsite Installation")!.discountPercent).toBe(100);
       expect(byName.get("System Onboarding and Training")!.discountPercent).toBe(100);
     }
@@ -261,6 +261,70 @@ describe("always-included services", () => {
     const { lines, missing } = resolveIncludedServices("all_in_one", SOMETHING, renamed);
     expect(missing).toEqual([]);
     expect(lines.find(l => l.hubspotProductId === "223452690133")!.unitPrice).toBe(999);
+  });
+
+  // The class of break this guards against: AIO deactivated "AIO WiFi Network
+  // Package" (281351401209) on 2026-10-13 with no replacement matching its id
+  // OR its name, so `resolveIncludedServices` reported it `missing` and every
+  // processing quote with a product picked could no longer be saved or sent.
+  // This asserts every always-included service still resolves against a
+  // representative catalog, so the NEXT such deactivation fails a test
+  // instead of reaching production silently.
+  it("resolves every INCLUDED_SERVICE_PRODUCTS id against the live catalog", () => {
+    for (const service of INCLUDED_SERVICE_PRODUCTS) {
+      const product = CATALOG.find(c => c.hubspotProductId === service.hubspotProductId);
+      expect(product, `${service.name} (${service.hubspotProductId})`).toBeDefined();
+      expect(product!.name).toBe(service.name);
+    }
+    const { missing } = resolveIncludedServices("all_in_one", SOMETHING, CATALOG);
+    expect(missing).toEqual([]);
+  });
+
+  describe("the retired WiFi package (281351401209, replaced 2026-10-13)", () => {
+    const RETIRED_WIFI = toQuoteLine(
+      p("281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"),
+      1
+    );
+
+    it("a fresh quote derives the current Unifi package, not the retired one", () => {
+      const { lines, missing } = resolveIncludedServices("all_in_one", SOMETHING, CATALOG);
+      expect(missing).toEqual([]);
+      const wifi = lines.find(l => l.hubspotProductId === WIFI_PRODUCT_ID)!;
+      expect(wifi.name).toBe("AIO Wifi Network Package - Unifi");
+      expect(wifi.unitPrice).toBe(698);
+    });
+
+    it("a saved quote carrying the retired $999 line is still recognised as the WiFi line and is not offered back as a pick", () => {
+      const saved = [RETIRED_WIFI, line("POS Unit", 1), line("Onsite Installation", 1), line("System Onboarding and Training", 1)];
+      const picks = picksFromQuoteLines(saved, "all_in_one");
+      expect(picks).not.toContainEqual(expect.objectContaining({ hubspotProductId: "281351401209" }));
+      expect(picks).toEqual([{ hubspotProductId: find("POS Unit").hubspotProductId, qty: 1 }]);
+    });
+
+    it("re-saving that quote re-derives the current Unifi line and raises no blocker", () => {
+      const picks = picksFromQuoteLines([RETIRED_WIFI, line("POS Unit", 1)], "all_in_one");
+      const built = buildQuote("all_in_one", picks.map(({ hubspotProductId, qty }) => toQuoteLine(CATALOG.find(c => c.hubspotProductId === hubspotProductId)!, qty)), [], CATALOG);
+      expect(built.blockers).toEqual([]);
+      expect(built.quoteLines.map(l => l.name)).not.toContain("AIO WiFi Network Package");
+      expect(built.quoteLines.map(l => l.name)).toContain("AIO Wifi Network Package - Unifi");
+    });
+
+    it("a retired WiFi line reopens as PRESENT, not as removed", () => {
+      const reopened = adjustmentsFromQuoteLines(
+        [line("All-in-One Platform", 1), RETIRED_WIFI, line("Onsite Installation", 1), line("System Onboarding and Training", 1), line("POS Unit", 1)],
+        "all_in_one"
+      );
+      expect(reopened[WIFI_PRODUCT_ID]).toBeUndefined();
+    });
+
+    it("the rep's remove-toggle still works once the retired line is gone", () => {
+      const reopened = adjustmentsFromQuoteLines(
+        [line("All-in-One Platform", 1), line("Onsite Installation", 1), line("System Onboarding and Training", 1), line("POS Unit", 1)],
+        "all_in_one"
+      );
+      // No WiFi line at all (rep removed it) still reads as removed.
+      expect(reopened[WIFI_PRODUCT_ID]).toEqual({ removed: true });
+    });
   });
 });
 
@@ -568,7 +632,7 @@ describe("buildQuote — the one derivation", () => {
     expect(built.orderPoints.total).toBe(3); // 2 POS + website
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "All-in-One Platform",
-      "AIO WiFi Network Package",
+      "AIO Wifi Network Package - Unifi",
       "Onsite Installation",
       "System Onboarding and Training",
       "POS Unit",
@@ -576,9 +640,9 @@ describe("buildQuote — the one derivation", () => {
       // One per POS unit, charged, on top of anything the rep picked.
       "Payment Terminal - AMS1",
     ]);
-    // 999 + 2×749 + 69 + 2×300 = $3,166 due once. The install ($999) and the
+    // 698 + 2×749 + 69 + 2×300 = $2,865 due once. The install ($999) and the
     // training ($499) are on the quote but comped to $0, so they add nothing.
-    expect(built.totals.oneTime).toBe(3166);
+    expect(built.totals.oneTime).toBe(2865);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
@@ -886,7 +950,7 @@ describe("website on a marketing quote", () => {
     const built = buildQuote("marketing_term", picked([["Website", 1], ["Marketing Kit - Mega Kiosk", 1]]), [], CATALOG);
     expect(built.includedServices.lines).toEqual([]);
     expect(built.quoteLines.map(l => l.name)).not.toContain("Onsite Installation");
-    expect(built.quoteLines.map(l => l.name)).not.toContain("AIO WiFi Network Package");
+    expect(built.quoteLines.map(l => l.name)).not.toContain("AIO Wifi Network Package - Unifi");
     expect(built.orderPoints.total).toBe(0);
   });
 
@@ -1075,7 +1139,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
   it("keeps a removed WiFi package off through a reopen", () => {
     const adjustments = { [WIFI_PRODUCT_ID]: { removed: true as const } };
     const first = buildQuote("all_in_one", picked([["POS Unit", 1]]), [], CATALOG, adjustments);
-    expect(first.quoteLines.map(l => l.name)).not.toContain("AIO WiFi Network Package");
+    expect(first.quoteLines.map(l => l.name)).not.toContain("AIO Wifi Network Package - Unifi");
     expect(first.includedServices.missing).toEqual([]);
     expect(first.quoteLines.map(l => l.name)).toContain("Onsite Installation");
 

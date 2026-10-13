@@ -35,9 +35,11 @@
 
 @media (min-width: 80rem) {
   .layout[data-railed]:not([data-rail="inline"]) {
-    grid-template-columns: minmax(0, 1fr) 21rem;
+    /* Widened from 21rem so a per-line commission figure and the "Hardware
+       commission" total row have room without crowding the amounts. */
+    grid-template-columns: minmax(0, 1fr) 23rem;
     column-gap: var(--space-lg);
-    width: calc(100% + var(--space-lg) + 21rem);
+    width: calc(100% + var(--space-lg) + 23rem);
   }
 
   .layout[data-railed]:not([data-rail="inline"]) .sideCol {
@@ -460,7 +462,10 @@
 }
 
 .receiptAmount {
-  grid-row: 1 / span 2;
+  /* To the last row rather than a hardcoded span of 2, so a line with a third
+     row underneath it (.receiptCommission) still centers the amount over the
+     whole line instead of just its top two rows. */
+  grid-row: 1 / -1;
   grid-column: 2;
   align-self: center;
   font-size: 0.78rem;
@@ -469,6 +474,20 @@
   text-align: right;
   color: var(--ink);
 }
+
+/* The rep's own estimated hardware commission on a one-time line — see
+   lib/commission.ts. Muted like .receiptMeta, which it sits directly under;
+   it's supplementary information, not a headline figure. A negative value
+   (a 100%-off package-covered line, margin minus cost) is flagged in the
+   danger color rather than styled like a discount — it isn't one. */
+.receiptCommission {
+  grid-column: 1;
+  font-size: 0.68rem;
+  color: var(--ink-3);
+  margin-top: 1px;
+}
+
+.receiptCommission[data-sign="negative"] { color: var(--danger); }
 
 .receiptTag {
   display: inline-block;
@@ -787,6 +806,13 @@
 
 .totalValue[data-tone="discount"] { color: var(--accent-text); }
 
+/* The "Hardware commission" total — unlike a discount, this is money, and it
+   can be negative (a package-covered line's margin minus cost). Positive
+   stays the default ink color rather than the discount's accent-green, since
+   it isn't savings; negative is flagged in the danger color, since a rep
+   should notice it rather than read it as just another figure on the page. */
+.totalValue[data-tone="commission"][data-sign="negative"] { color: var(--danger); }
+
 @media (prefers-reduced-motion: reduce) {
   .adjustToggle, .adjustChevron { transition-duration: 1ms; }
 }
@@ -861,7 +887,9 @@
 }
 
 @media (min-width: 72rem) {
-  .docLayout { grid-template-columns: minmax(0, 1.25fr) minmax(24rem, 1fr); }
+  /* Widened from 24rem so a per-line commission figure and the "Hardware
+     commission" total row have room without crowding the amounts. */
+  .docLayout { grid-template-columns: minmax(0, 1.25fr) minmax(26rem, 1fr); }
 
   .docCol {
     position: sticky;

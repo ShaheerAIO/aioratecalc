@@ -39,7 +39,7 @@ const ID = {
   printer:   "223511653104", // Thermal Printer
   drawer:    "222497165011", // Cash Drawer
   menuboard: "223511653103", // Menu Board Computer
-  wifi:      "281351401209", // AIO WiFi Network Package
+  wifi:      "338690209525", // AIO Wifi Network Package - Unifi
   mpos:      "223511653101", // mPOS — in no sheet row, so it can only swap, at its HubSpot price
   install:   "223452690133", // Onsite Installation — comped
   training:  "223152695032", // System Onboarding and Training — comped
@@ -64,7 +64,7 @@ const CATALOG: CatalogProduct[] = [
   p(ID.printer,   "Thermal Printer", 249, "one_time", "inventory"),
   p(ID.drawer,    "Cash Drawer", 69, "one_time", "inventory"),
   p(ID.menuboard, "Menu Board Computer", 99, "one_time", "inventory"),
-  p(ID.wifi,      "AIO WiFi Network Package", 999, "one_time", "inventory"),
+  p(ID.wifi,      "AIO Wifi Network Package - Unifi", 698, "one_time", "inventory"),
   p(ID.mpos,      "mPOS", 599, "one_time", "inventory"),
   p(ID.install,   "Onsite Installation", 999, "one_time", "Service"),
   p(ID.training,  "System Onboarding and Training", 499, "one_time", "Service"),
@@ -162,7 +162,7 @@ describe("decomposePackages — what is covered", () => {
   it("covers what the cart has and leaves the empty slots empty — nothing is credited elsewhere", () => {
     const out = run([line(ID.pos), line(ID.wifi)]);
     expect(covered(out.lines).map(l => l.hubspotProductId)).toEqual([ID.pos, ID.wifi]);
-    expect(out.coveredListAmount).toBe(749 + 999);
+    expect(out.coveredListAmount).toBe(749 + 698);
   });
 
   it("does not apply without an ordering device: a lone WiFi package and a printer are not a system", () => {

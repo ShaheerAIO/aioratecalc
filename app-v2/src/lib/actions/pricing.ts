@@ -133,10 +133,22 @@ export async function getPricingPreviewAction(input: {
   );
 }
 
-// ── Hardware commission rate ────────────────────────────────────────────────
-// The one knob on `commission_policy` (migration 0022) — see lib/commission.ts
-// for why it's a single nullable rate rather than a richer policy, and why
-// null ("unset") is the only state that actually does anything useful today.
+// ── Hardware commission rate (SUPERSEDED, no UI — kept per the 2026-10-12
+//    "three admin pages deleted, none of their policies were" precedent) ────
+//
+// SUPERSEDED 2026-10-13 by PER-PRODUCT hardware commission rates read from the
+// HubSpot product library (`cost_to_rep`/`rep_commission`/`rsm_commission`,
+// see CatalogProduct in types/merchant.ts and lib/commission.ts's
+// `quoteHardwareCommission`). A single admin-typed global bps rate applied to
+// a margin nobody could compute was always a placeholder for that design, not
+// a feature to keep running alongside it — `commissionReport.ts` no longer
+// calls either function below.
+//
+// Kept, not deleted: `commission_policy` (migration 0022) is already applied
+// in production and dropping the table is a separate, deliberate decision
+// nobody has made. These two actions have no caller and no UI — CommissionsPanel's
+// rate input/save button were removed with this change — but are left in
+// place in case the global rate ever needs re-reading or re-writing by hand.
 
 export async function getHardwareCommissionPolicy(): Promise<HardwareCommissionPolicy> {
   const [row] = await db.select().from(commissionPolicy).where(eq(commissionPolicy.isActive, true)).limit(1);
