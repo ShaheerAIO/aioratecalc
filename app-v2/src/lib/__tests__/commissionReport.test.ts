@@ -108,6 +108,60 @@ describe("commissionRowForApplication", () => {
     expect(row).not.toBeNull();
     expect(row!.repHardwareCommission).not.toBeNull();
   });
+
+  it("computes wholesale-basis total revenue and take rate for a normal processing quote, separate from the floor-enforcement basis", () => {
+    const row = commissionRowForApplication(app({
+      quoteConfig: { monthlyVolume: 100_000, avgTicket: 30 },
+    }), null)!;
+    // cardPresentRate 0.0249, perTransactionFee 0.15 (DEFAULT_QUOTE_RATES), $30 ticket -> $30 column (223 bps wholesale)
+    // revenue = 0.0249*100000 + (100000/30)*0.15 = 2490 + 500 = 2990
+    expect(row.totalRevenue).toBeCloseTo(2990, 0);
+    expect(row.totalTakeRate).toBeCloseTo(0.0299, 4);
+    expect(row.wholesaleMargin).toBeCloseTo(0.0299 - 0.0223, 4);
+    // Separate field from the floor-enforcement-basis margin — never overwrites it.
+    expect(row.wholesaleMargin).not.toBe(row.netMarginRate);
+  });
+
+  it("is all null (wholesale basis) for a marketing-only quote", () => {
+    const row = commissionRowForApplication(app({
+      quoteConfig: undefined, analysis: null, quoteType: "marketing_only" as StoredQuoteType,
+      quoteLines: [line({ costToRep: 100, repCommissionBps: 500, rsmCommissionBps: 500 })],
+    }), null)!;
+    expect(row).not.toBeNull();
+    expect(row.totalRevenue).toBeNull();
+    expect(row.totalTakeRate).toBeNull();
+    expect(row.wholesaleMargin).toBeNull();
+    expect(row.implausibleRate).toBeNull();
+    expect(row.processingArr).toBeNull();
+  });
+
+  it("is all null plus the implausible flag for a stored rate above MAX_PLAUSIBLE_CARD_RATE", () => {
+    const row = commissionRowForApplication(app({
+      quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: 2.0049 }, // 200.49% — a real stored value
+    }), null)!;
+    expect(row.implausibleRate).toBeCloseTo(2.0049, 4);
+    expect(row.totalRevenue).toBeNull();
+    expect(row.totalTakeRate).toBeNull();
+    expect(row.wholesaleMargin).toBeNull();
+    expect(row.processingArr).toBeNull();
+  });
+
+  it("carries the floor-enforcement basis and the wholesale basis as separate fields that never overwrite each other", () => {
+    const tier = {
+      id: "t1", name: "Tier 1", isDefault: true,
+      processingBps: 150, perTxnFee: 0.1, schemeBps: 10, monthlyFee: 0,
+    };
+    const row = commissionRowForApplication(app(), tier)!;
+    // Both bases are now computable (a real activeTier is on file) — and they
+    // disagree, which is the whole point: one basis must never silently
+    // become, or be mistaken for, the other.
+    expect(row.netMarginRate).not.toBeNull();
+    expect(row.wholesaleMargin).not.toBeNull();
+    expect(row.netMarginRate).not.toBe(row.wholesaleMargin);
+    expect(row.aioRevenue).not.toBeNull();
+    expect(row.totalRevenue).not.toBeNull();
+    expect(row.aioRevenue).not.toBe(row.totalRevenue);
+  });
 });
 
 describe("buildCommissionReport", () => {

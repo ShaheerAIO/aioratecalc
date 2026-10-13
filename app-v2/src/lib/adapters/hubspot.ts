@@ -482,50 +482,15 @@ export async function syncDealFromApplication(app: MerchantApplication): Promise
   return app.hubspotDealId;
 }
 
-/**
- * Reads back a deal's CURRENT `payment_processing_arr`, and nothing else —
- * the one property scripts/backfill-processing-arr.ts needs to print its
- * before/after diff. Deliberately NOT folded into DEAL_READ_PROPERTIES/
- * getDealById: those back three other call sites (listDealsForCompany,
- * searchDealsByName, the rep-facing deal-adoption picker) that have no
- * reason to carry this property around, and HubspotDeal has no field for it.
- */
-export async function getDealProcessingArr(dealId: string): Promise<string | null> {
-  const res = await fetchWithRetry(
-    `${BASE}/crm/v3/objects/deals/${dealId}?properties=payment_processing_arr`,
-    { headers: billingHeaders() }
-  );
-  if (!res.ok) {
-    throw hubspotErr(`HubSpot deal ${dealId} payment_processing_arr read failed`, res.status, await res.text());
-  }
-  const data = await res.json() as { properties?: { payment_processing_arr?: string | null } };
-  return data.properties?.payment_processing_arr ?? null;
-}
-
-/**
- * Writes ONLY `payment_processing_arr` on a deal. `syncDealFromApplication`
- * is the normal write path, but it necessarily carries whatever
- * `buildDealProperties` decides for dealname/amount/pipeline/dealstage too —
- * and the one-time backfill this exists for touches ~700 live production
- * deals to fix exactly the ARR the product owner asked for, never a rep's
- * own `amount` forecast or a stage a rep has since moved the deal past.
- */
-export async function patchDealProcessingArr(dealId: string, arr: number): Promise<void> {
-  const res = await fetch(`${BASE}/crm/v3/objects/deals/${dealId}`, {
-    method: "PATCH",
-    headers: billingHeaders(),
-    body: JSON.stringify({ properties: { payment_processing_arr: String(arr) } }),
-  });
-  if (!res.ok) {
-    throw hubspotErr(`HubSpot deal ${dealId} payment_processing_arr write failed`, res.status, await res.text());
-  }
-}
-
 // ── Deal reads, and adoption of an EXISTING deal ────────────────────────────
 // Nothing above this point ever read a deal back except getDealStage's single
-// `dealstage` property (for the forward-only guard) and getDealProcessingArr's
-// single `payment_processing_arr` (for the ARR backfill script). This is the
-// wider read side: what a rep sees while picking a deal to attach an
+// `dealstage` property (for the forward-only guard). `payment_processing_arr`
+// is write-only from here: it's written once, at acceptance, by
+// `buildDealProperties`/`syncDealFromApplication` above, and nothing reads it
+// back — the historical-ARR repair machinery that once did (a one-time
+// backfill script and a nightly resync block) was removed 2026-10-13 as dead
+// weight (the product owner: there's no need to fix old test-data rows). This
+// is the wider read side: what a rep sees while picking a deal to attach an
 // application to, instead of EasyOB always minting a new one. All on billingHeaders() — the
 // general app has no deals scope at all.
 //

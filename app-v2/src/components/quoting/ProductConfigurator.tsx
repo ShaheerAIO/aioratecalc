@@ -53,8 +53,8 @@ import {
   type QuoteLimits,
 } from "@/lib/quoting";
 import { coverageLabel, kitFor, kitPicks } from "@/lib/quotePackages";
-import QuoteReceipt from "@/components/quoting/QuoteReceipt";
-import { fmt$, fmtCycle, fmtRecurring, monthlyEquivalent } from "@/lib/utils";
+import QuoteReceipt, { type QuoteMarginPreview } from "@/components/quoting/QuoteReceipt";
+import { fmt$, fmtCycle, fmtPct2, fmtRecurring, monthlyEquivalent } from "@/lib/utils";
 import type {
   BillingStart, CatalogProduct, LineAdjustment, QuoteAdjustments, QuoteLine, QuoteType, UnitAdjustment,
 } from "@/types/merchant";
@@ -144,6 +144,16 @@ type Props = {
   documentRate?: ReactNode;
   /** document layout: under the totals — the host's send controls. */
   documentFooter?: ReactNode;
+  /**
+   * The rep's role-scoped margin preview for this quote. In the default
+   * "panels" layout it's forwarded to `QuoteReceipt` as-is (see its doc
+   * comment) — this component never reads or derives from it itself. In the
+   * "document" layout (`/rep/prospects/new`) `QuoteReceipt` isn't rendered at
+   * all, so `BuildMarginNote` above renders the same figure, in the same
+   * format, inside `.buildCol` — the rep-only build column, never inside the
+   * `.docCol` mirror of what the merchant will see.
+   */
+  pricingPreview?: QuoteMarginPreview | null;
 };
 
 // Recurring prices read monthly (see fmtRecurring): everything AIO sells bills
@@ -167,6 +177,31 @@ function startKey(start: BillingStart | null | undefined): string {
   return start.mode === "date" ? `date:${start.date}` : `days:${start.days}`;
 }
 
+/**
+ * The rep-only margin line for the "document" layout's BUILD column
+ * (`/rep/prospects/new`) — same fields and the same format as the
+ * `QuoteReceipt` row ("2.10% (est. $2,142.80/yr)"), so the two surfaces never
+ * disagree. Deliberately rendered inside `.buildCol`, never inside the
+ * customer-facing document mirror (`.docCol`/`.doc`, captioned "what the
+ * customer will see") — see the 2026-10-13 note on `ProductConfiguratorProps`.
+ * Renders nothing at all when there's no preview (marketing-only quote, no
+ * volume on file, or the preview hasn't loaded), never a `0.00%` placeholder.
+ */
+function BuildMarginNote({ pricingPreview }: { pricingPreview?: QuoteMarginPreview | null }) {
+  const margin = pricingPreview?.appliedTargetMargin;
+  if (margin == null) return null;
+  const projectedCommission = pricingPreview?.projectedCommission?.total;
+  return (
+    <div className={styles.totalRow}>
+      <span className={styles.totalLabel}>Processing margin</span>
+      <span className={styles.totalValue}>
+        {fmtPct2(margin)}
+        {projectedCommission != null && ` (est. ${fmt$(projectedCommission)}/yr)`}
+      </span>
+    </div>
+  );
+}
+
 export default function ProductConfigurator({
   quoteType, picks, channels,
   onQuoteTypeChange, onPicksChange, onChannelsChange, onDerivedChange,
@@ -176,6 +211,7 @@ export default function ProductConfigurator({
   rail = "gutter",
   layout = "panels",
   buildSlot, documentHeader, documentRate, documentFooter,
+  pricingPreview,
 }: Props) {
   // The catalog is read from HubSpot server-side and cached there, so this is
   // one call per mount, not one per keystroke. It lives in here rather than in
@@ -1482,6 +1518,8 @@ export default function ProductConfigurator({
 
           {buildSlot}
 
+          <BuildMarginNote pricingPreview={pricingPreview} />
+
           <section>
             <div className={styles.buildHeadRow}>
               <h3 className={styles.buildHead}>{rated ? "Hardware" : "Products"}</h3>
@@ -2046,6 +2084,7 @@ export default function ProductConfigurator({
             discountTotal={totalDiscount}
             dueAtCheckout={amountDueAtCheckout(quoteLines)}
             preAuthAmount={built.preAuth.lines[0]?.unitPrice ?? null}
+            pricingPreview={pricingPreview}
           />
         )}
       </aside>

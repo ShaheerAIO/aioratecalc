@@ -143,3 +143,102 @@ describe("the Hardware commission total row", () => {
     ]);
   });
 });
+
+// Margin on the quote receipt (2026-10-13 product-owner ask: show the rep
+// their processing margin on the surface they actually build a quote on).
+// `pricingPreview` is the rep-safe slice of `getPricingPreviewAction`'s
+// result (`derivePricingForRole` — already padded for a rep caller); this
+// file only covers rendering, not the pricing math itself.
+describe("the Processing margin total row", () => {
+  it("renders the margin and the estimated commission when both are supplied", () => {
+    // renderReceipt doesn't take a pricingPreview, so render directly, same
+    // as the ordering test above.
+    render(
+      <QuoteReceipt
+        lines={[line()]}
+        totals={ZERO_TOTALS}
+        packageSavings={0}
+        discountTotal={0}
+        dueAtCheckout={0}
+        preAuthAmount={null}
+        pricingPreview={{
+          appliedTargetMargin: 0.021,
+          projectedCommission: { totalArr: 21428, signingCommission: 1071.4, activationCommission: 1071.4, total: 2142.8 },
+        }}
+      />
+    );
+    expect(screen.getByText("Processing margin")).toBeTruthy();
+    expect(screen.getByText(/2\.10%/)).toBeTruthy();
+    expect(screen.getByText(/est\. \$2,142\.80\/yr/)).toBeTruthy();
+  });
+
+  it("renders the margin alone when no commission figure is available", () => {
+    render(
+      <QuoteReceipt
+        lines={[line()]}
+        totals={ZERO_TOTALS}
+        packageSavings={0}
+        discountTotal={0}
+        dueAtCheckout={0}
+        preAuthAmount={null}
+        pricingPreview={{
+          appliedTargetMargin: 0.021,
+          projectedCommission: { totalArr: null, signingCommission: null, activationCommission: null, total: null },
+        }}
+      />
+    );
+    expect(screen.getByText("Processing margin")).toBeTruthy();
+    expect(screen.getByText("2.10%")).toBeTruthy();
+    expect(screen.queryByText(/est\./)).toBeNull();
+  });
+
+  it("renders nothing when no pricing preview is passed at all (today's default — the other two hosts)", () => {
+    renderReceipt([line()]);
+    expect(screen.queryByText(/Processing margin/)).toBeNull();
+  });
+
+  it("renders nothing when the pricing preview is explicitly null (marketing-only, or no volume to price against)", () => {
+    render(
+      <QuoteReceipt
+        lines={[line()]}
+        totals={ZERO_TOTALS}
+        packageSavings={0}
+        discountTotal={0}
+        dueAtCheckout={0}
+        preAuthAmount={null}
+        pricingPreview={null}
+      />
+    );
+    expect(screen.queryByText(/Processing margin/)).toBeNull();
+    // And never a bare "0.00%" standing in for "we don't know" — the whole
+    // row is absent, not a zeroed-out one.
+    expect(screen.queryByText("0.00%")).toBeNull();
+  });
+
+  it("sits between Discounts applied and Hardware commission (est.)", () => {
+    render(
+      <QuoteReceipt
+        lines={[line({ costToRep: 400, repCommissionBps: 1000 })]}
+        totals={ZERO_TOTALS}
+        packageSavings={50}
+        discountTotal={20}
+        dueAtCheckout={100}
+        preAuthAmount={null}
+        pricingPreview={{
+          appliedTargetMargin: 0.021,
+          projectedCommission: { totalArr: null, signingCommission: null, activationCommission: null, total: null },
+        }}
+      />
+    );
+    const labels = screen
+      .getAllByText(/Package savings|Discounts applied|Processing margin|Hardware commission|Due at checkout/)
+      .map(el => el.textContent);
+    expect(labels).toEqual([
+      "Package savings",
+      "Discounts applied",
+      "Processing margin",
+      "Hardware commission (est.)",
+      "Due at checkout",
+    ]);
+  });
+});

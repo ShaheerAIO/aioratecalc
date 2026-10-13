@@ -53,7 +53,7 @@ export default function CommissionsPanel() {
 
   const hasGaps = gaps !== null && (gaps.missingCost.length > 0 || gaps.zeroCost.length > 0 || gaps.recurringWithRate.length > 0);
 
-  const cols = "1fr 110px 110px 100px 100px 110px 110px 110px 110px 110px 110px";
+  const cols = "1fr 110px 110px 100px 100px 120px 110px 110px 110px 130px 100px 110px 110px 110px";
 
   return (
     <>
@@ -63,6 +63,23 @@ export default function CommissionsPanel() {
           Revenue, processor cost, net margin, the true margin floor, the processing commission split
           (10% of total ARR — 5% at signing, 5% at activation), and per-product hardware commission.
           Admin only.
+        </p>
+        <p className={styles.revenueCaption}>
+          <strong>There are TWO different margins below, columns labelled &ldquo;Floor:&rdquo; vs
+          &ldquo;Wholesale:&rdquo;, and they do not agree — by design, not by bug.</strong> The{" "}
+          <strong>Floor</strong> columns (AIO Rev/mo, Proc. Cost, Net Margin, True Floor/mo) are revenue
+          over actual INTERCHANGE, the same basis that enforces the margin floor a quote can be refused
+          against. The <strong>Wholesale</strong> columns (Total Rev/mo, Take Rate, Margin) are the
+          product owner&rsquo;s 10/13 formula — one blended CP rate and flat per-transaction fee against
+          a ticket-indexed wholesale table — and are what actually drives <code>payment_processing_arr</code>{" "}
+          and therefore commission. On one live row these diverged by 0.7 points of margin. Don&rsquo;t
+          read one as a sanity check on the other.
+        </p>
+        <p className={styles.revenueCaption}>
+          <strong>A dash in the Wholesale columns with a note under the merchant name</strong> means this
+          deal&rsquo;s stored card rate exceeds the plausibility ceiling — the ARR/commission figures were
+          skipped rather than computed off a typo (e.g. 20.00% entered instead of 2.00%), since that
+          number would otherwise pay a real commission on a fat-fingered rate.
         </p>
         <p className={styles.revenueCaption}>
           <strong>Recurring ARR, total ARR, and the two processing-commission figures below are
@@ -133,7 +150,9 @@ export default function CommissionsPanel() {
         <div className={styles.panel}>
           <div className={styles.tableHeader} style={{ gridTemplateColumns: cols }}>
             {[
-              "Merchant", "AIO Rev/mo", "Proc. Cost", "Net Margin", "True Floor/mo",
+              "Merchant",
+              "Floor: AIO Rev/mo", "Floor: Proc. Cost", "Floor: Net Margin", "Floor: True Floor/mo",
+              "Wholesale: Total Rev/mo", "Wholesale: Take Rate", "Wholesale: Margin",
               "Processing ARR", "Recurring ARR (est.)", "Signing (est.)", "Activation (est.)",
               "Rep HW Comm.", "RSM HW Comm.",
             ].map(h => (
@@ -144,12 +163,22 @@ export default function CommissionsPanel() {
             <div key={r.applicationId} className={styles.tableRow} style={{ gridTemplateColumns: cols }}>
               <div className={styles.tableCell} data-label="Merchant">
                 <Link href={`/admin?view=accounts&app=${r.applicationId}`}>{r.merchantName ?? "Unnamed account"}</Link>
-                <div className={styles.tenantRef}>{r.stage}{r.quoteAcceptedAt ? " · accepted" : ""}</div>
+                <div className={styles.tenantRef}>
+                  {r.stage}{r.quoteAcceptedAt ? " · accepted" : ""}
+                  {r.implausibleRate != null && (
+                    <span style={{ color: "var(--warning)" }}>
+                      {" · stored rate "}{fmtPct2(r.implausibleRate)}{" implausible — Wholesale/ARR skipped"}
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="AIO Rev/mo">{dash(r.aioRevenue)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Proc. Cost">{dashPct(r.processorCostRate)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Net Margin">{dashPct(r.netMarginRate)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="True Floor/mo">{dash(r.trueMarginFloor)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: AIO Rev/mo">{dash(r.aioRevenue)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: Proc. Cost">{dashPct(r.processorCostRate)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: Net Margin">{dashPct(r.netMarginRate)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: True Floor/mo">{dash(r.trueMarginFloor)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Wholesale: Total Rev/mo">{dash(r.totalRevenue)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Wholesale: Take Rate">{dashPct(r.totalTakeRate)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Wholesale: Margin">{dashPct(r.wholesaleMargin)}</div>
               <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Processing ARR">{dash(r.processingArr)}</div>
               <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Recurring ARR">{dash(r.recurringArr)}</div>
               <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Signing">{dash(r.signingCommission)}</div>

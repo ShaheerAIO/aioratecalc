@@ -51,12 +51,38 @@ export type DealCommissionRow = {
   merchantName: string | null;
   stage: string;
   quoteAcceptedAt: string | null;
+  // ── FLOOR-ENFORCEMENT BASIS (derivePricingForRole / pricing.ts) ──────────
   // The true figures CLAUDE.md says a rep must never see — fine here, this
-  // report is admin-only (enforced in the action, not this file).
+  // report is admin-only (enforced in the action, not this file). This is
+  // revenue over INTERCHANGE (split CP/CNP/AMEX), and `netMarginRate` is what
+  // `belowMarginFloor` actually refuses a quote against. It does NOT agree
+  // with the ARR/commission-basis figures below — see the module comment on
+  // `wholesale.ts` and `processingArr.ts` for the size of the gap on real
+  // data (0.109% vs 0.799% margin on one live row). Don't reconcile them.
   aioRevenue: number | null;
   processorCostRate: number | null;
   netMarginRate: number | null;
   trueMarginFloor: number | null;
+  // ── ARR / COMMISSION BASIS (wholesale.ts / processingArr.ts) ─────────────
+  // What actually drives `payment_processing_arr` and therefore commission —
+  // ONE blended CP rate and flat per-transaction fee against the product
+  // owner's 10/13 ticket-indexed wholesale table, NOT interchange. See
+  // `wholesale.ts`'s module comment for why this is deliberately a different
+  // number from the floor-enforcement basis above.
+  /** (CP Rate × Monthly Volume) + ((Monthly Volume ÷ Avg Ticket) × Txn Fee). Null when implausibleRate is set, or when there's no ARR basis at all (marketing-only, no volume/ticket). */
+  totalRevenue: number | null;
+  /** totalRevenue ÷ Monthly Volume, as a fraction. Same null rules as totalRevenue. */
+  totalTakeRate: number | null;
+  /** totalTakeRate − the wholesale % for this avgTicket (wholesale.ts's `wholesalePctFor`). Can be negative. Same null rules as totalRevenue — this is NOT `netMarginRate` above. */
+  wholesaleMargin: number | null;
+  /**
+   * The offending stored rate when a quote's card rate exceeds
+   * `MAX_PLAUSIBLE_CARD_RATE` — set instead of `totalRevenue`/
+   * `totalTakeRate`/`wholesaleMargin`/`processingArr`, which are all null in
+   * that case so the panel never shows the inflated numbers the check exists
+   * to catch. A real row in production data stores 200.49% here.
+   */
+  implausibleRate: number | null;
   processingArr: number | null;
   /**
    * ESTIMATE — `estimatedRecurringArrFromQuoteLines` (lib/commission.ts), not
@@ -100,7 +126,24 @@ export function commissionRowForApplication(
       ? analysisFromQuoteConfig(app.quoteConfig)
       : null);
 
-  const processingArr = paymentProcessingArrBreakdown(app).arr;
+  const arrBreakdown = paymentProcessingArrBreakdown(app);
+  const processingArr = arrBreakdown.arr;
+  const implausibleRate = arrBreakdown.implausibleRate;
+  // `paymentProcessingArrBreakdown` still returns its (wrong) computed
+  // takeRate/commissionMargin alongside `implausibleRate` — deliberately, per
+  // its own doc comment, so a human reviewing the backfill script sees WHY a
+  // rate got flagged. This report is not that reviewer; an admin glancing at
+  // a table should see a dash and the flagged rate, never the inflated
+  // number the check exists to catch. So every wholesale-basis figure here
+  // is nulled together whenever `implausibleRate` is set.
+  const totalTakeRate = implausibleRate == null ? arrBreakdown.takeRate : null;
+  const wholesaleMargin = implausibleRate == null ? arrBreakdown.commissionMargin : null;
+  // Total Revenue isn't on the breakdown itself (only the rate it implies) —
+  // back it out from takeRate × monthlyVolume rather than re-deriving a
+  // second copy of wholesale.ts's `totalRevenue` from raw inputs.
+  const totalRevenue = totalTakeRate != null && arrBreakdown.monthlyVolume != null
+    ? totalTakeRate * arrBreakdown.monthlyVolume
+    : null;
   const recurringArr = app.quoteLines && app.quoteLines.length > 0 ? estimatedRecurringArrFromQuoteLines(app.quoteLines) : null;
   const totalArr = sumArrOrNull(processingArr, recurringArr);
   const commission = commissionFromTotalArr(totalArr);
@@ -139,6 +182,7 @@ export function commissionRowForApplication(
     stage: app.stage,
     quoteAcceptedAt: app.quoteAcceptedAt ?? null,
     aioRevenue, processorCostRate, netMarginRate, trueMarginFloor,
+    totalRevenue, totalTakeRate, wholesaleMargin, implausibleRate,
     processingArr, recurringArr, totalArr,
     signingCommission: commission.signingCommission,
     activationCommission: commission.activationCommission,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { DEFAULT_QUOTE_RATES, type HubspotIds, type HubspotSubscriptionSnapshot } from "@/types/merchant";
+import type { HubspotIds, HubspotSubscriptionSnapshot } from "@/types/merchant";
 
 // /api/cron/hubspot-billing-sync, exercised as a route handler. The drizzle
 // client is a hand-rolled chainable stub in the leadAccept.test.ts style; the
@@ -9,8 +9,6 @@ import { DEFAULT_QUOTE_RATES, type HubspotIds, type HubspotSubscriptionSnapshot 
 const listQuotesModifiedSince = vi.fn();
 const findSubscriptionsForQuote = vi.fn();
 const syncDealFromApplication = vi.fn();
-const getDealProcessingArr = vi.fn();
-const patchDealProcessingArr = vi.fn();
 const sendMagicLinkEmail = vi.fn();
 
 type Row = { id: string; hubspotIds: HubspotIds | null } & Record<string, unknown>;
@@ -64,7 +62,6 @@ const db = {
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/hubspot", () => ({
   listQuotesModifiedSince, findSubscriptionsForQuote, syncDealFromApplication,
-  getDealProcessingArr, patchDealProcessingArr,
 }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 
@@ -370,165 +367,6 @@ describe("the billing cron detects acceptance", () => {
     const errorWrite = updates.find(u => (u.hubspotIds as HubspotIds | undefined)?.lastSyncError);
     expect(errorWrite).toBeTruthy();
     expect((errorWrite!.hubspotIds as HubspotIds).lastSyncError).toContain("HubSpot 500");
-  });
-});
-
-describe("the billing cron resyncs an already-accepted deal's ARR", () => {
-  // payment_processing_arr (lib/billing/processingArr.ts) is only ever
-  // written as part of a deal PATCH, and `recordAcceptance` only ever makes
-  // that write ONCE — at the instant quoteAcceptedAt is first set. This is
-  // the one place in the codebase a row that was ALREADY accepted coming
-  // into a run gets a later chance at it.
-  //
-  // It MUST use the narrow getDealProcessingArr/patchDealProcessingArr pair,
-  // never syncDealFromApplication: that also sends dealname/amount for a row
-  // EasyOB created, and turning those into a NIGHTLY write would fight
-  // HubSpot's own deal-renaming automation and re-assert a wrong `amount`
-  // (12× gross card volume, not revenue) over any correction made during the
-  // day. See the comment on this block in the route itself.
-  //
-  // Rows here all default to accepted (rowDefaults.quoteAcceptedAt) and
-  // carry both a deal id and enough of a quote (quoteConfig) for
-  // paymentProcessingArr to compute a real number — rowDefaults otherwise
-  // leaves hubspotDealId null and has no quote basis at all, so
-  // paymentProcessingArr would return null and this whole block a no-op.
-  const QUOTE_BASIS = {
-    quoteType: "all_in_one",
-    pricingModel: "2-tier",
-    quoteRates: DEFAULT_QUOTE_RATES,
-    quoteConfig: { monthlyVolume: 100000, avgTicket: 30 },
-    analysis: null,
-  };
-  const acceptedRow = (overrides: Record<string, unknown> = {}) => [{
-    id: "app-1", hubspotIds: HUBSPOT_IDS, hubspotDealId: "deal-9", ...QUOTE_BASIS, ...overrides,
-  }];
-
-  beforeEach(() => {
-    getDealProcessingArr.mockReset();
-    patchDealProcessingArr.mockReset();
-    // The live placeholder every un-backfilled deal carries — always differs
-    // from a real computed ARR, so the default is "there's a write to do".
-    getDealProcessingArr.mockResolvedValue("2500");
-    patchDealProcessingArr.mockResolvedValue(undefined);
-  });
-
-  it("writes payment_processing_arr — and only that — for a row that was already accepted", async () => {
-    listQuotesModifiedSince.mockResolvedValue([quote()]);
-    selectRows = acceptedRow();
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-
-    await get();
-    expect(getDealProcessingArr).toHaveBeenCalledWith("deal-9");
-    expect(patchDealProcessingArr).toHaveBeenCalledTimes(1);
-    const [dealId, arr] = patchDealProcessingArr.mock.calls[0];
-    expect(dealId).toBe("deal-9");
-    expect(typeof arr).toBe("number");
-    expect(arr).toBeGreaterThan(0);
-  });
-
-  it("never calls syncDealFromApplication for this resync — dealname/amount must not be re-pushed nightly", async () => {
-    listQuotesModifiedSince.mockResolvedValue([quote()]);
-    selectRows = acceptedRow();
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-
-    await get();
-    expect(syncDealFromApplication).not.toHaveBeenCalled();
-  });
-
-  it("skips the write entirely once HubSpot already carries the computed value", async () => {
-    listQuotesModifiedSince.mockResolvedValue([quote()]);
-    selectRows = acceptedRow();
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-
-    await get(); // first pass: "2500" (the default stub) differs, so it writes once
-    const computed = patchDealProcessingArr.mock.calls[0][1];
-    patchDealProcessingArr.mockClear();
-    getDealProcessingArr.mockResolvedValue(String(computed));
-
-    await get(); // second pass: HubSpot now already matches
-    expect(patchDealProcessingArr).not.toHaveBeenCalled();
-  });
-
-  it("does not resync a row with no deal id at all", async () => {
-    listQuotesModifiedSince.mockResolvedValue([quote()]);
-    selectRows = [{ id: "app-1", hubspotIds: HUBSPOT_IDS }]; // hubspotDealId: null (rowDefaults)
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-
-    await get();
-    expect(getDealProcessingArr).not.toHaveBeenCalled();
-    expect(patchDealProcessingArr).not.toHaveBeenCalled();
-  });
-
-  it("does not resync a row with no ARR to state (no quote basis)", async () => {
-    listQuotesModifiedSince.mockResolvedValue([quote()]);
-    selectRows = [{ id: "app-1", hubspotIds: HUBSPOT_IDS, hubspotDealId: "deal-9" }]; // no QUOTE_BASIS
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-
-    await get();
-    expect(getDealProcessingArr).not.toHaveBeenCalled();
-    expect(patchDealProcessingArr).not.toHaveBeenCalled();
-  });
-
-  it("does not double-sync a row that was accepted for the first time THIS run", async () => {
-    // applyDetectedAcceptance's own recordAcceptance already made the one
-    // full-property-bag attempt (via syncDealFromApplication) for a
-    // freshly-accepted row; this block must not ALSO fire its narrow resync
-    // for the same row in the same pass.
-    listQuotesModifiedSince.mockResolvedValue([quote()]);
-    selectRows = [{
-      id: "app-1",
-      hubspotIds: HUBSPOT_IDS,
-      quoteAcceptedAt: null,
-      stage: "quote_sent",
-      hubspotDealId: "deal-9",
-      ownerContact: { email: "ana@tortapalace.com" },
-      quoteLines: [],
-      ...QUOTE_BASIS,
-    }];
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-
-    await get();
-    expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
-    expect(getDealProcessingArr).not.toHaveBeenCalled();
-    expect(patchDealProcessingArr).not.toHaveBeenCalled();
-  });
-
-  it("persists a failed resync as lastSyncError, and does not fail the whole cron run over it", async () => {
-    listQuotesModifiedSince.mockResolvedValue([quote()]);
-    selectRows = acceptedRow();
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-    patchDealProcessingArr.mockRejectedValue(new Error("payment_processing_arr write failed (403)"));
-
-    const res = await get();
-    expect(res.status).toBe(200);
-    const errorWrite = updates.find(u => (u.hubspotIds as HubspotIds | undefined)?.lastSyncError);
-    expect(errorWrite).toBeTruthy();
-    expect((errorWrite!.hubspotIds as HubspotIds).lastSyncError).toContain("403");
-    expect((errorWrite!.hubspotIds as HubspotIds).lastSyncErrorAt).toBeTruthy();
-  });
-
-  it("clears a stale lastSyncError once the resync succeeds, even when nothing else in the snapshot moved", async () => {
-    // Deliberately NO QUOTE_BASIS: this is testing the OUTER snapshot-write's
-    // clearing behaviour, which runs regardless of whether the ARR block
-    // even has anything to do, so it's kept orthogonal to that logic.
-    listQuotesModifiedSince.mockResolvedValue([quote()]); // same paymentStatus/esign/etc as HUBSPOT_IDS
-    selectRows = [{
-      id: "app-1",
-      hubspotIds: {
-        ...HUBSPOT_IDS,
-        subscriptions: [sub()], subscriptionStatus: "active", // already cached, matching this run's read
-        lastSyncError: "HubSpot 500", lastSyncErrorAt: "2026-10-12T00:00:00.000Z",
-      },
-      hubspotDealId: "deal-9",
-    }];
-    findSubscriptionsForQuote.mockResolvedValue([sub()]);
-
-    await get();
-    // The stale error differing from `next`'s unconditional null IS a
-    // snapshotChanged "moved" row on its own, so the ordinary snapshot write
-    // is what clears it here — not a second, separate write.
-    const write = updates[0].hubspotIds as HubspotIds;
-    expect(write.lastSyncError).toBeNull();
   });
 });
 

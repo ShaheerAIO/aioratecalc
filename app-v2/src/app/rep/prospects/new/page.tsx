@@ -19,6 +19,12 @@ import {
 } from "@/lib/prefillMerge";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
+// Type-only — erased at build, never bundles pricing.ts's runtime code (the
+// true MARGIN_REQS table) into this client page. See the comment on
+// `floorCheck` below and the one on `marginFloorBlockers`'s hand-copied
+// wording a few lines down, which explains why this file can't import
+// pricing.ts for anything but its types.
+import type { RoleScopedPricing } from "@/lib/pricing";
 import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
 import { DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
@@ -84,9 +90,16 @@ function NewProspectFlow() {
   // "Yes, $1.2M a month really is their volume." Reset by any edit to it.
   const [volumeConfirmed, setVolumeConfirmed] = useState(false);
   // The server's role-scoped view of what the typed rates earn. Reps see a
-  // PADDED floor and never the number itself — this component only ever reads
-  // the booleans, and `belowMarginFloor` is the one that refuses the send.
-  const [floorCheck, setFloorCheck] = useState<{ belowMarginFloor: boolean } | null>(null);
+  // PADDED floor and never the floor itself — `belowMarginFloor` is the one
+  // boolean that refuses the send. `appliedTargetMargin`/`projectedCommission`
+  // are kept too (2026-10-13 — "show the rep their margin on the quote
+  // receipt"): both are already rep-safe on `RoleScopedPricing` (see its doc
+  // comment — the margin is AIO's own forecast, not a secret, and the
+  // commission is derived from it), so holding onto them here is no wider
+  // than what this page already fetches.
+  const [floorCheck, setFloorCheck] = useState<Pick<
+    RoleScopedPricing, "belowMarginFloor" | "appliedTargetMargin" | "projectedCommission"
+  > | null>(null);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
   const [smsSent, setSmsSent]           = useState(false);
@@ -366,7 +379,15 @@ function NewProspectFlow() {
         feeOverrides: { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 },
         activeTier: null,
       })
-        .then(p => { if (!cancelled) setFloorCheck({ belowMarginFloor: p.belowMarginFloor }); })
+        .then(p => {
+          if (!cancelled) {
+            setFloorCheck({
+              belowMarginFloor: p.belowMarginFloor,
+              appliedTargetMargin: p.appliedTargetMargin,
+              projectedCommission: p.projectedCommission,
+            });
+          }
+        })
         // A preview that can't be fetched must not block the send: the rep
         // would have no way to clear a blocker whose cause is a network error.
         .catch(() => { if (!cancelled) setFloorCheck(null); });
@@ -812,6 +833,18 @@ function NewProspectFlow() {
         }
         documentRate={documentRate || undefined}
         documentFooter={documentFooter}
+        // NOTE: this host renders ProductConfigurator with layout="document"
+        // — the "Live quote · what the customer will see" mirror — which
+        // builds its own totals block and never renders QuoteReceipt (the
+        // panels-layout side panel this prop feeds). So passing it here
+        // plumbs the already-fetched preview through end to end, but has no
+        // visible effect on THIS host today. Deliberately not rendering it
+        // inside the document mirror itself: that block is a stand-in for
+        // what the merchant's own quote page shows, and AIO's margin has no
+        // business appearing inside something framed that way, even though
+        // nothing here is reachable by an actual customer. See this task's
+        // final report for the follow-up this implies.
+        pricingPreview={floorCheck}
       />
       {prefilledChannels.length > 0 && (
         <p className={styles.prefillNote}>
