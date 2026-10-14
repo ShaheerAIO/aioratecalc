@@ -17,7 +17,7 @@ import { resolveDealForCompany } from "@/lib/hubspotDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
 import type { StorageScope } from "@/lib/storage/storageInterface";
-import type { MerchantApplication, AppSettings, CustomerSubmission, DealLink } from "@/types/merchant";
+import type { MerchantApplication, AppSettings, DealLink } from "@/types/merchant";
 
 export type RepSummary = { id: string; name: string; email: string };
 
@@ -64,10 +64,6 @@ export async function getSettingsAction(): Promise<AppSettings> {
  */
 export async function saveSettingsAction(s: AppSettings): Promise<void> {
   await postgresStorage.saveSettings(await requireScope(), s);
-}
-
-export async function listSubmissionsAction(): Promise<CustomerSubmission[]> {
-  return postgresStorage.listSubmissions(await requireScope());
 }
 
 // Rep/admin-triggered: emails the merchant contact a magic link that logs

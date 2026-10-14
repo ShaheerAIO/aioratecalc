@@ -65,7 +65,7 @@ const annualVolumeLabel = (monthly: number) => {
 };
 
 const BLANK_BUSINESS: BusinessInfo = {
-  legalName: "", dba: "", bizType: "llc", address: "", city: "", state: "", zip: "",
+  legalName: "", dba: "", bizType: "", address: "", city: "", state: "", zip: "",
   phone: "", website: "", yearsInBusiness: "", annualRevenue: "",
 };
 const BLANK_OWNER: OwnerContact = { firstName: "", lastName: "", title: "", email: "", phone: "" };
@@ -165,20 +165,25 @@ function NewProspectFlow() {
   // dropdown reads from `contacts` above — no second portal-wide search.
   const [billingContactId, setBillingContactId] = useState<string | null>(null);
   const [billingContact, setBillingContact]     = useState<OwnerContact>(BLANK_OWNER);
+  // The billing contact exactly as it was loaded from HubSpot when picked —
+  // never touched after that — so MerchantDetailsForm can tell "the rep
+  // edited this real contact" from "nothing's changed" and warn only in the
+  // first case. Null whenever no existing contact is selected (including
+  // "Same as owner contact", which clears billingContactId — see the
+  // checkbox's own comment in MerchantDetailsForm.tsx for why).
+  const [billingContactLoaded, setBillingContactLoaded] = useState<OwnerContact | null>(null);
 
   const selectBillingContact = (id: string | null) => {
     setBillingContactId(id);
-    if (!id) return; // "New contact" — leave whatever's already typed alone.
+    if (!id) { setBillingContactLoaded(null); return; } // "New contact" — leave whatever's already typed alone.
     const contact = contacts.find(c => c.id === id);
-    if (!contact) return;
-    setBillingContact({
+    if (!contact) { setBillingContactLoaded(null); return; }
+    const loaded: OwnerContact = {
       firstName: contact.firstName ?? "", lastName: contact.lastName ?? "", title: "",
       email: contact.email ?? "", phone: contact.phone ?? "",
-    });
-  };
-  const copyBillingFromOwner = () => {
-    setBillingContactId(null);
-    setBillingContact({ ...ownerContact });
+    };
+    setBillingContact(loaded);
+    setBillingContactLoaded(loaded);
   };
 
   // Latest form values, so applying a prefill from an async callback merges
@@ -446,7 +451,7 @@ function NewProspectFlow() {
     setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
     clearDeal();
     setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
-    setBillingContactId(null); setBillingContact(BLANK_OWNER);
+    setBillingContactId(null); setBillingContact(BLANK_OWNER); setBillingContactLoaded(null);
     setPrefill(null); setReviewApplied(NO_REVIEW_PREFILL_APPLIED); appliedRef.current = { review: NO_REVIEW_PREFILL_APPLIED, channels: [] };
   };
 
@@ -795,9 +800,9 @@ function NewProspectFlow() {
             contactOptions={billingContactOptions}
             billingContactId={billingContactId}
             billing={billingContact}
+            billingContactLoaded={billingContactLoaded}
             onBillingContactIdChange={selectBillingContact}
             onBillingChange={setBillingContact}
-            onCopyBillingFromOwner={copyBillingFromOwner}
           />
           {missingWarnings.length > 0 && (
             <p className={styles.prefillNote}>

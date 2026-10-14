@@ -119,7 +119,7 @@ describe("channelsFromModules", () => {
   it("maps only the modules that are ordering CHANNELS, dropping hardware", () => {
     // POS / MPOS / Kiosk are hardware; they're counted from quote lines, not here.
     expect(channelsFromModules("POS;MPOS;Kiosk")).toEqual([]);
-    expect(channelsFromModules("POS;Website;3PO")).toEqual(["website", "third_party_delivery"]);
+    expect(channelsFromModules("POS;Website;3PO")).toEqual(["third_party_delivery"]);
     expect(channelsFromModules("QR/Online Ordering")).toEqual(["qr"]);
   });
 
@@ -127,8 +127,9 @@ describe("channelsFromModules", () => {
     expect(channelsFromModules("Catering;Menu Board;Scheduling;Payroll;Marketing")).toEqual([]);
   });
 
-  it("is whitespace- and case-tolerant and de-duplicates", () => {
-    expect(channelsFromModules(" website ; WEBSITE ;3po")).toEqual(["website", "third_party_delivery"]);
+  it("no longer maps Website to a channel — the ordering point moved to the Website product (quoting.ts, 2026-10-13)", () => {
+    expect(channelsFromModules("Website")).toEqual([]);
+    expect(channelsFromModules(" website ; WEBSITE ;3po")).toEqual(["third_party_delivery"]);
   });
 
   it("is empty for missing input", () => {
@@ -339,7 +340,9 @@ describe("buildProspectPrefill", () => {
       businessDescription: "Authentic Lebanese dining, Mediterranean cuisine.",
       monthlyVolume: "230000",
     });
-    expect(p.channels).toEqual(["website", "third_party_delivery"]);
+    // "Website" is in FULL.modules but no longer maps to a channel — see
+    // channelsFromModules above.
+    expect(p.channels).toEqual(["third_party_delivery"]);
     expect(p.country).toBe("US");
     expect(p.industryType).toBe("TSR");
     expect(p.ownershipType).toBe("Franchisee");

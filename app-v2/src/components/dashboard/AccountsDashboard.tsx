@@ -1,10 +1,9 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   listApplicationsAction,
-  listSubmissionsAction,
   listRepsAction,
   sendMerchantOnboardingLinkAction,
   markApplicationClosedLostAction,
@@ -26,7 +25,7 @@ import { hubspotDealUrl } from "@/lib/billingView";
 import { QUOTE_TYPES, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import { BillingPanel } from "./BillingPanel";
 import { Field, Section } from "./DetailSection";
-import type { MerchantApplication, CustomerSubmission } from "@/types/merchant";
+import type { MerchantApplication } from "@/types/merchant";
 import type { TenantCompany } from "@/lib/adapters/hubspot";
 import styles from "./AccountsDashboard.module.css";
 
@@ -102,13 +101,9 @@ type AccountsDashboardProps = {
   role: Role;
   userId: string;
   // Set when this is nested inside another page's chrome (/admin). The embedding
-  // page owns the title, the stat hero and the accounts/leads switch, so all
-  // three are suppressed here to avoid showing them twice. Unset = the
-  // standalone /rep behaviour, unchanged.
+  // page owns the title and the stat hero, so both are suppressed here to
+  // avoid showing them twice. Unset = the standalone /rep behaviour, unchanged.
   embedded?: boolean;
-  // Controlled sub-view, used with `embedded` so the host page's own view param
-  // drives which table renders instead of this component's ?tab=.
-  view?: "accounts" | "leads";
   // ownerUserId to narrow the accounts table to (drill-down from a rep row).
   repFilter?: string | null;
   onClearRepFilter?: () => void;
@@ -116,47 +111,19 @@ type AccountsDashboardProps = {
   debugBillingBypass?: boolean;
 };
 
-// useSearchParams (for the ?tab= param below) requires a Suspense boundary
-// above it, so the actual implementation is wrapped here rather than at every
-// call site (rep/page.tsx renders this directly; AdminDashboard.tsx nests it).
-export function AccountsDashboard(props: AccountsDashboardProps) {
-  return (
-    <Suspense>
-      <AccountsDashboardInner {...props} />
-    </Suspense>
-  );
-}
-
-function AccountsDashboardInner({
+export function AccountsDashboard({
   role,
   userId,
   embedded,
-  view,
   repFilter,
   onClearRepFilter,
   debugBillingBypass = false,
 }: AccountsDashboardProps) {
   const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
   const isAdmin = role === "admin";
 
   const [apps, setApps]         = useState<MerchantApplication[]>([]);
-  const [subs, setSubs]         = useState<CustomerSubmission[]>([]);
   const [reps, setReps]         = useState<RepSummary[]>([]);
-  // Sourced straight from the URL (not local state) so a link into this page
-  // (/rep?tab=leads) actually switches the panel, and so the URL and the panel
-  // always agree on which one is active. When embedded, the host page passes
-  // the resolved view in instead — see AdminDashboard.tsx.
-  const tab: "accounts" | "leads" =
-    view ?? (isAdmin && searchParams.get("tab") === "leads" ? "leads" : "accounts");
-  const setTab = (next: "accounts" | "leads") => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (next === "leads") params.set("tab", "leads");
-    else params.delete("tab");
-    const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  };
   const [selected, setSelected] = useState<MerchantApplication | null>(null);
   const [busyId, setBusyId]     = useState<string | null>(null);
   const [search, setSearch]     = useState("");
@@ -200,7 +167,6 @@ function AccountsDashboardInner({
   useEffect(() => {
     listApplicationsAction().then(setApps).catch(() => {});
     if (isAdmin) {
-      listSubmissionsAction().then(setSubs).catch(() => {});
       listRepsAction().then(setReps).catch(() => {});
     }
   }, [isAdmin]);
@@ -458,7 +424,7 @@ function AccountsDashboardInner({
   };
 
   const emptyCopy = isAdmin
-    ? "No accounts yet. They appear here as reps start proposals and customers submit leads."
+    ? "No accounts yet. They appear here as reps start proposals."
     : "No accounts yet. Upload a statement or send a customer link to get started.";
 
   return (
@@ -468,7 +434,7 @@ function AccountsDashboardInner({
           <h1 className={styles.headerTitle}>Accounts</h1>
           <p className={styles.headerSubtitle}>
             {isAdmin
-              ? "Every account across all reps, plus customer self-serve leads — with margin oversight for approved deals."
+              ? "Every account across all reps, with margin oversight for approved deals."
               : "Your merchants across the whole pipeline, from first statement to approved onboarding."}
           </p>
         </div>
@@ -496,26 +462,9 @@ function AccountsDashboardInner({
         </div>
       )}
 
-      {/* Admin gets a Leads sub-view alongside Accounts; reps only have Accounts.
-          Embedded, the host page's own view toggle takes over this job. */}
-      {isAdmin && !embedded && (
-        <div className={styles.tabsRow}>
-          <div className={styles.tabs} data-active={tab} role="tablist">
-            <button role="tab" aria-selected={tab === "accounts"} className={styles.tab} onClick={() => setTab("accounts")}>
-              Accounts ({apps.length})
-            </button>
-            <button role="tab" aria-selected={tab === "leads"} className={styles.tab} onClick={() => setTab("leads")}>
-              Leads ({subs.length})
-            </button>
-          </div>
-        </div>
-      )}
-
-      {tab === "accounts" && (
-        <>
-          {/* Drill-down chip — set when the host page narrowed this list to one
-              rep; dismissing it clears the filter back to every account. */}
-          {repFilter && (
+      {/* Drill-down chip — set when the host page narrowed this list to one
+          rep; dismissing it clears the filter back to every account. */}
+      {repFilter && (
             <div className={styles.filterChipRow}>
               <span className={styles.filterChip}>
                 Rep: {repMap.get(repFilter)?.name || repMap.get(repFilter)?.email || repFilter}
@@ -1081,35 +1030,6 @@ function AccountsDashboardInner({
               </div>
             </div>
           )}
-        </>
-      )}
-
-      {isAdmin && tab === "leads" && (
-        <div className={styles.tabPanel}>
-          <div className={styles.panel}>
-            <div className={styles.tableHeader} style={{ gridTemplateColumns: "1fr 110px 110px 110px 100px" }}>
-              {["Merchant", "Volume", "Fees", "Processor", "Submitted"].map(h => (
-                <div key={h} className={styles.tableHeaderCell}>{h}</div>
-              ))}
-            </div>
-            {subs.length === 0 && (
-              <div className={styles.emptyState}>No customer leads yet. Share the customer portal to collect submissions.</div>
-            )}
-            {subs.map((s, i) => (
-              <div key={i} className={styles.tableRow} style={{ gridTemplateColumns: "1fr 110px 110px 110px 100px", cursor: "default" }}>
-                <div className={styles.tableCell} data-label="Merchant">
-                  <div className={styles.merchantName}>{s.analysis?.merchantName || "—"}</div>
-                  <div className={styles.merchantSub}>{s.contactInfo?.email || "—"}</div>
-                </div>
-                <div className={`${styles.tableCell} ${styles["tableCell--numeric"]}`} data-label="Volume">{s.analysis ? fmt$(s.analysis.totalVolume) : "—"}</div>
-                <div className={`${styles.tableCell} ${styles["tableCell--accent"]}`} data-label="Fees">{s.analysis ? fmt$(s.analysis.totalFees) : "—"}</div>
-                <div className={`${styles.tableCell} ${styles["tableCell--muted"]}`} data-label="Processor">{s.analysis?.currentProcessorName || "—"}</div>
-                <div className={`${styles.tableCell} ${styles["tableCell--muted"]}`} data-label="Submitted">{new Date(s.submittedAt).toLocaleDateString()}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

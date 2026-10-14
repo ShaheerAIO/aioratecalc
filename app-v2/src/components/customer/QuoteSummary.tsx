@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  describeBillingStart, lineListAmount, lineNetAmount,
+  CHANNEL_LABELS, describeBillingStart, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
 import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafeQuote, QuoteLine } from "@/types/merchant";
@@ -30,6 +30,13 @@ export default function QuoteSummary({ quote }: Props) {
 
   const oneTimeLines  = quote.lines.filter(l => l.billingFrequency === "one_time");
   const recurringLines = quote.lines.filter(l => l.billingFrequency !== "one_time");
+
+  // Named alongside the ordering-point count below. A channel id with no
+  // current label (a saved quote can still carry a retired one, e.g.
+  // "website") is dropped rather than printed raw.
+  const channelLabels = (quote.orderPoints?.channels ?? [])
+    .map(id => CHANNEL_LABELS[id])
+    .filter((label): label is string => Boolean(label));
 
   // NET of any discount — this is what the merchant is actually charged, and
   // it is the same figure `quoteTotals` sums into the totals below.
@@ -106,7 +113,8 @@ export default function QuoteSummary({ quote }: Props) {
           the rest of the configuration, on its own. */}
       {quote.orderPoints && quote.orderPoints.total > 0 && (
         <p className={styles.orderPointsNote}>
-          Configured for {quote.orderPoints.total} ordering point{quote.orderPoints.total === 1 ? "" : "s"}.
+          Configured for {quote.orderPoints.total} ordering point{quote.orderPoints.total === 1 ? "" : "s"}
+          {channelLabels.length > 0 && ` (${channelLabels.join(", ")})`}.
         </p>
       )}
 

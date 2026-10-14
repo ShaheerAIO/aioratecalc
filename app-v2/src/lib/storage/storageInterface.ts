@@ -1,4 +1,4 @@
-import type { MerchantApplication, CustomerSubmission, AppSettings } from "@/types/merchant";
+import type { MerchantApplication, AppSettings } from "@/types/merchant";
 
 // Caller identity for ownership-scoped access: a rep's application methods
 // mean "mine"; an admin's mean "all". Settings/submissions are global tables,
@@ -34,8 +34,6 @@ export interface IStorage {
   deleteApplication(scope: StorageScope, id: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   saveSettings(scope: StorageScope, s: AppSettings): Promise<void>;
-  listSubmissions(scope: StorageScope): Promise<CustomerSubmission[]>;
-  saveSubmission(s: CustomerSubmission): Promise<void>;
   // Customer-scoped access — a separate scoping dimension from StorageScope's
   // rep/admin ownerUserId model, so these are kept as their own methods
   // rather than widening StorageScope.role (see src/lib/actions/customer.ts).

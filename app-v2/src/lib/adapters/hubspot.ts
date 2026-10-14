@@ -721,11 +721,20 @@ function noteHtml(body: string): string {
 }
 
 /**
- * Put a note on a deal, owned by `ownerId`.
+ * Put a note on a deal, owned by `ownerId` and optionally @-mentioning
+ * `mentionOwnerIds`.
  *
- * Owned, not @mentioned: this portal's NOTE object has no
- * `hs_at_mentioned_owner_ids` property, so there is no API route to the
- * notification HubSpot's own composer raises. See QUOTE_NOTE_WATCHER.
+ * Verified live against portal 244508708 (2026-10-13): `hs_at_mentioned_owner_ids`
+ * DOES exist on this portal's NOTE object (enumeration/checkbox, not
+ * read-only) and a value POSTed there persists on read-back. That reverses
+ * the earlier claim that there was no API route to it. What's still
+ * unverified is whether HubSpot actually DELIVERS a notification from an
+ * API-set mention — the property write is confirmed, delivery is not. See
+ * QUOTE_NOTE_WATCHER.
+ *
+ * `hs_at_mentioned_owner_ids` is an enumeration/checkbox, so HubSpot wants
+ * multiple values as one semicolon-separated string; a single id is just
+ * that id.
  *
  * Every caller is fire-and-log — a note is a record of a decision, never a
  * precondition for one — so the thrown message has to name the deal itself.
@@ -734,13 +743,16 @@ function noteHtml(body: string): string {
 export async function createDealNote(
   dealId: string,
   body: string,
-  ownerId?: string | null
+  ownerId?: string | null,
+  mentionOwnerIds?: string | string[] | null
 ): Promise<string> {
   const properties: Record<string, string> = {
     hs_timestamp: new Date().toISOString(),
     hs_note_body: noteHtml(body),
   };
   if (ownerId) properties.hubspot_owner_id = ownerId;
+  const mentions = Array.isArray(mentionOwnerIds) ? mentionOwnerIds : mentionOwnerIds ? [mentionOwnerIds] : [];
+  if (mentions.length) properties.hs_at_mentioned_owner_ids = mentions.join(";");
 
   const res = await fetchWithRetry(`${BASE}/crm/v3/objects/notes`, {
     method: "POST",

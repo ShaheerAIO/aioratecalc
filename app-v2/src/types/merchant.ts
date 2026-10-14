@@ -683,7 +683,7 @@ export function rollUpSubscriptionStatus(subs: HubspotSubscriptionSnapshot[]): s
 export type BusinessInfo = {
   legalName: string;
   dba: string;
-  bizType: "llc" | "corp" | "s-corp" | "sole-prop" | "partnership" | "non-profit";
+  bizType: "" | "llc" | "corp" | "s-corp" | "sole-prop" | "partnership" | "non-profit";
   address: string;
   city: string;
   state: string;

@@ -64,6 +64,12 @@ describe("buildFoodbuyFormHtml", () => {
     }
   });
 
+  it("renders an unspecified bizType as a blank write-on line, never a default label", () => {
+    const html = buildFoodbuyFormHtml({ ...BUSINESS, bizType: "" }, CONTACT);
+    expect(html).not.toContain(">LLC<");
+    expect(html).not.toContain("Unspecified");
+  });
+
   it("embeds the html2pdf export script and a download button", () => {
     const html = buildFoodbuyFormHtml(BUSINESS, CONTACT);
     expect(html).toContain("html2pdf.js/0.10.1/html2pdf.bundle.min.js");

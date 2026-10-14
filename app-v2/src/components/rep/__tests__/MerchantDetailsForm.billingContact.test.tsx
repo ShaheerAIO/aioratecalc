@@ -8,8 +8,13 @@
 //    new one" / "overwrite the billing contact in hs" — a new Billing
 //    section: a dropdown over the SAME contact list the page's own
 //    "Quote for" dropdown uses (passed in as `contactOptions`, never a second
-//    portal-wide search), a "Same as owner contact" copy action, and four
+//    portal-wide search), a "Same as owner contact" checkbox, and four
 //    free-text fields.
+//
+// The checkbox's fuller lifecycle (live mirroring while checked, disabling,
+// unchecking retains values, initial checked/unchecked state) lives in
+// MerchantDetailsForm.sameAsOwner.test.tsx — this file keeps only the smoke
+// test that it copies on check, plus the dropdown/independent-edit behavior.
 //
 // A SEPARATE file from MerchantDetailsForm.test.tsx (which covers the
 // "Same as operating address" address-sync behavior) rather than appended to
@@ -79,7 +84,6 @@ describe("MerchantDetailsForm — Billing contact (items 4/5)", () => {
         // only has to prove the component reports the id change faithfully.
         onBillingContactIdChange={setBillingContactId}
         onBillingChange={setBilling}
-        onCopyBillingFromOwner={() => setBilling({ ...ownerContact })}
       />
     );
   }
@@ -92,12 +96,13 @@ describe("MerchantDetailsForm — Billing contact (items 4/5)", () => {
     expect(screen.getByRole("option", { name: OPTIONS[0].label })).toBeTruthy();
   });
 
-  it("'Same as owner contact' copies the owner's fields into the billing fields", () => {
+  it("'Same as owner contact' checkbox copies the owner's fields into the billing fields", () => {
     render(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "Same as owner contact" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Same as owner contact" }));
     // "Ana"/"Reyes" now appear twice (Owner section + the copy landing in
     // Billing) — proving the copy worked is exactly that there are two now,
-    // not one.
+    // not one. The fuller lifecycle (disabling, live mirroring, unchecking)
+    // is covered in MerchantDetailsForm.sameAsOwner.test.tsx.
     expect(screen.getAllByDisplayValue("Ana")).toHaveLength(2);
     expect(screen.getAllByDisplayValue("Reyes")).toHaveLength(2);
     expect(screen.getAllByDisplayValue("ana@tortapalace.com")).toHaveLength(2);

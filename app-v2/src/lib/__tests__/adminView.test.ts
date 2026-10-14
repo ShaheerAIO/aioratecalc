@@ -4,7 +4,6 @@ import { parseAdminView } from "@/lib/adminView";
 describe("parseAdminView", () => {
   it("maps the non-default views through", () => {
     expect(parseAdminView("accounts")).toBe("accounts");
-    expect(parseAdminView("leads")).toBe("leads");
     expect(parseAdminView("revenue")).toBe("revenue");
     expect(parseAdminView("commissions")).toBe("commissions");
   });
@@ -16,5 +15,8 @@ describe("parseAdminView", () => {
     expect(parseAdminView("reps")).toBe("reps");
     expect(parseAdminView("Accounts")).toBe("reps");
     expect(parseAdminView("nonsense")).toBe("reps");
+    // "leads" was removed (2026-10-13) — a stale link must fall through to
+    // the default view rather than render the removed table.
+    expect(parseAdminView("leads")).toBe("reps");
   });
 });

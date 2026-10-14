@@ -432,6 +432,21 @@
 
 .totalRow[data-emphasis="true"] .totalValue { color: var(--accent-text); }
 
+/* Marks a row inside the customer-document mirror's totals that is NOT part
+   of the document the merchant sees (e.g. the rep's processing margin) — a
+   hairline rule plus a muted, uppercase label separates it from the
+   customer-facing rows above it. */
+.internalNote {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border-top: 1px solid var(--rule);
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+}
+
 .receiptGroup { margin-top: var(--space-sm); }
 
 .receiptGroupTitle {

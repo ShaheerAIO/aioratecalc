@@ -36,12 +36,19 @@ type Props = {
   contactOptions?: ContactOption[];
   billingContactId?: string | null;
   billing?: OwnerContact;
+  /**
+   * The billing contact exactly as it was loaded from HubSpot at pick time
+   * (see `selectBillingContact`, page.tsx) — never touched after that. Used
+   * only to decide whether to show the "this will update HubSpot" note
+   * below; null whenever no existing contact is selected.
+   */
+  billingContactLoaded?: OwnerContact | null;
   onBillingContactIdChange?: (id: string | null) => void;
   onBillingChange?: (next: OwnerContact) => void;
-  onCopyBillingFromOwner?: () => void;
 };
 
 const BIZ_TYPES: Array<[BusinessInfo["bizType"], string]> = [
+  ["", "Select…"],
   ["llc", "LLC"], ["corp", "Corporation"], ["s-corp", "S-Corp"],
   ["sole-prop", "Sole prop"], ["partnership", "Partnership"], ["non-profit", "Non-profit"],
 ];
@@ -64,9 +71,9 @@ export default function MerchantDetailsForm({
   contactOptions = [],
   billingContactId = null,
   billing = BLANK_CONTACT,
+  billingContactLoaded = null,
   onBillingContactIdChange = () => {},
   onBillingChange = () => {},
-  onCopyBillingFromOwner = () => {},
 }: Props) {
   const field = (
     path: string,
@@ -107,7 +114,14 @@ export default function MerchantDetailsForm({
   );
 
   const b = (patch: Partial<BusinessInfo>) => onBusinessChange({ ...business, ...patch });
-  const o = (patch: Partial<OwnerContact>) => onOwnerChange({ ...ownerContact, ...patch });
+  const o = (patch: Partial<OwnerContact>) => {
+    const next = { ...ownerContact, ...patch };
+    onOwnerChange(next);
+    // Live mirror, same shape as setOperatingAddress below: while "Same as
+    // owner contact" is checked, every owner edit routes through to Billing
+    // too, not just the moment the box is ticked.
+    if (sameAsOwner) mirrorBillingFromOwner(next);
+  };
   const p = (patch: Partial<ProcessingInfo>) => onProcessingChange({ ...processing, ...patch });
 
   // CHECKBOX, not a one-time copy button (reversed 10/13, product owner's
@@ -166,6 +180,60 @@ export default function MerchantDetailsForm({
       });
     }
   };
+
+  // Same CHECKBOX pattern as "Same as operating address" above (reversed
+  // 10/13, product owner's second confirmation, from the one-time copy
+  // button this superseded). Checked means Billing IS the Owner contact and
+  // tracks every edit to it (see `o` above); the four billing fields go
+  // read-only below, same visible tell as the legal address fields. Picking
+  // an existing HubSpot contact while this is checked would let "same as
+  // owner" silently PATCH that contact's record, so checking it always
+  // clears `billingContactId` first — a synced billing contact can never be
+  // a picked one. Unchecking leaves the copied values in place; nothing is
+  // cleared. Initial state, like the address checkbox, is computed once from
+  // whatever the form was handed on mount: checked only when both contacts
+  // are already filled in and identical, never asserted for a blank form.
+  const [sameAsOwner, setSameAsOwner] = useState(() => {
+    const ownerKey = ownerContact.firstName.trim();
+    const billingKey = billing.firstName.trim();
+    const bothNonEmpty = Boolean(ownerKey) && Boolean(billingKey);
+    return bothNonEmpty
+      && ownerContact.firstName === billing.firstName
+      && ownerContact.lastName === billing.lastName
+      && ownerContact.title === billing.title
+      && ownerContact.email === billing.email
+      && ownerContact.phone === billing.phone;
+  });
+
+  // Copies the owner contact's fields into Billing — title included (feeds
+  // HubSpot's jobtitle; there's no Billing input for it, so this is
+  // intentionally invisible here). Always clears billingContactId: a synced
+  // billing contact is never also a picked HubSpot one.
+  const mirrorBillingFromOwner = (owner: OwnerContact) => {
+    onBillingContactIdChange(null);
+    onBillingChange({
+      firstName: owner.firstName, lastName: owner.lastName, title: owner.title,
+      email: owner.email, phone: owner.phone,
+    });
+  };
+
+  const toggleSameAsOwner = (checked: boolean) => {
+    setSameAsOwner(checked);
+    if (checked) mirrorBillingFromOwner(ownerContact);
+  };
+
+  // The note below the Billing fields: only when an existing HubSpot contact
+  // is picked AND the rep has actually changed something from what loaded —
+  // see `syncBillingContact` (actions/prospects.ts) for what this warns
+  // about. Email is included in the comparison (any edit is worth a nudge)
+  // even though it's the one field that's never written back.
+  const billingContactChanged = Boolean(billingContactId) && billingContactLoaded !== null && (
+    billing.firstName !== billingContactLoaded.firstName
+    || billing.lastName !== billingContactLoaded.lastName
+    || billing.email !== billingContactLoaded.email
+    || billing.phone !== billingContactLoaded.phone
+  );
+
   const yesNo = (
     <>
       <option value="no">No</option>
@@ -293,17 +361,31 @@ export default function MerchantDetailsForm({
               {contactOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
             </select>
           </label>
-          <div className={styles.field} data-span={6}>
-            <span className={styles.label}>&nbsp;</span>
-            <button type="button" className={styles.copyButton} onClick={onCopyBillingFromOwner}>
-              Same as owner contact
-            </button>
-          </div>
-          {field("billing.firstName", "First name", 3, billing.firstName, v => onBillingChange({ ...billing, firstName: v }))}
-          {field("billing.lastName", "Last name", 3, billing.lastName, v => onBillingChange({ ...billing, lastName: v }))}
-          {field("billing.email", "Email", 3, billing.email, v => onBillingChange({ ...billing, email: v }), { type: "email", placeholder: "billing@business.com" })}
-          {field("billing.phone", "Phone", 3, billing.phone, v => onBillingChange({ ...billing, phone: v }), { type: "tel", placeholder: "555-000-0000" })}
+          {field("billing.firstName", "First name", 3, billing.firstName, v => onBillingChange({ ...billing, firstName: v }), { disabled: sameAsOwner })}
+          {field("billing.lastName", "Last name", 3, billing.lastName, v => onBillingChange({ ...billing, lastName: v }), { disabled: sameAsOwner })}
+          {field("billing.email", "Email", 3, billing.email, v => onBillingChange({ ...billing, email: v }), { type: "email", placeholder: "billing@business.com", disabled: sameAsOwner })}
+          {field("billing.phone", "Phone", 3, billing.phone, v => onBillingChange({ ...billing, phone: v }), { type: "tel", placeholder: "555-000-0000", disabled: sameAsOwner })}
         </div>
+        <div className={styles.checkRow}>
+          {/* A CHECKBOX, not a one-time copy button (reversed 10/13 — see
+              `sameAsOwner`'s comment above for what this undoes). Checked,
+              Billing mirrors the Owner contact live and the four fields above
+              go read-only. Unchecked, they're ordinary free text again and
+              hold whatever was last in them. */}
+          <label className={styles.check}>
+            <input
+              type="checkbox"
+              checked={sameAsOwner}
+              onChange={e => toggleSameAsOwner(e.target.checked)}
+            />
+            Same as owner contact
+          </label>
+        </div>
+        {billingContactChanged && (
+          <p className={styles.billingWarning}>
+            Saving will update this contact&apos;s name and phone in HubSpot — the email above can&apos;t be changed here.
+          </p>
+        )}
       </section>
 
       {showProcessing && (

@@ -16,7 +16,6 @@ import type { MerchantApplication } from "@/types/merchant";
 import type { TenantLinkResult } from "@/lib/actions/applications";
 
 const listApplicationsAction = vi.fn();
-const listSubmissionsAction = vi.fn();
 const listRepsAction = vi.fn();
 const sendMerchantOnboardingLinkAction = vi.fn();
 const markApplicationClosedLostAction = vi.fn();
@@ -26,7 +25,6 @@ const unlinkTenantCompanyAction = vi.fn();
 
 vi.mock("@/lib/actions/applications", () => ({
   listApplicationsAction,
-  listSubmissionsAction,
   listRepsAction,
   sendMerchantOnboardingLinkAction,
   markApplicationClosedLostAction,
@@ -104,7 +102,6 @@ async function openDetail() {
 beforeEach(() => {
   vi.clearAllMocks();
   listApplicationsAction.mockResolvedValue([baseApp()]);
-  listSubmissionsAction.mockResolvedValue([]);
   listRepsAction.mockResolvedValue([]);
   vi.spyOn(window, "alert").mockImplementation(() => {});
   vi.spyOn(window, "confirm").mockImplementation(() => true);

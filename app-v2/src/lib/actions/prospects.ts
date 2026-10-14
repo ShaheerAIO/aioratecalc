@@ -280,8 +280,9 @@ async function syncBillingContact(
 }
 
 /**
- * Mirror the rep's quote note onto the HubSpot deal, as a note owned by
- * QUOTE_NOTE_WATCHER.
+ * Mirror the rep's quote note onto the HubSpot deal, as a note owned by and
+ * @-mentioning QUOTE_NOTE_WATCHER (both the structured mention and a literal
+ * "@" in the heading text, belt-and-braces).
  *
  * Best-effort, like the company sync above: the quote is already saved, and a
  * note is a RECORD of a decision rather than a precondition for one — a
@@ -308,12 +309,17 @@ async function mirrorQuoteNote(
   // check.
   const delay = longestBillingDelayDays(app.quoteLines ?? []);
   const heading = delay > DELAY_NOTE_THRESHOLD_DAYS
-    ? `${QUOTE_NOTE_WATCHER.name} — billing on this quote starts after ${delay} days ` +
+    ? `@${QUOTE_NOTE_WATCHER.name} — billing on this quote starts after ${delay} days ` +
       `(past the ${DELAY_NOTE_THRESHOLD_DAYS}-day default). The rep's reason:`
-    : `${QUOTE_NOTE_WATCHER.name} — note from the rep on this quote:`;
+    : `@${QUOTE_NOTE_WATCHER.name} — note from the rep on this quote:`;
 
   try {
-    await createDealNote(app.hubspotDealId, `${heading}\n\n${note}`, QUOTE_NOTE_WATCHER.hubspotOwnerId);
+    await createDealNote(
+      app.hubspotDealId,
+      `${heading}\n\n${note}`,
+      QUOTE_NOTE_WATCHER.hubspotOwnerId,
+      QUOTE_NOTE_WATCHER.hubspotOwnerId
+    );
   } catch (err) {
     console.error("HubSpot quote note push failed", app.id, app.hubspotDealId, err);
   }

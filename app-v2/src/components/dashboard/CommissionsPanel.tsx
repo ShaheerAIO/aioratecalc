@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { getCommissionReportAction } from "@/lib/actions/commissions";
 import { fmt$, fmtPct2 } from "@/lib/utils";
@@ -10,22 +10,25 @@ import styles from "./AdminDashboard.module.css";
 // THE FULL PICTURE — everything that moved OFF PricingStep/EditQuotePanel on
 // 2026-10-13 ("the only thing to display [to a rep] is the margin... the
 // other stuff calculate it and store it in an admin only view somewhere").
-// AIO Revenue, processor cost, net margin and the TRUE floor are the exact
-// numbers CLAUDE.md says a rep must never receive — safe here because this
-// whole action chain is admin-gated (getCommissionReportAction throws for
-// anyone else), not because the UI merely hides a button.
+// Admin only — enforced in getCommissionReportAction (throws for anyone
+// else), not by this component hiding a button.
+//
+// Default columns are the product owner's own ask (2026-10-13): "why are
+// there like 8 diff values on that table it should be like two. Total rev
+// and total take rate." The four FLOOR columns (the true margin-floor
+// enforcement basis CLAUDE.md says a rep must never see — safe here, this
+// whole chain is admin-gated) are real and still needed for debugging a
+// refused quote, so they live behind "Show cost basis" rather than being
+// deleted — collapsed by default instead of competing with the two numbers
+// that actually matter day to day.
 //
 // HARDWARE commission here is PER-PRODUCT, read from the HubSpot product
 // library's `cost_to_rep`/`rep_commission`/`rsm_commission` and snapshotted
-// onto each quote line at quote time (lib/commission.ts). There is no more
-// global rate to set here — that design (migration 0022's `commission_policy`,
-// a single admin-typed bps number applied to a margin nobody could compute)
-// is superseded; see the SUPERSEDED comment in lib/actions/pricing.ts. As of
-// 2026-10-13 the catalog itself is the blocker (0 of 39 active products carry
-// a commission rate), which is why the "needs attention" section below is the
-// most useful thing on this panel right now — it says WHICH products still
-// need a cost or a rate, instead of every deal just reading "$0, nothing to
-// see."
+// onto each quote line at quote time (lib/commission.ts). The "needs
+// attention" box below is the most useful thing on this panel while that
+// catalog is still mostly unpopulated (2026-10-13: 0 of 39 active products
+// carry a commission rate) — it says WHICH products still need a cost or a
+// rate, instead of every deal just reading "$0, nothing to see."
 
 function dash(v: number | null | undefined): string {
   return v == null ? "—" : fmt$(v);
@@ -34,12 +37,35 @@ function dashPct(v: number | null | undefined): string {
   return v == null ? "—" : fmtPct2(v);
 }
 
+const BASE_COLS = "1fr 110px 90px 120px 110px 100px 100px 110px 110px";
+const FLOOR_COLS = " 110px 100px 100px 120px";
+
+const BASE_HEADERS: { label: string; title: string }[] = [
+  { label: "Merchant", title: "A dash elsewhere with a note under the name means this deal's stored card rate is implausible — ARR/commission were skipped rather than computed off a likely typo." },
+  { label: "Total Rev/mo", title: "(CP Rate × Monthly Volume) + ((Monthly Volume ÷ Avg Ticket) × Txn Fee) — the product owner's 10/13 wholesale formula. Drives payment_processing_arr and commission." },
+  { label: "Take Rate", title: "Total Rev/mo ÷ Monthly Volume." },
+  { label: "Processing ARR", title: "What's written to HubSpot's payment_processing_arr at acceptance — appliedTargetMargin × monthly volume × 12." },
+  { label: "Total ARR (est.)", title: "Processing ARR + estimated recurring ARR from this quote's own line items (not a live HubSpot saas_revenue read) — the denominator for Signing/Activation." },
+  { label: "Signing (est.)", title: "5% of Total ARR (est.), paid at signing." },
+  { label: "Activation (est.)", title: "5% of Total ARR (est.), paid at activation." },
+  { label: "Rep HW Comm.", title: "(Price after discount − cost) × rate, one-time lines only. Dash means no cost/rate on file for this line, not a measured zero." },
+  { label: "RSM HW Comm.", title: "Same formula as Rep HW Comm., at the RSM's own rate." },
+];
+
+const FLOOR_HEADERS: { label: string; title: string }[] = [
+  { label: "AIO Rev/mo", title: "Revenue over true interchange — the margin-floor enforcement basis." },
+  { label: "Proc. Cost", title: "True Adyen cost rate for this volume." },
+  { label: "Net Margin", title: "Applied target margin − Proc. Cost — what a quote is actually refused against." },
+  { label: "True Floor/mo", title: "The true minimum profitable margin floor for this deal's volume tier. Never shown to reps." },
+];
+
 export default function CommissionsPanel() {
   const [rows, setRows] = useState<DealCommissionRow[] | null>(null);
   const [gaps, setGaps] = useState<CommissionDataGaps | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showCostBasis, setShowCostBasis] = useState(false);
 
-  const load = () => {
+  useEffect(() => {
     getCommissionReportAction()
       .then(report => {
         setRows(report.rows);
@@ -47,90 +73,62 @@ export default function CommissionsPanel() {
         setError(null);
       })
       .catch(e => setError(e instanceof Error ? e.message : "Could not load commissions"));
-  };
-
-  useEffect(load, []);
+  }, []);
 
   const hasGaps = gaps !== null && (gaps.missingCost.length > 0 || gaps.zeroCost.length > 0 || gaps.recurringWithRate.length > 0);
 
-  const cols = "1fr 110px 110px 100px 100px 120px 110px 110px 110px 130px 100px 110px 110px 110px";
+  const cols = showCostBasis ? BASE_COLS + FLOOR_COLS : BASE_COLS;
+  const headers = showCostBasis ? [...BASE_HEADERS, ...FLOOR_HEADERS] : BASE_HEADERS;
 
   return (
     <>
       <div className={styles.revenueHead}>
         <p className={styles.revenueCaption}>
-          The full per-deal picture that moved off the rep-facing pricing screens on 2026-10-13: AIO
-          Revenue, processor cost, net margin, the true margin floor, the processing commission split
-          (10% of total ARR — 5% at signing, 5% at activation), and per-product hardware commission.
-          Admin only.
+          Per-deal commission detail — AIO revenue, processing ARR, and the signing/activation/hardware
+          splits that moved off the rep-facing pricing screens on 2026-10-13. Admin only. Hover a column
+          header for how it&rsquo;s computed.
         </p>
-        <p className={styles.revenueCaption}>
-          <strong>There are TWO different margins below, columns labelled &ldquo;Floor:&rdquo; vs
-          &ldquo;Wholesale:&rdquo;, and they do not agree — by design, not by bug.</strong> The{" "}
-          <strong>Floor</strong> columns (AIO Rev/mo, Proc. Cost, Net Margin, True Floor/mo) are revenue
-          over actual INTERCHANGE, the same basis that enforces the margin floor a quote can be refused
-          against. The <strong>Wholesale</strong> columns (Total Rev/mo, Take Rate, Margin) are the
-          product owner&rsquo;s 10/13 formula — one blended CP rate and flat per-transaction fee against
-          a ticket-indexed wholesale table — and are what actually drives <code>payment_processing_arr</code>{" "}
-          and therefore commission. On one live row these diverged by 0.7 points of margin. Don&rsquo;t
-          read one as a sanity check on the other.
-        </p>
-        <p className={styles.revenueCaption}>
-          <strong>A dash in the Wholesale columns with a note under the merchant name</strong> means this
-          deal&rsquo;s stored card rate exceeds the plausibility ceiling — the ARR/commission figures were
-          skipped rather than computed off a typo (e.g. 20.00% entered instead of 2.00%), since that
-          number would otherwise pay a real commission on a fat-fingered rate.
-        </p>
-        <p className={styles.revenueCaption}>
-          <strong>Recurring ARR, total ARR, and the two processing-commission figures below are
-          ESTIMATES</strong> — built from this quote&rsquo;s own line items, not a live read of
-          HubSpot&rsquo;s actual <code>saas_revenue</code>. They can and do differ from what actually
-          gets written to the deal: the real write (behind <code>COMMISSION_WRITEBACK_ENABLED</code>,
-          off today) reads HubSpot&rsquo;s own <code>saas_revenue</code> at the moment of acceptance
-          instead of estimating it — see lib/billing/commissionWriteback.ts.
-        </p>
-        <p className={styles.revenueCaption}>
-          <strong>Rep/RSM hardware commission is the real formula</strong> — (price after discount −
-          cost) × rate — over each product&rsquo;s own <code>cost_to_rep</code>/<code>rep_commission</code>/
-          <code>rsm_commission</code> from the HubSpot product library, one-time lines only. A dash
-          means no cost and rate are on file for that line, not a measured zero.
-        </p>
+        <button
+          type="button"
+          className={styles.toggleBtn}
+          data-active={showCostBasis}
+          onClick={() => setShowCostBasis(v => !v)}
+        >
+          {showCostBasis ? "Hide cost basis" : "Show cost basis"}
+        </button>
       </div>
+
+      {showCostBasis && (
+        <p className={styles.revenueCaption}>
+          The Floor columns are the true margin-floor enforcement basis — they disagree with Total
+          Rev/mo and Take Rate by design. Don&rsquo;t read one as a sanity check on the other.
+        </p>
+      )}
 
       {error && <div className={styles.emptyState}>{error}</div>}
 
       {gaps && hasGaps && (
-        <div className={styles.panel} style={{ marginBottom: "var(--space-md, 16px)", borderColor: "var(--warning)" }}>
+        <div className={styles.panel} style={{ marginBottom: "var(--space-md, 16px)", borderColor: "var(--warning)", padding: "var(--space-md) var(--space-lg)" }}>
           <div className={styles.sectionHead}>
-            <h2 className={styles.sectionTitle}>Needs attention — hardware commission catalog gaps</h2>
+            <h2 className={styles.sectionTitle}>Needs attention — hardware commission gaps</h2>
           </div>
-          <p className={styles.revenueCaption}>
-            Hardware commission is computed per product from the HubSpot product library. These are the
-            products on file across every deal that leave that computation incomplete or questionable.
-          </p>
-          {gaps.missingCost.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <strong>No cost on file ({gaps.missingCost.length})</strong> — these lines contribute no
-              commission at all until a &ldquo;Cost to Rep&rdquo; is entered.
-              <div style={{ opacity: 0.85, fontSize: 13, marginTop: 4 }}>{gaps.missingCost.join(", ")}</div>
-            </div>
-          )}
-          {gaps.zeroCost.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <strong>Costed at a literal $0 ({gaps.zeroCost.length})</strong> — honoured as a real
-              zero, so the entire sale price pays commission. Almost certainly means nobody has entered
-              a real cost yet, not that the product truly costs nothing.
-              <div style={{ opacity: 0.85, fontSize: 13, marginTop: 4 }}>{gaps.zeroCost.join(", ")}</div>
-            </div>
-          )}
-          {gaps.recurringWithRate.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <strong>Recurring product carrying a commission rate ({gaps.recurringWithRate.length})</strong> —
-              hardware commission is one-time-dollars only, so these rates are excluded from every total.
-              Likely a misconfigured product.
-              <div style={{ opacity: 0.85, fontSize: 13, marginTop: 4 }}>{gaps.recurringWithRate.join(", ")}</div>
-            </div>
-          )}
+          <ul style={{ listStyle: "none", margin: "var(--space-xs) 0 0", padding: 0, display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+            {gaps.missingCost.length > 0 && (
+              <li title="These lines contribute no commission at all until a Cost to Rep is entered.">
+                <strong>No cost on file ({gaps.missingCost.length}):</strong> {gaps.missingCost.join(", ")}
+              </li>
+            )}
+            {gaps.zeroCost.length > 0 && (
+              <li title="Honoured as a real zero — the entire sale price pays commission. Almost certainly nobody has entered a real cost yet.">
+                <strong>Costed at a literal $0 ({gaps.zeroCost.length}):</strong> {gaps.zeroCost.join(", ")}
+              </li>
+            )}
+            {gaps.recurringWithRate.length > 0 && (
+              <li title="Hardware commission is one-time-dollars only, so these rates are excluded from every total. Likely a misconfigured product.">
+                <strong>Recurring product carrying a rate ({gaps.recurringWithRate.length}):</strong> {gaps.recurringWithRate.join(", ")}
+              </li>
+            )}
+          </ul>
         </div>
       )}
 
@@ -139,9 +137,7 @@ export default function CommissionsPanel() {
       {rows && rows.length === 0 && (
         <div className={styles.panel}>
           <div className={styles.emptyState}>
-            Nothing to report yet — no application has a statement, a rep-entered volume/ticket, any
-            quote lines to compute a commission basis from, or any hardware line with both a cost and a
-            rate on file.
+            Nothing to report yet — no deals have a pricing basis or any hardware commission data.
           </div>
         </div>
       )}
@@ -149,14 +145,8 @@ export default function CommissionsPanel() {
       {rows && rows.length > 0 && (
         <div className={styles.panel}>
           <div className={styles.tableHeader} style={{ gridTemplateColumns: cols }}>
-            {[
-              "Merchant",
-              "Floor: AIO Rev/mo", "Floor: Proc. Cost", "Floor: Net Margin", "Floor: True Floor/mo",
-              "Wholesale: Total Rev/mo", "Wholesale: Take Rate", "Wholesale: Margin",
-              "Processing ARR", "Recurring ARR (est.)", "Signing (est.)", "Activation (est.)",
-              "Rep HW Comm.", "RSM HW Comm.",
-            ].map(h => (
-              <div key={h} className={styles.tableHeaderCell}>{h}</div>
+            {headers.map(h => (
+              <div key={h.label} className={styles.tableHeaderCell} title={h.title}>{h.label}</div>
             ))}
           </div>
           {rows.map(r => (
@@ -167,24 +157,27 @@ export default function CommissionsPanel() {
                   {r.stage}{r.quoteAcceptedAt ? " · accepted" : ""}
                   {r.implausibleRate != null && (
                     <span style={{ color: "var(--warning)" }}>
-                      {" · stored rate "}{fmtPct2(r.implausibleRate)}{" implausible — Wholesale/ARR skipped"}
+                      {" · stored rate "}{fmtPct2(r.implausibleRate)}{" implausible — skipped"}
                     </span>
                   )}
                 </div>
               </div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: AIO Rev/mo">{dash(r.aioRevenue)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: Proc. Cost">{dashPct(r.processorCostRate)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: Net Margin">{dashPct(r.netMarginRate)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Floor: True Floor/mo">{dash(r.trueMarginFloor)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Wholesale: Total Rev/mo">{dash(r.totalRevenue)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Wholesale: Take Rate">{dashPct(r.totalTakeRate)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Wholesale: Margin">{dashPct(r.wholesaleMargin)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Total Rev/mo">{dash(r.totalRevenue)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Take Rate">{dashPct(r.totalTakeRate)}</div>
               <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Processing ARR">{dash(r.processingArr)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Recurring ARR">{dash(r.recurringArr)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Signing">{dash(r.signingCommission)}</div>
-              <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Activation">{dash(r.activationCommission)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Total ARR (est.)">{dash(r.totalArr)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Signing (est.)">{dash(r.signingCommission)}</div>
+              <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Activation (est.)">{dash(r.activationCommission)}</div>
               <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="Rep HW Comm.">{dash(r.repHardwareCommission)}</div>
               <div className={`${styles.tableCell} ${styles.numeric} ${styles.success}`} data-label="RSM HW Comm.">{dash(r.rsmHardwareCommission)}</div>
+              {showCostBasis && (
+                <>
+                  <div className={`${styles.tableCell} ${styles.numeric}`} data-label="AIO Rev/mo">{dash(r.aioRevenue)}</div>
+                  <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Proc. Cost">{dashPct(r.processorCostRate)}</div>
+                  <div className={`${styles.tableCell} ${styles.numeric}`} data-label="Net Margin">{dashPct(r.netMarginRate)}</div>
+                  <div className={`${styles.tableCell} ${styles.numeric}`} data-label="True Floor/mo">{dash(r.trueMarginFloor)}</div>
+                </>
+              )}
             </div>
           ))}
         </div>

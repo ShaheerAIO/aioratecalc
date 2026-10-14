@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 //
-// The processing-margin task (2026-10-13) added a "Processing margin" row to
-// QuoteReceipt.tsx, but QuoteReceipt is only rendered in the default "panels"
-// layout — the "document" layout `/rep/prospects/new` actually uses never
-// renders it, so the margin was invisible on the one screen the product
-// owner tests. This covers the fix: the same figure, rendered separately
-// inside the document layout's rep-only BUILD column (`.buildCol`), never
-// inside the `.docCol` mirror captioned "what the customer will see".
+// The processing-margin task (2026-10-13 a.m.) added a "Processing margin" row
+// to QuoteReceipt.tsx, but QuoteReceipt is only rendered in the default
+// "panels" layout — the "document" layout `/rep/prospects/new` actually uses
+// never renders it, so the margin was invisible on the one screen the product
+// owner tests. The fix at the time rendered the same figure separately inside
+// the document layout's rep-only BUILD column (`.buildCol`), never inside the
+// `.docCol` mirror of what the merchant will see.
+//
+// Later that day the product owner asked for it moved AGAIN — into the
+// `.docCol` mirror's own totals block (`.docTotals`), the thing the earlier
+// fix was built specifically to avoid — but marked unmistakably internal:
+// a muted "Internal" label directly above the row, set off from the
+// customer-facing rows above it. This file now covers THAT placement, and
+// inverts the `.buildCol`/`.docCol` expectations the first fix asserted.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import type { CatalogProduct } from "@/types/merchant";
@@ -32,7 +39,7 @@ const CATALOG: CatalogProduct[] = [
   { hubspotProductId: "335283119838", name: "All-in-One Platform", price: 399, billingFrequency: "monthly", productType: "Software" },
 ];
 
-function renderConfigurator(pricingPreview?: QuoteMarginPreview | null) {
+function renderConfigurator(pricingPreview?: QuoteMarginPreview | null, channels: string[] = ["qr"]) {
   return render(
     <ProductConfigurator
       layout="document"
@@ -40,10 +47,15 @@ function renderConfigurator(pricingPreview?: QuoteMarginPreview | null) {
       // the "pick a plan to start" screen (ProductConfigurator.tsx:1141) —
       // unrelated to this margin note, but the host never has a preview to
       // show before a plan is picked either, so this matches how the prop is
-      // actually supplied in practice.
+      // actually supplied in practice. A processing quote with no picks AND no
+      // declared channels is rate-only and derives no platform line at all
+      // (`resolvePlatformLine` → `none_needed`), so one channel is declared
+      // by default purely to give the quote a line — `.docTotals` is gated on
+      // `quoteLines.length > 0`. The rate-only regression test below passes
+      // `channels={[]}` deliberately, to land on zero quote lines.
       quoteType="all_in_one"
       picks={[]}
-      channels={[]}
+      channels={channels}
       adjustments={{}}
       pricingPreview={pricingPreview}
       documentHeader={<h2 data-testid="mirror-heading">Live quote · what Test Co will see</h2>}
@@ -64,8 +76,8 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("processing margin in the document layout's build column", () => {
-  it("renders the margin and projected commission when a preview is supplied", async () => {
+describe("processing margin in the document layout's totals block", () => {
+  it("renders the margin and projected commission inside .docTotals, marked internal, when a preview is supplied", async () => {
     const { container } = renderConfigurator({
       appliedTargetMargin: 0.021,
       projectedCommission: { totalArr: 102038, signingCommission: 2551, activationCommission: 2551, total: 2142.8 },
@@ -78,13 +90,51 @@ describe("processing margin in the document layout's build column", () => {
     expect(screen.getByText(/2\.10%/)).toBeTruthy();
     expect(screen.getByText(/\(est\. \$2,142\.80\/yr\)/)).toBeTruthy();
 
-    const buildCol = container.querySelector(`.${styles.buildCol}`);
     const docCol = container.querySelector(`.${styles.docCol}`);
-    expect(buildCol).toBeTruthy();
+    const buildCol = container.querySelector(`.${styles.buildCol}`);
+    const docTotals = container.querySelector(`.${styles.docTotals}`);
     expect(docCol).toBeTruthy();
-    expect(buildCol?.textContent).toContain("Processing margin");
-    // The customer-facing mirror never carries AIO's margin.
-    expect(docCol?.textContent).not.toContain("Processing margin");
+    expect(buildCol).toBeTruthy();
+    expect(docTotals).toBeTruthy();
+
+    // It lives in the customer-document mirror's totals block now, not the
+    // rep-only build column — the opposite of the earlier fix.
+    expect(docTotals?.textContent).toContain("Processing margin");
+    expect(docCol?.textContent).toContain("Processing margin");
+    expect(buildCol?.textContent).not.toContain("Processing margin");
+
+    // And it's unmistakably marked as not part of the document the merchant
+    // actually sees, right alongside the row.
+    expect(docTotals?.textContent).toMatch(/internal/i);
+    expect(docTotals?.textContent).toMatch(/not shown to merchant/i);
+  });
+
+  it("renders the margin and its internal marking on a RATE-ONLY quote (no picks, no channels, no quote lines)", async () => {
+    // The regression this task exists for: `resolvePlatformLine` gives a
+    // processing quote with no picks and no declared channels NO platform
+    // line at all (`none_needed`), so `quoteLines` is empty and `.docTotals`
+    // — gated on `quoteLines.length > 0` — never mounts. A rate-only quote is
+    // pure card processing, so the margin is the entire economics of the
+    // deal and must still show up, just outside that gate.
+    const { container } = renderConfigurator(
+      {
+        appliedTargetMargin: 0.021,
+        projectedCommission: { totalArr: 102038, signingCommission: 2551, activationCommission: 2551, total: 2142.8 },
+      },
+      []
+    );
+    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
+    await screen.findByTestId("mirror-heading");
+
+    const docTotals = container.querySelector(`.${styles.docTotals}`);
+    expect(docTotals).toBeNull();
+
+    const docCol = container.querySelector(`.${styles.docCol}`);
+    expect(docCol?.textContent).toContain("Processing margin");
+    expect(screen.getByText(/2\.10%/)).toBeTruthy();
+    expect(screen.getByText(/\(est\. \$2,142\.80\/yr\)/)).toBeTruthy();
+    expect(docCol?.textContent).toMatch(/internal/i);
+    expect(docCol?.textContent).toMatch(/not shown to merchant/i);
   });
 
   it("renders the margin alone when there's no projected-commission figure", async () => {
@@ -104,6 +154,7 @@ describe("processing margin in the document layout's build column", () => {
 
     expect(screen.queryByText("Processing margin")).toBeNull();
     expect(screen.queryByText(/0\.00%/)).toBeNull();
+    expect(screen.queryByText(/not shown to merchant/i)).toBeNull();
   });
 
   it("renders nothing when the preview is explicitly null (marketing-only / no volume)", async () => {

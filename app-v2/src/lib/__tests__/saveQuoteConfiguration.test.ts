@@ -510,11 +510,21 @@ describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
 
     expect(updated.quoteNote).toBe("Equipment lands in November, agreed with the owner.");
     expect(createDealNote).toHaveBeenCalledTimes(1);
-    const [dealId, body, ownerId] = createDealNote.mock.calls[0];
+    const [dealId, body, ownerId, mentionIds] = createDealNote.mock.calls[0];
     expect(dealId).toBe("deal-9");
     expect(body).toContain("90 days");
     expect(body).toContain("Equipment lands in November");
+    expect(body.startsWith(`@${QUOTE_NOTE_WATCHER.name}`)).toBe(true);
     expect(ownerId).toBe(QUOTE_NOTE_WATCHER.hubspotOwnerId);
+    expect(mentionIds).toBe(QUOTE_NOTE_WATCHER.hubspotOwnerId);
+  });
+
+  it("opens the plain (non-delay) heading with the same @-mention", async () => {
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
+    await save("Just a note, no delay involved.", 60);
+    expect(createDealNote).toHaveBeenCalledTimes(1);
+    const [, body] = createDealNote.mock.calls[0];
+    expect(body.startsWith(`@${QUOTE_NOTE_WATCHER.name}`)).toBe(true);
   });
 
   it("keeps the quote when the note can't reach HubSpot", async () => {
@@ -524,6 +534,12 @@ describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
     createDealNote.mockRejectedValueOnce(new Error("403 missing scope"));
     await expect(save("Equipment lands in November.", 90)).resolves.toBeTruthy();
     expect(saveApplication).toHaveBeenCalled();
+  });
+
+  it("omits the mention arg entirely when the deal id is missing (no call at all)", async () => {
+    getApplication.mockResolvedValue(app({ hubspotDealId: null }));
+    await save("A note with nowhere to go.", 90);
+    expect(createDealNote).not.toHaveBeenCalled();
   });
 
   it("does not repost a note the deal already carries", async () => {

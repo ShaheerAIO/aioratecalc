@@ -92,6 +92,10 @@
 
 .input::placeholder { color: var(--ink-3); opacity: 0.7; }
 
+/* The Entity type placeholder option ("Select…") — an unanswered field reads
+   as unanswered rather than defaulting to a real entity type nobody stated. */
+.input option[value=""] { color: var(--ink-3); }
+
 .input:focus-visible {
   border-color: var(--focus);
   outline: 2px solid var(--focus);
@@ -123,36 +127,16 @@
 
 .checkRow { display: flex; align-items: center; gap: var(--space-xs); margin-top: var(--space-sm); }
 
-/* An action the rep takes, not a state the form holds — the Billing
-   section's "Same as owner contact" button. (Re-added 2026-10-13; this rule
-   existed before for the legal-address copy button, which became a checkbox
-   the same day — see the "Legal" section's own comment in the .tsx file.) */
-.copyButton {
-  align-self: flex-start;
-  margin-top: calc(var(--space-3xs) + 0.1rem);
-  font-family: var(--font-body);
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--accent-text);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.copyButton:hover:not(:disabled) { color: var(--ink); }
-.copyButton:disabled { color: var(--ink-3); cursor: default; text-decoration: none; }
-
-.copyButton:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
-}
-
 .checkRow .check { margin-top: 0; }
 .checkRow + .grid { margin-top: var(--space-sm); }
+
+/* The "this will update HubSpot" note under Billing — same understated
+   register as .legend above, not an alarm. */
+.billingWarning {
+  margin: var(--space-xs) 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
 
 /* A hover/focus tooltip. The button is what makes it reachable by keyboard;
    `title` alone never shows on focus or touch. */

@@ -179,7 +179,7 @@ describe("customerOnboardInitial", () => {
     const r = customerOnboardInitial(NO_SOURCE);
     expect(r.prefilled).toEqual([]);
     expect(r.business.legalName).toBe("");
-    expect(r.business.bizType).toBe("llc");
+    expect(r.business.bizType).toBe("");
     expect(r.ownerContact.title).toBe("Owner");
     expect(r.processing.previouslyTerminated).toBe("no");
   });
@@ -189,7 +189,7 @@ describe("customerOnboardInitial", () => {
     const r = customerOnboardInitial({
       ...NO_SOURCE,
       business: {
-        legalName: "Acme Pizza", dba: "Acme Pizza", bizType: "llc",
+        legalName: "Acme Pizza", dba: "Acme Pizza", bizType: "",
         address: "", city: "", state: "", zip: "", phone: "", website: "",
         yearsInBusiness: "", annualRevenue: "",
       },
@@ -213,7 +213,7 @@ describe("customerOnboardInitial", () => {
     const r = customerOnboardInitial({
       ...NO_SOURCE,
       business: {
-        legalName: "", dba: "", bizType: "llc", address: "", city: "", state: "", zip: "",
+        legalName: "", dba: "", bizType: "", address: "", city: "", state: "", zip: "",
         phone: "", website: "", yearsInBusiness: "", annualRevenue: "",
       },
       ownerContact: { firstName: "", lastName: "", title: "Owner", email: "", phone: "" },

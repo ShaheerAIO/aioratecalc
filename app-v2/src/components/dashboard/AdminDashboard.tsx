@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import {
   listApplicationsAction,
-  listSubmissionsAction,
   listRepsAction,
   type RepSummary,
 } from "@/lib/actions/applications";
@@ -16,7 +15,7 @@ import RevenuePanel from "./RevenuePanel";
 import CommissionsPanel from "./CommissionsPanel";
 import { parseAdminView, type AdminView } from "@/lib/adminView";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
-import type { MerchantApplication, CustomerSubmission } from "@/types/merchant";
+import type { MerchantApplication } from "@/types/merchant";
 import styles from "./AdminDashboard.module.css";
 
 type RepRow = RepSummary & {
@@ -42,7 +41,6 @@ function summarizeRep(rep: RepSummary, apps: MerchantApplication[]): RepRow {
 const VIEW_TABS: { id: AdminView; label: string }[] = [
   { id: "reps",     label: "By Rep" },
   { id: "accounts", label: "Accounts" },
-  { id: "leads",    label: "Leads" },
   // What AIO earned, as opposed to what the merchant saves — the only money
   // figure on this page until 2026-09-25. Reads merchant_monthly_actuals,
   // which the settlement ingest has been filling all along with nothing
@@ -67,8 +65,8 @@ export function AdminDashboard(props: AdminDashboardProps) {
 }
 
 // The single admin surface: org-wide pipeline totals on top, then exactly one
-// of three views — the per-rep breakdown, all accounts, or customer leads —
-// chosen by ?view= (default "reps"). The accounts/leads views reuse
+// of four views — the per-rep breakdown, all accounts, revenue, or
+// commissions — chosen by ?view= (default "reps"). The accounts view reuses
 // AccountsDashboard embedded, so there is one accounts table in the app, not two.
 function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps) {
   const router = useRouter();
@@ -90,14 +88,12 @@ function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps
   };
 
   const [apps, setApps] = useState<MerchantApplication[]>([]);
-  const [subs, setSubs] = useState<CustomerSubmission[]>([]);
   const [reps, setReps] = useState<RepSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       listApplicationsAction().then(setApps),
-      listSubmissionsAction().then(setSubs),
       listRepsAction().then(setReps),
     ]).finally(() => setLoading(false));
   }, []);
@@ -109,7 +105,6 @@ function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps
     approved: apps.filter(a => a.stage === "adyen_approved").length,
     volume: apps.reduce((sum, a) => sum + (a.analysis?.totalVolume || 0), 0),
     savings: apps.reduce((sum, a) => sum + (a.proposal?.savings?.annual || 0), 0),
-    leads: subs.length,
     // The tripwire: a HubSpot integration failure used to be visible only as
     // a console.error, so the deal sync stayed broken for the entire life of
     // the feature with nobody knowing. This is the number that would have
@@ -130,7 +125,7 @@ function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps
           <div className={styles.kicker}>Admin Console</div>
           <h1 className={styles.headerTitle}>Dashboard</h1>
           <p className={styles.headerSubtitle}>
-            Org-wide pipeline across every rep, plus customer self-serve leads.
+            Org-wide pipeline across every rep.
           </p>
         </div>
 
@@ -146,8 +141,6 @@ function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps
             <span className={styles.statDot}>·</span>
             <span><b>{metrics.approved}</b> Approved</span>
             <span className={styles.statDot}>·</span>
-            <span><b>{metrics.leads}</b> Leads</span>
-            <span className={styles.statDot}>·</span>
             <span><b className={styles.statSuccess}>{fmt$(metrics.savings)}/yr</b> Projected Savings</span>
             <span className={styles.statDot}>·</span>
             {/* Always visible, not just when non-zero — a permanently-broken
@@ -161,7 +154,7 @@ function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps
           </div>
         </div>
 
-        {/* One surface, three views — only one table renders below, so the rep
+        {/* One surface, four views — only one table renders below, so the rep
             breakdown can grow without burying the accounts list. */}
         <div className={styles.tabsRow}>
           <div className={styles.tabs} data-active={view} role="tablist">
@@ -224,13 +217,12 @@ function AdminDashboardInner({ userId, debugBillingBypass }: AdminDashboardProps
         </div>
       )}
 
-      {view !== "reps" && view !== "revenue" && view !== "commissions" && (
+      {view === "accounts" && (
         <AccountsDashboard
           role="admin"
           userId={userId}
           debugBillingBypass={debugBillingBypass}
           embedded
-          view={view}
           repFilter={repFilter}
           onClearRepFilter={() => go("accounts", null)}
         />

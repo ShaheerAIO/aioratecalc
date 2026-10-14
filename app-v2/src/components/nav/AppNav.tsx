@@ -158,7 +158,7 @@ function AdminViewLinksView({ pathname, view }: { pathname: string; view: AdminV
       <NavLink
         href="/admin?view=accounts"
         pathname={pathname}
-        active={onAdmin && (view === "accounts" || view === "leads")}
+        active={onAdmin && view === "accounts"}
       >
         Accounts
       </NavLink>

@@ -5,6 +5,7 @@ import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
 import {
   AMS1_PRODUCT,
+  CHANNEL_LABELS,
   DEFAULT_MAX_DISCOUNT_PERCENT,
   DEFAULT_QUOTE_LIMITS,
   INCLUDED_SCREEN_COUNT,
@@ -149,9 +150,12 @@ type Props = {
    * "panels" layout it's forwarded to `QuoteReceipt` as-is (see its doc
    * comment) — this component never reads or derives from it itself. In the
    * "document" layout (`/rep/prospects/new`) `QuoteReceipt` isn't rendered at
-   * all, so `BuildMarginNote` above renders the same figure, in the same
-   * format, inside `.buildCol` — the rep-only build column, never inside the
-   * `.docCol` mirror of what the merchant will see.
+   * all, so `MarginNote` below renders the same figure, in the same format,
+   * inside `.docTotals` — the product owner's call (2026-10-13) was to put it
+   * in the customer-document mirror's totals block anyway, so it carries its
+   * own "Internal" label rather than living in `.buildCol` where it used to.
+   * Renders even on a RATE-ONLY quote (no quote lines at all) — see
+   * `MarginNote`'s doc comment for why `.docTotals`'s own guard can't gate it.
    */
   pricingPreview?: QuoteMarginPreview | null;
 };
@@ -178,27 +182,44 @@ function startKey(start: BillingStart | null | undefined): string {
 }
 
 /**
- * The rep-only margin line for the "document" layout's BUILD column
- * (`/rep/prospects/new`) — same fields and the same format as the
+ * The margin row for the "document" layout's totals block (`.docTotals`,
+ * `/rep/prospects/new`) — same fields and the same format as the
  * `QuoteReceipt` row ("2.10% (est. $2,142.80/yr)"), so the two surfaces never
- * disagree. Deliberately rendered inside `.buildCol`, never inside the
- * customer-facing document mirror (`.docCol`/`.doc`, captioned "what the
- * customer will see") — see the 2026-10-13 note on `ProductConfiguratorProps`.
- * Renders nothing at all when there's no preview (marketing-only quote, no
- * volume on file, or the preview hasn't loaded), never a `0.00%` placeholder.
+ * disagree. This used to live in `.buildCol`, the rep-only build column,
+ * specifically to keep it out of the customer-document mirror (`.docCol`/
+ * `.doc`, captioned "Live quote · what {name} will see"). The product owner
+ * chose (2026-10-13) to put it in that mirror's totals anyway, so it renders
+ * its own "Internal" label immediately above the row, set off from the
+ * customer-facing rows above it by a hairline rule — the row itself is never
+ * sent to HubSpot or shown to the merchant, only this component renders it
+ * here, same as before. Renders nothing at all when there's no preview
+ * (marketing-only quote, no volume on file, or the preview hasn't loaded),
+ * never a `0.00%` placeholder.
+ *
+ * Rendered from TWO call sites in the document layout, never duplicated: a
+ * rate-only quote (no picks, no declared channels) carries no quote lines at
+ * all, so `.docTotals` — guarded on `quoteLines.length > 0` because it also
+ * holds "Due at checkout"/"Per month", which have nothing to total on an
+ * empty quote — never mounts. But processing margin is the ENTIRE economics
+ * of a rate-only quote, so it renders standalone, outside that guard, in the
+ * same spot `.docTotals` would otherwise occupy. Both call sites share this
+ * one function rather than inlining the markup twice.
  */
-function BuildMarginNote({ pricingPreview }: { pricingPreview?: QuoteMarginPreview | null }) {
+function MarginNote({ pricingPreview }: { pricingPreview?: QuoteMarginPreview | null }) {
   const margin = pricingPreview?.appliedTargetMargin;
   if (margin == null) return null;
   const projectedCommission = pricingPreview?.projectedCommission?.total;
   return (
-    <div className={styles.totalRow}>
-      <span className={styles.totalLabel}>Processing margin</span>
-      <span className={styles.totalValue}>
-        {fmtPct2(margin)}
-        {projectedCommission != null && ` (est. ${fmt$(projectedCommission)}/yr)`}
-      </span>
-    </div>
+    <>
+      <div className={styles.internalNote}>Internal · not shown to merchant</div>
+      <div className={styles.totalRow}>
+        <span className={styles.totalLabel}>Processing margin</span>
+        <span className={styles.totalValue}>
+          {fmtPct2(margin)}
+          {projectedCommission != null && ` (est. ${fmt$(projectedCommission)}/yr)`}
+        </span>
+      </div>
+    </>
   );
 }
 
@@ -1506,6 +1527,14 @@ export default function ProductConfigurator({
       ...built.requiredTerminals.missing,
     ];
 
+    // Selected ordering channels, named for the merchant — deliberately kept
+    // with the rest of the configuration (here, beside the package/line notes)
+    // and nowhere near a price or the platform line: order points stopped
+    // pricing anything on 2026-10-05, and this used to render nowhere at all.
+    // A channel id with no current label (e.g. a saved quote still carrying
+    // the retired "website" entry) is dropped rather than printed raw.
+    const channelLabels = channels.map(id => CHANNEL_LABELS[id]).filter((label): label is string => Boolean(label));
+
     return (
       <div className={styles.docLayout}>
         <div className={styles.buildCol}>
@@ -1517,8 +1546,6 @@ export default function ProductConfigurator({
           )}
 
           {buildSlot}
-
-          <BuildMarginNote pricingPreview={pricingPreview} />
 
           <section>
             <div className={styles.buildHeadRow}>
@@ -1644,6 +1671,10 @@ export default function ProductConfigurator({
               </p>
             ))}
 
+            {channelLabels.length > 0 && (
+              <p className={styles.docWhy}>Ordering channels: {channelLabels.join(", ")}.</p>
+            )}
+
             {quoteLines.length === 0 && !catalogLoading && (
               <p className={styles.sectionNote}>
                 {rated
@@ -1660,6 +1691,10 @@ export default function ProductConfigurator({
               </div>
             )}
 
+            {quoteLines.length === 0 && (
+              <MarginNote pricingPreview={pricingPreview} />
+            )}
+
             {quoteLines.length > 0 && (
               <div className={styles.docTotals}>
                 {packages.savings > 0 && (
@@ -1674,6 +1709,7 @@ export default function ProductConfigurator({
                     <span className={styles.totalValue} data-tone="discount">−{fmt$(totalDiscount)}</span>
                   </div>
                 )}
+                <MarginNote pricingPreview={pricingPreview} />
                 <div className={styles.docTotalGrid}>
                   <div>
                     <div className={styles.docTotalValue}>{fmt$(amountDueAtCheckout(quoteLines))}</div>

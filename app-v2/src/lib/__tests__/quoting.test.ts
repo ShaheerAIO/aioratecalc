@@ -234,11 +234,27 @@ describe("always-included services", () => {
     expect(resolveIncludedServices("order_pay_only", [], CATALOG)).toEqual({ lines: [], missing: [] });
   });
 
+  it("adds none of them to a software-only pick — a website has nothing on site to install", () => {
+    const websiteOnly = [line("Website", 1)];
+    expect(resolveIncludedServices("all_in_one", websiteOnly, CATALOG)).toEqual({ lines: [], missing: [] });
+  });
+
+  it("still attaches all three when hardware is picked ALONGSIDE a website — one physical pick is enough", () => {
+    const mixed = [line("POS Unit", 1), line("Website", 1)];
+    const { lines, missing } = resolveIncludedServices("all_in_one", mixed, CATALOG);
+    expect(missing).toEqual([]);
+    expect(lines.map(l => l.name)).toEqual([
+      "AIO Wifi Network Package - Unifi",
+      "Onsite Installation",
+      "System Onboarding and Training",
+    ]);
+  });
+
   it("attaches to products, not to declared channels", () => {
-    // A website-ordering merchant has no on-site anything for a $999 install or
+    // A QR-ordering merchant has no on-site anything for a $999 install or
     // a $999 WiFi package to cover, even though the channel does carry a
     // platform fee.
-    const built = buildQuote("all_in_one", [], ["website"], CATALOG);
+    const built = buildQuote("all_in_one", [], ["qr"], CATALOG);
     expect(built.orderPoints.total).toBe(1);
     expect(built.platform.status).toBe("resolved");
     expect(built.includedServices.lines).toEqual([]);
@@ -417,12 +433,14 @@ describe("snapshot immutability", () => {
 });
 
 describe("deriveOrderPoints", () => {
-  it("counts 3 POS + 2 kiosks + a website as 6", () => {
-    const lines = [line("POS Unit", 3), line("Mega Kiosk", 2)];
-    const { orderPoints } = deriveOrderPoints(lines, ["website"]);
+  it("counts 3 POS + 2 kiosks + a website product as 6", () => {
+    // The website channel chip is gone (2026-10-13) — the Website PRODUCT is
+    // now the ordering point, so it's counted as a picked line, not a channel.
+    const lines = [line("POS Unit", 3), line("Mega Kiosk", 2), line("Website", 1)];
+    const { orderPoints } = deriveOrderPoints(lines, []);
 
-    expect(orderPoints.hardware).toEqual({ "POS Unit": 3, "Mega Kiosk": 2 });
-    expect(orderPoints.channels).toEqual(["website"]);
+    expect(orderPoints.hardware).toEqual({ "POS Unit": 3, "Mega Kiosk": 2, "Website": 1 });
+    expect(orderPoints.channels).toEqual([]);
     expect(orderPoints.total).toBe(6);
   });
 
@@ -455,10 +473,15 @@ describe("deriveOrderPoints", () => {
     expect(needsReview).toEqual([]);
   });
 
-  it("counts the website CHANNEL, never the Website product, so it can't double", () => {
+  it("counts the Website PRODUCT now, and a stale 'website' channel on an old saved row doesn't double it", () => {
+    // Reversed 2026-10-13: the channel chip is gone, the product is the single
+    // source of truth. A saved row that still carries the retired "website"
+    // channel id must not add a second point — deriveOrderPoints drops any
+    // channel id no longer in ORDER_POINT_CHANNELS.
     const { orderPoints } = deriveOrderPoints([line("Website", 1)], ["website"]);
     expect(orderPoints.total).toBe(1);
-    expect(orderPoints.hardware).toEqual({});
+    expect(orderPoints.hardware).toEqual({ "Website": 1 });
+    expect(orderPoints.channels).toEqual([]);
   });
 
   it("counts the QSR bundle as the one POS it contains", () => {
@@ -500,18 +523,22 @@ describe("deriveOrderPoints", () => {
     expect(deriveOrderPoints([line("Mega Kiosk", 1)], []).orderPoints.total).toBe(1);
   });
 
-  it("counts each declared channel once and only the known ones", () => {
+  it("counts each declared channel once and only the known ones — including the retired 'website' id", () => {
+    // "website" was retired as a channel 2026-10-13 (moved to the Website
+    // product instead), so a saved row still carrying it must be dropped
+    // exactly like any other unrecognised id, not crash and not count.
     const { orderPoints } = deriveOrderPoints([], ["website", "qr", "not_a_channel"]);
-    expect(orderPoints.channels).toEqual(["website", "qr"]);
-    expect(orderPoints.total).toBe(2);
+    expect(orderPoints.channels).toEqual(["qr"]);
+    expect(orderPoints.total).toBe(1);
   });
 
-  it("excludes payment terminals, cash drawers and other non-ordering hardware", () => {
-    const lines = [line("Payment Terminal - AMS1", 4), line("Cash Drawer", 2), line("Website", 1)];
+  it("excludes payment terminals and cash drawers — non-ordering hardware", () => {
+    // Website used to be in this list too (0 points, channel-counted instead),
+    // but since 2026-10-13 it IS an ordering point — see its own tests above.
+    const lines = [line("Payment Terminal - AMS1", 4), line("Cash Drawer", 2)];
     const { orderPoints, unclassified } = deriveOrderPoints(lines, []);
     expect(orderPoints.total).toBe(0);
-    // All three are known rules at 0 points, so none of them is a mystery —
-    // including the Website product, which carries no hs_product_type live.
+    // Both are known rules at 0 points, so neither is a mystery.
     expect(unclassified).toEqual([]);
   });
 
@@ -576,11 +603,44 @@ describe("platform line selection", () => {
   });
 
   it("still charges the plan when the only ordering point is a declared channel", () => {
-    // A website-ordering merchant with no hardware is on the platform. Unlike
+    // A QR-ordering merchant with no hardware is on the platform. Unlike
     // the install services, which need something physical on site.
-    const platform = resolvePlatformLine("all_in_one", [], ["website"], CATALOG);
+    const platform = resolvePlatformLine("all_in_one", [], ["qr"], CATALOG);
     expect(platform.status).toBe("resolved");
     expect(platform.line!.unitPrice).toBe(399);
+  });
+
+  it("a website-only merchant now expresses it by picking the Website PRODUCT, and that is NOT rate-only", () => {
+    // Since the "website / online ordering" channel chip was removed
+    // (2026-10-13), the only way to declare a website is to pick the $50/mo
+    // Website product. That makes pickedLines non-empty, so the rate-only
+    // escape (`pickedLines.length === 0 && channels.length === 0`) never
+    // fires — the quote correctly gets a platform line instead of reading as
+    // "nothing picked, no plan due".
+    const websiteOnly = [toQuoteLine(CATALOG.find(c => c.name === "Website")!, 1)];
+    const platform = resolvePlatformLine("all_in_one", websiteOnly, [], CATALOG);
+    expect(platform.status).toBe("resolved");
+    expect(platform.line!.unitPrice).toBe(399);
+
+    const built = buildQuote("all_in_one", websiteOnly, [], CATALOG);
+    expect(built.blockers).toEqual([]);
+    expect(built.platform.status).toBe("resolved");
+    expect(built.orderPoints.total).toBe(1);
+    expect(built.orderPoints.hardware).toEqual({ "Website": 1 });
+    // FIXED (was a KNOWN GAP): picking the Website product is now the ONLY
+    // way to declare a website on a processing quote, which made
+    // `pickedLines` non-empty for a merchant with nothing physically on
+    // site. `resolveIncludedServices` used to gate purely on
+    // `pickedLines.length !== 0`, so a website-only quote wrongly picked up
+    // the $698 WiFi package and the comped install/training pair. It now
+    // gates on `hasPhysicalPick` (billingFrequency === "one_time"), so a
+    // software-only pick like Website attaches none of them — same as the
+    // retired channel-only path did.
+    expect(built.quoteLines.map(l => l.name)).toEqual([
+      "All-in-One Platform",
+      "Website",
+    ]);
+    expect(built.totals.oneTime).toBe(0);
   });
 
   it("quotes the 2-year term as the PLAN, picking HubSpot's 'Mega or 27\"' record", () => {
@@ -626,10 +686,10 @@ describe("buildQuote — the one derivation", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
 
   it("assembles an All-in-One quote: platform line, the three services, then the picks", () => {
-    const built = buildQuote("all_in_one", picked([["POS Unit", 2], ["Cash Drawer", 1]]), ["website"], CATALOG);
+    const built = buildQuote("all_in_one", picked([["POS Unit", 2], ["Cash Drawer", 1]]), ["qr"], CATALOG);
 
     expect(built.blockers).toEqual([]);
-    expect(built.orderPoints.total).toBe(3); // 2 POS + website
+    expect(built.orderPoints.total).toBe(3); // 2 POS + the QR channel
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "All-in-One Platform",
       "AIO Wifi Network Package - Unifi",
@@ -648,8 +708,8 @@ describe("buildQuote — the one derivation", () => {
 
   it("prices the same cart $100/mo lower on the Order & Pay plan", () => {
     const cart = picked([["POS Unit", 2], ["Cash Drawer", 1]]);
-    const lesser = buildQuote("order_pay_only", cart, ["website"], CATALOG);
-    const full = buildQuote("all_in_one", cart, ["website"], CATALOG);
+    const lesser = buildQuote("order_pay_only", cart, ["qr"], CATALOG);
+    const full = buildQuote("all_in_one", cart, ["qr"], CATALOG);
 
     expect(lesser.totals.oneTime).toBe(full.totals.oneTime);
     expect(lesser.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
@@ -658,11 +718,11 @@ describe("buildQuote — the one derivation", () => {
 
   it("drops declared channels on a marketing-only quote", () => {
     // A marketing merchant isn't taking orders through AIO, so ticking
-    // "website / online ordering" must not report an ordering point.
+    // "QR code ordering" must not report an ordering point.
     const built = buildQuote(
       "marketing_only",
       picked([["Marketing Kit - Mega Kiosk", 1]]),
-      ["website", "qr"],
+      ["qr", "third_party_delivery"],
       CATALOG
     );
 
@@ -951,7 +1011,10 @@ describe("website on a marketing quote", () => {
     expect(built.includedServices.lines).toEqual([]);
     expect(built.quoteLines.map(l => l.name)).not.toContain("Onsite Installation");
     expect(built.quoteLines.map(l => l.name)).not.toContain("AIO Wifi Network Package - Unifi");
-    expect(built.orderPoints.total).toBe(0);
+    // The Website PRODUCT is the ordering point since 2026-10-13 (was 0; the
+    // retired channel used to carry it instead), so this is 1, not 0 — the
+    // Marketing Kit stays 0 either way (it's not an ordering kiosk).
+    expect(built.orderPoints.total).toBe(1);
   });
 
   it("blocks the quote when the rate product is missing from the catalog", () => {

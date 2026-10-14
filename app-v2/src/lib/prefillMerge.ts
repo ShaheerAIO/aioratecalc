@@ -189,7 +189,7 @@ export function flattenSections(s: Sections): Record<string, string> {
 // anyway, so marking them "pre-filled" would tell the customer to double-check
 // something nobody asserted.
 const FORM_DEFAULTS: Record<string, string> = {
-  "business.bizType": "llc",
+  "business.bizType": "",
   "ownerContact.title": "Owner",
   "processing.previouslyTerminated": "no",
   "processing.bankruptcy": "no",
@@ -225,7 +225,7 @@ export function customerOnboardInitial(
     // keeps the seed, since that field IS the trading name the statement
     // actually names.
     legalName: "", dba: a?.merchantName || "",
-    bizType: "llc", address: "", city: "", state: "", zip: "",
+    bizType: "", address: "", city: "", state: "", zip: "",
     phone: "", website: "", yearsInBusiness: "", annualRevenue: "",
     ...compact(app.business),
   };

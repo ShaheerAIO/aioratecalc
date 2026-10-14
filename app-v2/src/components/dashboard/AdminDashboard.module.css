@@ -84,9 +84,8 @@
 
 .statDot { color: var(--rule); }
 
-/* ---------- View toggle (By Rep / Accounts / Leads) ----------
-   Same pill control as AccountsDashboard's Accounts/Leads tabs, widened to
-   three equal segments so the sliding thumb lands on each one. */
+/* ---------- View toggle (By Rep / Accounts / Revenue / Commissions) ----------
+   Four equal segments so the sliding thumb lands on each one. */
 
 .tabsRow {
   display: flex;
@@ -116,9 +115,9 @@
   transition: transform 250ms var(--ease-out);
 }
 
-.tabs[data-active="accounts"]::before { transform: translateX(100%); }
-.tabs[data-active="leads"]::before    { transform: translateX(200%); }
-.tabs[data-active="revenue"]::before  { transform: translateX(300%); }
+.tabs[data-active="accounts"]::before    { transform: translateX(100%); }
+.tabs[data-active="revenue"]::before     { transform: translateX(200%); }
+.tabs[data-active="commissions"]::before { transform: translateX(300%); }
 
 .tab {
   position: relative;
@@ -208,17 +207,15 @@
   font-size: 0.9rem;
 }
 
-/* The three 7.5rem segments plus padding make a 366px strip, which does not fit
-   a phone: at 320px it painted to x=390 and "Leads" was half off-screen (the
-   app's overflow-x: clip hid the scroll rather than the element). Below the
-   phone breakpoint the strip stops being intrinsically sized and fills the row
-   instead, with each segment an equal third of it. Equal thirds are load-bearing
-   here, not cosmetic — the sliding thumb is one third wide and moves by
-   translateX(100%/200%), so segments sized to their own labels would desync it.
-   That rules out shrink-to-fit; a horizontally scrolling strip was the other
-   option but it hides an option behind a gesture, which is the wrong trade for
-   three top-level views. At 320px each segment is ~89px against a ~62px
-   "Accounts" label, so nothing clips. */
+/* The four 7.5rem segments plus padding make a 486px strip, which does not fit
+   a phone — the app's overflow-x: clip hides the resulting scroll rather than
+   the element. Below the phone breakpoint the strip stops being intrinsically
+   sized and fills the row instead, with each segment an equal fourth of it.
+   Equal fourths are load-bearing here, not cosmetic — the sliding thumb is one
+   quarter wide and moves by translateX(100%/200%/300%), so segments sized to
+   their own labels would desync it. That rules out shrink-to-fit; a
+   horizontally scrolling strip was the other option but it hides an option
+   behind a gesture, which is the wrong trade for four top-level views. */
 @media (max-width: 40rem) {
   .tabs {
     flex: 1;
@@ -288,6 +285,44 @@
 }
 
 .monthSelect:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Toggle button in a .revenueHead row (e.g. CommissionsPanel's "Show cost
+   basis") — same pill shape as .monthSelect, since both sit in that row. */
+.toggleBtn {
+  flex-shrink: 0;
+  padding: var(--space-xs) var(--space-md);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink-2);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.toggleBtn:hover { background: var(--rule); color: var(--ink); }
+.toggleBtn[data-active="true"] { color: var(--ink); border-color: var(--accent); }
+.toggleBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* A labelled sub-section inside a .panel that isn't the main table (e.g.
+   CommissionsPanel's "Needs attention" box). */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.sectionTitle {
+  font-family: var(--font-display);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+}
 
 .revenueCards {
   display: grid;

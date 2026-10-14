@@ -16,6 +16,9 @@
 import type { BusinessInfo, OwnerContact } from "@/types/merchant";
 
 const BIZ_TYPE_LABEL: Record<BusinessInfo["bizType"], string> = {
+  // Unspecified: falls through to field()'s blank write-on line, same as
+  // every other value AIO doesn't hold — never assert a legal entity nobody stated.
+  "": "",
   llc: "LLC",
   corp: "Corporation",
   "s-corp": "S-Corporation",

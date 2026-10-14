@@ -85,7 +85,10 @@ const PRODUCTS_QUOTE_WITH_POINTS: CustomerSafeQuote = {
     { hubspotProductId: "217526517443", name: "AIO Platform", qty: 1, unitPrice: 399, billingFrequency: "monthly", productType: "Software" },
   ],
   lineTotals: { oneTime: 0, recurring: [{ frequency: "monthly", amount: 399 }], monthlyEquivalent: 399 },
-  orderPoints: { hardware: { "POS Unit": 2 }, channels: ["website"], total: 3 },
+  // No declared channels here on purpose — these fixtures are about the
+  // COUNT, not the channel names (that's its own describe block below), so
+  // `channels` stays empty and `total` is set directly.
+  orderPoints: { hardware: { "POS Unit": 2 }, channels: [], total: 3 },
 };
 
 describe("QuoteSummary — ordering-point count", () => {
@@ -95,7 +98,7 @@ describe("QuoteSummary — ordering-point count", () => {
   });
 
   it("singularizes a count of exactly one", () => {
-    render(<QuoteSummary quote={{ ...PRODUCTS_QUOTE_WITH_POINTS, orderPoints: { hardware: {}, channels: ["website"], total: 1 } }} />);
+    render(<QuoteSummary quote={{ ...PRODUCTS_QUOTE_WITH_POINTS, orderPoints: { hardware: {}, channels: [], total: 1 } }} />);
     expect(screen.getByText("Configured for 1 ordering point.")).toBeTruthy();
   });
 
@@ -114,7 +117,7 @@ describe("QuoteSummary — ordering-point count", () => {
       ...CONFIG_QUOTE_NO_SAVINGS,
       lines: PRODUCTS_QUOTE_WITH_POINTS.lines,
       lineTotals: PRODUCTS_QUOTE_WITH_POINTS.lineTotals,
-      orderPoints: { hardware: {}, channels: ["website"], total: 2 },
+      orderPoints: { hardware: {}, channels: [], total: 2 },
     }} />);
     expect(screen.getByText("Configured for 2 ordering points.")).toBeTruthy();
   });
@@ -123,5 +126,47 @@ describe("QuoteSummary — ordering-point count", () => {
     render(<QuoteSummary quote={PRODUCTS_QUOTE_WITH_POINTS} />);
     const note = screen.getByText("Configured for 3 ordering points.");
     expect(note.closest("section")).toBeNull();
+  });
+});
+
+// Channel labels (2026-10-13 p.m.) — `orderPoints.channels` existed since
+// OrderPoints did but nothing ever named them; the product owner picked "QR
+// code ordering" and "Phone-AI ordering" and saw neither on the quote. Same
+// placement rule as the count above: configuration content, never beside a
+// price or the platform line.
+describe("QuoteSummary — ordering-channel names", () => {
+  it("names the selected channels alongside the count", () => {
+    render(<QuoteSummary quote={{
+      ...PRODUCTS_QUOTE_WITH_POINTS,
+      orderPoints: { hardware: {}, channels: ["qr", "phone_ai"], total: 2 },
+    }} />);
+    expect(screen.getByText("Configured for 2 ordering points (QR code ordering, Phone-AI ordering).")).toBeTruthy();
+  });
+
+  it("renders no channel list when none were declared, even with a nonzero count", () => {
+    render(<QuoteSummary quote={PRODUCTS_QUOTE_WITH_POINTS} />);
+    const note = screen.getByText("Configured for 3 ordering points.");
+    expect(note.textContent).not.toContain("(");
+  });
+
+  it("drops an unrecognized channel id instead of printing it raw or crashing", () => {
+    render(<QuoteSummary quote={{
+      ...PRODUCTS_QUOTE_WITH_POINTS,
+      orderPoints: { hardware: {}, channels: ["qr", "some_retired_channel"], total: 2 },
+    }} />);
+    const note = screen.getByText(/Configured for 2 ordering points/);
+    expect(note.textContent).toContain("QR code ordering");
+    expect(note.textContent).not.toContain("some_retired_channel");
+    expect(note.textContent).not.toContain("undefined");
+  });
+
+  it("renders nothing at all (no stray parens) when every declared channel is unrecognized", () => {
+    render(<QuoteSummary quote={{
+      ...PRODUCTS_QUOTE_WITH_POINTS,
+      orderPoints: { hardware: {}, channels: ["some_retired_channel"], total: 1 },
+    }} />);
+    const note = screen.getByText("Configured for 1 ordering point.");
+    expect(note.textContent).not.toContain("(");
+    expect(note.textContent).not.toContain("undefined");
   });
 });

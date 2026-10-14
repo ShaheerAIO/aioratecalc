@@ -1,10 +1,10 @@
 import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
-import { merchantApplications, appSettings, customerSubmissions } from "@/lib/db/schema";
+import { merchantApplications, appSettings } from "@/lib/db/schema";
 import type { IStorage, StorageScope, CustomerApplicationPatch } from "./storageInterface";
 import { rowToApp, appToRow } from "./applicationRow";
-import type { MerchantApplication, CustomerSubmission, AppSettings } from "@/types/merchant";
+import type { MerchantApplication, AppSettings } from "@/types/merchant";
 import { DEFAULT_PROCESSOR } from "@/lib/defaults";
 
 /**
@@ -82,28 +82,6 @@ export class PostgresAdapter implements IStorage {
       existing
         ? db.update(appSettings).set(values).where(eq(appSettings.id, existing.id))
         : db.insert(appSettings).values(values)
-    );
-  }
-
-  async listSubmissions(_scope: StorageScope): Promise<CustomerSubmission[]> {
-    const rows = await db.select().from(customerSubmissions);
-    return rows.map(r => ({
-      id: r.id,
-      submittedAt: r.submittedAt.toISOString(),
-      contactInfo: r.contactInfo,
-      analysis: r.analysis as CustomerSubmission["analysis"],
-      quote: r.quote as CustomerSubmission["quote"],
-    }));
-  }
-
-  async saveSubmission(s: CustomerSubmission): Promise<void> {
-    await dbWrite("save this submission", () =>
-      db.insert(customerSubmissions).values({
-        submittedAt: new Date(s.submittedAt),
-        contactInfo: s.contactInfo,
-        analysis: s.analysis,
-        quote: s.quote,
-      })
     );
   }
 

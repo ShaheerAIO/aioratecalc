@@ -859,12 +859,40 @@ export type IncludedServicesResult = {
 };
 
 /**
+ * Whether these picks include anything that physically arrives on site — the
+ * discriminator `resolveIncludedServices` (and no one else) needs between "a
+ * rep picked hardware" and "a rep picked a software-only product".
+ *
+ * `billingFrequency === "one_time"` is the signal: hardware is bought once,
+ * while every software-only pick a rep can actually make (Website $50/mo,
+ * Additional Software License $19/mo — though the license is filtered out of
+ * `picks` before this ever sees it) bills on a cycle. Checked against the
+ * catalog, 2026-10-13: the one-time products that are NOT physical (Onsite
+ * Installation, System Onboarding and Training, the $0.50 pre-auth, the $0
+ * processing-rate disclosure) are all DERIVED lines — none of them is ever a
+ * product a rep can pick, so none of them can reach `pickedLines` and fool
+ * this check. If a future catalog product is ever one-time and not physical
+ * AND pickable, this needs an explicit exclusion, not a silent assumption.
+ */
+function hasPhysicalPick(pickedLines: QuoteLine[]): boolean {
+  return pickedLines.some(l => l.billingFrequency === "one_time" && l.qty > 0);
+}
+
+/**
  * The install lines a quote carries. Resolved from the catalog like any other
  * line, so the price on the quote is the price HubSpot holds today and is
  * snapshotted from here on.
  *
- * Takes the picked lines because the services follow the products: no products
- * means a rate-only quote, and a rate-only quote installs nothing.
+ * Takes the picked lines because the services follow the products — but
+ * specifically the PHYSICAL ones: no physical product means nothing to
+ * network, install or train on. This used to fall out for free from "no
+ * products picked == rate-only quote", back when a website merchant declared
+ * it with a channel chip rather than a pick. Since 2026-10-13 the Website
+ * product ($50/mo) IS the pick, so a website-only quote has a non-empty
+ * `pickedLines` and the old `pickedLines.length === 0` gate stopped being
+ * enough — it would attach a $698 WiFi package and a comped install/training
+ * pair to a merchant with nothing on site. `hasPhysicalPick` is the fix:
+ * software-only picks (Website, the derived software license) don't count.
  */
 export function resolveIncludedServices(
   quoteType: QuoteType,
@@ -877,7 +905,7 @@ export function resolveIncludedServices(
    */
   omitIds: readonly string[] = []
 ): IncludedServicesResult {
-  if (!isProcessingQuote(quoteType) || pickedLines.length === 0) return { lines: [], missing: [] };
+  if (!isProcessingQuote(quoteType) || !hasPhysicalPick(pickedLines)) return { lines: [], missing: [] };
 
   const lines: QuoteLine[] = [];
   const missing: string[] = [];
@@ -903,6 +931,12 @@ export type RequiredTerminalsResult = IncludedServicesResult & { qty: number };
  * terminal has to ship with the POS, so it is added rather than refused.
  * Missing from the catalog is a blocker: a POS quote without the terminal it
  * has to ship with is incomplete.
+ *
+ * Does NOT need `hasPhysicalPick`'s "any pick means hardware" fix that
+ * `resolveIncludedServices` needed: `minimumTerminalsFor` already counts
+ * specific POS product ids (`POS_REQUIRING_TERMINAL_IDS`), not "picks exist
+ * at all", so a website-only quote (no POS in its picks) already derives 0
+ * required terminals here, unaffected by the Website product becoming a pick.
  */
 export function resolveRequiredAms1(
   quoteType: QuoteType,
@@ -1304,6 +1338,14 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   // counts one point like a bare POS Unit. Was 0-with-needsReview while the
   // contents were unknown.
   "QSR POS Hardware Bundle": { pointsPerUnit: 1, hubspotProductId: "252941875920" },
+  // The website PRODUCT is the ordering point now (2026-10-13, product
+  // owner) — the "website / online ordering" CHANNEL chip was removed
+  // because it was redundant with this $50/mo line already being on the
+  // quote. This is now the single source of truth: a saved row carrying the
+  // retired channel id loses that point (deriveOrderPoints drops any channel
+  // id no longer in ORDER_POINT_CHANNELS) and gains it back here instead, so
+  // the total is unchanged. Do not migrate old rows' `channels` data.
+  "Website": { pointsPerUnit: 1, hubspotProductId: "333275576048" },
 
   // Explicitly does not count
   // Both tablets were 0-with-needsReview until Shaheer settled them
@@ -1321,10 +1363,6 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   // show the rep an "unclassified hardware" warning on every marketing quote.
   "Marketing Kit - Mega Kiosk": { pointsPerUnit: 0, hubspotProductId: "332617109238" },
   "Marketing Kit - 27\" Kiosk": { pointsPerUnit: 0, hubspotProductId: "332793212658" },
-  // The "website / online ordering" CHANNEL is the ordering point, declared on
-  // the deal. This is the $50/mo product that builds the site; counting it too
-  // would double it.
-  "Website": { pointsPerUnit: 0, hubspotProductId: "333275576048" },
   "Menu Board Computer": { pointsPerUnit: 0, hubspotProductId: "223511653103" },
   "Thermal Printer": { pointsPerUnit: 0, hubspotProductId: "223511653104" },
   "Epson Sticky Printer": { pointsPerUnit: 0, hubspotProductId: "250458906315" },
@@ -1369,10 +1407,11 @@ export function orderPointsPerUnit(line: { hubspotProductId: string; name: strin
 const NON_HARDWARE_PRODUCT_TYPES = ["Software", "Service"];
 
 // Ordering points that will never appear in an inventory system or on a
-// hardware line. A website IS an ordering point — Steve called this one out
-// specifically — so it has to be declared on the deal or the count is wrong.
+// hardware line. A website USED to be declared here too, but moved to being
+// counted on the Website PRODUCT itself (2026-10-13, product owner) — the
+// chip was redundant with the $50/mo line already on the quote. See
+// ORDER_POINT_RULES["Website"] for the other half of that move.
 export const ORDER_POINT_CHANNELS: Array<{ id: string; label: string; note?: string }> = [
-  { id: "website", label: "Website / online ordering", note: "Counts — confirmed" },
   { id: "qr", label: "QR code ordering" },
   { id: "third_party_delivery", label: "Third-party delivery" },
   { id: "phone_ai", label: "Phone-AI ordering" },

@@ -1,6 +1,6 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Stat-Led · design-system: design.md
  * Shared dashboard for /rep and /admin. The same table + split-detail layout renders for
- * both roles; admin-only affordances (Rep column, Leads sub-view) are toggled by the caller.
+ * both roles; admin-only affordances (e.g. the Rep column) are toggled by the caller.
  * Merged from the former rep.module.css + admin.module.css, which this file replaces.
  */
 
@@ -91,70 +91,6 @@
 .statTicker b.statSuccess { color: var(--success); }
 
 .statDot { color: var(--rule); }
-
-/* ---------- Segmented tabs (admin: Accounts / Leads) ---------- */
-
-.tabsRow {
-  display: flex;
-  margin-bottom: var(--space-lg);
-}
-
-.tabs {
-  position: relative;
-  display: inline-flex;
-  background: var(--paper-2);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-pill);
-  padding: var(--space-3xs);
-  gap: var(--space-3xs);
-}
-
-.tabs::before {
-  content: "";
-  position: absolute;
-  inset: var(--space-3xs);
-  width: calc(50% - var(--space-3xs));
-  background: var(--paper);
-  border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-whisper);
-  transition: transform 250ms var(--ease-out);
-}
-
-.tabs[data-active="leads"]::before {
-  transform: translateX(100%);
-}
-
-.tab {
-  position: relative;
-  z-index: 1;
-  border: none;
-  background: transparent;
-  color: var(--ink-2);
-  font-family: var(--font-body);
-  font-size: 0.85rem;
-  font-weight: 600;
-  padding: var(--space-xs) var(--space-lg);
-  border-radius: var(--radius-pill);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 200ms var(--ease-out);
-}
-
-.tab[aria-selected="true"] { color: var(--ink); }
-
-.tab:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.tabPanel {
-  animation: fade 250ms var(--ease-out) both;
-}
-
-@keyframes fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
 
 /* ---------- Drill-down filter chip (rep narrowing, from /admin) ---------- */
 
@@ -890,12 +826,11 @@ details[open] > .disclosureSummary::before { transform: rotate(90deg); }
 /* ---------- Reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  .stats, .tabPanel {
+  .stats {
     animation: none;
     opacity: 1;
     transform: none;
   }
-  .tabs::before,
   .tableRow,
   .btnGhost,
   .btnPrimary,

@@ -64,15 +64,22 @@ export function streetLine(address: string | null | undefined, city: string | nu
   return street || raw;
 }
 
-// `moduels` is a checkbox enum: "POS;MPOS;Kiosk". Only three of its eleven
+// `moduels` is a checkbox enum: "POS;MPOS;Kiosk". Only two of its eleven
 // options are ORDERING CHANNELS in quoting.ts's sense (ORDER_POINT_CHANNELS);
 // POS / MPOS / Kiosk are physical hardware that gets counted from quote lines
 // instead, and Catering / Menu Board / Scheduling / Payroll / Marketing aren't
 // ordering points at all. Unmapped tokens are dropped rather than guessed —
 // each channel is a whole ordering point, and an extra one can flip the
 // platform tier ($433/mo). "phone_ai" has no HubSpot counterpart.
+//
+// "website" is deliberately NOT mapped: the ordering point moved off the
+// channel and onto the Website PRODUCT (hubspotProductId 333275576048,
+// quoting.ts 2026-10-13) — a HubSpot module token can't prefill a picked
+// product, so a deal with the Website module no longer seeds an ordering
+// point from this mapper. Don't re-add "website" here; it names a channel id
+// that no longer exists in ORDER_POINT_CHANNELS and is silently dropped by
+// deriveOrderPoints.
 const MODULE_TO_CHANNEL: Record<string, string> = {
-  "website": "website",
   "qr/online ordering": "qr",
   "3po": "third_party_delivery",
 };
