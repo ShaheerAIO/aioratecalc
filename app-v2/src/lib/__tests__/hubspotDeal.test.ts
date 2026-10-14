@@ -417,11 +417,21 @@ describe("buildDealProperties", () => {
       expect(repOnly).not.toHaveProperty("rsm_commission");
     });
 
-    it("lets a negative commission (a 100%-off package-covered line) survive to the property string, unclamped", () => {
+    it("writes NOTHING for a package-covered line — AIO's giveaway is nobody's loss", () => {
+      // Was asserted as "-60" until 2026-10-14. With no line producing a
+      // figure, the property is omitted rather than zeroed, the same rule the
+      // rest of this builder follows.
       const props = buildDealProperties(appAt("merchant_filling", {
         quoteLines: [hwLine({
           costToRep: 300, discountPercent: 100, coveredByPackage: "QSR Kit", repCommissionBps: 1000,
         })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(props).not.toHaveProperty("rep_commission");
+    });
+
+    it("lets a REP'S OWN below-cost discount survive to the property string, unclamped", () => {
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({ costToRep: 300, discountPercent: 100, repCommissionBps: 1000 })],
       } as unknown as Partial<MerchantApplication>));
       // net = 0; cost = 600; margin = -600; 10% of -600 = -60.
       expect(props.rep_commission).toBe("-60");

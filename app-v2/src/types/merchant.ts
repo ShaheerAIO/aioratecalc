@@ -293,7 +293,7 @@ export type CatalogProduct = {
    * properties `cost_to_rep` / `rep_commission` / `rsm_commission`. Named
    * away from HubSpot's own names on purpose: the DEAL object has properties
    * spelled `rep_commission`/`rsm_commission` too, but those are DOLLAR
-   * amounts, where these are PERCENTAGES — the product-vs-deal collision this
+   * amounts, where these are RATES — the product-vs-deal collision this
    * file must never blur. `costToRep` is the product owner's "AE Cost".
    *
    * Optional (not just nullable) so every existing literal `CatalogProduct`
@@ -301,15 +301,16 @@ export type CatalogProduct = {
    *
    * null means the property is unset in HubSpot ("nobody has told us yet"),
    * never 0 — see commission.ts for why that distinction matters to the math.
-   * As of 2026-10-13, 0 of 39 active products carry a commission rate and all
-   * 8 populated `cost_to_rep` values are literally 0 (expected: Elizabeth
-   * uploads real values after this ships).
+   * The real values landed 2026-10-14: 26 of 39 active products carry both a
+   * cost and a rate. The notable holes are POS Unit, Customer Facing Display,
+   * mPOS and the two tablets, which have no cost and so earn no commission
+   * figure at all until one is entered — surfaced, not guessed at.
    *
    * `repCommissionBps`/`rsmCommissionBps` are stored in BASIS POINTS, matching
    * rateMatrix.ts/wholesale.ts and for the same reason (exact, not a float).
-   * HubSpot's property is labelled "Rep Commission %", so `toCatalogProduct`
-   * ASSUMES a stored `6` means 6% → 600 bps. This is unconfirmed against real
-   * data (every row is null today) — see `percentToBps` in commission.ts,
+   * HubSpot stores the rate as a DECIMAL FRACTION — 0.6 is 60%, so 6000 bps —
+   * confirmed by the product owner 2026-10-14 despite the property being
+   * labelled "Rep Commission %". See `commissionRateToBps` in commission.ts,
    * the one place this conversion happens.
    */
   costToRep?: number | null;

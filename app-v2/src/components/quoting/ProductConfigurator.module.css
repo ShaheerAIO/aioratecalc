@@ -504,6 +504,8 @@
 
 .receiptCommission[data-sign="negative"] { color: var(--danger); }
 
+.receiptCommission[data-commission="unknown"] { font-style: italic; }
+
 .receiptTag {
   display: inline-block;
   margin-left: var(--space-2xs);
@@ -1078,6 +1080,38 @@
 
 .docWhy {
   font-size: 0.72rem;
+  color: var(--ink-3);
+  line-height: 1.45;
+  margin: var(--space-3xs) 0 0;
+}
+
+/* The AE's own commission on a document line (.docCol mirrors what the
+   merchant will see, so this is marked as internal on its own: a hairline
+   left rule and the muted ink that nothing merchant-facing in this column
+   uses). Never red for being small — only for being negative, which here
+   means a rep discounted a line below AIO's cost. An unpriced product reads
+   in the same muted ink: it's a note about missing data, not a warning. */
+.docCommission {
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  line-height: 1.45;
+  margin: var(--space-3xs) 0 0;
+  padding-left: var(--space-2xs);
+  border-left: 2px solid var(--rule);
+}
+
+.docCommission[data-sign="negative"] {
+  color: var(--danger);
+  border-left-color: var(--danger);
+}
+
+.docCommission[data-commission="unknown"] { font-style: italic; }
+
+/* The "these products aren't priced yet" footnote under either surface's
+   commission total. */
+.commissionGap {
+  font-size: 0.7rem;
+  font-style: italic;
   color: var(--ink-3);
   line-height: 1.45;
   margin: var(--space-3xs) 0 0;

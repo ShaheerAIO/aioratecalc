@@ -6,8 +6,9 @@ import {
   commissionFromTotalArr,
   estimatedRecurringArrFromQuoteLines,
   hardwareCommission,
+  commissionRateToBps,
+  isPolicyComped,
   lineHardwareCommission,
-  percentToBps,
   quoteHardwareCommission,
   sumArrOrNull,
 } from "@/lib/commission";
@@ -130,20 +131,58 @@ describe("hardwareCommission — the data-gap guard", () => {
 
 // ── Per-product hardware commission (2026-10-13), the replacement design ──
 
-describe("percentToBps", () => {
-  it("converts a plain percentage to basis points (HubSpot stores '6' meaning 6%)", () => {
-    expect(percentToBps(6)).toBe(600);
-    expect(percentToBps(0.5)).toBe(50);
-    expect(percentToBps(0)).toBe(0);
+describe("commissionRateToBps", () => {
+  // HubSpot stores the rate as a DECIMAL FRACTION despite labelling the
+  // property "Rep Commission %" — confirmed by the product owner 2026-10-14
+  // against the real values. The live catalog's hardware rate is 0.6, and
+  // reading that as 0.6% would pay an AE $4.53 on a Mega Kiosk whose margin
+  // is $755, instead of $453.
+  it("reads the stored value as a fraction: 0.6 is 60%", () => {
+    expect(commissionRateToBps(0.6)).toBe(6000);
+    expect(commissionRateToBps(0.1)).toBe(1000);
+    expect(commissionRateToBps(0.45)).toBe(4500);
+    expect(commissionRateToBps(0.05)).toBe(500);
+    expect(commissionRateToBps(1)).toBe(10000);
+    expect(commissionRateToBps(0)).toBe(0);
   });
 
   it("is null, not 0, when the property is unset", () => {
-    expect(percentToBps(null)).toBeNull();
+    expect(commissionRateToBps(null)).toBeNull();
   });
 
   it("is null on a non-finite input rather than propagating NaN/Infinity", () => {
-    expect(percentToBps(NaN)).toBeNull();
-    expect(percentToBps(Infinity)).toBeNull();
+    expect(commissionRateToBps(NaN)).toBeNull();
+    expect(commissionRateToBps(Infinity)).toBeNull();
+  });
+});
+
+describe("isPolicyComped", () => {
+  const INSTALL = "223452690133"; // Onsite Installation, a COMPED_SERVICE_PRODUCT_ID
+
+  it("is true for a package/plan-covered line", () => {
+    expect(isPolicyComped(hwLine({ coveredByPackage: "QSR Kit", discountPercent: 100 }))).toBe(true);
+  });
+
+  it("is true for a comped service sitting at exactly $0", () => {
+    const install = hwLine({
+      hubspotProductId: INSTALL, name: "Onsite Installation",
+      qty: 1, unitPrice: 999, discountPercent: 100,
+    });
+    expect(isPolicyComped(install)).toBe(true);
+  });
+
+  it("is FALSE for that same service when a rep discounted it only partway", () => {
+    // Still AIO's product, but the money on it is now the rep's decision, so
+    // it is theirs to lose — the case the never-clamp rule is actually for.
+    const install = hwLine({
+      hubspotProductId: INSTALL, name: "Onsite Installation",
+      qty: 1, unitPrice: 999, discountPercent: 50,
+    });
+    expect(isPolicyComped(install)).toBe(false);
+  });
+
+  it("is FALSE for an ordinary line a rep discounted 100%", () => {
+    expect(isPolicyComped(hwLine({ discountPercent: 100 }))).toBe(false);
   });
 });
 
@@ -178,12 +217,33 @@ describe("lineHardwareCommission", () => {
     expect(result.rep).toBeCloseTo(30, 6);
   });
 
-  it("a 100%-off package-covered line produces a NEGATIVE commission, and it is never clamped", () => {
+  it("earns NOTHING on hardware AIO comps itself — not a negative (2026-10-14)", () => {
+    // The in-plan QSR Kit hardware sits at 100% off by AIO's decision, not the
+    // rep's. Counting its full cost against them put -$1,635.90 on a kit quote.
     const result = lineHardwareCommission(
       hwLine({ costToRep: 300, discountPercent: 100, coveredByPackage: "QSR Kit", repCommissionBps: 1000 })
     );
-    // net = 0; cost = 600; margin = -600; 10% of -600 = -60.
-    expect(result.rep).toBeCloseTo(-60, 6);
+    expect(result.status).toBe("included");
+    expect(result.rep).toBeNull();
+    expect(result.rsm).toBeNull();
+  });
+
+  it("STILL goes negative, unclamped, when the REP discounts below AIO's cost", () => {
+    // What "Cost to Rep" means in HubSpot: "Minimum Price rep can discount to
+    // before eating into commissions." 2 units at $500 list, 90% off -> $100
+    // net; cost $600; margin -$500; 10% = -$50.
+    const result = lineHardwareCommission(
+      hwLine({ costToRep: 300, discountPercent: 90, repCommissionBps: 1000 })
+    );
+    expect(result.status).toBe("computed");
+    expect(result.rep).toBeCloseTo(-50, 6);
+  });
+
+  it("reports WHY there is no figure, so an unpriced product can't read as a zero one", () => {
+    expect(lineHardwareCommission(hwLine({ costToRep: null })).status).toBe("no_cost");
+    expect(lineHardwareCommission(hwLine({ costToRep: 300 })).status).toBe("no_rate");
+    expect(lineHardwareCommission(hwLine({ billingFrequency: "monthly" })).status).toBe("recurring");
+    expect(lineHardwareCommission(hwLine({ costToRep: 0, repCommissionBps: 6000 })).status).toBe("computed");
   });
 
   it("contributes nothing (null) when cost is missing, even with a rate set", () => {
@@ -249,6 +309,16 @@ describe("quoteHardwareCommission", () => {
     expect(result.missingCost).toEqual([]);
     expect(result.rep).toBe(0);
     expect(result.perLine[0].rep).toBeNull();
+  });
+
+  it("leaves comped hardware out of missingCost — there is no cost to go and fill in", () => {
+    const lines = [
+      hwLine({ costToRep: null, coveredByPackage: "QSR Kit", discountPercent: 100 }),
+      hwLine({ hubspotProductId: "b", name: "Customer Facing Display", costToRep: null }),
+    ];
+    const result = quoteHardwareCommission(lines);
+    expect(result.missingCost).toEqual(["Customer Facing Display"]);
+    expect(result.rep).toBe(0);
   });
 
   it("is all zero/empty for an empty quote", () => {

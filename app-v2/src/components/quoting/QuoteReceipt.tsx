@@ -6,7 +6,11 @@ import {
   lineListAmount,
   lineNetAmount,
 } from "@/lib/quoting";
-import { lineHardwareCommission, quoteHardwareCommission } from "@/lib/commission";
+import {
+  commissionSummary,
+  LineCommissionNote,
+  UnpricedNote,
+} from "@/components/quoting/HardwareCommission";
 import { fmt$, fmtCycle, fmtFrequency, fmtPct2 } from "@/lib/utils";
 import type { QuoteLine, QuoteTotals } from "@/types/merchant";
 // Type-only — erased at build, so this does NOT bundle MARGIN_REQS or any of
@@ -63,13 +67,10 @@ export default function QuoteReceipt({
 
   // Hardware-only, one-time-line rep commission (lib/commission.ts) — never
   // the RSM figure and never the underlying cost, both of which are
-  // admin-only. Computed over every line; `quoteHardwareCommission` itself
-  // ignores recurring ones. Shown only when at least one line produced a
-  // real figure — with no commission data loaded in the catalog (the state
-  // today, 2026-10-13), this is false and the row is simply absent, rather
-  // than a misleading $0.00.
-  const hardware = quoteHardwareCommission(lines);
-  const hasHardwareCommission = hardware.perLine.some(l => l.rep != null);
+  // admin-only. Shown only when at least one line produced a real figure, so
+  // a quote made entirely of products HubSpot hasn't priced yet says so
+  // underneath rather than claiming a $0.00 commission.
+  const hardware = commissionSummary(lines);
 
   return (
     <div className={styles.panel}>
@@ -114,22 +115,25 @@ export default function QuoteReceipt({
           </span>
         </div>
       )}
-      {hasHardwareCommission && (
+      {hardware.hasFigure && (
         <div className={styles.totalRow}>
-          <span className={styles.totalLabel}>Hardware commission (est.)</span>
-          {/* Never clamped — a package-covered line sits at 100% off, so its
-              margin, and the commission on it, is negative by construction.
-              fmt$ renders a negative figure with its own minus sign, so this
-              is NOT prefixed with "−" the way the discount rows above are. */}
+          <span className={styles.totalLabel}>Your hardware commission (est.)</span>
+          {/* Never clamped: a discount the REP chooses can push a line below
+              AIO's cost, which is what "Cost to Rep" means. Hardware AIO
+              comps itself is excluded instead of counted as a loss — see
+              `isPolicyComped`. fmt$ renders a negative with its own minus
+              sign, so this is NOT prefixed with "−" the way the discount
+              rows above are. */}
           <span
             className={styles.totalValue}
             data-tone="commission"
-            data-sign={hardware.rep < 0 ? "negative" : undefined}
+            data-sign={hardware.total < 0 ? "negative" : undefined}
           >
-            {fmt$(hardware.rep)}
+            {fmt$(hardware.total)}
           </span>
         </div>
       )}
+      <UnpricedNote unpriced={hardware.unpriced} />
       <div className={styles.totalRow}>
         <span className={styles.totalLabel}>Due at checkout</span>
         <span className={styles.totalValue}>{fmt$(dueAtCheckout)}</span>
@@ -168,11 +172,6 @@ function ReceiptLine({ line }: { line: QuoteLine }) {
   const discounted = (line.discountPercent ?? 0) > 0;
   const tag = line.coveredByPackage ? "In package" : isCompedService(line) ? "Included" : null;
   const cycle = line.billingFrequency === "one_time" ? "" : `/${fmtCycle(line.billingFrequency)}`;
-  // Hardware commission is ONE-TIME lines only (lib/commission.ts) — a
-  // recurring line never gets a figure here. Only the rep's own number: RSM
-  // commission and the underlying cost are admin-only and never rendered in
-  // this component.
-  const commission = line.billingFrequency === "one_time" ? lineHardwareCommission(line) : null;
 
   return (
     <div className={styles.receiptLine}>
@@ -184,17 +183,11 @@ function ReceiptLine({ line }: { line: QuoteLine }) {
         {line.qty} × {fmt$(line.unitPrice)}{cycle}
         {line.billingStart && ` · ${describeBillingStart(line.billingStart)}`}
       </div>
-      {/* Rendered only when there's a real figure — null means "no cost or no
-          rate on file", not "zero commission", so it's omitted rather than
-          shown as $0.00 or a dash. */}
-      {commission?.rep != null && (
-        <div
-          className={styles.receiptCommission}
-          data-sign={commission.rep < 0 ? "negative" : undefined}
-        >
-          Your est. commission: {fmt$(commission.rep)}
-        </div>
-      )}
+      {/* Quiet for a line that earns nothing by design (recurring, in-plan,
+          comped) — the tag beside the name already says why — and explicit
+          for one HubSpot hasn't priced, which must not read as "earns
+          nothing". See LineCommissionNote. */}
+      <LineCommissionNote line={line} className={styles.receiptCommission} />
       <div className={styles.receiptAmount}>
         {discounted && <span className={styles.strike}>{fmt$(lineListAmount(line))}</span>}{" "}
         <span>{fmt$(lineNetAmount(line))}</span>

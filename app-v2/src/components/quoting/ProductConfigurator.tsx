@@ -55,6 +55,11 @@ import {
 } from "@/lib/quoting";
 import { coverageLabel, kitFor, kitPicks } from "@/lib/quotePackages";
 import QuoteReceipt, { type QuoteMarginPreview } from "@/components/quoting/QuoteReceipt";
+import {
+  commissionSummary,
+  LineCommissionNote,
+  UnpricedNote,
+} from "@/components/quoting/HardwareCommission";
 import { fmt$, fmtCycle, fmtPct2, fmtRecurring, monthlyEquivalent } from "@/lib/utils";
 import type {
   BillingStart, CatalogProduct, LineAdjustment, QuoteAdjustments, QuoteLine, QuoteType, UnitAdjustment,
@@ -205,20 +210,49 @@ function startKey(start: BillingStart | null | undefined): string {
  * same spot `.docTotals` would otherwise occupy. Both call sites share this
  * one function rather than inlining the markup twice.
  */
-function MarginNote({ pricingPreview }: { pricingPreview?: QuoteMarginPreview | null }) {
+function MarginNote({
+  pricingPreview,
+  lines = [],
+}: {
+  pricingPreview?: QuoteMarginPreview | null;
+  /**
+   * The built quote, for the AE's own hardware commission (2026-10-14). Lives
+   * in this block rather than in a section of its own so the one "Internal"
+   * header covers both figures: they are the two numbers on this page the
+   * merchant must never read, and a second header would halve the weight of
+   * each. Defaults to none for the rate-only call site, which has no lines.
+   */
+  lines?: QuoteLine[];
+}) {
   const margin = pricingPreview?.appliedTargetMargin;
-  if (margin == null) return null;
   const projectedCommission = pricingPreview?.projectedCommission?.total;
+  const hardware = commissionSummary(lines);
+  if (margin == null && !hardware.hasFigure && hardware.unpriced.length === 0) return null;
   return (
     <>
       <div className={styles.internalNote}>Internal · not shown to merchant</div>
-      <div className={styles.totalRow}>
-        <span className={styles.totalLabel}>Processing margin</span>
-        <span className={styles.totalValue}>
-          {fmtPct2(margin)}
-          {projectedCommission != null && ` (est. ${fmt$(projectedCommission)}/yr)`}
-        </span>
-      </div>
+      {margin != null && (
+        <div className={styles.totalRow}>
+          <span className={styles.totalLabel}>Processing margin</span>
+          <span className={styles.totalValue}>
+            {fmtPct2(margin)}
+            {projectedCommission != null && ` (est. ${fmt$(projectedCommission)}/yr)`}
+          </span>
+        </div>
+      )}
+      {hardware.hasFigure && (
+        <div className={styles.totalRow}>
+          <span className={styles.totalLabel}>Your hardware commission (est.)</span>
+          <span
+            className={styles.totalValue}
+            data-tone="commission"
+            data-sign={hardware.total < 0 ? "negative" : undefined}
+          >
+            {fmt$(hardware.total)}
+          </span>
+        </div>
+      )}
+      <UnpricedNote unpriced={hardware.unpriced} />
     </>
   );
 }
@@ -1483,6 +1517,12 @@ export default function ProductConfigurator({
             </div>
             {why && <div className={styles.docWhy}>{why}</div>}
             {l.billingStart && <div className={styles.docWhy}>{describeBillingStart(l.billingStart)}</div>}
+            {/* The AE's own commission on this line. This column mirrors what
+                the merchant will see, so the figure is marked as internal in
+                its own right (`.docCommission`) rather than relying on the
+                "Internal" header down in the totals — a rep reads a line
+                here, not the block boundary it sits inside. */}
+            <LineCommissionNote line={l} className={styles.docCommission} />
           </div>
           <div className={styles.docAmount}>
             {list > net && <span className={styles.strike}>{fmt$(list)}</span>}{" "}
@@ -1709,7 +1749,7 @@ export default function ProductConfigurator({
                     <span className={styles.totalValue} data-tone="discount">−{fmt$(totalDiscount)}</span>
                   </div>
                 )}
-                <MarginNote pricingPreview={pricingPreview} />
+                <MarginNote pricingPreview={pricingPreview} lines={quoteLines} />
                 <div className={styles.docTotalGrid}>
                   <div>
                     <div className={styles.docTotalValue}>{fmt$(amountDueAtCheckout(quoteLines))}</div>

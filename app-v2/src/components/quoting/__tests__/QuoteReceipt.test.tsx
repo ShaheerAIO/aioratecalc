@@ -44,12 +44,16 @@ describe("per-line hardware commission", () => {
     renderReceipt([
       line({ costToRep: 400, repCommissionBps: 1000, rsmCommissionBps: 500 }),
     ]);
-    expect(screen.getByText(/Your est\. commission: \$34\.90/)).toBeTruthy();
+    expect(screen.getByText(/Your commission \$34\.90/)).toBeTruthy();
   });
 
-  it("renders nothing for a line with no cost or no rate on file (today's default state)", () => {
+  it("says a product is unpriced rather than going quiet — silence would read as $0", () => {
+    // POS Unit, Customer Facing Display, mPOS and both tablets are in exactly
+    // this state in HubSpot as of 2026-10-14, and three of them are on most
+    // quotes. An AE must not read a missing figure as "this earns nothing".
     renderReceipt([line()]); // no costToRep, no repCommissionBps at all
-    expect(screen.queryByText(/Your est\. commission/)).toBeNull();
+    expect(screen.queryByText(/Your commission/)).toBeNull();
+    expect(screen.getByText(/No cost on file/)).toBeTruthy();
   });
 
   it("never shows a figure on a recurring line, even if it carries commission fields", () => {
@@ -61,11 +65,13 @@ describe("per-line hardware commission", () => {
         repCommissionBps: 1000,
       }),
     ]);
-    expect(screen.queryByText(/Your est\. commission/)).toBeNull();
+    expect(screen.queryByText(/Your commission/)).toBeNull();
   });
 
-  it("renders a negative figure for a 100%-off package-covered line", () => {
-    // Net amount is $0 (100% off), cost is $400 -> margin -$400, 10% rep = -$40.
+  it("stays quiet on hardware AIO comps — the line's own tag already says why", () => {
+    // Was asserted as -$40.00 until 2026-10-14. A package-covered line is
+    // AIO's giveaway, so it earns nothing; a $0.00 next to "In package" would
+    // read as a bug, and the negative read as a charge against the rep.
     renderReceipt([
       line({
         discountPercent: 100,
@@ -74,7 +80,15 @@ describe("per-line hardware commission", () => {
         repCommissionBps: 1000,
       }),
     ]);
-    expect(screen.getByText(/Your est\. commission: -\$40\.00/)).toBeTruthy();
+    expect(screen.queryByText(/Your commission/)).toBeNull();
+    expect(screen.queryByText(/No cost on file/)).toBeNull();
+  });
+
+  it("STILL shows a negative when the REP discounted the line below cost", () => {
+    renderReceipt([
+      line({ discountPercent: 100, costToRep: 400, repCommissionBps: 1000 }),
+    ]);
+    expect(screen.getByText(/Your commission -\$40\.00/)).toBeTruthy();
   });
 
   it("never renders the RSM figure or the underlying cost", () => {
@@ -89,7 +103,7 @@ describe("per-line hardware commission", () => {
 });
 
 describe("the Hardware commission total row", () => {
-  it("is absent when no line has commission data (0 of 39 products populated today)", () => {
+  it("is absent when no line has commission data", () => {
     renderReceipt([line(), line({ hubspotProductId: "223452690133", name: "Onsite Installation" })]);
     expect(screen.queryByText(/Hardware commission/)).toBeNull();
   });
@@ -105,20 +119,15 @@ describe("the Hardware commission total row", () => {
         repCommissionBps: 1000,
       }), // $99.90
     ]);
-    expect(screen.getByText("Hardware commission (est.)")).toBeTruthy();
+    expect(screen.getByText("Your hardware commission (est.)")).toBeTruthy();
     expect(screen.getByText("$134.80")).toBeTruthy();
   });
 
-  it("can go negative, and is never clamped to zero", () => {
+  it("can go negative on a rep's own below-cost discount, and is never clamped", () => {
     renderReceipt([
-      line({
-        discountPercent: 100,
-        coveredByPackage: "QSR Kit",
-        costToRep: 400,
-        repCommissionBps: 1000,
-      }),
+      line({ discountPercent: 100, costToRep: 400, repCommissionBps: 1000 }),
     ]);
-    expect(screen.getByText("Hardware commission (est.)")).toBeTruthy();
+    expect(screen.getByText("Your hardware commission (est.)")).toBeTruthy();
     expect(screen.getByText("-$40.00")).toBeTruthy();
   });
 
@@ -133,12 +142,12 @@ describe("the Hardware commission total row", () => {
         preAuthAmount={null}
       />
     );
-    const labels = screen.getAllByText(/Package savings|Discounts applied|Hardware commission|Due at checkout/)
+    const labels = screen.getAllByText(/Package savings|Discounts applied|Your hardware commission|Due at checkout/)
       .map(el => el.textContent);
     expect(labels).toEqual([
       "Package savings",
       "Discounts applied",
-      "Hardware commission (est.)",
+      "Your hardware commission (est.)",
       "Due at checkout",
     ]);
   });
@@ -231,13 +240,13 @@ describe("the Processing margin total row", () => {
       />
     );
     const labels = screen
-      .getAllByText(/Package savings|Discounts applied|Processing margin|Hardware commission|Due at checkout/)
+      .getAllByText(/Package savings|Discounts applied|Processing margin|Your hardware commission|Due at checkout/)
       .map(el => el.textContent);
     expect(labels).toEqual([
       "Package savings",
       "Discounts applied",
       "Processing margin",
-      "Hardware commission (est.)",
+      "Your hardware commission (est.)",
       "Due at checkout",
     ]);
   });

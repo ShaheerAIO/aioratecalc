@@ -36,7 +36,7 @@ import { derivePricingForRole, analysisFromQuoteConfig, type PaddingConfig } fro
 import { paymentProcessingArrBreakdown } from "@/lib/billing/processingArr";
 import {
   commissionFromTotalArr, estimatedRecurringArrFromQuoteLines, sumArrOrNull,
-  quoteHardwareCommission,
+  isPolicyComped, quoteHardwareCommission,
 } from "@/lib/commission";
 import type { MerchantApplication, ProcessorTier } from "@/types/merchant";
 
@@ -103,9 +103,10 @@ export type DealCommissionRow = {
    * not an estimate. null means "no one-time line on this deal has BOTH a
    * cost and a rate on file", which is distinct from a real 0 (every
    * qualifying line's margin happened to net to exactly zero, or summed to
-   * it). As of 2026-10-13 every deal reports null here — 0 of 39 active
-   * products carry a commission rate — which is the correct current state,
-   * not a bug; see `buildCommissionDataGaps` for why.
+   * it). Null is still the right answer for a quote whose every line is
+   * comped or unpriced — see `buildCommissionDataGaps` for which products
+   * those are. Real figures started landing 2026-10-14, when HubSpot's
+   * product library was populated.
    */
   repHardwareCommission: number | null;
   rsmHardwareCommission: number | null;
@@ -204,14 +205,16 @@ export function buildCommissionReport(
 
 // ── Hardware commission data-quality gaps ───────────────────────────────────
 //
-// This is the most useful thing this report can do while the HubSpot product
-// library is still mostly unpopulated (0 of 39 active products carry a
-// commission rate, 2026-10-13): tell the admin WHICH products are missing
-// what, instead of the panel just reading as "every deal earns $0 hardware
-// commission" with no explanation. Scans every app's quote lines directly —
-// deliberately NOT limited to the apps that produced a row above, since a
-// prospect with no pricing basis yet can still carry quote lines worth
-// flagging.
+// Tells the admin WHICH products are missing what, instead of the panel just
+// reading as "this deal earns $0 hardware commission" with no explanation.
+// Scans every app's quote lines directly — deliberately NOT limited to the
+// apps that produced a row above, since a prospect with no pricing basis yet
+// can still carry quote lines worth flagging.
+//
+// Smaller and more pointed since the real data landed (2026-10-14): what it
+// finds now is a genuinely unpriced product — POS Unit, Customer Facing
+// Display, mPOS and the two tablets have no "Cost to Rep" while most of the
+// catalog does — rather than the whole catalog at once.
 
 export type CommissionDataGaps = {
   /** One-time line names (deduped) with no cost on file at all — these
@@ -242,6 +245,12 @@ export function buildCommissionDataGaps(apps: MerchantApplication[]): Commission
         if (line.repCommissionBps != null || line.rsmCommissionBps != null) recurringWithRate.add(line.name);
         continue;
       }
+      // Hardware AIO comps by policy earns nothing whatever its cost says
+      // (see `isPolicyComped`), so neither list reports one: an admin sent to
+      // fill in a cost there would change no figure on any quote. Same rule
+      // `quoteHardwareCommission.missingCost` follows, so the admin panel and
+      // the AE's own view of a quote can't disagree about what's missing.
+      if (isPolicyComped(line)) continue;
       if (line.costToRep == null) missingCost.add(line.name);
       else if (line.costToRep === 0) zeroCost.add(line.name);
     }

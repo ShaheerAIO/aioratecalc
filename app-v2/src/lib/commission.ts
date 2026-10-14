@@ -42,7 +42,7 @@
 // percentage (5.00%, 10.00%) that is exact in bps and not in a float, feeding
 // a number that pays people.
 
-import { lineNetAmount, quoteTotals } from "@/lib/quoting";
+import { isCompedService, lineNetAmount, quoteTotals } from "@/lib/quoting";
 import type { QuoteLine } from "@/types/merchant";
 
 // ── Processing commission ───────────────────────────────────────────────────
@@ -193,55 +193,104 @@ export function hardwareCommission(hardwareMargin: number, policy: HardwareCommi
 //
 // Replaces the global-rate design above. HubSpot's product library carries
 // real per-product inputs — `cost_to_rep` ("AE Cost"), `rep_commission` and
-// `rsm_commission` (both PERCENTAGES) — read into `CatalogProduct` and
+// `rsm_commission` (both RATES) — read into `CatalogProduct` and
 // snapshotted onto `QuoteLine` at `toQuoteLine` time (see both types'
 // doc comments in types/merchant.ts). This section is the math over those
-// snapshotted fields. As of 2026-10-13 every rate is null and 8 populated
-// costs are all 0, so every real quote computes to "no commissions yet" —
-// that is the correct, expected state until Elizabeth uploads real values,
-// not a bug.
+// snapshotted fields. THE DATA LANDED 2026-10-14: 26 of 39 active products
+// carry a real cost and a real rate, so these figures are now live money
+// rather than the "everything computes to null" placeholder state this
+// section shipped in.
 //
 // Formula (product owner, verbatim, 2026-10-13):
 //   rep commission for a line = ((qty * price after discount) - (qty * AE
 //     Cost)) * Rep Commission %
 //   rsm commission = same, with RSM Commission %
 //
-// Three rules, all explicit product-owner decisions — do not revisit:
+// Four rules, all explicit product-owner decisions — do not revisit:
 //   1. ONE-TIME LINES ONLY. Both HubSpot deal properties this feeds are
 //      labelled "Rep/RSM HARDWARE Commission", and mixing a monthly
 //      "price after discount" into one-time hardware dollars mixes units
 //      (the same reason quoteTotals keeps one-time and recurring separate).
 //      A recurring line that nonetheless carries a commission rate is
 //      reported via `recurringWithRate`, never silently included or dropped.
-//   2. NEGATIVE IS INTENDED, NEVER CLAMPED. A package-covered line sits at
-//      100% off, so `netAmount - cost*qty` is negative by construction — "this
-//      can go negative" (product owner, 10/13). Don't add a Math.max(0, ...)
-//      anywhere in this section.
+//      Every monthly platform product now carries a rate, so this list is no
+//      longer the near-empty curiosity it was when it was written.
+//   2. HARDWARE AIO COMPS BY POLICY EARNS NOTHING — NOT A NEGATIVE
+//      (product owner, 2026-10-14). See `isPolicyComped`. This NARROWS, and
+//      does not cancel, the 10/13 "this can go negative, never clamp it"
+//      rule: a discount the REP chooses still eats into their own commission
+//      and still goes negative, which is exactly what `cost_to_rep`'s own
+//      HubSpot description ("Minimum Price rep can discount to before eating
+//      into commissions") says it means. What changed is that real cost data
+//      made the untargeted version absurd — a QSR Kit quote, whose nine
+//      in-plan lines sit at 100% off by AIO's own decision, showed the AE
+//      −$1,635.90, and the comped Install + Training pair alone put −$674.10
+//      on EVERY quote. Still no Math.max(0, …) anywhere in this section.
 //   3. null IS NOT 0. A line contributes a commission only when BOTH its cost
 //      and its rate are non-null — a missing cost means "nobody has told us
 //      yet", and treating it as 0 would pay commission on the full sale
 //      price. Lines missing a cost are reported via `missingCost`. A LITERAL
 //      0 (a real, known zero cost) is honoured and does participate.
+//   4. A line's `status` says WHICH of those it was, because "no figure" has
+//      four different meanings and an AE reading a quote needs to tell "AIO
+//      gives this away" from "nobody has entered a cost for the POS Unit".
 
 /**
- * HubSpot's "Rep Commission %"/"RSM Commission %" product properties store a
- * plain percentage (e.g. a product owner entering "6" means 6%). This
- * function is the ONE place that percent is converted to the basis-points
- * unit the rest of this codebase's commission math uses (rateMatrix.ts,
- * wholesale.ts, and SIGNING/ACTIVATION_COMMISSION_BPS above) — flip it here
- * if that reading turns out wrong.
+ * HubSpot's "Rep Commission %"/"RSM Commission %" product properties store the
+ * rate as a DECIMAL FRACTION — 0.6 is 60%, not 0.6% — so this converts by
+ * ×10000, not ×100. It is the ONE place that conversion happens, feeding the
+ * basis-points unit the rest of this codebase's commission math uses
+ * (rateMatrix.ts, wholesale.ts, SIGNING/ACTIVATION_COMMISSION_BPS above).
  *
- * ASSUMPTION TO CONFIRM WITH THE PRODUCT OWNER WHEN REAL VALUES LAND: every
- * `rep_commission`/`rsm_commission` row in the portal is null today (2026-10-13,
- * 0 of 39 active products populated), so this reading is UNVERIFIED against
- * real data. It is deliberately isolated to one named, exported, tested
- * function so correcting it later (e.g. if HubSpot actually stores "0.06" for
- * 6%) is a one-line change rather than a hunt through call sites.
+ * CONFIRMED BY THE PRODUCT OWNER 2026-10-14, reversing the "plain percentage"
+ * reading this function shipped with — which would have paid an AE $4.53 on a
+ * Mega Kiosk instead of $453.00. The portal cannot settle this by itself and
+ * two things in it actively argue for the wrong answer: the properties are
+ * LABELLED "Rep Commission %" and carry HubSpot's `numberDisplayHint:
+ * percentage`, so the CRM renders the stored 0.6 as "0.6%". What settles it is
+ * the shape of the data — hardware at 0.6/0.1 against Onsite Installation and
+ * Training at 0.45/0.05 is a deliberate 70%/50% split of hardware margin
+ * between AE, RSM and AIO, where the literal reading makes it a $5-vs-$3
+ * difference nobody would configure — plus `cost_to_rep`'s own description
+ * ("Minimum Price rep can discount to before eating into commissions"), which
+ * only means anything if the commission is a material share of that margin.
+ * No deal in the portal carried a computed `rep_commission` to check against.
  */
-export function percentToBps(percent: number | null): number | null {
-  if (percent === null || !Number.isFinite(percent)) return null;
-  return Math.round(percent * 100);
+export function commissionRateToBps(rate: number | null): number | null {
+  if (rate === null || !Number.isFinite(rate)) return null;
+  return Math.round(rate * 10000);
 }
+
+/**
+ * Hardware AIO itself gives away: a package/plan-covered line, or one of the
+ * policy-comped services (Onsite Installation, System Onboarding and
+ * Training) sitting at exactly $0. These earn NO commission — see rule 2
+ * above. Deliberately judged on the line as BUILT rather than on the
+ * adjustments that produced it, because that is the one representation both
+ * the configurator and a saved quote share; `coveredByPackage` is set only by
+ * `decomposePackages` and the comped services only reach $0 through
+ * `applyServiceComp`'s default, so neither can be forged by a rep edit.
+ *
+ * A rep's OWN discount is not policy and is not excluded here, even at 100%:
+ * that is the case the never-clamp rule is for.
+ */
+export function isPolicyComped(line: QuoteLine): boolean {
+  if (line.coveredByPackage) return true;
+  return isCompedService(line) && lineNetAmount(line) === 0;
+}
+
+/** Why a line produced the figure it did — or produced none. */
+export type LineCommissionStatus =
+  /** A real figure, from a real cost and at least one real rate. */
+  | "computed"
+  /** AIO comps it (in-plan, in-package, or a comped service) — earns nothing. */
+  | "included"
+  /** Recurring: not hardware dollars. Carries a rate only by mistake. */
+  | "recurring"
+  /** One-time, but no "Cost to Rep" on file — unknown, not zero. */
+  | "no_cost"
+  /** Cost on file, but neither commission rate is set on the product. */
+  | "no_rate";
 
 /** One line's rep/rsm hardware commission, or the reason it didn't produce one. */
 export type LineHardwareCommission = {
@@ -249,6 +298,7 @@ export type LineHardwareCommission = {
   name: string;
   rep: number | null;
   rsm: number | null;
+  status: LineCommissionStatus;
 };
 
 /**
@@ -267,24 +317,34 @@ export type LineHardwareCommission = {
  * later assume it is, because it visibly is not.
  */
 export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission {
-  const base: Pick<LineHardwareCommission, "hubspotProductId" | "name"> = {
+  const none = (status: LineCommissionStatus): LineHardwareCommission => ({
     hubspotProductId: line.hubspotProductId,
     name: line.name,
-  };
+    rep: null,
+    rsm: null,
+    status,
+  });
 
-  if (line.billingFrequency !== "one_time") return { ...base, rep: null, rsm: null };
+  if (line.billingFrequency !== "one_time") return none("recurring");
+  // Before the cost check, so a comped line with no cost on file reads as
+  // "AIO gives this away" rather than as missing data someone should go fix.
+  if (isPolicyComped(line)) return none("included");
 
   const cost = line.costToRep ?? null;
-  if (cost === null) return { ...base, rep: null, rsm: null };
+  if (cost === null) return none("no_cost");
 
-  const marginTotal = lineNetAmount(line) - cost * line.qty;
   const repBps = line.repCommissionBps ?? null;
   const rsmBps = line.rsmCommissionBps ?? null;
+  if (repBps === null && rsmBps === null) return none("no_rate");
+
+  const marginTotal = lineNetAmount(line) - cost * line.qty;
 
   return {
-    ...base,
+    hubspotProductId: line.hubspotProductId,
+    name: line.name,
     rep: repBps === null ? null : marginTotal * (repBps / 10000),
     rsm: rsmBps === null ? null : marginTotal * (rsmBps / 10000),
+    status: "computed",
   };
 }
 
@@ -295,7 +355,7 @@ export type QuoteHardwareCommission = {
   /** Sum of every line's non-null rsm commission. 0 when nothing qualified. */
   rsm: number;
   perLine: LineHardwareCommission[];
-  /** Names of one-time lines with cost or rate missing (no commission computed). */
+  /** Names of one-time, non-comped lines with no "Cost to Rep" on file. */
   missingCost: string[];
   /** Names of RECURRING lines that nonetheless carry a commission rate — excluded, flagged. */
   recurringWithRate: string[];
@@ -320,14 +380,13 @@ export function quoteHardwareCommission(lines: QuoteLine[]): QuoteHardwareCommis
       continue;
     }
 
-    // Literally "cost is missing" — not gated on a rate being set too, since
-    // 0/39 products carry a rate today and gating this on "AND a rate exists"
-    // would make the warning useless until rates are populated. A line with
-    // a cost but no rate contributes nothing either (see lineHardwareCommission),
-    // which is visible in `perLine` (rep/rsm both null) without a separate list.
-    if (line.costToRep == null) missingCost.push(line.name);
-
     const result = lineHardwareCommission(line);
+
+    // "Somebody needs to fill a cost in", so comped lines are left out of it:
+    // they earn nothing whatever their cost says, and listing them would send
+    // an admin off to fix data that would change no figure on any quote.
+    if (result.status === "no_cost") missingCost.push(line.name);
+
     perLine.push(result);
     rep += result.rep ?? 0;
     rsm += result.rsm ?? 0;

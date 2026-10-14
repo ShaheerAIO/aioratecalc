@@ -2,7 +2,7 @@
 // Scopes required: crm.objects.deals.read/write, crm.objects.contacts.read/write
 
 import { paymentProcessingArr } from "@/lib/billing/processingArr";
-import { percentToBps, quoteHardwareCommission } from "@/lib/commission";
+import { commissionRateToBps, quoteHardwareCommission } from "@/lib/commission";
 import type {
   BillingFrequency,
   CatalogProduct,
@@ -311,9 +311,11 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
   // existing `signing_commission`/`activation_commission` properties (5% of
   // `total_arr`) carry cents for the same reason. commission.ts itself stays
   // unrounded, since rounding here is a HubSpot-write concern, not a math one.
-  // Negative totals are written as-is — never floored at zero, a
-  // package-covered line priced at 100% off legitimately nets a negative
-  // margin.
+  // Negative totals are written as-is — never floored at zero. What CAN go
+  // negative narrowed on 2026-10-14: hardware AIO comps by policy (in-plan,
+  // in-package, comped Install/Training) now earns nothing rather than a
+  // negative, and it is a discount the REP chose that eats into their own
+  // figure. See `isPolicyComped` in commission.ts.
   if (hardwareCommissionWritebackEnabled() && app.quoteLines) {
     const commission = quoteHardwareCommission(app.quoteLines);
     if (commission.perLine.some(line => line.rep !== null)) {
@@ -1327,12 +1329,13 @@ function toCatalogProduct(obj: { id: string; properties: Record<string, string |
     status: (p.hs_status ?? "").trim(),
     // `num()` (below) is absent/empty/non-numeric -> null, never 0 — a missing
     // cost or rate means "unset", not "zero". `cost_to_rep` is a dollar
-    // figure; the two commission rates stay PERCENTAGES here (HubSpot's own
-    // unit) and are converted to bps in commission.ts's `percentToBps`, the
-    // one place that conversion happens.
+    // figure; the two commission rates stay in HubSpot's own unit here (a
+    // DECIMAL FRACTION: 0.6 is 60%) and are converted to bps in
+    // commission.ts's `commissionRateToBps`, the one place that conversion
+    // happens and the one place to change if that reading is ever wrong.
     costToRep: num(p.cost_to_rep),
-    repCommissionBps: percentToBps(num(p.rep_commission)),
-    rsmCommissionBps: percentToBps(num(p.rsm_commission)),
+    repCommissionBps: commissionRateToBps(num(p.rep_commission)),
+    rsmCommissionBps: commissionRateToBps(num(p.rsm_commission)),
   };
 }
 

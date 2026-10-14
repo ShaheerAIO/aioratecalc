@@ -87,15 +87,29 @@ describe("commissionRowForApplication", () => {
     expect(row.rsmHardwareCommission).toBeCloseTo(40); // 800 * 5%
   });
 
-  it("is negative for a package-covered line (100% off, cost still owed)", () => {
+  it("reports NOTHING for a package-covered line — AIO comps it, nobody loses on it", () => {
+    // Was asserted as -$60 until 2026-10-14. The cost is real and still owed,
+    // but it is AIO's giveaway, not the rep's discount, so it is excluded
+    // rather than charged to them. A quote made only of covered lines has no
+    // commission figure at all — null, not 0, since 0 would read as measured.
     const row = commissionRowForApplication(app({
       quoteLines: [line({
         unitPrice: 1000, qty: 1, costToRep: 600, repCommissionBps: 1000, rsmCommissionBps: 500,
         discountPercent: 100, coveredByPackage: "QSR Kit",
       })],
     }), null)!;
+    expect(row.repHardwareCommission).toBeNull();
+    expect(row.rsmHardwareCommission).toBeNull();
+  });
+
+  it("still charges a REP'S OWN discount below cost against their commission", () => {
+    const row = commissionRowForApplication(app({
+      quoteLines: [line({
+        unitPrice: 1000, qty: 1, costToRep: 600, repCommissionBps: 1000, rsmCommissionBps: 500,
+        discountPercent: 100,
+      })],
+    }), null)!;
     // netAmount = 0, margin = 0 - 600 = -600
-    expect(row.repHardwareCommission).toBeLessThan(0);
     expect(row.repHardwareCommission).toBeCloseTo(-60); // -600 * 10%
     expect(row.rsmHardwareCommission).toBeCloseTo(-30); // -600 * 5%
   });
