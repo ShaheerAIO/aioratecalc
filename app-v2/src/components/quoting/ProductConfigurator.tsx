@@ -781,14 +781,31 @@ export default function ProductConfigurator({
 
   const setAdjustment = (id: string, patch: LineAdjustment) => setAdjustments([id], patch);
 
+  // Every discount percent on a line goes through this, whoever typed it and
+  // whichever box it came from.
+  //
+  // ONE DECIMAL PLACE (product owner, 2026-10-14). HubSpot's
+  // `hs_discount_percentage` is a plain number and we never established how
+  // many decimals it keeps; a tenth of a percent is unarguably safe, and a
+  // discount is a commercial decision somebody says out loud — "thirty-three
+  // point two percent" is a real number, "33.244326%" is an artifact of
+  // dividing. The cost is that a discount typed in DOLLARS usually can't land
+  // exactly any more (up to 0.05% of the line, so ~$1 on a $2,247 line), which
+  // is why the drawer prints the resulting net underneath.
+  //
+  // CLAMPED to 0–100, not merely reported. `adjustmentBlockers` refuses
+  // anything over 100 and always will, but a number input accepts typed values
+  // past its own max — so without this a rep types 150, watches the preview go
+  // negative, and has to work out what they did wrong from a blocker. A
+  // discount can't exceed the price; holding the field at 100 says so.
+  const cleanPercent = (pct: number | null): number | null => {
+    if (pct === null || Number.isNaN(pct)) return null;
+    return Math.round(Math.min(100, Math.max(0, pct)) * 10) / 10;
+  };
+
   const setDiscount = (id: string, raw: string) => {
     const pct = raw.trim() === "" ? null : Number(raw);
-    // CLAMPED here, not merely reported. `adjustmentBlockers` refuses anything
-    // over 100 and always will, but a number input accepts typed values past
-    // its own max — so without this a rep types 150, watches the preview go
-    // negative, and has to work out what they did wrong from a blocker. A
-    // discount can't exceed the price; holding the field at 100 says so.
-    const next = pct === null || Number.isNaN(pct) ? null : Math.min(100, Math.max(0, pct));
+    const next = cleanPercent(pct);
     // Clearing the percent clears the quantity with it. A quantity on its own
     // scopes nothing, and leaving it behind would silently re-scope the next
     // discount the rep types on this row.
@@ -821,11 +838,12 @@ export default function ProductConfigurator({
     // Nothing to take a percentage OF. Leaving the discount alone is the only
     // honest answer — any percent of $0 is $0.
     if (!(base > 0)) return;
-    // Six decimals so the cent the rep typed is reachable on the largest line
-    // AIO sells; the resulting net is rendered under the field either way, so
-    // a figure that can't land exactly is visible rather than claimed.
-    const pct = Math.round(Math.min(100, Math.max(0, (amount / base) * 100)) * 1e6) / 1e6;
-    setAdjustment(id, pct > 0 ? { discountPercent: pct } : { discountPercent: null, discountQty: null });
+    // Rounded to one decimal like every other discount — see `cleanPercent`.
+    // So the dollars are a way of ARRIVING at a percent, not a figure the
+    // quote promises to hit: the net rendered under this field is the real
+    // one, and it is frequently a little off what was typed here.
+    const pct = cleanPercent((amount / base) * 100);
+    setAdjustment(id, pct ? { discountPercent: pct } : { discountPercent: null, discountQty: null });
   };
 
   // ── Per-unit editing ──────────────────────────────────────────────────────
@@ -868,9 +886,7 @@ export default function ProductConfigurator({
 
   const setUnitDiscount = (id: string, qty: number, index: number, raw: string) => {
     const pct = raw.trim() === "" ? null : Number(raw);
-    setUnit(id, qty, index, {
-      discountPercent: pct === null || Number.isNaN(pct) ? null : Math.min(100, Math.max(0, pct)),
-    });
+    setUnit(id, qty, index, { discountPercent: cleanPercent(pct) });
   };
 
   const setUnitStartMode = (id: string, qty: number, index: number, mode: "now" | "date" | "days") => {
@@ -1022,7 +1038,7 @@ export default function ProductConfigurator({
                         <span className={styles.adjustLabel}>Discount</span>
                         <span className={styles.pctWrap}>
                           <input
-                            type="number" min={0} max={100} step={1}
+                            type="number" min={0} max={100} step={0.1}
                             className={styles.adjustInput}
                             value={u.discountPercent ?? ""}
                             placeholder="0"

@@ -345,9 +345,13 @@ only lever that reaches HubSpot. The base respects "applies to N of qty".
 Under it the drawer now states the REAL net — "3 × $749.00 → $1,500.00" —
 because a percentage can't always land exactly on a dollar figure and the
 document can't be amended once published.
-OPEN: HubSpot's `hs_discount_percentage` is a plain number but we have not
-confirmed it keeps 6 decimals. Worth one throwaway line item on the test
-company before a rep uses this on a real quote.)
+CLOSED by limiting every percent to ONE DECIMAL (your call, same day) — a
+tenth is unarguably safe in HubSpot, so the open question about
+`hs_discount_percentage`'s precision no longer blocks anything. Applies to
+hand-typed percents too, so it's true of the line and not just of the dollar
+box. The cost: a dollar figure usually can't be hit exactly. $747 off $2,247
+stores 33.2% and bills $1,501.00, and the box you typed $100 into settles to
+$100.37. Both figures are shown rather than hidden.)
 
 confirm we are adding a payments line item on the hubspot quote
 (IT WASN'T, on most quotes. Checked the live portal: the $0 "AIO Processing
