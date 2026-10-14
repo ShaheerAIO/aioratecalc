@@ -332,6 +332,14 @@ scripts/
                                  Pins NEXT_PUBLIC_BASE_URL to the production alias, because
                                  .env.local says localhost and the backfill rightly refuses to
                                  write a link a rep couldn't click.
+  provision-aio-tenant.ts      ← provisions ONE named application into AIO now, without waiting
+                                 for the 15-minute cron. Calls the shipping provisionAioTenant,
+                                 so the lease / resume / reconcile-by-alias guards all still
+                                 apply. The ONLY gate it can skip is billing_not_paid (with
+                                 --unpaid), because the chain is otherwise untestable without a
+                                 real ACH payment — the debug billing bypass deliberately won't
+                                 fabricate a subscription. Prints what it will create and makes
+                                 you type the application id back: the alias is permanent.
 ```
 
 ### To run v2
