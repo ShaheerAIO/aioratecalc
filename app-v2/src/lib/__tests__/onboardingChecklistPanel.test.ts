@@ -39,6 +39,22 @@ describe("withSignInOverride", () => {
     expect(result.locked).toEqual({ reason: "quote", message: "Available after your quote is signed" });
   });
 
+  // The missing-details repair (2026-10-14). The merchant it exists for has
+  // PAID and has no account, so "Create account to continue" is both a dead
+  // end and the one thing they are least willing to do.
+  it("leaves a publicCta module's href alone — this host serves it without a session", () => {
+    const repair = mod({ key: "adyen", href: "/lead/tok-1?fix=details", ctaLabel: "Finish Your Details", publicCta: true });
+    const [result] = withSignInOverride([repair], "/lead/tok-1/account", "Create account to continue");
+    expect(result.href).toBe("/lead/tok-1?fix=details");
+    expect(result.ctaLabel).toBe("Finish Your Details");
+  });
+
+  it("still overrides the SAME module when it has no publicCta", () => {
+    const authed = mod({ key: "adyen", href: "/customer/applications/app-1/edit", ctaLabel: "Finish Your Details" });
+    const [result] = withSignInOverride([authed], "/lead/tok-1/account", "Create account to continue");
+    expect(result.href).toBe("/lead/tok-1/account");
+  });
+
   it("leaves a module with no href alone", () => {
     const noHref = mod({ href: undefined, ctaLabel: undefined });
     const [result] = withSignInOverride([noHref], "/customer/login");

@@ -41,10 +41,31 @@ describe("validateOnboardingFields — the all-valid case", () => {
     expect(check()).toEqual({});
   });
 
-  it("passes with every optional field left blank", () => {
-    // Only the registered address is required — a merchant with no website and
-    // no phone on file must still be able to start onboarding.
-    expect(check({ dba: "", phone: "", website: "", yearsInBusiness: "" }, { email: "" })).toEqual({});
+  // What is STILL optional, after tenantFieldErrors made the AIO-facing set
+  // required on 2026-10-14: the website and the second email, and nothing
+  // else. The phone and the owner's email used to be on this list — both are
+  // sent to AIO's business create, which 400s on a blank.
+  it("passes with the genuinely optional fields left blank", () => {
+    expect(check({ dba: "", website: "", yearsInBusiness: "" }, { title: "", altEmail: "" })).toEqual({});
+  });
+
+  it("requires every field AIO's tenant create reads", () => {
+    const e = check({ phone: "" }, { firstName: "", lastName: "", email: "", phone: "" });
+    expect(Object.keys(e).sort()).toEqual([
+      "business.phone",
+      "ownerContact.email", "ownerContact.firstName", "ownerContact.lastName", "ownerContact.phone",
+    ]);
+  });
+
+  // The live failure this rule exists for: prospect_1792016501714, 2026-10-14,
+  // "pocInfo.0.contactNo should not be empty" — one blank box, five burned
+  // attempts, and a checklist telling the merchant no action was needed.
+  it("flags the owner phone that failed AIO's business create", () => {
+    expect(Object.keys(check({}, { phone: "" }))).toEqual(["ownerContact.phone"]);
+  });
+
+  it("rejects an owner phone that E.164 conversion can't handle", () => {
+    expect(Object.keys(check({}, { phone: "call the office" }))).toEqual(["ownerContact.phone"]);
   });
 
   it("accepts a spelled-out state and a ZIP+4", () => {
@@ -83,7 +104,9 @@ describe("validateOnboardingFields — each required field missing", () => {
 
   it("treats a wholly absent business section as every field missing", () => {
     expect(Object.keys(validateOnboardingFields({})).sort()).toEqual([
-      "business.address", "business.city", "business.legalName", "business.state", "business.zip",
+      "business.address", "business.city", "business.legalName", "business.phone",
+      "business.state", "business.zip",
+      "ownerContact.email", "ownerContact.firstName", "ownerContact.lastName", "ownerContact.phone",
     ]);
   });
 });
@@ -220,6 +243,36 @@ describe("validateOnboardingFields(stripBlanks(input)) — malformed-only", () =
     expect(Object.keys(validateOnboardingFields(stripBlanks({ business: { ...BUSINESS, phone: "call the office" } })))).toEqual(["business.phone"]);
     expect(Object.keys(validateOnboardingFields(stripBlanks({ business: { ...BUSINESS, website: "n/a" } })))).toEqual(["business.website"]);
     expect(Object.keys(validateOnboardingFields(stripBlanks({ ownerContact: { ...OWNER, email: "nope" } })))).toEqual(["ownerContact.email"]);
+  });
+
+  // The "gate blocks, rep stays lenient" decision (2026-10-14): the fields
+  // tenantFieldErrors made required are placeholdered here too, so a rep
+  // working from a HubSpot deal that carries no owner phone can still create
+  // the prospect. The merchant's form requires them, and
+  // isReadyForAioProvisioning refuses to attempt a create without them — so
+  // nothing fails, it waits somewhere visible.
+  it("still lets a rep through with the AIO-required fields blank", () => {
+    const sparse = {
+      business: { ...BUSINESS, phone: "" },
+      ownerContact: { firstName: "", lastName: "", title: "", email: "", phone: "" } as OwnerContact,
+    };
+    expect(validateOnboardingFields(sparse)).not.toEqual({});
+    expect(validateOnboardingFields(stripBlanks(sparse))).toEqual({});
+  });
+
+  it("still reports a malformed owner phone the rep DID type", () => {
+    expect(Object.keys(validateOnboardingFields(stripBlanks({
+      ownerContact: { ...OWNER, phone: "call the office" },
+    })))).toEqual(["ownerContact.phone"]);
+  });
+
+  // The DBA placeholders are conditional, so a rep who left the whole DBA
+  // address blank isn't handed three stand-ins for a rule that never fires.
+  it("placeholders the DBA pieces only when a DBA street was given", () => {
+    const withStreet = stripBlanks({ business: { ...BUSINESS, dbaAddress: "9 Dining St" } });
+    expect(withStreet.business?.dbaCity).toBeTruthy();
+    const without = stripBlanks({ business: BUSINESS });
+    expect(without.business?.dbaCity).toBeUndefined();
   });
 
   it("passes a fully valid form with no errors at all", () => {

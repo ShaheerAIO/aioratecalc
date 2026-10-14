@@ -5,17 +5,23 @@ import { canClaimLeadAccount } from "@/lib/leadAccount";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
 import { checklistNotice, getOnboardingModules } from "@/lib/onboardingModules";
+import { canRepairFromLead, missingTenantFields } from "@/lib/leadDetails";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { refreshLeadBilling } from "@/lib/billing/leadRefresh";
 import OnboardingChecklistPanel from "@/components/customer/OnboardingChecklistPanel";
+import MissingDetailsDialog from "@/components/customer/MissingDetailsDialog";
 import styles from "./lead.module.css";
 import shellStyles from "../../customer/customer.module.css";
 
 // Public route — not matched by middleware.ts, no auth. The token itself
 // (validated here, server-side) is the only gate. This is the checklist host:
 // the quote it used to open on lives at /lead/[token]/quote.
-export default async function LeadPage({ params }: { params: Promise<{ token: string }> }) {
+export default async function LeadPage({ params, searchParams }: {
+  params: Promise<{ token: string }>;
+  searchParams: Promise<{ fix?: string }>;
+}) {
   const { token } = await params;
+  const { fix } = await searchParams;
   const lookup = await getLeadApplicationByToken(token);
 
   if (!lookup.ok) {
@@ -46,9 +52,23 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
   // "Review & Sign"/"View Quote" must point there directly rather than back
   // at this page.
   const basePath = `/lead/${token}`;
+
+  // The repair dialog is offered ONLY when it can finish the job — a row also
+  // missing something it can't touch (a legal address) would otherwise get a
+  // CTA that leaves it just as stuck. Those fall through to the default
+  // `${basePath}/edit`, which this host's sign-in override then turns into the
+  // account path, which is the honest answer for a repair this can't make.
+  const repairable = canRepairFromLead(app);
+  const missing = repairable ? missingTenantFields(app) : [];
+
   const modules = getOnboardingModules(app, {
     basePath,
     quoteHref: `${basePath}/quote`,
+    // Opens the dialog below. A query param rather than a route because the
+    // module model carries an href, not a callback, and because the merchant
+    // should land back on their checklist with it open rather than on a page
+    // of their own that they then have to navigate out of.
+    detailsHref: repairable ? `${basePath}?fix=details` : undefined,
     // The authenticated host's `${basePath}/billing` redirect needs a session,
     // so this host sends a signed-but-unpaid merchant to its own quote route
     // instead — it serves the same hosted-quote link, publicly.
@@ -76,6 +96,9 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
           signInHref={needsAccount ? `${basePath}/account` : "/customer/login"}
           signInLabel={needsAccount ? "Create account to continue" : undefined}
         />
+        {missing.length > 0 && (
+          <MissingDetailsDialog token={token} fields={missing} open={fix === "details"} />
+        )}
       </div>
     </div>
   );

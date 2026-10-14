@@ -19,13 +19,30 @@ describe("locationAddress", () => {
 });
 
 describe("DBA address validation", () => {
-  const BIZ: Partial<BusinessInfo> = { legalName: "X", ...LEGAL };
-  it("is optional and never required", () => {
-    expect(validateOnboardingFields({ business: BIZ })).toEqual({});
-    expect(validateOnboardingFields({ business: { ...BIZ, dbaAddress: "9 Dining St" } })).toEqual({});
+  const BIZ: Partial<BusinessInfo> = { legalName: "X", phone: "555-000-0000", ...LEGAL };
+  const OWNER = { firstName: "Ana", lastName: "Reyes", title: "", email: "ana@x.com", phone: "555-000-0001" };
+  const check = (biz: Partial<BusinessInfo>) =>
+    validateOnboardingFields({ business: { ...BIZ, ...biz }, ownerContact: OWNER });
+
+  it("is optional as a whole — blank means the location IS the legal address", () => {
+    expect(check({})).toEqual({});
   });
+
+  // 2026-10-14. `locationAddress` keys on the STREET alone, so a DBA street
+  // with no city/state/zip silently becomes an AIO location with three blanks
+  // on it. It used to pass here ("the customer's to finish"), and nothing
+  // downstream ever made them finish it.
+  it("requires the rest of the address once a DBA street is given", () => {
+    const e = check({ dbaAddress: "9 Dining St" });
+    expect(Object.keys(e).sort()).toEqual(["business.dbaCity", "business.dbaState", "business.dbaZip"]);
+  });
+
+  it("passes once the DBA address is complete", () => {
+    expect(check({ dbaAddress: "9 Dining St", dbaCity: "San Jose", dbaState: "CA", dbaZip: "95120" })).toEqual({});
+  });
+
   it("rejects a malformed DBA state or ZIP", () => {
-    const e = validateOnboardingFields({ business: { ...BIZ, dbaAddress: "9 Dining St", dbaState: "ZZ", dbaZip: "12" } });
+    const e = check({ dbaAddress: "9 Dining St", dbaCity: "San Jose", dbaState: "ZZ", dbaZip: "12" });
     expect(Object.keys(e).sort()).toEqual(["business.dbaState", "business.dbaZip"]);
   });
 });

@@ -93,7 +93,8 @@ function moduleFor(modules: OnboardingModule[], key: string): OnboardingModule {
   return m;
 }
 
-const page = (token = TOKEN) => LeadPage({ params: Promise.resolve({ token }) });
+const page = (token = TOKEN, fix?: string) =>
+  LeadPage({ params: Promise.resolve({ token }), searchParams: Promise.resolve({ fix }) });
 
 beforeEach(() => {
   hasQuoteBasis.mockReset();
@@ -156,6 +157,63 @@ describe("basePath", () => {
       if (m.href === "/customer/login") continue; // explicit sign-in override is fine
       expect(m.href.startsWith(quoteRoute)).toBe(false);
     }
+  });
+});
+
+// The missing-details repair dialog (2026-10-14). A merchant who has PAID can
+// be holding provisioning open on one blank field with no account to sign in
+// with — prospect_1792016501714 was exactly that. This host is their only way
+// in, so the CTA has to survive the sign-in override and point at the dialog.
+describe("the missing-details repair", () => {
+  // Paid, accepted, and one field short of what AIO's create needs.
+  const paid = (extra: Partial<Row> = {}) => baseRow({
+    quoteAcceptedAt: new Date("2026-08-15T00:00:00.000Z"),
+    stage: "quote_accepted",
+    quoteLines: [{ name: "POS", hubspotProductId: "1", qty: 1, unitPrice: 100, billingFrequency: "one-time" }],
+    business: {
+      legalName: "Torta Palace LLC", dba: "Torta Palace", address: "1 Main St",
+      city: "LA", state: "CA", zip: "90017", phone: "555-000-0000",
+    },
+    ownerContact: { firstName: "Ana", lastName: "Reyes", title: "", email: "ana@t.com", phone: "" },
+    ...extra,
+  });
+
+  it("points the Adyen row at the dialog, NOT at account creation", async () => {
+    row = paid();
+    const modules = findModules(await page())!;
+    const adyen = moduleFor(modules, "adyen");
+    expect(adyen.href).toBe(`/lead/${TOKEN}?fix=details`);
+    expect(adyen.ctaLabel).toBe("Finish Your Details");
+  });
+
+  it("renders the dialog with exactly the missing field, closed until ?fix=details", async () => {
+    row = paid();
+    const closed = JSON.stringify(await page());
+    expect(closed).toContain("ownerContact.phone");
+    expect(closed).toContain('"open":false');
+    const opened = JSON.stringify(await page(TOKEN, "details"));
+    expect(opened).toContain('"open":true');
+  });
+
+  it("offers nothing when the row is complete", async () => {
+    row = paid({
+      ownerContact: { firstName: "Ana", lastName: "Reyes", title: "", email: "ana@t.com", phone: "555-000-0001" },
+    });
+    const modules = findModules(await page())!;
+    expect(moduleFor(modules, "adyen").href).not.toContain("fix=details");
+  });
+
+  // A row missing something the dialog can't touch would get a CTA that leaves
+  // it exactly as stuck, so it falls through to the account path instead.
+  it("does NOT offer the dialog when something unrepairable is also missing", async () => {
+    row = paid({
+      business: {
+        legalName: "Torta Palace LLC", dba: "Torta Palace", address: "1 Main St",
+        city: "LA", state: "CA", zip: "", phone: "555-000-0000",
+      },
+    });
+    const modules = findModules(await page())!;
+    expect(moduleFor(modules, "adyen").href).not.toContain("fix=details");
   });
 });
 

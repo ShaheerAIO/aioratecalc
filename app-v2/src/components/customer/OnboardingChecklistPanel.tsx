@@ -29,6 +29,13 @@ type Props = {
    * Locked modules are also exempt (they already show a lock message instead
    * of a CTA), so this only ever touches an unlocked, otherwise-actionable
    * row.
+   *
+   * A module carrying `publicCta` is exempt for the same reason as quote: its
+   * href is something this host serves without a session. Today that is only
+   * the missing-details repair dialog, and the exemption is the point of it —
+   * the merchant it exists for has PAID and has no account, so sending them to
+   * "Create account to continue" is both a dead end and the single thing they
+   * are least willing to do (lib/leadDetails.ts).
    */
   signInHref?: string;
   /** Replaces "Sign in to continue" — e.g. when the merchant has no account yet. */
@@ -45,7 +52,7 @@ export function withSignInOverride(
 ): OnboardingModule[] {
   if (!signInHref) return modules;
   return modules.map(m =>
-    !m.locked && m.href && m.key !== "quote"
+    !m.locked && m.href && m.key !== "quote" && !m.publicCta
       ? { ...m, href: signInHref, ctaLabel: signInLabel }
       : m
   );

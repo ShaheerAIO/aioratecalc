@@ -5,6 +5,7 @@ import type { HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/m
 // `monthlyEquivalent` from utils and a few types, so it carries no margin data.
 // Don't widen this to anything that reaches pricing.ts.
 import { quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
+import { validateOnboardingFields } from "@/lib/onboardingValidation";
 
 export type ModuleStatus = "not_started" | "in_progress" | "complete";
 
@@ -24,6 +25,13 @@ export type OnboardingModule = {
   // if locked modules were filtered out the way `coming_soon` was, the
   // denominator would *grow* as the customer progressed.
   locked?: { reason: "quote" | "billing"; message: string };
+  // This CTA works on the PUBLIC token host without an account, so
+  // `withSignInOverride` must leave it alone. Exactly one module sets it: the
+  // missing-details repair in `adyenModule`, whose whole point is reaching a
+  // merchant who has paid and has no account yet (lib/leadDetails.ts). Without
+  // this the row would say "Create account to continue", which is both a dead
+  // end and the thing they are least willing to do.
+  publicCta?: boolean;
 };
 
 /**
@@ -86,6 +94,12 @@ export type OnboardingModulesOpts = {
   // carries the same link. Defaults to the authenticated path; the token host
   // MUST pass its quote route instead, or the row's CTA 404s.
   billingHref?: string;
+  // Where the merchant fixes details that are missing before AIO can create
+  // their tenant. Defaults to the authenticated onboarding form
+  // (`${basePath}/edit`), which is right for a merchant with an account. The
+  // token host passes its own dialog instead, because the merchant this is for
+  // may have no account at all — see lib/leadDetails.ts.
+  detailsHref?: string;
   // Whether there's a quote ready to show (a rep-configured rate basis, or
   // priced lines). MUST be computed by the caller via `hasQuoteBasis`
   // in leadQuote.ts, never here — that module imports pricing.ts, and
@@ -115,11 +129,12 @@ export function getOnboardingModules(
   const basePath = opts?.basePath ?? `/customer/applications/${app.id}`;
   const quoteHref = opts?.quoteHref ?? basePath;
   const billingHref = opts?.billingHref ?? `${basePath}/billing`;
+  const detailsHref = opts?.detailsHref;
   const quoteAccepted = !!app.quoteAcceptedAt;
 
   const modules = [
     quoteBillingModule(app, { hasQuote: opts?.hasQuote ?? false, quoteHref, billingHref }),
-    adyenModule(app, basePath),
+    adyenModule(app, basePath, detailsHref),
     payrollModule(app, basePath),
     foodbuyModule(app, basePath),
   ].filter((m): m is OnboardingModule => m !== null);
@@ -436,7 +451,11 @@ function hostedQuoteRow(
   };
 }
 
-function adyenModule(app: MerchantApplication, basePath: string): OnboardingModule | null {
+function adyenModule(
+  app: MerchantApplication,
+  basePath: string,
+  detailsHref?: string,
+): OnboardingModule | null {
   const key = "adyen";
   const label = "Payment Processing (Adyen)";
   const editHref = `${basePath}/edit`;
@@ -465,6 +484,33 @@ function adyenModule(app: MerchantApplication, basePath: string): OnboardingModu
       description: "Finish identity verification with our processing partner.",
       href: `${basePath}/continue`,
       ctaLabel: "Continue Verification",
+    };
+  }
+
+  // Missing details are the ONE reason to break into this sequence, because
+  // they are the one the merchant can fix and the one nothing else will.
+  // `isReadyForAioProvisioning` runs this same validator and HOLDS on it
+  // (2026-10-14), so a row with a blank owner phone waits here forever — and
+  // every branch below would tell the merchant there was nothing to do. It
+  // sits under the two states above because a provisioned tenant doesn't care
+  // what the form says any more.
+  if (Object.keys(validateOnboardingFields(app)).length > 0) {
+    // A REPAIR reads differently from a first fill, and the difference is
+    // whether anything is on file — not whether a tenant row exists. Since the
+    // gate now holds BEFORE claiming, `aioTenant` is null on almost every row
+    // that lands here, so keying off it would label a merchant who is one
+    // phone number short "Get Started".
+    const started = Boolean(app.business && app.ownerContact);
+    return {
+      key,
+      label,
+      status: started || app.aioTenant ? "in_progress" : "not_started",
+      description: "We need a few more details before we can set up your payment processing.",
+      href: detailsHref ?? editHref,
+      ctaLabel: started ? "Finish Your Details" : "Get Started",
+      // Only when the host gave us somewhere public to send them. The
+      // authenticated form is behind a login and must still be overridden.
+      publicCta: detailsHref ? true : undefined,
     };
   }
 

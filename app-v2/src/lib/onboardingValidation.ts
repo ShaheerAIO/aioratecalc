@@ -1,13 +1,28 @@
-// What Adyen actually needs before the legal-entity → onboarding-link chain in
-// adapters/adyen.ts can succeed. Adyen 422s on a missing or malformed
-// registered address, and that rejection used to be invisible: the customer
-// saw a success screen with no link to click.
+// What the AIO tenant chain actually needs before `adapters/aioDashboard.ts`'s
+// business → location → KYC-link chain can succeed.
+//
+// This was written for Adyen's own legal-entity chain, which EasyOB no longer
+// creates (2026-09-23). The job is the same and the stakes went UP: AIO's
+// `business/create` validates server-side and 400s, and a failed provisioning
+// run is not a form error anyone sees — it burns one of five attempts, backs
+// off exponentially (1h, 2h, 4h, 8h, 16h) and then stops forever, while the
+// merchant's checklist says "We're setting up your account — no action
+// needed". That is exactly what happened to `prospect_1792016501714` on
+// 2026-10-14: `pocInfo.0.contactNo should not be empty`, because the owner's
+// phone was blank and nothing had ever required it.
+//
+// Hence the rule this module now carries: **passing `validateOnboardingFields`
+// IS the precondition for provisioning.** `isReadyForAioProvisioning` calls
+// this same function rather than keeping its own shorter list, so the cron can
+// never attempt a create the form would have refused, and the two can't drift.
+// Before adding a field to AIO's payloads, add it here.
 //
 // Deliberately PURE and dependency-free apart from utils.ts and consent.ts
 // (both also pure) so the same rules run in the browser (CustomerOnboardStep,
-// for inline messages) and in the Server Action (the real gate). It must never
-// import adapters/adyen.ts, pricing.ts, or anything under lib/db — those are
-// server-only and would be pulled into the client bundle.
+// for inline messages), in the Server Action (the real gate), and in the
+// provisioning gate. It must never import adapters/, pricing.ts, or anything
+// under lib/db — those are server-only and would be pulled into the client
+// bundle.
 //
 // Errors are keyed by the dotted field path the onboarding form already uses
 // for its prefill bookkeeping ("business.zip"), so the form can render each
@@ -84,35 +99,79 @@ export function validateOnboardingFields(input: OnboardingValidationInput): Onbo
   if (!zip) errors["business.zip"] = "Enter the ZIP code.";
   else if (!ZIP.test(zip)) errors["business.zip"] = "Use a 5-digit ZIP, e.g. 90210.";
 
-  // The DBA address is optional (blank = same as the legal address above), so
-  // nothing here is REQUIRED — and a blank piece is not flagged, which also
-  // keeps stripBlanks' "malformed only" contract without a placeholder. But a
-  // value that IS given has to be usable, since it becomes the location AIO
-  // creates. (A DBA street with no city/state/zip is the customer's to finish.)
-  const dbaState = s(biz.dbaState);
-  if (dbaState && !isUsStateCode(dbaState)) errors["business.dbaState"] = "Use a US state — e.g. CA or California.";
-  const dbaZip = s(biz.dbaZip);
-  if (dbaZip && !ZIP.test(dbaZip)) errors["business.dbaZip"] = "Use a 5-digit ZIP, e.g. 90210.";
-
-  // Optional, but must be usable if given.
-  const phone = s(biz.phone);
-  if (phone && !isE164Convertible(phone)) {
-    errors["business.phone"] = "Enter a 10-digit phone number, e.g. 555-000-0000.";
-  }
-
   const website = s(biz.website);
   if (website && !isWebsiteLike(website)) {
     errors["business.website"] = "Use a full web address, e.g. yourrestaurant.com — or leave it blank.";
   }
 
-  const email = s(owner.email);
-  if (email && !EMAIL.test(email)) {
-    errors["ownerContact.email"] = "Enter a valid email address.";
-  }
   const altEmail = s(owner.altEmail);
   if (altEmail && !EMAIL.test(altEmail)) {
     errors["ownerContact.altEmail"] = "Enter a valid second email address, or leave it blank.";
   }
+
+  return { ...errors, ...tenantFieldErrors(input) };
+}
+
+/**
+ * The fields AIO's own tenant create reads, every one of them REQUIRED.
+ *
+ * `createAioBusiness` and `createAioLocation` between them send the business
+ * name, the operating address, the business phone, and an owner/point-of-
+ * contact block of name + email + phone. AIO rejects a blank in that block
+ * outright, and there is no second chance worth having: the alias a retry
+ * would use is globally unique and never freed.
+ *
+ * Three of these were previously optional-if-given or unchecked entirely, and
+ * each has a specific destination:
+ *   - `business.phone` → `businessInfo.contactNo` and the location's `phoneNo`
+ *   - `ownerContact.firstName`/`lastName` → `ownerInfo.ownerName` and
+ *     `pocInfo[0].name`, which AIO wants as one joined string — so a missing
+ *     surname is a half-named owner, not a missing field AIO can report
+ *   - `ownerContact.phone` → `ownerInfo.ownerContactNo` and
+ *     `pocInfo[0].contactNo`. THIS is the one that failed live.
+ *
+ * The DBA address is still optional as a whole — blank means "same as the
+ * legal address", which `locationAddress` falls back to and the legal rules
+ * above already require. But a DBA STREET with no city/state/zip is no longer
+ * tolerated: `locationAddress` keys on the street alone, so a half-filled DBA
+ * address silently becomes a location with blank city, state and ZIP. That
+ * used to be "the customer's to finish"; there is nothing downstream that
+ * would make them finish it, and AIO is handed the blanks.
+ */
+export function tenantFieldErrors(input: OnboardingValidationInput): OnboardingFieldErrors {
+  const errors: OnboardingFieldErrors = {};
+  const biz = input.business ?? {};
+  const owner = input.ownerContact ?? {};
+
+  const phone = s(biz.phone);
+  if (!phone) errors["business.phone"] = "Enter the business phone number.";
+  else if (!isE164Convertible(phone)) {
+    errors["business.phone"] = "Enter a 10-digit phone number, e.g. 555-000-0000.";
+  }
+
+  if (!s(owner.firstName)) errors["ownerContact.firstName"] = "Enter the owner's first name.";
+  if (!s(owner.lastName)) errors["ownerContact.lastName"] = "Enter the owner's last name.";
+
+  const email = s(owner.email);
+  if (!email) errors["ownerContact.email"] = "Enter the owner's email address.";
+  else if (!EMAIL.test(email)) errors["ownerContact.email"] = "Enter a valid email address.";
+
+  const ownerPhone = s(owner.phone);
+  if (!ownerPhone) errors["ownerContact.phone"] = "Enter the owner's phone number.";
+  else if (!isE164Convertible(ownerPhone)) {
+    errors["ownerContact.phone"] = "Enter a 10-digit phone number, e.g. 555-000-0000.";
+  }
+
+  // Only once a DBA street says there IS a separate operating address.
+  const dbaState = s(biz.dbaState);
+  const dbaZip = s(biz.dbaZip);
+  if (s(biz.dbaAddress)) {
+    if (!s(biz.dbaCity)) errors["business.dbaCity"] = "Enter the city for the DBA address.";
+    if (!dbaState) errors["business.dbaState"] = "Enter the state for the DBA address.";
+    if (!dbaZip) errors["business.dbaZip"] = "Enter the ZIP for the DBA address.";
+  }
+  if (dbaState && !isUsStateCode(dbaState)) errors["business.dbaState"] = "Use a US state — e.g. CA or California.";
+  if (dbaZip && !ZIP.test(dbaZip)) errors["business.dbaZip"] = "Use a 5-digit ZIP, e.g. 90210.";
 
   return errors;
 }
@@ -166,22 +225,57 @@ export function validateOnboardingSubmission(input: OnboardingSubmissionInput): 
 //
 // legalName/address/city have no format check beyond "not blank", so any
 // non-blank placeholder clears them; state/zip need one that's also
-// well-formed. Optional fields (phone, website, ownerContact.email) are left
-// alone — they already produce no error when blank.
+// well-formed, and the phones need one isE164Convertible accepts.
+//
+// This list GREW on 2026-10-14 with `tenantFieldErrors` — business phone and
+// the owner's name/email/phone became required, and without a placeholder
+// apiece every rep would suddenly be blocked on an owner phone number they
+// often don't have yet. Keeping them here is the whole of the "gate blocks,
+// rep stays lenient" decision: the rep may create a prospect with these
+// blank, the merchant's own onboarding form requires them, and
+// `isReadyForAioProvisioning` refuses to attempt a create until they're
+// actually there. Nothing fails — it waits, where somebody can see it.
+//
+// Only `business.website` and `ownerContact.altEmail` are genuinely optional
+// now, and both are already no-ops when blank.
 const BLANK_PLACEHOLDER: Partial<Record<keyof BusinessInfo, string>> = {
   legalName: "placeholder",
   address: "placeholder",
   city: "placeholder",
   state: "CA",
   zip: "00000",
+  phone: "5550000000",
+};
+
+const BLANK_OWNER_PLACEHOLDER: Partial<Record<keyof OwnerContact, string>> = {
+  firstName: "placeholder",
+  lastName: "placeholder",
+  email: "placeholder@example.com",
+  phone: "5550000000",
+};
+
+// The DBA pieces are only required once a DBA STREET is given, so they're
+// placeholdered only in that case — otherwise a rep who left the whole DBA
+// address blank would get three placeholders standing in for a rule that was
+// never going to fire.
+const BLANK_DBA_PLACEHOLDER: Partial<Record<keyof BusinessInfo, string>> = {
+  dbaCity: "placeholder",
+  dbaState: "CA",
+  dbaZip: "00000",
 };
 
 export function stripBlanks(input: OnboardingValidationInput): OnboardingValidationInput {
   const business: Partial<BusinessInfo> = { ...(input.business ?? {}) };
-  for (const key of Object.keys(BLANK_PLACEHOLDER) as Array<keyof BusinessInfo>) {
-    if (!s(business[key] as string | undefined)) {
-      (business as Record<string, string>)[key] = BLANK_PLACEHOLDER[key]!;
+  const fill = (target: Record<string, string>, defaults: Partial<Record<string, string>>) => {
+    for (const [key, placeholder] of Object.entries(defaults)) {
+      if (!s(target[key])) target[key] = placeholder!;
     }
-  }
-  return { business, ownerContact: input.ownerContact };
+  };
+  fill(business as Record<string, string>, BLANK_PLACEHOLDER);
+  if (s(business.dbaAddress)) fill(business as Record<string, string>, BLANK_DBA_PLACEHOLDER);
+
+  const ownerContact: Partial<OwnerContact> = { ...(input.ownerContact ?? {}) };
+  fill(ownerContact as Record<string, string>, BLANK_OWNER_PLACEHOLDER);
+
+  return { business, ownerContact };
 }

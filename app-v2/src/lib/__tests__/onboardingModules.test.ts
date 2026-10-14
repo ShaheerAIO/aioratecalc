@@ -38,11 +38,11 @@ const BASE_APP: MerchantApplication = {
   proposal: null,
   business: {
     legalName: "Test Co LLC", dba: "Test Co", bizType: "llc", address: "1 Main St",
-    city: "Testville", state: "CA", zip: "90000", phone: "555-0100", website: "",
+    city: "Testville", state: "CA", zip: "90000", phone: "555-000-0100", website: "",
     yearsInBusiness: "5", annualRevenue: "500000",
   },
   ownerContact: {
-    firstName: "Jane", lastName: "Doe", title: "Owner", email: "jane@testco.com", phone: "555-0101",
+    firstName: "Jane", lastName: "Doe", title: "Owner", email: "jane@testco.com", phone: "555-000-0101",
   },
   processing: null,
   agreement: null,
@@ -344,6 +344,35 @@ describe("adyenModule (regression net)", () => {
     expect(m.status).toBe("in_progress");
     expect(m.href).toBeUndefined();
     expect(m.description).toMatch(/setting up your account/i);
+  });
+
+  // 2026-10-14. isReadyForAioProvisioning now HOLDS on anything
+  // validateOnboardingFields would refuse, so a row with a blank owner phone
+  // waits indefinitely — and every other branch of this module would tell the
+  // merchant there was nothing for them to do. The live case was
+  // prospect_1792016501714: AIO answered `pocInfo.0.contactNo should not be
+  // empty` while the checklist read "no action needed".
+  it("sends the customer to the form when a field AIO needs is missing", () => {
+    const m = adyen({
+      ...BASE_APP,
+      ownerContact: { ...BASE_APP.ownerContact!, phone: "" },
+      aioTenant: { provisionedAt: null, locationId: null, attempts: 1 } as never,
+    });
+    expect(m.status).toBe("in_progress");
+    expect(m.href).toBe("/customer/applications/app-1/edit");
+    expect(m.ctaLabel).toBe("Finish Your Details");
+    expect(m.description).not.toMatch(/no action needed/i);
+  });
+
+  it("still says Continue Verification once provisioned, whatever the form says", () => {
+    // A provisioned tenant doesn't care about the form any more — the details
+    // check must not break into this state.
+    const m = adyen({
+      ...BASE_APP,
+      ownerContact: { ...BASE_APP.ownerContact!, phone: "" },
+      aioTenant: { provisionedAt: "2026-09-23T00:00:00.000Z", locationId: 4690 } as never,
+    });
+    expect(m.ctaLabel).toBe("Continue Verification");
   });
 
   it("is OMITTED entirely for a marketing quote that sells nothing through us", () => {

@@ -6,6 +6,7 @@
 
 import type { MerchantApplication } from "@/types/merchant";
 import { hasBillingCompleted } from "@/lib/onboardingModules";
+import { validateOnboardingFields } from "@/lib/onboardingValidation";
 import { quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
 
 export type ProvisioningSkip =
@@ -56,12 +57,20 @@ export function isReadyForAioProvisioning(app: MerchantApplication, now = new Da
   // to sell, which is why gating on payment cannot strand anyone.
   if (!hasBillingCompleted(app.hubspotIds)) return { ready: false, reason: "billing_not_paid" };
 
-  // AIO's business create needs a name, address and an owner contact. Without
-  // them we would create a tenant named "" — an alias burned on a row we then
-  // could not fix.
-  const biz = app.business;
-  const hasName = Boolean((biz?.dba || biz?.legalName || "").trim());
-  if (!biz || !hasName || !app.ownerContact?.email) {
+  // EXACTLY what the merchant's own onboarding form enforces — the same
+  // function, not a shorter list beside it (see onboardingValidation.ts's
+  // header). This used to check a name and an owner email and nothing else,
+  // which is how `prospect_1792016501714` reached AIO on 2026-10-14 with a
+  // blank owner phone and came back `pocInfo.0.contactNo should not be empty`.
+  //
+  // The ORDERING is why this has to be a gate and not just a form rule:
+  // provisioning triggers on payment, and the merchant fills their onboarding
+  // form AFTER they pay — so the cron routinely reaches a row the form has
+  // never seen. Refusing here costs nothing (the row is retried every 15
+  // minutes, free, with no attempt burned and no alias claimed); attempting
+  // costs one of five attempts and an exponential backoff that ends in
+  // `too_many_attempts` and silence.
+  if (Object.keys(validateOnboardingFields(app)).length > 0) {
     return { ready: false, reason: "missing_business_details" };
   }
 

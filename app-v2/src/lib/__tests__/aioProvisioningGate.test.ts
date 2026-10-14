@@ -126,6 +126,56 @@ describe("isReadyForAioProvisioning", () => {
     });
   });
 
+  // 2026-10-14. The gate used to check a name and an owner email and nothing
+  // else, so prospect_1792016501714 reached AIO with a blank owner phone and
+  // came back 400 `pocInfo.0.contactNo should not be empty` — one burned
+  // attempt, an exponential backoff, and a checklist reading "no action
+  // needed". It now runs the merchant form's own validator, so anything the
+  // form would refuse the cron refuses too, for free and without a retry.
+  describe("every field AIO's create reads is a hold, not a 400", () => {
+    const blank: Array<[string, Partial<MerchantApplication>]> = [
+      ["the owner's phone", { ownerContact: { firstName: "Sam", lastName: "R", title: "", email: "s@e.com", phone: "" } as never }],
+      ["the owner's first name", { ownerContact: { firstName: "", lastName: "R", title: "", email: "s@e.com", phone: "4155550143" } as never }],
+      ["the owner's last name", { ownerContact: { firstName: "Sam", lastName: "", title: "", email: "s@e.com", phone: "4155550143" } as never }],
+      ["the business phone", { business: { dba: "Blue Plate", legalName: "Blue Plate LLC", address: "1 St", city: "SJ", state: "CA", zip: "95120", phone: "" } as never }],
+      ["the ZIP", { business: { dba: "Blue Plate", legalName: "Blue Plate LLC", address: "1 St", city: "SJ", state: "CA", zip: "", phone: "4155550142" } as never }],
+    ];
+    for (const [what, patch] of blank) {
+      it(`holds when ${what} is missing`, () => {
+        expect(isReadyForAioProvisioning(app(patch), NOW)).toEqual({
+          ready: false,
+          reason: "missing_business_details",
+        });
+      });
+    }
+
+    // locationAddress keys on the DBA street alone, so this would have created
+    // an AIO location with a blank city, state and ZIP on it.
+    it("holds on a DBA street with no city, state or ZIP behind it", () => {
+      const half = app({
+        business: {
+          dba: "Blue Plate", legalName: "Blue Plate LLC", address: "1 St", city: "SJ", state: "CA",
+          zip: "95120", phone: "4155550142", dbaAddress: "9 Dining St",
+        } as never,
+      });
+      expect(isReadyForAioProvisioning(half, NOW)).toEqual({
+        ready: false,
+        reason: "missing_business_details",
+      });
+    });
+
+    it("passes once the DBA address is complete", () => {
+      const whole = app({
+        business: {
+          dba: "Blue Plate", legalName: "Blue Plate LLC", address: "1 St", city: "SJ", state: "CA",
+          zip: "95120", phone: "4155550142",
+          dbaAddress: "9 Dining St", dbaCity: "San Jose", dbaState: "CA", dbaZip: "95120",
+        } as never,
+      });
+      expect(isReadyForAioProvisioning(whole, NOW)).toEqual({ ready: true });
+    });
+  });
+
   it("leaves a freshly claimed row to whoever claimed it", () => {
     const claimed = app({
       aioTenant: { provisionedAt: null, attempts: 1, claimedAt: new Date(NOW.getTime() - 60_000).toISOString() } as never,

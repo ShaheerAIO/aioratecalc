@@ -417,6 +417,65 @@ secret stays valid but you no longer have it).
   DETERMINISTIC alias (`easyob_{app.id}` — a random one would mint a second tenant on retry), a
   conditional-UPDATE lease, resume-from-persisted-ids, reconcile-by-alias before creating, and the
   `AIO_DASHBOARD_APP_ALLOWLIST` canary. Don't simplify any of those away.
+- **PASSING `validateOnboardingFields` IS THE PRECONDITION FOR PROVISIONING, and the gate runs that
+  exact function** (2026-10-14). `isReadyForAioProvisioning` used to check a business name and an
+  owner email and nothing else, while AIO's `business/create` validates the whole point-of-contact
+  block server-side. So `prospect_1792016501714` was handed to AIO with a blank owner phone and came
+  back `400 ["pocInfo.0.contactNo should not be empty"]` — and because `ownerContact.phone` was
+  never required anywhere, nothing upstream could have caught it. Four things are load-bearing:
+  - **A failed create is not a form error anyone sees.** It burns one of five attempts, backs off
+    1h → 2h → 4h → 8h → 16h and then stops at `too_many_attempts` forever, while the merchant's
+    checklist says "We're setting up your account — no action needed". Holding costs nothing by
+    comparison: the row is re-examined every 15 minutes, free, with no attempt burned and no alias
+    claimed. So **anything the merchant's own form would refuse, the cron refuses too** — one
+    function, called from both, which is why `onboardingValidation.ts` is pure and importable from
+    the gate, the Server Action and the browser alike. Before adding a field to AIO's payloads, add
+    it there.
+  - **The ORDERING is why a form rule alone can't fix this.** Provisioning triggers on PAYMENT, and
+    the merchant fills their onboarding form AFTER they pay — so the cron routinely reaches a row
+    the form has never seen. That is exactly what happened: accepted 22:33Z, attempted 22:45Z, form
+    never opened.
+  - **`business.phone` and `ownerContact.firstName`/`lastName`/`email`/`phone` are now REQUIRED**
+    (`tenantFieldErrors`). Three were optional-if-given and one was unchecked entirely. Each has a
+    destination: business phone → `businessInfo.contactNo` and the location's `phoneNo`; first+last
+    → `ownerInfo.ownerName` and `pocInfo[0].name`, which AIO wants joined, so a missing surname is a
+    half-named owner rather than a field AIO can report; owner phone → `ownerContactNo` and
+    `pocInfo[0].contactNo`, the one that actually failed.
+  - **A DBA STREET now requires its city, state and ZIP.** `locationAddress` keys on the street
+    alone, so a half-filled DBA address silently becomes an AIO location with three blanks on it.
+    It used to be tolerated as "the customer's to finish" and nothing downstream ever made them.
+    The DBA address as a WHOLE stays optional — blank still means "same as the legal address".
+  **Reps stay lenient, deliberately** (product-owner decision, 2026-10-14): `stripBlanks` carries a
+  placeholder for every newly-required field, so `/rep/prospects/new` still blocks only on MALFORMED
+  values and a rep working from a HubSpot deal with no owner phone on it can still create the
+  prospect. The merchant's form requires them and the gate refuses to attempt without them — so
+  nothing fails, it waits where somebody can see it. Which is the other half: `adyenModule` breaks
+  out of its state sequence when the validator fails and sends the merchant to their form, because
+  the gate's hold is otherwise indistinguishable from "we're working on it".
+- **The merchant can repair a tenant-blocking blank from the PUBLIC lead link, with no account**
+  (`lib/leadDetails.ts` + `lib/actions/leadDetails.ts` + `components/customer/MissingDetailsDialog.tsx`,
+  2026-10-14). It should never fire — the form requires these fields and the gate holds rather than
+  failing — but the gap it covers is real and was live: provisioning triggers on PAYMENT, the
+  onboarding form is filled AFTER payment, and `prospect_1792016501714` had paid, had
+  `customer_user_id` NULL (no account at all), and was holding on one empty phone. The authenticated
+  form at `/customer/applications/[id]/edit` was unreachable for them, and the product owner's
+  constraint was explicit: they are not re-entering payment details. Four rules:
+  - **It is an allow-LIST, not a derivation.** `REPAIRABLE` names the eight paths a public token may
+    write: business phone, the owner's name/email/phone, and the three DBA address parts. The legal
+    name and legal address are required too and deliberately NOT on it — those are what AIO's records
+    say the business IS, and a blank one is a rep-side data problem, not something to invite a
+    merchant to type into a modal with no review.
+  - **It applies only paths that are BOTH on the list AND currently in error**, so the token can never
+    overwrite a value that is already good, whatever the form posts. The action then RE-VALIDATES the
+    merged result before saving. A token holder is not necessarily the merchant.
+  - **`canRepairFromLead` gates the offer**, so a row also missing something unrepairable falls through
+    to the account path instead of getting a CTA that leaves it equally stuck.
+  - **`OnboardingModule.publicCta` is what keeps the CTA alive.** `withSignInOverride` rewrites every
+    unlocked non-`quote` CTA to "Sign in"/"Create account to continue"; this one flag exempts it, and
+    the exemption is the entire point — the merchant it exists for has paid and has no account.
+  The action deliberately does NOT push to HubSpot or kick provisioning: the 15-minute cron re-reads
+  the row and the gate now passes it, and an unauthenticated route triggering the creation of objects
+  AIO can never delete, to save fifteen minutes, is not a trade worth making.
 - **Two AIO endpoints are buggy on their FIRST call and the handling is narrow on purpose.**
   `restaurant/post/create` 500s with `relation "tenant_N.state" does not exist`;
   `restaurant/adyen-onboard` returns HTTP 201 `success:true` with `url: ""`. So **success is the
