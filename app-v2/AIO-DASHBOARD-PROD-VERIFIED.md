@@ -62,18 +62,39 @@ Two prod-only strictnesses — both now handled in `aioDashboard.ts`:
   `restaurant.accountId` once it populates. This matches the module's "no automatic KYC-completion
   signal" posture (a deal reaches `adyen_approved` via a human or the settlement backstop).
 
-## Still open (do before flipping `AIO_DASHBOARD_ENABLED=true` for real traffic)
+## LIVE IN PRODUCTION since 2026-10-14
 
-- **Settlement store reference:** is it `prod-{businessId}` or `prod-{restaurantId}`? The Phase G P&L
-  builds `prod-{n}` from `adyenIds.tenantNumber` (the business id); verify against ONE real settlement
-  row before enabling the flag, or revenue attribution silently breaks with no alert.
-- **Check company ownership:** AIO auto-creates a Check company at `business/create` (`data.companyId`),
-  and `startPayrollOnboardingAction` creates another — two Check companies for one restaurant is real
-  payroll, not a sandbox object. Resolve before payroll + provisioning run together in prod.
-- **Env wiring:** set `AIO_DASHBOARD_BASE_URL=https://backend.prod.aioapp.com`,
-  `AIO_DASHBOARD_USERNAME`/`AIO_DASHBOARD_PASSWORD` to the service account, keep
-  `AIO_DASHBOARD_APP_ALLOWLIST` populated for first real runs, and set `AIO_DASHBOARD_ENABLED=true`
-  only when ready. Every `business/create` burns a globally-unique alias that is never freed.
+All four vars are set in the Vercel project and a production deploy has taken them. Verified by
+calling the cron itself, which is the only check that proves the whole chain of env resolved —
+`aioDashboardEnabled()` requires all four, so a reply that isn't `{"skipped":"disabled"}` means
+the password landed too:
+
+```
+GET /api/cron/aio-provisioning   (Bearer CRON_SECRET)
+{"considered":0,"provisioned":0,"skipped":{"quote_not_accepted":9,"billing_not_paid":2},
+ "needsAttention":[],"failed":[]}
+```
+
+**`AIO_DASHBOARD_APP_ALLOWLIST` is deliberately EMPTY**, reversing this doc's earlier advice to
+keep it populated for the first real runs. The allowlist would add nothing: the gate already
+requires `hasBillingCompleted`, i.e. a published quote AND a HubSpot subscription carrying a real
+`paymentMethod`, and `subscriptions` is only ever written from a live HubSpot read. Nothing in the
+codebase fabricates one — the debug billing bypass explicitly refuses to, for this exact reason.
+So a real payment is the canary. Every application in the DB before this date was fake and none of
+them can reach the gate.
+
+## Two former blockers, DEFERRED by the product owner (2026-10-14)
+
+Both were listed here as "do before flipping the flag". Neither is a blocker any more, because v1
+of this product is **HubSpot + the Adyen KYC link, and nothing else**. Both are downstream of
+provisioning rather than part of it, so a tenant still gets created correctly while they wait:
+
+- **Settlement store reference** (`prod-{businessId}` vs `prod-{restaurantId}`) — Phase G, deferred.
+  Still true that revenue attribution breaks silently with no alert if the guess is wrong, so verify
+  against one real settlement row before anyone trusts the P&L. It just doesn't gate go-live.
+- **Check company ownership** — AIO auto-creates a Check company at `business/create`
+  (`data.companyId`) and `startPayrollOnboardingAction` creates another. Payroll is "much later",
+  so the two cannot yet collide in prod. Resolve before payroll and provisioning run together.
 
 ## Live smoketest debris (permanent — cannot be deleted)
 

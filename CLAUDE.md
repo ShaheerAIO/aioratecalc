@@ -383,7 +383,7 @@ secret stays valid but you no longer have it).
 |---|---|---|
 | 1 | Next.js scaffold + 5-step rep flow + localStorage | **DONE** (committed 2026-07-06) |
 | 1.5 | Multi-role (Customer/Rep/Admin), Postgres, NextAuth, pillowed margin, customer self-serve lead flow | **DONE** (2026-07-06) |
-| 2 | Adyen onboarding | **REPLACED 2026-09-23 — EasyOB no longer creates Adyen accounts.** Product-owner decision: our own integration was "harmful and redundant", producing balance accounts that were misnamed and unlinked from the AIO tenant graph. `adapters/adyen.ts`, `adapters/adyenWebhook.ts` and `/api/adyen/webhook` are DELETED. A merchant now gets a tenant + location + KYC link from **AIO's dashboard API**, triggered when their **billing is paid** (the HubSpot subscription appears), by `/api/cron/aio-provisioning` → `lib/aio/provision.ts`. Behind AIO_DASHBOARD_ENABLED, default OFF. PROD-verified end-to-end 2026-10-09 with a dedicated service account — see app-v2/AIO-DASHBOARD-PROD-VERIFIED.md. See "The AIO dashboard provisioning path" below. |
+| 2 | Adyen onboarding | **REPLACED 2026-09-23 — EasyOB no longer creates Adyen accounts.** Product-owner decision: our own integration was "harmful and redundant", producing balance accounts that were misnamed and unlinked from the AIO tenant graph. `adapters/adyen.ts`, `adapters/adyenWebhook.ts` and `/api/adyen/webhook` are DELETED. A merchant now gets a tenant + location + KYC link from **AIO's dashboard API**, triggered when their **billing is paid** (the HubSpot subscription appears), by `/api/cron/aio-provisioning` → `lib/aio/provision.ts`. Behind AIO_DASHBOARD_ENABLED, **ON IN PRODUCTION since 2026-10-14** with an EMPTY allowlist — the paid-subscription gate is the canary, so no fake application can reach it. Verified by calling the prod cron, which is the only check that proves every env var resolved. PROD-verified end-to-end 2026-10-09 with a dedicated service account — see app-v2/AIO-DASHBOARD-PROD-VERIFIED.md. See "The AIO dashboard provisioning path" below. |
 | 2.5 | Check payroll onboarding (the `payroll` module on the customer checklist) | **BUILT / sandbox** — opt-in, not auto-chained like Adyen: nothing reaches Check until the customer clicks "Set Up Payroll" at `/customer/applications/[id]/payroll`, which collects the two things AIO can't derive (first payday + authorized signer) and calls `startPayrollOnboardingAction`. Onboard links are one-time use / 24h, so `/customer/applications/[id]/payroll/continue` mints a fresh one per click — never store and re-serve one. Check has **no redirect-back URL**, so completion is detected by re-reading `company.onboard.status` when the customer views the application (`getMyApplicationWithPayrollSyncAction`), cached on `checkIds.onboardStatus` so list/dashboard views don't fan out one API call per app. Production base URL is a go-live TODO (`CHECK_API_BASE_URL`; Check doesn't publish it). |
 | 3 | HubSpot bidirectional sync (wire `hubspot.ts` stub) | **SUPERSEDED / partly done.** There is no bidirectional sync and there must not be: authority **hands off at quote publish** — EasyOB → HubSpot while the quote is a draft, HubSpot → EasyOB (read-only) forever after. Deal sync is repaired and live (it had never once succeeded before commit `9aafa5d`). Billing is E2E-PLAN **Phase E**, below. `getMyApplicationWithPayrollSyncAction` was folded into `getMyApplicationWithSyncAction` (refreshes Check + HubSpot independently). |
 | E (E2E-PLAN) | **Billing through HubSpot** — quote → hosted checkout → subscription read-back | **PUBLISH PATH LIVE-VERIFIED 2026-08-24** — the one human-run publish `PHASE-E-SPEC.md`:777 called for is DONE; see "The Phase E gate run" below. **The TRIGGER changed 2026-09-25**: the merchant publishes it themselves from their own quote link, not the rep. Same build, same preconditions, same one-way door — see the acceptance constraint. Checkout → subscription read-back remains unverified **on purpose** (`PAYMENT-TEST-PLAN.md` §2.1 recommends against a live payment test; §1's 46 live paid quotes cover it instead). **The rep sends the quote (`sendQuoteAction`); acceptance is then DETECTED, not asserted** — see the constraint below. `canPublishBillingQuote` still applies strictly before the first write. Migration `0008` (`quote_template_policy`) **IS applied** — the policy table is empty, which is harmless: `getQuoteTemplatePolicy()` falls back to `DEFAULT_TEMPLATE_IDS`, so an unseeded table can never block a publish. Wants `NEXT_PUBLIC_HUBSPOT_PORTAL_ID=244508708` (cosmetic: CRM record links). The `hs_sender_email` go-live blocker is **CLOSED** (2026-09-25) — the sender is verified against the portal's own user list before the door opens, and the `crm.objects.owners.read` scope it needs is granted and verified live; see the constraint below. |
@@ -770,12 +770,21 @@ works (`/customer/applications/[id]/continue`). The `legalEntityId` is obtainabl
 `/legalEntities/(LE\w+)` out of that URL: `accountDetails` comes back empty and `restaurant.accountId`
 stays null.
 
-Open asks blocking flag-on, tracked in `app-v2/ADYEN-KYC-LINK-QUESTIONS.md` and
-`app-v2/AIO-DASHBOARD-API-TRANSCRIPT.md`: is the store reference `prod-{businessId}` or
-`prod-{restaurantId}`; is there a readable KYC status; a service account instead of a human
-super-admin password; a stage/production base URL; and **who owns the Check company**, since AIO
-creates one at tenant create and `startPayrollOnboardingAction` creates another — two Check
-companies for one restaurant is real payroll, not a sandbox object.
+Open asks, tracked in `app-v2/ADYEN-KYC-LINK-QUESTIONS.md` and
+`app-v2/AIO-DASHBOARD-API-TRANSCRIPT.md`. **None of them block flag-on any more** — the flag went
+on 2026-10-14, because v1 of this product is HubSpot plus the Adyen KYC link and nothing else
+(product owner). Two were closed outright: the service account exists
+(`shaheer.hasnain+easyob@aioapp.com`) and the production base URL is known. Three remain, all
+downstream of provisioning rather than part of it, so a tenant is still created correctly while
+they wait:
+- **the store reference** — `prod-{businessId}` or `prod-{restaurantId}`? Phase G, DEFERRED.
+  Verify against one real settlement row before anyone trusts the P&L; revenue attribution breaks
+  silently with no alert if the guess is wrong.
+- **a readable KYC status** — there is none, which is why `adyen_approved` needs a human or the
+  settlement backstop.
+- **who owns the Check company** — AIO creates one at tenant create and
+  `startPayrollOnboardingAction` creates another. Payroll is "much later" (product owner,
+  2026-10-14), so the two cannot yet collide in prod. Resolve before they run together.
 
 ### Env vars needed (per phase)
 ```
@@ -794,14 +803,23 @@ ENABLE_DEBUG_ROLE_SWITCH    # Phase 1.5 — local dev only, never in Vercel proj
                             # (NOTE: migration 0021 adds rate_matrix_policy — the admin-edited
                             #  card-present rate card. No env var; an unmigrated DB falls back to
                             #  the pricing guide's own numbers rather than blocking a quote.)
-AIO_DASHBOARD_ENABLED       # master switch, must be exactly "true". DEFAULT OFF.
-- AIO_DASHBOARD_BASE_URL — change "Internal dev today" → "https://backend.prod.aioapp.com (prod-verified 2026-10-09)"
-- AIO_DASHBOARD_USERNAME — change "a human super-admin today; a service account is an open ask" → "the operation service account shaheer.hasnain+easyob@aioapp.com (MFA disabled)"account is an open ask
-AIO_DASHBOARD_PASSWORD
+AIO_DASHBOARD_ENABLED       # master switch, must be exactly "true". ON IN PRODUCTION since
+                            # 2026-10-14. All four below are required together —
+                            # aioDashboardEnabled() is false unless every one is set, so a
+                            # half-configured environment is OFF rather than half-broken.
+AIO_DASHBOARD_BASE_URL      # https://backend.prod.aioapp.com (prod-verified 2026-10-09).
+                            # No default, deliberately: the only plausible one is the
+                            # internal-dev host, which prod must never reach by accident.
+AIO_DASHBOARD_USERNAME      # the operation service account shaheer.hasnain+easyob@aioapp.com
+                            # (MFA disabled, so it logs in unattended)
+AIO_DASHBOARD_PASSWORD      # \$-escape any $ in .env.local; paste it RAW in the Vercel UI
 AIO_DASHBOARD_BROWSER_ID    # optional, a STABLE uuid — Cognito treats it as a device
 AIO_DASHBOARD_APP_ALLOWLIST # comma-separated application ids; empty = every eligible row.
-                            # Populate it for the first real runs: every create burns a
-                            # globally-unique alias that is NEVER freed, in a shared DB.
+                            # DELIBERATELY EMPTY in production, reversing the earlier advice to
+                            # populate it for the first real runs. The gate already requires a
+                            # paid HubSpot subscription, which nothing in the codebase can
+                            # fabricate (the debug billing bypass refuses to, by design), so a
+                            # real payment IS the canary and the allowlist adds nothing.
 ADYEN_REPORT_API_KEY        # settlement reporting — KEPT, read-only, separate LIVE credential
 ADYEN_REPORT_BASE_URL       # optional; defaults to https://ca-live.adyen.com/reports/download
 ADYEN_POS_MERCHANT_ACCOUNT  # the merchant account the settlement report path is built from
