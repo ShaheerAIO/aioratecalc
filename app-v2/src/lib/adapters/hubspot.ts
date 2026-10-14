@@ -731,24 +731,67 @@ export async function createDeal(input: CreateDealInput): Promise<string> {
 // will ever come across.
 export const NOTE_TO_DEAL_ASSOCIATION_TYPE_ID = 214;
 
-/** The rep's text, as safe HTML. `hs_note_body` is rendered as HTML by HubSpot. */
-function noteHtml(body: string): string {
-  const esc = body
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return esc.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+/** A person to @-mention: HubSpot's chip needs both the id and the display name. */
+export type DealNoteMention = { ownerId: string; name: string };
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Attribute context additionally needs `"` escaped, or a name containing one
+// would break out of the `data-mention-name="…"` attribute it sits in.
+function escapeAttr(s: string): string {
+  return escapeHtml(s).replace(/"/g, "&quot;");
+}
+
+/**
+ * The rep's text, as safe HTML, with optional @-mentions rendered as the
+ * markup the portal's own UI produces when a person types "@Name" — verified
+ * live against portal 244508708 (2026-10-13) against real mentions in the
+ * portal (note 406503541481 and others, all identical in shape):
+ *
+ *   <div style="" dir="auto" data-top-level="true"><p style="margin:0;">
+ *     <strong><span data-mention-id="161690499" data-mention-name="Elizabeth Phillips"
+ *       style="color: #425b76;font-weight: 600;">@Elizabeth Phillips</span></strong>
+ *     please look at this one for pricing.</p></div>
+ *
+ * `hs_at_mentioned_owner_ids` alone does NOT create the chip — the chip comes
+ * from this markup living inside `hs_note_body`. Both halves are required;
+ * `createDealNote` still sets the property to the same ids.
+ *
+ * `body` is rep-entered free text and is always escaped (`escapeHtml`) before
+ * it reaches this output. The mention markup is trusted content we construct
+ * ourselves — its two inputs (id, name) are each escaped (`escapeAttr`/
+ * `escapeHtml`) rather than relied upon to already be safe, but the two paths
+ * never cross: the note text is never trusted enough to go unescaped, and the
+ * mention markup never runs through the note-text escaper (which would mangle
+ * its own `<`/`>`).
+ */
+function noteHtml(body: string, mentions: DealNoteMention[] = []): string {
+  const paragraphs = escapeHtml(body).split(/\n{2,}/).map(p => p.replace(/\n/g, "<br>"));
+  const mentionMarkup = mentions
+    .map(m =>
+      `<strong><span data-mention-id="${escapeAttr(m.ownerId)}" data-mention-name="${escapeAttr(m.name)}" ` +
+      `style="color: #425b76;font-weight: 600;">@${escapeHtml(m.name)}</span></strong>`
+    )
+    .join(" ");
+  if (mentionMarkup) {
+    paragraphs[0] = paragraphs[0] ? `${mentionMarkup} ${paragraphs[0]}` : mentionMarkup;
+  }
+  const html = paragraphs.map(p => `<p style="margin:0;">${p}</p>`).join("");
+  return `<div style="" dir="auto" data-top-level="true">${html}</div>`;
 }
 
 /**
  * Put a note on a deal, owned by `ownerId` and optionally @-mentioning
- * `mentionOwnerIds`.
+ * `mentions`.
  *
  * Verified live against portal 244508708 (2026-10-13): `hs_at_mentioned_owner_ids`
  * DOES exist on this portal's NOTE object (enumeration/checkbox, not
- * read-only) and a value POSTed there persists on read-back. That reverses
- * the earlier claim that there was no API route to it. What's still
- * unverified is whether HubSpot actually DELIVERS a notification from an
- * API-set mention — the property write is confirmed, delivery is not. See
- * QUOTE_NOTE_WATCHER.
+ * read-only) and a value POSTed there persists on read-back. But the property
+ * ALONE does not render a mention chip and does not notify anyone — that
+ * needs the `data-mention-id`/`data-mention-name` markup in `hs_note_body`
+ * too (see `noteHtml`). Both halves are required.
  *
  * `hs_at_mentioned_owner_ids` is an enumeration/checkbox, so HubSpot wants
  * multiple values as one semicolon-separated string; a single id is just
@@ -762,15 +805,15 @@ export async function createDealNote(
   dealId: string,
   body: string,
   ownerId?: string | null,
-  mentionOwnerIds?: string | string[] | null
+  mentions?: DealNoteMention | DealNoteMention[] | null
 ): Promise<string> {
+  const mentionList = Array.isArray(mentions) ? mentions : mentions ? [mentions] : [];
   const properties: Record<string, string> = {
     hs_timestamp: new Date().toISOString(),
-    hs_note_body: noteHtml(body),
+    hs_note_body: noteHtml(body, mentionList),
   };
   if (ownerId) properties.hubspot_owner_id = ownerId;
-  const mentions = Array.isArray(mentionOwnerIds) ? mentionOwnerIds : mentionOwnerIds ? [mentionOwnerIds] : [];
-  if (mentions.length) properties.hs_at_mentioned_owner_ids = mentions.join(";");
+  if (mentionList.length) properties.hs_at_mentioned_owner_ids = mentionList.map(m => m.ownerId).join(";");
 
   const res = await fetchWithRetry(`${BASE}/crm/v3/objects/notes`, {
     method: "POST",

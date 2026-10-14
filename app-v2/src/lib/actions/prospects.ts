@@ -280,13 +280,27 @@ async function syncBillingContact(
 }
 
 /**
- * Mirror the rep's quote note onto the HubSpot deal, as a note owned by and
- * @-mentioning QUOTE_NOTE_WATCHER (both the structured mention and a literal
- * "@" in the heading text, belt-and-braces).
+ * Mirror the rep's quote note onto the HubSpot deal, as a note AUTHORED BY
+ * THE REP and @-mentioning QUOTE_NOTE_WATCHER (Elizabeth Phillips) — both the
+ * structured `hs_at_mentioned_owner_ids` property and the matching
+ * `data-mention-id`/`data-mention-name` markup `createDealNote` builds into
+ * the body. Neither half alone renders a working mention (see `noteHtml`).
+ *
+ * The author must NOT be Elizabeth: HubSpot does not notify anyone about
+ * their own note, and authoring every one of these as her is exactly why the
+ * mention never fired. So the rep's own HubSpot owner id is resolved via
+ * `resolveSender` — the same `findOwnerByEmail` lookup `publishBillingQuote.ts`
+ * already uses to verify `hs_sender_email` — rather than a second, un-synced
+ * notion of "the rep's real address". A rep who resolves to no HubSpot owner
+ * (the seeded dev rows `rep@aioapp.com`/`admin@aioapp.com` deliberately do)
+ * gets `hubspot_owner_id` omitted entirely, so the note is authored by the
+ * integration instead — never falling back to Elizabeth, which would
+ * recreate the bug this fixes.
  *
  * Best-effort, like the company sync above: the quote is already saved, and a
  * note is a RECORD of a decision rather than a precondition for one — a
- * missing `crm.objects.notes.write` scope must not stop a rep quoting.
+ * missing `crm.objects.notes.write` scope, or a failed owner lookup, must not
+ * stop a rep quoting.
  *
  * Only on CHANGE, and only when there is a deal to put it on. HubSpot notes
  * are append-only (there is no update-this-note here), so posting an unchanged
@@ -297,7 +311,7 @@ async function syncBillingContact(
  * lost, even when the push is.
  */
 async function mirrorQuoteNote(
-  app: Pick<MerchantApplication, "id" | "hubspotDealId" | "quoteNote" | "quoteLines">,
+  app: Pick<MerchantApplication, "id" | "hubspotDealId" | "quoteNote" | "quoteLines" | "ownerUserId">,
   previous: string | null,
 ): Promise<void> {
   const note = (app.quoteNote ?? "").trim();
@@ -306,19 +320,26 @@ async function mirrorQuoteNote(
 
   // The delay is what makes this note mandatory, so it is what the note has
   // to open with — a reason with no number beside it is a sentence nobody can
-  // check.
+  // check. No literal "@Name" here: `createDealNote` builds the mention chip
+  // itself (see `noteHtml`) and prepends it ahead of this heading text, so
+  // writing one here too would duplicate it in the rendered note.
   const delay = longestBillingDelayDays(app.quoteLines ?? []);
   const heading = delay > DELAY_NOTE_THRESHOLD_DAYS
-    ? `@${QUOTE_NOTE_WATCHER.name} — billing on this quote starts after ${delay} days ` +
+    ? `— billing on this quote starts after ${delay} days ` +
       `(past the ${DELAY_NOTE_THRESHOLD_DAYS}-day default). The rep's reason:`
-    : `@${QUOTE_NOTE_WATCHER.name} — note from the rep on this quote:`;
+    : `— note from the rep on this quote:`;
+
+  // Best-effort: an owner-lookup failure (network, missing scope) must not
+  // block the note, it just means the integration authors it instead of the rep.
+  const sender = await resolveSender(app.ownerUserId).catch(() => null);
+  const repOwnerId = sender?.ok ? sender.ownerId : undefined;
 
   try {
     await createDealNote(
       app.hubspotDealId,
       `${heading}\n\n${note}`,
-      QUOTE_NOTE_WATCHER.hubspotOwnerId,
-      QUOTE_NOTE_WATCHER.hubspotOwnerId
+      repOwnerId,
+      { ownerId: QUOTE_NOTE_WATCHER.hubspotOwnerId, name: QUOTE_NOTE_WATCHER.name }
     );
   } catch (err) {
     console.error("HubSpot quote note push failed", app.id, app.hubspotDealId, err);
