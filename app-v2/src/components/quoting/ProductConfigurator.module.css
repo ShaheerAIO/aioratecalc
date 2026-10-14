@@ -923,9 +923,11 @@
 }
 
 @media (min-width: 72rem) {
-  /* Widened from 24rem so a per-line commission figure and the "Hardware
-     commission" total row have room without crowding the amounts. */
-  .docLayout { grid-template-columns: minmax(0, 1.25fr) minmax(26rem, 1fr); }
+  /* An even split (product owner, 2026-10-14). The document carries three
+     columns of its own now — name, the internal commission, the price — and
+     at 1.25fr/1fr it was reading them in a column narrower than the picker
+     beside it. Minimum widened from 24rem for the same reason. */
+  .docLayout { grid-template-columns: minmax(0, 1fr) minmax(26rem, 1fr); }
 
   .docCol {
     position: sticky;
@@ -1016,14 +1018,29 @@
 
 .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-/* The document reads as paper on the page, not as one more panel. */
+/* The document reads as paper on the page, not as one more panel.
+ *
+ * Its charges are a TABLE (product owner, 2026-10-14: "instead of lines for
+ * each thing, make it like a table"), and these are its column tracks —
+ * declared once here and read by BOTH the group head and every line in it,
+ * which are separate grids and would otherwise only agree by accident. They
+ * are fixed rather than `auto` for exactly that reason: two grids sizing an
+ * `auto` track to their own content line up at the right edge and nowhere
+ * else. The commission track only exists on a group that has one — see
+ * `recurringComm`/`oneTimeComm`. */
 .doc {
+  --doc-cols: minmax(0, 1fr) 6.75rem;
   background: var(--paper-2);
   border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-whisper);
   padding: var(--space-lg);
 }
+
+/* 6rem, not 5: the column's own head ("Your comm.", uppercased and letter-
+   spaced by .docGroupHead) is wider than any figure under it, and a narrower
+   track broke it over two lines. */
+.docGroup[data-commission="true"] { --doc-cols: minmax(0, 1fr) 6rem 6.75rem; }
 
 .docControls {
   padding: var(--space-sm) 0;
@@ -1037,8 +1054,9 @@
 .docGroup { margin-top: var(--space-md); }
 
 .docGroupHead {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: var(--doc-cols);
+  column-gap: var(--space-sm);
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1049,23 +1067,29 @@
   border-bottom: 1px solid var(--rule);
 }
 
+/* The head's own cells: the group name left, everything after it over its
+   column, right-aligned like the figures underneath. */
+.docGroupHead > * + * { text-align: right; }
+
 .docLine {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: var(--doc-cols);
   align-items: baseline;
-  justify-content: space-between;
   column-gap: var(--space-sm);
-  padding: var(--space-xs) 0;
+  padding: var(--space-2xs) 0;
   border-bottom: 1px solid var(--rule);
 }
 
 .docLine[data-pending="true"] { opacity: 0.55; }
+/* The controls a line can grow (the adjust drawer, the WiFi confirmation,
+   the Remove/Add-back button) are rows of their own under the table row,
+   never a fourth column. */
 .docLine > .adjustWrap,
-.docLine > .confirmBox { flex-basis: 100%; }
-.docLine > .linkBtn { order: 3; }
+.docLine > .confirmBox { grid-column: 1 / -1; }
+.docLine > .linkBtn { grid-column: 1 / -1; justify-self: start; }
 .docLine > .adjustWrap { margin-top: var(--space-3xs); }
 
-.docLineMain { flex: 1; min-width: 0; }
+.docLineMain { grid-column: 1; min-width: 0; }
 
 .docLineName {
   font-size: 0.85rem;
@@ -1104,19 +1128,29 @@
   margin: var(--space-3xs) 0 0;
 }
 
-/* The AE's own commission on a document line (.docCol mirrors what the
-   merchant will see, so this is marked as internal on its own: a hairline
-   left rule and the muted ink that nothing merchant-facing in this column
-   uses). Never red for being small — only for being negative, which here
-   means a rep discounted a line below AIO's cost. An unpriced product reads
-   in the same muted ink: it's a note about missing data, not a warning. */
+/* The AE's own commission, its own column beside the price (.docCol mirrors
+   what the merchant will see, so the column is still marked as internal on
+   its own: a hairline left rule fencing it off from the merchant-facing name
+   and the muted ink nothing merchant-facing in this column uses). Never red
+   for being small — only for being negative, which here means a rep
+   discounted a line below AIO's cost. An unpriced product reads in the same
+   muted ink: it's a note about missing data, not a warning. */
+.docCommission,
+.docCommissionHead {
+  grid-column: 2;
+  padding-left: var(--space-xs);
+  border-left: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
 .docCommission {
   font-size: 0.7rem;
   color: var(--ink-3);
   line-height: 1.45;
-  margin: var(--space-3xs) 0 0;
-  padding-left: var(--space-2xs);
-  border-left: 2px solid var(--rule);
+  margin: 0;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .docCommission[data-sign="negative"] {
@@ -1136,15 +1170,40 @@
   margin: var(--space-3xs) 0 0;
 }
 
+/* Always the LAST column, whether or not the group has a commission one, so
+   prices stay in one line down the document. A struck-through list price and
+   the net wrap past each other inside the cell rather than overflowing it —
+   each half stays whole. */
 .docAmount {
+  grid-column: -2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  column-gap: 0.35em;
   font-size: 0.85rem;
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
   text-align: right;
 }
 
+.docAmount > * { white-space: nowrap; }
+
 .docAmount strong { color: var(--ink); }
+
+/* On a phone three columns leave the product name a few characters wide, so
+   the internal one folds under the price it belongs to and its head goes
+   away with it — the figures still read as a pair, just stacked. */
+@media (max-width: 40rem) {
+  .docGroup[data-commission="true"] { --doc-cols: minmax(0, 1fr) 6.75rem; }
+  .docCommissionHead { display: none; }
+  .docCommission {
+    grid-column: -2 / -1;
+    grid-row: 2;
+    border-left: none;
+    padding-left: 0;
+  }
+  .docAmount { grid-row: 1; }
+}
 
 .docTotals {
   margin-top: var(--space-lg);

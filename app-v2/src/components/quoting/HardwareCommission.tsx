@@ -34,17 +34,24 @@ import styles from "./ProductConfigurator.module.css";
  * the one case an AE must not read as "this product earns nothing": POS Unit,
  * Customer Facing Display, mPOS and both tablets are unpriced in HubSpot as
  * of 2026-10-14, and three of those are on most quotes.
+ *
+ * `compact` is the document layout's column form: the figure alone, because
+ * the column it sits in is already headed "Your comm." and saying it again on
+ * every row is the clutter the column was introduced to remove. The stacked
+ * `QuoteReceipt` form has no header to lean on and keeps the full sentence.
  */
-export function LineCommissionNote({ line, className }: { line: QuoteLine; className?: string }) {
+export function LineCommissionNote({
+  line, className, compact,
+}: { line: QuoteLine; className?: string; compact?: boolean }) {
   const c = lineHardwareCommission(line);
 
   if (c.status === "recurring" || c.status === "included") return null;
 
   if (c.status === "no_cost" || c.status === "no_rate") {
+    const why = `${c.status === "no_cost" ? "No cost on file" : "No commission rate on file"} — commission not calculated`;
     return (
-      <div className={className} data-commission="unknown">
-        {c.status === "no_cost" ? "No cost on file" : "No commission rate on file"} — commission not
-        calculated
+      <div className={className} data-commission="unknown" title={compact ? why : undefined}>
+        {compact ? "n/a" : why}
       </div>
     );
   }
@@ -56,9 +63,22 @@ export function LineCommissionNote({ line, className }: { line: QuoteLine; class
 
   return (
     <div className={className} data-sign={c.rep < 0 ? "negative" : undefined}>
-      Your commission {fmt$(c.rep)}
+      {compact ? fmt$(c.rep) : `Your commission ${fmt$(c.rep)}`}
     </div>
   );
+}
+
+/**
+ * Whether `LineCommissionNote` would render anything for this line — the same
+ * decision, in one place, so the document layout can decide whether a group
+ * needs a commission COLUMN at all. A column of nothing is a gap beside every
+ * price (the recurring group, where no line ever earns one).
+ */
+export function hasLineCommissionNote(line: QuoteLine): boolean {
+  const c = lineHardwareCommission(line);
+  if (c.status === "recurring" || c.status === "included") return false;
+  if (c.status === "no_cost" || c.status === "no_rate") return true;
+  return c.rep != null;
 }
 
 export type CommissionSummary = {

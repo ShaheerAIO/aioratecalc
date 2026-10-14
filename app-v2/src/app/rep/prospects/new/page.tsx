@@ -652,13 +652,31 @@ function NewProspectFlow() {
           front of the customer and is still card-not-present, so the
           in-person framing names the wrong thing. One vocabulary everywhere
           a rate is shown. */}
-      <span className={styles.docRateValue}>
-        {[
-          ...(cnpOnly ? [] : [`${pct(quoteRates.cardPresentRate)}% card present`]),
-          `${pct(quoteRates.cardNotPresentRate)}% card not present`,
-          `+ ${fmt$(quoteRates.perTransactionFee)} per transaction`,
-        ].join(" · ")}
-      </span>
+      {/* ONE LANE PER LINE (product owner, 2026-10-14). Run together and
+          separated by middots, the two rates were a single sentence that
+          broke wherever the column happened to end — and splitting that
+          sentence in a fixed place only moved the break. A lane is a row:
+          what it is on the left, what it costs on the right, the same shape
+          the rate editor on the other side of this screen uses. The
+          per-transaction fee is restated on each row rather than hoisted out
+          — it applies to both, and a merchant reading one row should see the
+          whole price of that lane. */}
+      <div className={styles.docRateRows}>
+        {!cnpOnly && (
+          <div className={styles.docRateRow}>
+            <span className={styles.docRateLane}>Card present</span>
+            <span className={styles.docRateValue}>
+              {pct(quoteRates.cardPresentRate)}% + {fmt$(quoteRates.perTransactionFee)} per transaction
+            </span>
+          </div>
+        )}
+        <div className={styles.docRateRow}>
+          <span className={styles.docRateLane}>Card not present</span>
+          <span className={styles.docRateValue}>
+            {pct(quoteRates.cardNotPresentRate)}% + {fmt$(quoteRates.perTransactionFee)} per transaction
+          </span>
+        </div>
+      </div>
       <span className={styles.docRateNote}>
         {cnpOnly
           ? "They take orders online and nowhere else, so every sale is card-not-present."

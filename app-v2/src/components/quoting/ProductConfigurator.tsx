@@ -57,6 +57,7 @@ import { coverageLabel, kitFor, kitPicks } from "@/lib/quotePackages";
 import QuoteReceipt, { type QuoteMarginPreview } from "@/components/quoting/QuoteReceipt";
 import {
   commissionSummary,
+  hasLineCommissionNote,
   LineCommissionNote,
   UnpricedNote,
 } from "@/components/quoting/HardwareCommission";
@@ -1628,16 +1629,19 @@ export default function ProductConfigurator({
             </div>
             {why && <div className={styles.docWhy}>{why}</div>}
             {l.billingStart && <div className={styles.docWhy}>{describeBillingStart(l.billingStart)}</div>}
-            {/* The AE's own commission on this line. This column mirrors what
-                the merchant will see, so the figure is marked as internal in
-                its own right (`.docCommission`) rather than relying on the
-                "Internal" header down in the totals — a rep reads a line
-                here, not the block boundary it sits inside. */}
-            <LineCommissionNote line={l} className={styles.docCommission} />
           </div>
+          {/* The AE's own commission on this line, in its own column beside
+              the price rather than stacked under the name (product owner,
+              2026-10-14: the preview was getting cluttered). This column
+              mirrors what the merchant will see, so the figure is still
+              marked as internal in its own right — the hairline rule down
+              its left edge and the "Your comm." head — rather than relying
+              on the "Internal" header down in the totals: a rep reads a line
+              here, not the block boundary it sits inside. */}
+          <LineCommissionNote line={l} className={styles.docCommission} compact />
           <div className={styles.docAmount}>
-            {list > net && <span className={styles.strike}>{fmt$(list)}</span>}{" "}
-            <strong>{fmt$(net)}</strong>{cycle}
+            {list > net && <span className={styles.strike}>{fmt$(list)}</span>}
+            <span><strong>{fmt$(net)}</strong>{cycle}</span>
           </div>
           {isWifi && first && onAdjustmentsChange && !confirmWifi && (
             <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(true)}>Remove</button>
@@ -1669,6 +1673,14 @@ export default function ProductConfigurator({
       .map((l, i) => ({ l, i, derived: docTag(l).tag ? 1 : 0 }))
       .sort((a, b) => a.derived - b.derived || a.i - b.i)
       .map(x => x.l);
+
+    // The commission COLUMN only exists where something in the group earns
+    // one. A recurring line never does (`hasLineCommissionNote` is false for
+    // every one of them), so the monthly group stays two columns and its
+    // prices sit where they always did, rather than leaving an empty gutter
+    // the width of a column that nothing in that group can ever fill.
+    const recurringComm = recurringDoc.some(hasLineCommissionNote);
+    const oneTimeComm = oneTimeDoc.some(hasLineCommissionNote);
 
     const missingNames = catalogLoading ? [] : [
       ...(platform.status === "unresolved" ? [platform.productName] : []),
@@ -1773,9 +1785,10 @@ export default function ProductConfigurator({
             {documentRate}
 
             {recurringDoc.length > 0 && (
-              <div className={styles.docGroup}>
+              <div className={styles.docGroup} data-commission={recurringComm || undefined}>
                 <div className={styles.docGroupHead}>
                   <span>Monthly</span>
+                  {recurringComm && <span className={styles.docCommissionHead}>Your comm.</span>}
                   <span>{fmt$(totals.monthlyEquivalent)}/mo</span>
                 </div>
                 {recurringDoc.map(docLine)}
@@ -1783,9 +1796,10 @@ export default function ProductConfigurator({
             )}
 
             {(oneTimeDoc.length > 0 || adjustments[WIFI_PRODUCT_ID]?.removed) && (
-              <div className={styles.docGroup}>
+              <div className={styles.docGroup} data-commission={oneTimeComm || undefined}>
                 <div className={styles.docGroupHead}>
                   <span>One-time</span>
+                  {oneTimeComm && <span className={styles.docCommissionHead}>Your comm.</span>}
                   <span>{fmt$(totals.oneTime)}</span>
                 </div>
                 {oneTimeDoc.map(docLine)}

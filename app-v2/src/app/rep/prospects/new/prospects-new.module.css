@@ -224,7 +224,20 @@
 }
 
 .docRateLabel { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
-.docRateValue { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+/* One row per lane — the lane named on the left, its whole price on the
+   right — so neither rate can wrap into the other. */
+.docRateRows { display: grid; gap: var(--space-2xs); }
+
+.docRateRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  column-gap: var(--space-md);
+}
+
+.docRateLane { font-size: 0.82rem; color: var(--ink-2); }
+.docRateValue { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); text-align: right; }
 .docRateNote { font-size: 0.78rem; color: var(--ink-3); }
 
 .sendBlock {

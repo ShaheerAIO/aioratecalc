@@ -82,9 +82,12 @@ describe("the AE's hardware commission in the document layout", () => {
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await screen.findByTestId("mirror-heading");
 
-    expect(screen.getByText(/Your commission \$453\.00/)).toBeTruthy();
+    // Since 2026-10-14 it is a COLUMN beside the price, so the cell carries
+    // the figure alone and the group's column head says whose it is.
+    const note = container.querySelector(`.${styles.docCommission}`);
+    expect(note?.textContent).toBe("$453.00");
     const docCol = container.querySelector(`.${styles.docCol}`);
-    expect(docCol?.textContent).toContain("Your commission $453.00");
+    expect(docCol?.textContent).toContain("$453.00");
   });
 
   it("marks the per-line figure internal on the line itself, not only in the totals", async () => {
@@ -94,7 +97,11 @@ describe("the AE's hardware commission in the document layout", () => {
 
     const note = container.querySelector(`.${styles.docCommission}`);
     expect(note).toBeTruthy();
-    expect(note?.textContent).toContain("Your commission $453.00");
+    expect(note?.textContent).toContain("$453.00");
+    // A bare figure in a column needs the column to name it — otherwise the
+    // only thing saying it isn't the merchant's is the totals block below.
+    const head = container.querySelector(`.${styles.docCommissionHead}`);
+    expect(head?.textContent).toContain("Your comm.");
   });
 
   it("totals it under the one 'not shown to merchant' header", async () => {
@@ -128,7 +135,12 @@ describe("the AE's hardware commission in the document layout", () => {
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await screen.findByTestId("mirror-heading");
 
-    expect(screen.getByText(/No cost on file/)).toBeTruthy();
+    // In the column it reads "n/a" rather than nothing — the full reason is
+    // on the cell, but an empty cell would read as "this earns $0".
+    const note = container.querySelector(`.${styles.docCommission}`);
+    expect(note?.getAttribute("data-commission")).toBe("unknown");
+    expect(note?.textContent).toBe("n/a");
+    expect(note?.getAttribute("title")).toMatch(/No cost on file/);
     // And the totals name it, so an AE reading only the bottom line still
     // knows a product on this quote wasn't counted.
     const docTotals = container.querySelector(`.${styles.docTotals}`);
