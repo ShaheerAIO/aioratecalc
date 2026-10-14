@@ -5,6 +5,7 @@ import {
   INCLUDED_SERVICE_PRODUCTS,
   MAX_BILLING_DELAY_DAYS,
   adjustmentBlockers,
+  applyPackageComp,
   adjustmentsFromQuoteLines,
   amountDueAtCheckout,
   applyLineAdjustment,
@@ -397,6 +398,45 @@ describe("toLineItemProperties", () => {
 
   it("omits the discount property entirely on a full-price line", () => {
     expect(toLineItemProperties(line())).not.toHaveProperty("hs_discount_percentage");
+    expect(toLineItemProperties(line())).not.toHaveProperty("discount");
+  });
+
+  // HubSpot's `discount` is PER UNIT — proven live by
+  // scripts/probe-cash-discount.ts, because the portal couldn't answer it:
+  // all 166 line items carrying one have quantity 1, where per-unit and
+  // per-line agree. price 100 × qty 3 with discount 10 read back
+  // amount 270.00 / hs_total_discount 30.00.
+  describe("a cash discount", () => {
+    it("divides the LINE total by quantity, because HubSpot's property is per-unit", () => {
+      const props = toLineItemProperties(line({ unitPrice: 749, qty: 3, discountAmount: 747 }));
+      expect(props.price).toBe("749");
+      expect(props.quantity).toBe("3");
+      expect(props.discount).toBe("249");
+      // Never both levers: a line carrying each would bill one figure and
+      // display the other.
+      expect(props).not.toHaveProperty("hs_discount_percentage");
+    });
+
+    it("keeps six decimals on a quantity that doesn't divide evenly", () => {
+      // $100 across 3 units. HubSpot keeps all six and rounds the TOTAL, not
+      // the per-unit figure, so this bills exactly $100 off — the same probe
+      // confirmed $1,000 off 7 × $999.99 as hs_total_discount 1000.00.
+      // Rounded to 2dp here instead, it would take off $99.99.
+      const props = toLineItemProperties(line({ unitPrice: 749, qty: 3, discountAmount: 100 }));
+      expect(props.discount).toBe("33.333333");
+    });
+
+    it("sends it plainly on a single-unit line", () => {
+      expect(toLineItemProperties(line({ unitPrice: 749, qty: 1, discountAmount: 100 })).discount).toBe("100");
+    });
+
+    it("wins over a percentage if a line somehow carried both", () => {
+      // `applyLineAdjustment` guarantees it can't, so this is the boundary
+      // backstop: one property, never two.
+      const props = toLineItemProperties(line({ unitPrice: 100, qty: 1, discountAmount: 10, discountPercent: 50 }));
+      expect(props.discount).toBe("10");
+      expect(props).not.toHaveProperty("hs_discount_percentage");
+    });
   });
 
   it("writes the delay type discriminator with a custom date, or the delay is ignored", () => {
@@ -749,5 +789,76 @@ describe("the pre-authorization charge", () => {
   it("never appears on a rate-only quote", () => {
     const built = buildQuote("all_in_one", [], [], CATALOG, {}, 100);
     expect(preAuthLines(built.quoteLines)).toHaveLength(0);
+  });
+});
+
+// ── The cash lever, through the engine ──────────────────────────────────────
+// Added 2026-10-14 when the dollar control stopped being a percentage in
+// disguise. The thing worth pinning is that a rep's figure survives intact:
+// the arithmetic subtracts it, the cap still bounds it, and nothing anywhere
+// converts it into a percentage that can't be billed.
+describe("a cash discount through the engine", () => {
+  const cash = (over: Partial<QuoteLine>) => line({ unitPrice: 749, qty: 3, ...over });
+
+  it("subtracts exactly, at a quantity a percentage could not express", () => {
+    const l = cash({ discountAmount: 100 });
+    expect(lineListAmount(l)).toBe(2247);
+    expect(lineNetAmount(l)).toBe(2147);
+    expect(lineDiscountAmount(l)).toBe(100);
+  });
+
+  it("wins over a percentage on the same line, matching the HubSpot boundary", () => {
+    expect(lineNetAmount(cash({ discountAmount: 100, discountPercent: 50 }))).toBe(2147);
+  });
+
+  it("never bills backwards on a stale amount larger than the line", () => {
+    // The rep set $5,000 off and then lowered the quantity. `lineNetAmount`
+    // floors at zero; `adjustmentBlockers` is what actually reports it.
+    expect(lineNetAmount(cash({ qty: 1, discountAmount: 5000 }))).toBe(0);
+  });
+
+  it("is held to the SAME admin cap as a percentage, converted", () => {
+    // Without this the dollar box walks straight around the limit: $700 off
+    // a $749 line is 93%, and the percentage check never looks at it.
+    const blockers = adjustmentBlockers([cash({ qty: 1, discountAmount: 700 })], 50);
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]).toContain("over the 50% limit");
+  });
+
+  it("passes the cap when it is genuinely under it", () => {
+    expect(adjustmentBlockers([cash({ qty: 1, discountAmount: 300 })], 50)).toEqual([]);
+  });
+
+  it("REFUSES an amount larger than the line rather than making it free", () => {
+    // Unlike `discountQty`, which clamps: a quantity past the line can only
+    // mean "all of them", but a discount past the price is a typo or a line
+    // the rep shrank, and silently zeroing it is worth more than $0.
+    const blockers = adjustmentBlockers([cash({ qty: 1, discountAmount: 5000 })], 100);
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]).toContain("more than the line's");
+  });
+
+  it("round-trips through a reopen as cash, not as a percentage", () => {
+    const saved = [cash({ discountAmount: 100 })];
+    expect(adjustmentsFromQuoteLines(saved)[POS_ID]).toEqual({ discountAmount: 100 });
+  });
+
+  it("splits by quantity like a percentage does, and the remainder is at list", () => {
+    const [covered, rest] = splitPartialDiscount(cash({ discountAmount: 100 }), { discountQty: 1 });
+    expect(covered.qty).toBe(1);
+    expect(covered.discountAmount).toBe(100);
+    expect(rest.qty).toBe(2);
+    // The whole figure left on the remainder would take $100 off twice.
+    expect(rest.discountAmount).toBeUndefined();
+    expect(lineNetAmount(covered) + lineNetAmount(rest)).toBe(2147);
+  });
+
+  it("is cleared by a policy comp, which would otherwise be outranked", () => {
+    // `lineNetAmount` reads the cash lever FIRST, so a leftover amount on a
+    // comped line would quietly beat the 100%.
+    const comped = applyPackageComp(cash({ discountAmount: 100, coveredByPackage: "QSR Kit" }));
+    expect(comped.discountPercent).toBe(100);
+    expect(comped.discountAmount).toBeUndefined();
+    expect(lineNetAmount(comped)).toBe(0);
   });
 });

@@ -170,3 +170,43 @@ describe("QuoteSummary — ordering-channel names", () => {
     expect(note.textContent).not.toContain("undefined");
   });
 });
+
+// ── How a discount reads to the MERCHANT ────────────────────────────────────
+// A cash discount prints the dollars the rep agreed, not the percentage they
+// happen to work out as (2026-10-14). "$747 off" is the thing that was said
+// in the room; "33.244326% off" is an artifact of dividing, and printing it
+// would undo the reason the cash lever was built.
+const DISCOUNTED_QUOTE: CustomerSafeQuote = {
+  basis: "products",
+  lines: [
+    { hubspotProductId: "217445755632", name: "POS Unit", qty: 3, unitPrice: 749, billingFrequency: "one_time", productType: "inventory", discountAmount: 747 },
+    { hubspotProductId: "223511653105", name: "Payment Terminal - AMS1", qty: 1, unitPrice: 300, billingFrequency: "one_time", productType: "inventory", discountPercent: 20 },
+    { hubspotProductId: "223452690133", name: "Onsite Installation", qty: 1, unitPrice: 999, billingFrequency: "one_time", productType: "Service", discountPercent: 100 },
+  ],
+  lineTotals: { oneTime: 1740, recurring: [], monthlyEquivalent: 0 },
+  orderPoints: null,
+};
+
+describe("QuoteSummary — how a discount is described", () => {
+  it("states a cash discount in dollars, never as the percentage it works out as", () => {
+    render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);
+    expect(screen.getByText("$747.00 off")).toBeTruthy();
+    expect(screen.queryByText(/33\.2/)).toBeNull();
+  });
+
+  it("still states a percentage discount as a percentage", () => {
+    render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);
+    expect(screen.getByText("20% off")).toBeTruthy();
+  });
+
+  it("says 'Included' at 100%, whichever lever got there", () => {
+    render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);
+    expect(screen.getByText("Included")).toBeTruthy();
+  });
+
+  it("prices the cash-discounted line at the figure the rep agreed", () => {
+    // 3 × $749 = $2,247, less $747, is $1,500.00 exactly.
+    render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);
+    expect(screen.getByText("$1,500.00")).toBeTruthy();
+  });
+});

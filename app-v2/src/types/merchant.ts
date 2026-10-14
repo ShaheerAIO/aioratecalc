@@ -379,6 +379,28 @@ export type QuoteLine = {
    */
   discountPercent?: number | null;
   /**
+   * A discount in DOLLARS off this line's total, as an alternative to
+   * `discountPercent` (2026-10-14). Mutually exclusive with it — the two are
+   * never both set, and `applyLineAdjustment` clears whichever the rep's
+   * adjustment didn't carry.
+   *
+   * THIS IS THE LINE TOTAL, not a per-unit figure, because that is what a rep
+   * says: "take $500 off the hardware". HubSpot's own `discount` property is
+   * PER UNIT — proven live 2026-10-14, `scripts/probe-cash-discount.ts`:
+   * price 100 × qty 3 with `discount: 10` reads back `amount 270.00` /
+   * `hs_total_discount 30.00`. So `toLineItemProperties` divides by quantity
+   * on the way out, and that division is exact at the two decimals anybody
+   * is charged: HubSpot keeps SIX decimals on `discount` and rounds the
+   * TOTAL, not the per-unit figure, so $1,000 off 7 × $999.99 comes back
+   * `hs_total_discount: 1000.00` and not a cent either side.
+   *
+   * It exists because a percentage cannot express a price. "$100 off" a
+   * 3-unit $749 line is 13.351135%, and at any rounding a rep could read
+   * aloud it bills something that is not $100 — which is how this started as
+   * a percent-only control and had to be rebuilt.
+   */
+  discountAmount?: number | null;
+  /**
    * When the recurring charges start, if not at checkout. Only ever set on a
    * recurring line — a one-time charge has no billing schedule to delay, and
    * `applyLineAdjustment` strips it rather than emitting a property HubSpot
@@ -442,6 +464,14 @@ export type BillingStart =
  */
 export type LineAdjustment = {
   discountPercent?: number | null;
+  /**
+   * The same discount expressed in DOLLARS off the line total — see
+   * `QuoteLine.discountAmount`. Mutually exclusive with `discountPercent`:
+   * the configurator clears one when the other is set, and
+   * `applyLineAdjustment` is the backstop. Two live levers for one discount
+   * is a line nobody can say the truth about.
+   */
+  discountAmount?: number | null;
   /**
    * How many UNITS the discount applies to. Absent means the whole line, which
    * is the overwhelming majority.

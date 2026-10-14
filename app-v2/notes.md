@@ -339,19 +339,30 @@ add the phrase "per transaction" after the rate
 on the wizard's rate cards and the exported proposal, so there's one wording.)
 
 add a cash discount option for each line item
-(DONE — an "Amount off" $ box beside "Percent off" in each line's drawer.
-Nothing new is stored: it computes the percent, because the percent is the
-only lever that reaches HubSpot. The base respects "applies to N of qty".
-Under it the drawer now states the REAL net — "3 × $749.00 → $1,500.00" —
-because a percentage can't always land exactly on a dollar figure and the
-document can't be amended once published.
-CLOSED by limiting every percent to ONE DECIMAL (your call, same day) — a
-tenth is unarguably safe in HubSpot, so the open question about
-`hs_discount_percentage`'s precision no longer blocks anything. Applies to
-hand-typed percents too, so it's true of the line and not just of the dollar
-box. The cost: a dollar figure usually can't be hit exactly. $747 off $2,247
-stores 33.2% and bills $1,501.00, and the box you typed $100 into settles to
-$100.37. Both figures are shown rather than hidden.)
+(DONE, then REBUILT the same day after you pointed out HubSpot takes cash
+discounts natively — you were right and the first version was bad. It
+converted your dollars into a percentage, because I believed
+`hs_discount_percentage` was the only discount HubSpot would accept. It
+isn't. The conversion meant a figure you typed could not actually be billed:
+$100 off a $749 line became 13.4% and charged $100.37, and the box you typed
+$100 into settled to $100.37 in front of you.
+
+Now the dollars ARE the stored figure. Two things I had to prove first,
+because the portal couldn't: HubSpot's `discount` property is PER UNIT (all
+166 live line items carrying one have quantity 1, where both readings look
+identical), and it keeps six decimals while rounding the TOTAL. So we store
+the line total you type and divide once at the boundary —
+`scripts/probe-cash-discount.ts` is the proof and is worth keeping.
+
+Verified end to end against live HubSpot through the real code path: $100 off
+3 × $749, $747 off 3 × $749, $1,000 off 7 × $999.99, $12.34 off one. All four
+match to the cent.
+
+The percentage box stays for "give them 20% off" and still rounds to one
+decimal, which costs nothing now. Typing in either box clears the other. The
+cap applies to both — $700 off a $749 line is 93% and would otherwise have
+walked straight around the admin limit. Your merchant's quote prints
+"$747.00 off", not the percentage it works out as.)
 
 confirm we are adding a payments line item on the hubspot quote
 (IT WASN'T, on most quotes. Checked the live portal: the $0 "AIO Processing

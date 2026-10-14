@@ -169,7 +169,9 @@ function ReceiptGroup({ title, subtotal, lines }: { title: string; subtotal: str
 }
 
 function ReceiptLine({ line }: { line: QuoteLine }) {
-  const discounted = (line.discountPercent ?? 0) > 0;
+  // Either lever — a cash discount must strike through the list price too,
+  // or the receipt shows full price beside a smaller total.
+  const discounted = (line.discountPercent ?? 0) > 0 || (line.discountAmount ?? 0) > 0;
   const tag = line.coveredByPackage ? "In package" : isCompedService(line) ? "Included" : null;
   const cycle = line.billingFrequency === "one_time" ? "" : `/${fmtCycle(line.billingFrequency)}`;
 

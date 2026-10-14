@@ -499,7 +499,13 @@ export default function ProductConfigurator({
   // product that is ONLY covered therefore has no entry, which is exactly how
   // `lineAdjust` knows not to offer a control for it.
   const lineFor = useMemo(() => {
-    const map = new Map<string, QuoteLine & { discountAmount: number; mixedDiscount?: boolean }>();
+    // `discountGiven` is the money actually taken off, SUMMED across a
+    // product's split lines — a display figure. It is deliberately NOT called
+    // `discountAmount` any more: QuoteLine gained a field of that name on
+    // 2026-10-14 (the rep's cash discount LEVER), and the collision silently
+    // fed the summed give-away back into the dollar input, so a 20% discount
+    // on a $749 line made the cash box read $149.80.
+    const map = new Map<string, QuoteLine & { discountGiven: number; mixedDiscount?: boolean }>();
     for (const l of quoteLines) {
       if (l.coveredByPackage) continue;
       // The pre-authorization is not the rep's to adjust, so it gets no entry
@@ -514,20 +520,23 @@ export default function ProductConfigurator({
       const prev = map.get(l.hubspotProductId);
       const amount = lineDiscountAmount(l);
       if (!prev) {
-        map.set(l.hubspotProductId, { ...l, discountAmount: amount });
+        map.set(l.hubspotProductId, { ...l, discountGiven: amount });
         continue;
       }
       map.set(l.hubspotProductId, {
         ...prev,
         qty: prev.qty + l.qty,
         discountPercent: prev.discountPercent ?? l.discountPercent,
+        discountAmount: prev.discountAmount ?? l.discountAmount,
         billingStart: prev.billingStart ?? l.billingStart,
         // Summed off the real lines, so the button states what was actually
         // given away rather than the discount as if it hit every unit.
-        discountAmount: prev.discountAmount + amount,
+        discountGiven: prev.discountGiven + amount,
         // The halves of a split line disagree about the discount. The quote-
         // wide field reads this to say "Mixed" instead of the first half's figure.
-        mixedDiscount: prev.mixedDiscount || (prev.discountPercent ?? 0) !== (l.discountPercent ?? 0),
+        mixedDiscount: prev.mixedDiscount
+          || (prev.discountPercent ?? 0) !== (l.discountPercent ?? 0)
+          || (prev.discountAmount ?? 0) !== (l.discountAmount ?? 0),
       });
     }
     return map;
@@ -769,6 +778,7 @@ export default function ProductConfigurator({
       }
       if (!merged.units) delete merged.units;
       if (!merged.discountPercent) delete merged.discountPercent;
+      if (!merged.discountAmount) delete merged.discountAmount;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
       if (!merged.removed) delete merged.removed;
@@ -781,17 +791,14 @@ export default function ProductConfigurator({
 
   const setAdjustment = (id: string, patch: LineAdjustment) => setAdjustments([id], patch);
 
-  // Every discount percent on a line goes through this, whoever typed it and
-  // whichever box it came from.
+  // Every discount percent goes through this, whoever typed it.
   //
-  // ONE DECIMAL PLACE (product owner, 2026-10-14). HubSpot's
-  // `hs_discount_percentage` is a plain number and we never established how
-  // many decimals it keeps; a tenth of a percent is unarguably safe, and a
-  // discount is a commercial decision somebody says out loud — "thirty-three
-  // point two percent" is a real number, "33.244326%" is an artifact of
-  // dividing. The cost is that a discount typed in DOLLARS usually can't land
-  // exactly any more (up to 0.05% of the line, so ~$1 on a $2,247 line), which
-  // is why the drawer prints the resulting net underneath.
+  // ONE DECIMAL PLACE. `hs_discount_percentage`'s own precision was never
+  // established and a tenth is unarguably safe — and a percentage a rep
+  // chooses is a figure they say out loud, where "33.244326%" is an artifact
+  // of dividing. This no longer costs anything, because a rep who wants an
+  // exact PRICE types the dollars instead and those are exact (see
+  // `setDiscountAmount`); the percent box is for "give them 20% off".
   //
   // CLAMPED to 0–100, not merely reported. `adjustmentBlockers` refuses
   // anything over 100 and always will, but a number input accepts typed values
@@ -809,7 +816,12 @@ export default function ProductConfigurator({
     // Clearing the percent clears the quantity with it. A quantity on its own
     // scopes nothing, and leaving it behind would silently re-scope the next
     // discount the rep types on this row.
-    setAdjustment(id, next ? { discountPercent: next } : { discountPercent: null, discountQty: null });
+    //
+    // `discountAmount: null` on every write: the two levers are mutually
+    // exclusive, so typing in this box is also how a rep abandons the other.
+    setAdjustment(id, next
+      ? { discountPercent: next, discountAmount: null }
+      : { discountPercent: null, discountAmount: null, discountQty: null });
   };
 
   const setDiscountQty = (id: string, raw: string) => {
@@ -817,33 +829,39 @@ export default function ProductConfigurator({
     setAdjustment(id, { discountQty: qty === null || Number.isNaN(qty) ? null : qty });
   };
 
-  // A discount in DOLLARS (2026-10-14, "add a cash discount option for each
-  // line item ... do that math to see what percent discount u would need").
+  // A discount in DOLLARS — its OWN lever since 2026-10-14, not a percentage
+  // in disguise.
   //
-  // It stores nothing of its own. `discountPercent` is still the only lever
-  // on the line, because it is the only one that reaches HubSpot
-  // (`hs_discount_percentage`) — so the dollars are converted here and the
-  // percent is what the quote, the receipt and the published document all
-  // carry. There is deliberately no `discountAmount` on `LineAdjustment`: two
-  // stored levers for one discount is a line nobody can say the truth about.
+  // It was built the other way first, converting the dollars to a percent
+  // because that was believed to be the only discount HubSpot would take.
+  // It isn't: the line-item `discount` property is a cash amount, and it is
+  // PER UNIT (proven by scripts/probe-cash-discount.ts — see
+  // `toLineItemProperties`). Converting meant a figure a rep typed could not
+  // be billed exactly: $100 off a $749 line became 13.4% and charged
+  // $100.37. A cash discount that cannot hit a price is not a cash discount.
   //
-  // The base respects `discountQty`, so "$200 off, applies to 1 of 3" takes
-  // $200 off that one unit rather than off all three.
+  // So the dollars are stored as dollars, `lineNetAmount` subtracts them
+  // outright, and nothing rounds anywhere. The amount is the LINE TOTAL, as
+  // a rep says it; the per-unit division happens once, at the HubSpot
+  // boundary.
+  //
+  // Scoped by `discountQty` the same way the percentage is: "$200 off,
+  // applies to 1 of 3" takes $200 off that one unit's line after the split.
   const setDiscountAmount = (id: string, raw: string) => {
-    if (raw.trim() === "") { setAdjustment(id, { discountPercent: null, discountQty: null }); return; }
+    if (raw.trim() === "") {
+      setAdjustment(id, { discountPercent: null, discountAmount: null, discountQty: null });
+      return;
+    }
     const amount = Number(raw);
-    const l = lineFor.get(id);
-    if (!l || Number.isNaN(amount)) return;
-    const base = l.unitPrice * (adjustments[id]?.discountQty ?? l.qty);
-    // Nothing to take a percentage OF. Leaving the discount alone is the only
-    // honest answer — any percent of $0 is $0.
-    if (!(base > 0)) return;
-    // Rounded to one decimal like every other discount — see `cleanPercent`.
-    // So the dollars are a way of ARRIVING at a percent, not a figure the
-    // quote promises to hit: the net rendered under this field is the real
-    // one, and it is frequently a little off what was typed here.
-    const pct = cleanPercent((amount / base) * 100);
-    setAdjustment(id, pct ? { discountPercent: pct } : { discountPercent: null, discountQty: null });
+    if (Number.isNaN(amount)) return;
+    // Rounded to CENTS — the smallest unit anybody is billed in. Not clamped
+    // to the line: `adjustmentBlockers` refuses an amount over the line total
+    // rather than silently making it free, which is a decision worth more
+    // than $0 (see that function).
+    const next = Math.round(Math.max(0, amount) * 100) / 100;
+    setAdjustment(id, next > 0
+      ? { discountAmount: next, discountPercent: null }
+      : { discountAmount: null, discountPercent: null, discountQty: null });
   };
 
   // ── Per-unit editing ──────────────────────────────────────────────────────
@@ -996,13 +1014,19 @@ export default function ProductConfigurator({
     const open = openAdjust.has(id);
     const start = l.billingStart;
     const mode = start?.mode ?? "now";
-    const discounted = (l.discountPercent ?? 0) > 0;
+    // EITHER lever counts. Scoped to the percentage, a cash discount would
+    // show no result line and no "applies to" control — the row would look
+    // undiscounted while billing less.
+    const discounted = (l.discountPercent ?? 0) > 0 || (l.discountAmount ?? 0) > 0;
     const delayed = mode !== "now";
     const unitMode = Array.isArray(adjustments[id]?.units) || openUnits.has(id);
     const units = unitMode ? unitsOf(id, l.qty) : [];
-    // What a dollar discount is a percentage OF — the quantity it is scoped
-    // to, not necessarily the whole line. Mirrors `setDiscountAmount`.
-    const discountBase = l.unitPrice * (adjustments[id]?.discountQty ?? l.qty);
+    // Which lever this line is on. They are mutually exclusive, so exactly
+    // one box ever holds a value and the other sits empty rather than showing
+    // a conversion of its twin — a converted figure reads as a second
+    // decision the rep did not make, and that is what the first version of
+    // this control did (type $100, watch it settle to $100.37).
+    const cashDiscount = l.discountAmount ?? null;
 
     return (
       <div className={styles.adjustWrap}>
@@ -1015,7 +1039,7 @@ export default function ProductConfigurator({
         >
           {discounted || delayed ? (
             <>
-              {discounted && <span className={styles.savedTag}>−{fmt$(l.discountAmount)}</span>}
+              {discounted && <span className={styles.savedTag}>−{fmt$(l.discountGiven)}</span>}
               {delayed && <span className={styles.delayTag}>Starts later</span>}
             </>
           ) : (
@@ -1103,14 +1127,12 @@ export default function ProductConfigurator({
             <label className={styles.adjustField}>
               <span className={styles.adjustLabel}>Percent off</span>
               <span className={styles.pctWrap}>
-                {/* `step="any"` since 2026-10-14: a discount typed in dollars
-                    back-fills a fractional percent ("$747 off $2,247" is
-                    33.244326%), and a step of 1 makes the browser flag the
-                    value the tool itself just put there. */}
+                {/* A tenth, matching what `cleanPercent` stores, so the
+                    browser's own validation and the saved value agree. */}
                 <input
-                  type="number" min={0} max={100} step="any"
+                  type="number" min={0} max={100} step={0.1}
                   className={styles.adjustInput}
-                  value={l.discountPercent ?? ""}
+                  value={cashDiscount !== null ? "" : l.discountPercent ?? ""}
                   placeholder="0"
                   onChange={e => setDiscount(id, e.target.value)}
                   aria-label={`Discount percent for ${l.name}`}
@@ -1119,18 +1141,18 @@ export default function ProductConfigurator({
               </span>
             </label>
 
-            {/* The same discount in dollars. Two views of ONE stored number —
-                see `setDiscountAmount` for why the percent is what's kept. */}
+            {/* The OTHER lever, not another view of the same one. Typing in
+                either box clears the other, because a line carrying both is
+                one nobody can say the truth about. Dollars are EXACT — see
+                `setDiscountAmount`; the percentage box is for "20% off". */}
             <label className={styles.adjustField}>
               <span className={styles.adjustLabel}>Amount off</span>
               <span className={styles.pctWrap}>
                 <span className={styles.pctSign}>$</span>
                 <input
-                  type="number" min={0} step="any"
+                  type="number" min={0} step={0.01}
                   className={`${styles.adjustInput} ${styles.amountInput}`}
-                  value={discountBase > 0 && discounted
-                    ? Math.round(discountBase * (l.discountPercent ?? 0)) / 100
-                    : ""}
+                  value={cashDiscount ?? ""}
                   placeholder="0.00"
                   onChange={e => setDiscountAmount(id, e.target.value)}
                   aria-label={`Discount amount in dollars for ${l.name}`}
@@ -1169,8 +1191,8 @@ export default function ProductConfigurator({
                 {l.qty} × {fmt$(l.unitPrice)} →{" "}
                 {/* Off the SUMMED real discount, not off the merged line's
                     percent: a split line's halves carry different percentages
-                    and only `discountAmount` adds them up correctly. */}
-                <strong>{fmt$(lineListAmount(l) - l.discountAmount)}</strong>
+                    and only `discountGiven` adds them up correctly. */}
+                <strong>{fmt$(lineListAmount(l) - l.discountGiven)}</strong>
                 {l.billingFrequency !== "one_time" && `/${fmtCycle(l.billingFrequency)}`}
               </p>
             )}

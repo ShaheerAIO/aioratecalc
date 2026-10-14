@@ -1,22 +1,18 @@
 // @vitest-environment jsdom
 //
-// The cash discount (product owner, 2026-10-14: "add a cash discount option
-// for each line item ... just do that math to see what percent discount u
-// would need to have to achieve the desired price and fill that").
+// The cash discount — its OWN lever, in dollars, since 2026-10-14.
 //
-// It stores NOTHING of its own. `discountPercent` stays the only lever on a
-// line, because it is the only one that reaches HubSpot
-// (`hs_discount_percentage`) — so these tests assert the conversion, and that
-// what the rep is SHOWN is the real net rather than the dollars they typed. A
-// percentage can't always land exactly on a dollar figure, and the document
-// it lands on can't be amended once published.
+// It was built the other way first: the dollars were converted to a
+// percentage, on the belief that `hs_discount_percentage` was the only
+// discount HubSpot would take. It isn't. The line-item `discount` property is
+// a cash amount, and the conversion meant a figure a rep typed could not be
+// billed — $100 off a $749 line became 13.4% and charged $100.37. These tests
+// exist mostly to pin the thing that fixed: dollars in, the SAME dollars out,
+// at every quantity, with nothing rounded in between.
 //
-// Every percent is rounded to ONE DECIMAL (product owner, 2026-10-14), which
-// makes that gap the normal case rather than an edge one: $747 off a $2,247
-// line is 33.244326%, stored as 33.2%, which bills $1,501.00 and not the
-// $1,500.00 the rep typed toward. These tests pin the real figures on
-// purpose — if the rounding ever changes, the numbers that move are the ones
-// a merchant is charged.
+// `discount` is PER UNIT in HubSpot (scripts/probe-cash-discount.ts), so the
+// division happens once at the boundary — asserted in quoteDiscounts.test.ts
+// against `toLineItemProperties`, not here.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { PACKAGES } from "@/lib/quotePackages";
 import { useState } from "react";
@@ -103,54 +99,77 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("a discount typed in dollars", () => {
-  // Every line on the quote has one of these and they are not individually
-  // labelled, so all of them are opened and the POS drawer is then found by
-  // its inputs' own labels.
   const openAdjust = async () => {
     const toggles = await screen.findAllByRole("button", { name: /Adjust/ });
     for (const t of toggles) fireEvent.click(t);
   };
 
-  it("back-fills the percent that reaches that figure, and stores only the percent", async () => {
+  const storedAmount = () =>
+    (JSON.parse(screen.getByTestId("adj").textContent || "{}") as QuoteAdjustments)[POS]?.discountAmount;
+
+  it("stores the dollars as dollars, and bills exactly them", async () => {
     render(<Host qty={1} />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await openAdjust();
     const { amount, percent } = await openPosDrawer();
 
-    // $100 off a $749 unit is 13.351135%, held at one decimal.
     fireEvent.change(amount, { target: { value: "100" } });
-    await waitFor(() => expect(storedPercent()).toBe(13.4));
-    // The percent box shows what was derived — the two are one number.
-    expect(Number(percent.value)).toBe(13.4);
-    // And so does the DOLLAR box, which is why a rep who types 100 sees
-    // 100.37 settle in: 13.4% of $749 is what the quote actually takes off.
-    // Surprising, and the honest reading of one decimal place — the
-    // alternative is storing the typed dollars as a second lever.
-    expect(Number(amount.value)).toBeCloseTo(100.37, 2);
-    // And nothing of its own was persisted: no discountAmount field exists.
-    const adj = JSON.parse(screen.getByTestId("adj").textContent || "{}")[POS];
-    expect(Object.keys(adj)).toEqual(["discountPercent"]);
+    await waitFor(() => expect(storedAmount()).toBe(100));
+    // No percentage anywhere — this is the whole point. The old build turned
+    // $100 into 13.4% and charged $100.37.
+    expect(storedPercent()).toBeUndefined();
+    // The box holds what the rep typed, rather than settling to a conversion.
+    expect(Number(amount.value)).toBe(100);
+    // And the percent box is empty: the line is on the other lever.
+    expect(percent.value).toBe("");
+    // $749 − $100.
+    await waitFor(() => {
+      expect(screen.getAllByText((_, el) => el?.textContent === "1 × $749.00 → $649.00").length)
+        .toBeGreaterThan(0);
+    });
   });
 
-  it("counts the WHOLE line, not one unit", async () => {
+  it("is the LINE total, not per unit — the figure a rep says out loud", async () => {
     render(<Host qty={3} />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await openAdjust();
     const { amount } = await openPosDrawer();
 
-    // $747 off 3 × $749 = $2,247 is 33.244326%, held at 33.2%.
     fireEvent.change(amount, { target: { value: "747" } });
-    await waitFor(() => expect(storedPercent()).toBe(33.2));
+    await waitFor(() => expect(storedAmount()).toBe(747));
+    // 3 × $749 = $2,247, less $747, is $1,500.00 exactly — the figure the
+    // percentage build could only get to $1,501.00.
+    await waitFor(() => {
+      expect(screen.getAllByText((_, el) => el?.textContent === "3 × $749.00 → $1,500.00").length)
+        .toBeGreaterThan(0);
+    });
   });
 
-  it("clamps to the line — a rep cannot give away more than the line is worth", async () => {
+  it("is exact at a quantity that does not divide evenly", async () => {
+    // $100 across 3 units is $33.333... each, and this is where a per-unit
+    // design rounds. It is stored as the line total and divided once, at the
+    // HubSpot boundary, so nothing rounds here at all.
+    render(<Host qty={3} />);
+    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
+    await openAdjust();
+    const { amount } = await openPosDrawer();
+
+    fireEvent.change(amount, { target: { value: "100" } });
+    await waitFor(() => expect(storedAmount()).toBe(100));
+    await waitFor(() => {
+      expect(screen.getAllByText((_, el) => el?.textContent === "3 × $749.00 → $2,147.00").length)
+        .toBeGreaterThan(0);
+    });
+  });
+
+  it("holds cents", async () => {
     render(<Host qty={1} />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await openAdjust();
     const { amount } = await openPosDrawer();
 
-    fireEvent.change(amount, { target: { value: "5000" } });
-    await waitFor(() => expect(storedPercent()).toBe(100));
+    fireEvent.change(amount, { target: { value: "12.34" } });
+    await waitFor(() => expect(storedAmount()).toBe(12.34));
   });
 
   it("clears the discount when the box is emptied", async () => {
@@ -160,49 +179,62 @@ describe("a discount typed in dollars", () => {
     const { amount } = await openPosDrawer();
 
     fireEvent.change(amount, { target: { value: "100" } });
-    await waitFor(() => expect(storedPercent()).toBe(13.4));
+    await waitFor(() => expect(storedAmount()).toBe(100));
     fireEvent.change(amount, { target: { value: "" } });
-    await waitFor(() => expect(storedPercent()).toBeUndefined());
+    await waitFor(() => expect(storedAmount()).toBeUndefined());
   });
+});
 
-  it("shows the REAL net, so a figure a percentage can't reach exactly is visible", async () => {
-    render(<Host qty={3} />);
-    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
-    await openAdjust();
-    const { amount } = await openPosDrawer();
+describe("the two levers are mutually exclusive", () => {
+  const openAdjust = async () => {
+    const toggles = await screen.findAllByRole("button", { name: /Adjust/ });
+    for (const t of toggles) fireEvent.click(t);
+  };
+  const storedAmount = () =>
+    (JSON.parse(screen.getByTestId("adj").textContent || "{}") as QuoteAdjustments)[POS]?.discountAmount;
 
-    fireEvent.change(amount, { target: { value: "747" } });
-    // 33.2% of $2,247 leaves $1,501.00 — a dollar off what the rep typed
-    // toward, and stated rather than hidden. This is the whole reason the
-    // result line exists.
-    await waitFor(() => {
-      expect(screen.getAllByText((_, el) => el?.textContent === "3 × $749.00 → $1,501.00").length)
-        .toBeGreaterThan(0);
-    });
-  });
-
-  it("round-trips a percent typed by hand back into dollars", async () => {
-    render(<Host qty={2} />);
+  it("typing a percent abandons a cash discount already on the line", async () => {
+    render(<Host qty={1} />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await openAdjust();
     const { amount, percent } = await openPosDrawer();
 
-    // 25% of 2 × $749 = $374.50.
-    fireEvent.change(percent, { target: { value: "25" } });
-    await waitFor(() => expect(Number(amount.value)).toBeCloseTo(374.5, 2));
+    fireEvent.change(amount, { target: { value: "100" } });
+    await waitFor(() => expect(storedAmount()).toBe(100));
+
+    fireEvent.change(percent, { target: { value: "20" } });
+    await waitFor(() => expect(storedPercent()).toBe(20));
+    // A line carrying both would bill one figure and display the other.
+    expect(storedAmount()).toBeUndefined();
+    await waitFor(() => expect(Number(amount.value) || 0).toBe(0));
+  });
+
+  it("typing a cash amount abandons a percentage already on the line", async () => {
+    render(<Host qty={1} />);
+    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
+    await openAdjust();
+    const { amount, percent } = await openPosDrawer();
+
+    fireEvent.change(percent, { target: { value: "20" } });
+    await waitFor(() => expect(storedPercent()).toBe(20));
+
+    fireEvent.change(amount, { target: { value: "100" } });
+    await waitFor(() => expect(storedAmount()).toBe(100));
+    expect(storedPercent()).toBeUndefined();
+    expect(percent.value).toBe("");
   });
 });
 
-describe("one decimal place, everywhere a percent is set", () => {
+describe("the percentage lever still rounds to one decimal", () => {
   const openAdjust = async () => {
     const toggles = await screen.findAllByRole("button", { name: /Adjust/ });
     for (const t of toggles) fireEvent.click(t);
   };
 
-  it("rounds a percent typed by HAND too, not just a derived one", async () => {
-    // Otherwise 33.25 typed in the percent box would outlive anything the
-    // dollar box could produce, and "one decimal" would be true of one
-    // entry path rather than of the line.
+  it("rounds a hand-typed percent", async () => {
+    // Kept from the percentage-only build. It costs nothing now: a rep who
+    // wants an exact PRICE types dollars, so the percent box is only ever
+    // for a figure someone chose ("20% off").
     render(<Host qty={1} />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await openAdjust();
@@ -212,7 +244,7 @@ describe("one decimal place, everywhere a percent is set", () => {
     await waitFor(() => expect(storedPercent()).toBe(33.3));
   });
 
-  it("still clamps over 100 before rounding", async () => {
+  it("still clamps a percent over 100", async () => {
     render(<Host qty={1} />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await openAdjust();
@@ -220,17 +252,5 @@ describe("one decimal place, everywhere a percent is set", () => {
 
     fireEvent.change(percent, { target: { value: "150" } });
     await waitFor(() => expect(storedPercent()).toBe(100));
-  });
-
-  it("treats a figure under a twentieth of a percent as no discount at all", async () => {
-    // 0.04% rounds to 0, and 0 has always cleared the adjustment rather than
-    // being stored — nobody means a four-hundredth of the price.
-    render(<Host qty={1} />);
-    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
-    await openAdjust();
-    const { percent } = await openPosDrawer();
-
-    fireEvent.change(percent, { target: { value: "0.04" } });
-    await waitFor(() => expect(storedPercent()).toBeUndefined());
   });
 });

@@ -1718,11 +1718,26 @@ export function toLineItemProperties(line: QuoteLine, description?: string | nul
   // `hs_total_discount` and `hs_pre_discount_amount` are CALCULATED by HubSpot
   // from these — writing them is both rejected and pointless.
   //
-  // Only the percentage lever is emitted. The flat `discount` ("Unit discount")
-  // property exists and is used on ~105 lines portal-wide, but a quote carrying
-  // both is a document where nobody can say what was given away, and the
-  // percentage covers every case a rep has needed.
-  if (line.discountPercent) {
+  // EXACTLY ONE of the two levers is ever emitted. A line carrying both is a
+  // document where nobody can say what was given away; `applyLineAdjustment`
+  // guarantees the QuoteLine only has one, and this is the boundary backstop.
+  //
+  // `discount` IS PER UNIT. Proven live 2026-10-14 by
+  // `scripts/probe-cash-discount.ts`, because the portal could not answer it
+  // — all 166 live line items carrying a `discount` have `quantity: 1`, where
+  // per-unit and per-line agree. The probe sent price 100 × qty 3 with
+  // `discount: 10` and read back `amount 270.00` / `hs_total_discount 30.00`.
+  // So `QuoteLine.discountAmount` (a LINE total, which is what a rep says) is
+  // divided by quantity here.
+  //
+  // Six decimals, and the division is EXACT at the cents anybody is charged:
+  // HubSpot keeps all six and rounds the TOTAL rather than the per-unit
+  // figure. Same probe: $1,000 off 7 × $999.99 → `hs_total_discount 1000.00`,
+  // not a cent either side. Don't "simplify" this to 2dp — $100 off 3 units
+  // would become $99.99.
+  if (line.discountAmount) {
+    props.discount = String(Math.round((line.discountAmount / line.qty) * 1e6) / 1e6);
+  } else if (line.discountPercent) {
     props.hs_discount_percentage = String(line.discountPercent);
   }
 

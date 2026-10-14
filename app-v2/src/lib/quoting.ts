@@ -5,7 +5,7 @@
 // in here is an AIO internal (no margin, no cost, no floor). The catalog it
 // operates on is read from HubSpot server-side and passed in.
 
-import { monthlyEquivalent } from "@/lib/utils";
+import { fmt$, monthlyEquivalent } from "@/lib/utils";
 import { decomposePackages, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
@@ -744,9 +744,19 @@ export function isCompedService(line: Pick<QuoteLine, "hubspotProductId">): bool
  */
 export function applyServiceComp(line: QuoteLine, adjustment?: LineAdjustment): QuoteLine {
   if (!isCompedService(line)) return line;
-  const repSet = adjustment?.discountPercent;
+  // A rep who set EITHER lever deliberately keeps it — the comp is a default,
+  // not an override (see this function's doc comment). A cash discount counts
+  // as that decision exactly like a percentage does.
+  const repSet = adjustment?.discountPercent ?? adjustment?.discountAmount;
   if (repSet !== undefined && repSet !== null) return line;
-  return { ...line, discountPercent: 100 };
+  // `discountAmount` is DROPPED, not left beside the 100% and not set to
+  // null: the two levers are mutually exclusive and `lineNetAmount` reads the
+  // cash one FIRST, so a leftover amount would quietly outrank the comp. A
+  // deleted key rather than a null one so a comped line keeps the exact shape
+  // it had before cash discounts existed.
+  const comped = { ...line, discountPercent: 100 };
+  delete comped.discountAmount;
+  return comped;
 }
 
 /**
@@ -767,7 +777,11 @@ export function applyServiceComp(line: QuoteLine, adjustment?: LineAdjustment): 
  */
 export function applyPackageComp(line: QuoteLine): QuoteLine {
   if (!line.coveredByPackage) return line;
-  return { ...line, discountPercent: 100 };
+  // Same reason as `applyServiceComp`: drop the cash lever, which
+  // `lineNetAmount` would otherwise read in preference to this 100%.
+  const covered = { ...line, discountPercent: 100 };
+  delete covered.discountAmount;
+  return covered;
 }
 
 /**
@@ -797,11 +811,14 @@ export function splitPartialDiscount(line: QuoteLine, adjustment: LineAdjustment
     !want || !Number.isInteger(want) || want <= 0 ||
     want >= line.qty ||
     line.coveredByPackage ||
-    !line.discountPercent
+    !(line.discountPercent || line.discountAmount)
   ) return [line];
 
   const rest: QuoteLine = { ...line, qty: line.qty - want };
   delete rest.discountPercent;
+  // The remainder is at list, so it carries NEITHER lever. A cash amount left
+  // on it would take the rep's whole figure off twice — once on each half.
+  delete rest.discountAmount;
   return [{ ...line, qty: want }, rest];
 }
 
@@ -1306,9 +1323,19 @@ export function lineListAmount(line: QuoteLine): number {
  * with the document HubSpot renders.
  */
 export function lineNetAmount(line: QuoteLine): number {
+  const list = lineListAmount(line);
+  // A cash discount is the line total the rep typed, so it subtracts exactly
+  // — no percentage, no rounding, nothing to disagree with HubSpot about.
+  // CLAMPED at zero: a stale amount larger than the line (the rep lowered the
+  // quantity after setting it) must not bill backwards. `adjustmentBlockers`
+  // refuses that case separately, so this is the arithmetic's own floor, not
+  // the place it gets reported.
+  const amount = line.discountAmount ?? 0;
+  if (amount > 0) return Math.max(0, Math.round((list - amount) * 100) / 100);
+
   const pct = line.discountPercent ?? 0;
-  if (!pct) return lineListAmount(line);
-  return Math.round(lineListAmount(line) * (1 - pct / 100) * 100) / 100;
+  if (!pct) return list;
+  return Math.round(list * (1 - pct / 100) * 100) / 100;
 }
 
 /** What the discount takes off this line. HubSpot's calculated `hs_total_discount`. */
@@ -1890,9 +1917,17 @@ export function applyLineAdjustment(line: QuoteLine, adjustment: LineAdjustment 
   if (!adjustment) return line;
   const next = { ...line };
 
+  // The two discount levers are MUTUALLY EXCLUSIVE and both are cleared
+  // first, so an adjustment that switched from one to the other can never
+  // leave the old one behind on the line — a line carrying both would bill
+  // one figure and display the other.
+  delete next.discountPercent;
+  delete next.discountAmount;
+
+  const amount = adjustment.discountAmount;
   const pct = adjustment.discountPercent;
-  if (pct !== undefined && pct !== null && pct > 0) next.discountPercent = pct;
-  else delete next.discountPercent;
+  if (amount !== undefined && amount !== null && amount > 0) next.discountAmount = amount;
+  else if (pct !== undefined && pct !== null && pct > 0) next.discountPercent = pct;
 
   const start = adjustment.billingStart;
   if (start && line.billingFrequency !== "one_time") next.billingStart = start;
@@ -1934,6 +1969,36 @@ export function adjustmentBlockers(
         blockers.push(
           `"${line.name}" is discounted ${pct}%, over the ${cap}% limit AIO allows on a quote. ` +
           `Lower it, or ask an admin to raise the limit in Admin → Margin policy.`
+        );
+      }
+    }
+
+    // A CASH discount is held to the same ceiling, converted. Without this
+    // the dollar box would be a way straight around the admin's limit: "$700
+    // off a $749 line" is 93%, and nothing above would have looked at it.
+    // Expressed against the LIST amount, which is what the percentage lever
+    // is a percentage of, so the two controls bound the same thing.
+    const amount = line.discountAmount;
+    if (amount !== undefined && amount !== null) {
+      const list = lineListAmount(line);
+      if (!Number.isFinite(amount) || amount < 0) {
+        blockers.push(`"${line.name}" has a discount of ${fmt$(amount)}, which isn't an amount of money off.`);
+      } else if (amount > list) {
+        // Refused rather than clamped, unlike `discountQty`. A quantity past
+        // the line means "all of them" and there is nothing else it could
+        // mean; a discount bigger than the line is either a typo or a line
+        // the rep shrank afterwards, and silently making it "free" is a
+        // decision worth more than $0.
+        blockers.push(
+          `"${line.name}" is discounted ${fmt$(amount)}, which is more than the line's ${fmt$(list)}. ` +
+          `A discount can't exceed the price.`
+        );
+      } else if (list > 0 && (amount / list) * 100 > cap) {
+        const asPct = Math.round((amount / list) * 1000) / 10;
+        blockers.push(
+          `"${line.name}" is discounted ${fmt$(amount)} of ${fmt$(list)} — ${asPct}%, over the ${cap}% ` +
+          `limit AIO allows on a quote. Lower it, or ask an admin to raise the limit in ` +
+          `Admin → Quote limits.`
         );
       }
     }
@@ -2081,8 +2146,12 @@ export function adjustmentsFromQuoteLines(
     if (line.coveredByPackage) continue;
     const s = shape.get(line.hubspotProductId) ?? { starts: new Set(), discounts: new Set(), discounted: 0 };
     s.starts.add(startSignature(line.billingStart));
-    s.discounts.add(line.discountPercent || 0);
-    if (line.discountPercent) s.discounted += 1;
+    // A cash discount counts as a distinct discount for shape purposes, so a
+    // line split between a cash figure and list still reopens correctly.
+    // Negated so it can never collide with a percentage of the same number —
+    // "$50 off" and "50% off" are different edits.
+    s.discounts.add(line.discountAmount ? -line.discountAmount : (line.discountPercent || 0));
+    if (line.discountPercent || line.discountAmount) s.discounted += 1;
     shape.set(line.hubspotProductId, s);
   }
   const perUnit = new Set(
@@ -2094,7 +2163,10 @@ export function adjustmentsFromQuoteLines(
   for (const line of lines ?? []) {
     if (line.coveredByPackage || perUnit.has(line.hubspotProductId)) continue;
     const adjustment: LineAdjustment = {};
-    if (line.discountPercent) {
+    if (line.discountAmount) {
+      adjustment.discountAmount = line.discountAmount;
+      if (line.qty < (chargeable.get(line.hubspotProductId) ?? 0)) adjustment.discountQty = line.qty;
+    } else if (line.discountPercent) {
       adjustment.discountPercent = line.discountPercent;
       if (line.qty < (chargeable.get(line.hubspotProductId) ?? 0)) adjustment.discountQty = line.qty;
     }

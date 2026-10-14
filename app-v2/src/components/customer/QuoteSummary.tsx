@@ -41,7 +41,18 @@ export default function QuoteSummary({ quote }: Props) {
   // NET of any discount — this is what the merchant is actually charged, and
   // it is the same figure `quoteTotals` sums into the totals below.
   const lineTotal = (l: QuoteLine) => lineNetAmount(l);
-  const isDiscounted = (l: QuoteLine) => (l.discountPercent ?? 0) > 0;
+  const isDiscounted = (l: QuoteLine) => (l.discountPercent ?? 0) > 0 || (l.discountAmount ?? 0) > 0;
+
+  // How the saving reads to the MERCHANT. A cash discount says the dollars
+  // the rep agreed — "$747 off" — rather than the percentage it happens to
+  // work out as, which is the whole reason the cash lever exists (2026-10-14).
+  // 100% is "Included" either way: on a comped or package-covered line that
+  // is what it means, and a percentage nobody chose is not worth printing.
+  const discountLabel = (l: QuoteLine) => {
+    if (l.discountPercent === 100) return "Included";
+    if ((l.discountAmount ?? 0) > 0) return `${fmt$(l.discountAmount!)} off`;
+    return `${l.discountPercent}% off`;
+  };
 
   return (
     <>
@@ -148,7 +159,7 @@ export default function QuoteSummary({ quote }: Props) {
                         restatement only appears for a line on another cycle. */}
                     {(isDiscounted(l) || l.billingFrequency !== "monthly") && (
                       <div className={styles.linePriceAlt}>
-                        {isDiscounted(l) && <span className={styles.lineSaved}>{l.discountPercent}% off</span>}
+                        {isDiscounted(l) && <span className={styles.lineSaved}>{discountLabel(l)}</span>}
                         {isDiscounted(l) && l.billingFrequency !== "monthly" && " · "}
                         {l.billingFrequency !== "monthly" &&
                           `~${fmt$(monthlyEquivalent(lineTotal(l), l.billingFrequency))}/mo`}
@@ -190,9 +201,7 @@ export default function QuoteSummary({ quote }: Props) {
                     </div>
                     {isDiscounted(l) && (
                       <div className={styles.linePriceAlt}>
-                        <span className={styles.lineSaved}>
-                          {l.discountPercent === 100 ? "Included" : `${l.discountPercent}% off`}
-                        </span>
+                        <span className={styles.lineSaved}>{discountLabel(l)}</span>
                       </div>
                     )}
                   </div>
