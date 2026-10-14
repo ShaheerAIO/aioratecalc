@@ -1814,25 +1814,25 @@ export function planDefaultBillingStart(quoteType: QuoteType): BillingStart | nu
 }
 
 /**
- * Who a quote's note is addressed to in HubSpot: the owner record it is
- * assigned to, and the name written into it.
+ * Who a quote's note is written for — the name the rep-facing copy says it
+ * goes to, so a required box says who is going to read it.
  *
  * Elizabeth Phillips, 2026-10-12 — "if they make the delayed billing longer
  * than 60 days, force them to leave a note explaining why and tagging me
- * automatically". Owner 161690499, checked live against portal 244508708.
+ * automatically".
  *
- * It is an ASSIGNMENT, not an @mention, and that is a platform limit rather
- * than a corner cut: this portal's NOTE object carries no
- * `hs_at_mentioned_owner_ids`, so the API cannot raise the notification the
- * "@" in HubSpot's own composer does. The note lands on the deal, owned by her
- * and naming her, which is as close as the API reaches. A HubSpot-side
- * workflow on "note created, owner = her" is the way to turn it into an alert.
+ * The "tagging" half is GONE as of 2026-10-14: the note moved off a HubSpot
+ * note engagement and onto the deal's `billing_notes` property, which renders
+ * as the "Billing Notes" card on the deal record and notifies nobody. So this
+ * is now a NAME and nothing else — her owner id (161690499) went with the
+ * @mention markup that needed it. An alert, if it's wanted back, is a
+ * HubSpot-side workflow on "Billing Notes has changed"; see
+ * `setDealBillingNotes`.
  *
  * Here rather than in `adapters/hubspot.ts` because the rep-facing copy has to
  * name who it goes to, and that file is server-only.
  */
 export const QUOTE_NOTE_WATCHER = {
-  hubspotOwnerId: "161690499",
   name: "Elizabeth Phillips",
 } as const;
 
@@ -1873,7 +1873,8 @@ export function quoteNoteBlockers(
   if ((note ?? "").trim().length >= MIN_QUOTE_NOTE_LENGTH) return [];
   return [
     `This quote holds a first charge for ${days} days, past the ${DELAY_NOTE_THRESHOLD_DAYS}-day ` +
-    `default — write a note saying why. It goes onto the HubSpot deal for ${QUOTE_NOTE_WATCHER.name}.`,
+    `default — write a note saying why. It goes onto the HubSpot deal's Billing Notes ` +
+    `for ${QUOTE_NOTE_WATCHER.name}.`,
   ];
 }
 

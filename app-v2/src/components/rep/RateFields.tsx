@@ -29,6 +29,24 @@ import styles from "./RateFields.module.css";
  * whatever the quote actually carries, locked immediately, and never
  * substituted — it only removes the rep's ability to retype it.
  *
+ * The card-not-present PER-TRANSACTION FEE is locked too, as of 2026-10-14
+ * ("remove the ability to edit transaction fee on cnp"), and unconditionally
+ * rather than on `cnpLocked`: there is nothing to confirm, because the fee is
+ * not looked up per quote the way the rate is — it arrives with the rate card
+ * (`RateSuggestion`) or sits at the $0.15 default. Two consequences worth
+ * knowing before "fixing" either one:
+ *
+ *  - `QuoteRates` carries ONE `perTransactionFee`, not one per lane, so the
+ *    two fee boxes have always been views of the same number. Locking this
+ *    one doesn't freeze the fee — it says the card-present lane is where it's
+ *    typed. Giving card-not-present its own fee would be a pricing change,
+ *    not a UI one.
+ *  - On a `cardNotPresentOnly` quote the card-present lane is HIDDEN, so no
+ *    fee box is editable at all and the fee is whatever the rate card or the
+ *    default put there. That is deliberate (product owner, 2026-10-14): a
+ *    merchant with no card-present lane has no rep-editable rate either, so
+ *    the whole lane is policy.
+ *
  * One component for all three rep surfaces — the wizard's Pricing step,
  * prospect creation and the Edit Quote panel — because the margin control it
  * replaced had drifted into three different widgets with three different
@@ -193,11 +211,15 @@ export default function RateFields({
             <span className={styles.plus} aria-hidden="true">+</span>
             <span className={styles.inputWrap}>
               <span className={styles.unit} data-side="left">$</span>
+              {/* Locked like the rate beside it — see this file's doc comment
+                  for why it's unconditional, and for what that means on a
+                  card-not-present-only quote. */}
               <DecimalField
                 className={styles.input} data-unit="leading"
                 value={value.perTransactionFee}
-                onChange={setPerTransactionFee}
-                aria-label="Card not present, per transaction fee, dollars"
+                onChange={() => {}}
+                disabled
+                aria-label="Card not present, per transaction fee, dollars — set by AIO's rate card, not editable"
               />
             </span>
             <span className={styles.suffix}>per transaction</span>
@@ -223,7 +245,8 @@ export default function RateFields({
 
       {!hideNote && !cardNotPresentOnly && (
         <p className={styles.note}>
-          Card-not-present is set by AIO&rsquo;s rate card and isn&rsquo;t rep-editable. Default is{" "}
+          Card-not-present &mdash; rate and per-transaction fee &mdash; is set by AIO&rsquo;s rate card and
+          isn&rsquo;t rep-editable. Default is{" "}
           {pctText(DEFAULT_QUOTE_RATES.cardPresentRate)}% + ${DEFAULT_QUOTE_RATES.perTransactionFee.toFixed(2)} until
           the ticket-size and volume matrix has a basis to quote from.
         </p>

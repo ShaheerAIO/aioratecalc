@@ -31,21 +31,27 @@ type Props = {
    * row.
    */
   signInHref?: string;
+  /** Replaces "Sign in to continue" — e.g. when the merchant has no account yet. */
+  signInLabel?: string;
 };
 
 // Exported (not just inlined) so it's unit-testable as a pure function,
 // matching the rest of this codebase's pure-function-over-DOM-render test
 // idiom — see OnboardingChecklistPanel.test.ts.
-export function withSignInOverride(modules: OnboardingModule[], signInHref?: string): OnboardingModule[] {
+export function withSignInOverride(
+  modules: OnboardingModule[],
+  signInHref?: string,
+  signInLabel = "Sign in to continue",
+): OnboardingModule[] {
   if (!signInHref) return modules;
   return modules.map(m =>
     !m.locked && m.href && m.key !== "quote"
-      ? { ...m, href: signInHref, ctaLabel: "Sign in to continue" }
+      ? { ...m, href: signInHref, ctaLabel: signInLabel }
       : m
   );
 }
 
-export default function OnboardingChecklistPanel({ modules, notice, signInHref }: Props) {
+export default function OnboardingChecklistPanel({ modules, notice, signInHref, signInLabel }: Props) {
   return (
     <>
       {notice && (
@@ -59,7 +65,7 @@ export default function OnboardingChecklistPanel({ modules, notice, signInHref }
           )}
         </div>
       )}
-      <ModuleChecklist modules={withSignInOverride(modules, signInHref)} />
+      <ModuleChecklist modules={withSignInOverride(modules, signInHref, signInLabel)} />
     </>
   );
 }

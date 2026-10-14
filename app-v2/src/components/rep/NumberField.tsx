@@ -53,7 +53,8 @@ export type DecimalFieldProps = {
   max?: number;
   className?: string;
   /** Read-only display — used for the locked card-not-present rate (RateFields.tsx,
-   *  2026-10-13). `onChange` is still required by the type but never fires. */
+   *  2026-10-13) and its per-transaction fee (2026-10-14). `onChange` is still
+   *  required by the type but never fires. */
   disabled?: boolean;
   "aria-label": string;
 };

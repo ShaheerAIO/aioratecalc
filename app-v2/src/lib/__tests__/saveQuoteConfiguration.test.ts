@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/merchant";
-import { picksFromQuoteLines, toQuoteLine, QUOTE_NOTE_WATCHER } from "@/lib/quoting";
+import { picksFromQuoteLines, toQuoteLine } from "@/lib/quoting";
 import { PACKAGES } from "@/lib/quotePackages";
 
 // The free hardware kit is switched off for this file: these tests are about
@@ -27,11 +27,11 @@ vi.mock("@/lib/storage/postgresAdapter", () => ({
   postgresStorage: { getApplication, saveApplication },
 }));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
-const createDealNote = vi.fn();
+const setDealBillingNotes = vi.fn();
 vi.mock("@/lib/adapters/hubspot", () => ({
   listCompanyContacts: vi.fn(),
   getCompanyProfile: vi.fn(),
-  createDealNote,
+  setDealBillingNotes,
 }));
 vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail: vi.fn() }));
 vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms: vi.fn() }));
@@ -44,10 +44,9 @@ vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany: vi.fn() }));
 // publish-at-send reversal) for createProspectAction's publishAtSend —
 // mocked for the same reason as the one above (it pulls in the server-only
 // db client), and because saveQuoteConfigurationAction never calls it either.
-// resolveSender is also mocked here: mirrorQuoteNote now uses it to resolve
-// the REP's HubSpot owner id (so the quote note is authored by them, not by
-// Elizabeth — see the note tests below). Defaults to a resolved owner; tests
-// that care about the no-HubSpot-owner case override it per-test.
+// resolveSender is mocked for the same reason, and is no longer touched by
+// mirrorQuoteNote at all — the quote note moved onto the deal's billing_notes
+// property on 2026-10-14, so there is no note author to resolve.
 const resolveSender = vi.fn();
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote: vi.fn(), resolveSender }));
 // Default 50% pillow, matching actions/pricing.ts's DEFAULT_PADDING — the
@@ -517,82 +516,52 @@ describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
 
   it("takes the 60 days the plan itself seeds without asking for anything", async () => {
     await expect(save(undefined, 60)).resolves.toBeTruthy();
-    expect(createDealNote).not.toHaveBeenCalled();
+    expect(setDealBillingNotes).not.toHaveBeenCalled();
   });
 
-  it("saves with a reason, authored by the rep, mentioning the watcher", async () => {
+  it("writes the reason onto the deal's Billing Notes property", async () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
     const updated = await save("Equipment lands in November, agreed with the owner.", 90);
 
     expect(updated.quoteNote).toBe("Equipment lands in November, agreed with the owner.");
-    expect(createDealNote).toHaveBeenCalledTimes(1);
-    const [dealId, body, ownerId, mention] = createDealNote.mock.calls[0];
+    expect(setDealBillingNotes).toHaveBeenCalledTimes(1);
+    const [dealId, text] = setDealBillingNotes.mock.calls[0];
     expect(dealId).toBe("deal-9");
-    expect(body).toContain("90 days");
-    expect(body).toContain("Equipment lands in November");
-    // No literal "@Name" in the raw body any more — createDealNote builds the
-    // mention chip itself and prepends it ahead of this text (see noteHtml).
-    expect(body).not.toContain(`@${QUOTE_NOTE_WATCHER.name}`);
-    // Authored by the REP's resolved HubSpot owner id, never the watcher's.
-    expect(ownerId).toBe("owner-rep-1");
-    expect(ownerId).not.toBe(QUOTE_NOTE_WATCHER.hubspotOwnerId);
-    expect(mention).toEqual({ ownerId: QUOTE_NOTE_WATCHER.hubspotOwnerId, name: QUOTE_NOTE_WATCHER.name });
-    expect(resolveSender).toHaveBeenCalledWith("rep-1");
+    expect(text).toContain("90 days");
+    expect(text).toContain("Equipment lands in November");
   });
 
-  it("omits hubspot_owner_id when the rep doesn't resolve to a HubSpot owner", async () => {
-    // The seeded dev rows (rep@aioapp.com/admin@aioapp.com) resolve this way
-    // on purpose. Must NOT fall back to the watcher's id — that recreates the
-    // self-mention bug.
-    resolveSender.mockResolvedValue({ ok: false, code: "not_a_portal_owner", repEmail: "rep@aioapp.com" });
-    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
-    await save("Equipment lands in November, agreed with the owner.", 90);
-
-    expect(createDealNote).toHaveBeenCalledTimes(1);
-    const [, , ownerId] = createDealNote.mock.calls[0];
-    expect(ownerId).toBeUndefined();
-  });
-
-  it("still posts the note when the owner lookup itself throws", async () => {
-    resolveSender.mockRejectedValue(new Error("HubSpot owner lookup failed"));
-    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
-    await expect(save("Equipment lands in November, agreed with the owner.", 90)).resolves.toBeTruthy();
-
-    expect(createDealNote).toHaveBeenCalledTimes(1);
-    const [, , ownerId] = createDealNote.mock.calls[0];
-    expect(ownerId).toBeUndefined();
-  });
-
-  it("opens the plain (non-delay) heading the same way, mentioning the watcher", async () => {
+  // The old note engagement needed a preamble because a note body carries no
+  // label; the property's card is already called "Billing Notes", so below the
+  // threshold the rep's sentence stands on its own.
+  it("writes a sub-threshold note verbatim, with no preamble", async () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
     await save("Just a note, no delay involved.", 60);
-    expect(createDealNote).toHaveBeenCalledTimes(1);
-    const [, body, , mention] = createDealNote.mock.calls[0];
-    expect(body).not.toContain(`@${QUOTE_NOTE_WATCHER.name}`);
-    expect(body).toContain("note from the rep on this quote");
-    expect(mention).toEqual({ ownerId: QUOTE_NOTE_WATCHER.hubspotOwnerId, name: QUOTE_NOTE_WATCHER.name });
+    expect(setDealBillingNotes).toHaveBeenCalledTimes(1);
+    const [, text] = setDealBillingNotes.mock.calls[0];
+    expect(text).toBe("Just a note, no delay involved.");
   });
 
   it("keeps the quote when the note can't reach HubSpot", async () => {
     // A note is a record of a decision, never a precondition for one — a
-    // missing notes scope must not stop a rep quoting.
+    // missing scope must not stop a rep quoting.
     getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
-    createDealNote.mockRejectedValueOnce(new Error("403 missing scope"));
+    setDealBillingNotes.mockRejectedValueOnce(new Error("403 missing scope"));
     await expect(save("Equipment lands in November.", 90)).resolves.toBeTruthy();
     expect(saveApplication).toHaveBeenCalled();
   });
 
-  it("omits the mention arg entirely when the deal id is missing (no call at all)", async () => {
+  it("writes nothing when the deal id is missing", async () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: null }));
     await save("A note with nowhere to go.", 90);
-    expect(createDealNote).not.toHaveBeenCalled();
+    expect(setDealBillingNotes).not.toHaveBeenCalled();
   });
 
-  it("does not repost a note the deal already carries", async () => {
+  it("does not rewrite a note the deal already carries", async () => {
     const note = "Equipment lands in November, agreed with the owner.";
     getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9", quoteNote: note }));
     await save(note, 90);
-    expect(createDealNote).not.toHaveBeenCalled();
+    expect(setDealBillingNotes).not.toHaveBeenCalled();
   });
 
   it("leaves an existing note alone when the caller doesn't offer the box", async () => {

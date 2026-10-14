@@ -1369,7 +1369,7 @@ export default function ProductConfigurator({
         aria-label="Note on this quote"
       />
       <span className={styles.adjustNote}>
-        Posted to the HubSpot deal for {QUOTE_NOTE_WATCHER.name}.
+        Posted to the HubSpot deal&rsquo;s Billing Notes for {QUOTE_NOTE_WATCHER.name}.
       </span>
     </label>
   ) : null;

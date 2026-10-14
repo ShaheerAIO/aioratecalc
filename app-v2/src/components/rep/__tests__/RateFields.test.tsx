@@ -104,6 +104,55 @@ describe("RateFields", () => {
     render(<Harness initial={DEFAULT_QUOTE_RATES} />);
     expect(screen.getByText(/isn.t rep-editable/)).toBeTruthy();
   });
+
+  // 2026-10-14, "remove the ability to edit transaction fee on cnp". The fee
+  // box in the card-not-present lane is a VIEW of the quote's single
+  // perTransactionFee, so locking it moves where the fee is typed rather than
+  // freezing it — the card-present box below still writes the same number.
+  it("renders the card-not-present per-transaction fee disabled", () => {
+    render(<Harness initial={STORED} />);
+    const fee = screen.getByLabelText(/Card not present, per transaction fee/) as HTMLInputElement;
+    expect(fee.disabled).toBe(true);
+  });
+
+  it("never fires onChange from the locked card-not-present fee box", () => {
+    let changes = 0;
+    function Spy() {
+      const [value, setValue] = useState(STORED);
+      return <RateFields value={value} onChange={next => { changes++; setValue(next); }} />;
+    }
+    render(<Spy />);
+    const fee = screen.getByLabelText(/Card not present, per transaction fee/) as HTMLInputElement;
+    fireEvent.change(fee, { target: { value: "0.99" } });
+    expect(changes).toBe(0);
+  });
+
+  it("still lets the card-present lane set the one shared per-transaction fee", () => {
+    let last: QuoteRates = STORED;
+    function Spy() {
+      const [value, setValue] = useState(STORED);
+      return <RateFields value={value} onChange={next => { last = next; setValue(next); }} />;
+    }
+    render(<Spy />);
+    const fee = screen.getByLabelText("Card present, per transaction fee, dollars") as HTMLInputElement;
+    fireEvent.change(fee, { target: { value: "0.20" } });
+    fireEvent.blur(fee);
+    expect(last.perTransactionFee).toBeCloseTo(0.2, 6);
+    // And it shows through in the locked card-not-present box, because there
+    // is only ever one fee on the quote.
+    const cnpFee = screen.getByLabelText(/Card not present, per transaction fee/) as HTMLInputElement;
+    expect(cnpFee.value).toBe("0.20");
+  });
+
+  // Product owner, 2026-10-14: on a card-not-present-only quote the
+  // card-present lane is hidden, so NOTHING is editable — accepted
+  // deliberately, the whole lane is policy there.
+  it("leaves no editable fee box at all on a card-not-present-only quote", () => {
+    render(<RateFields value={STORED} onChange={() => {}} cardNotPresentOnly />);
+    expect(screen.queryByLabelText("Card present, per transaction fee, dollars")).toBeNull();
+    const fee = screen.getByLabelText(/Card not present, per transaction fee/) as HTMLInputElement;
+    expect(fee.disabled).toBe(true);
+  });
 });
 
 // freshQuote — the no-basis bug: a brand-new quote starts at

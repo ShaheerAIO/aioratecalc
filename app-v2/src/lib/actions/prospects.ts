@@ -17,8 +17,8 @@ import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type ReplyToRep, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import {
-  createDealNote, deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot,
-  updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
+  deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot,
+  setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
 import { buildAndPublishBillingQuote, resolveSender } from "@/lib/billing/publishBillingQuote";
 import { analysisFromQuoteConfig, marginFloorBlockers } from "@/lib/pricing";
@@ -26,7 +26,7 @@ import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "
 import {
   buildQuote, isAllowedForQuoteType, isProcessingQuote, longestBillingDelayDays,
   processesCardNotPresentOnly, quoteHasProcessing,
-  quoteNoteBlockers, quoteTypeOf, toQuoteLine, DELAY_NOTE_THRESHOLD_DAYS, QUOTE_NOTE_WATCHER,
+  quoteNoteBlockers, quoteTypeOf, toQuoteLine, DELAY_NOTE_THRESHOLD_DAYS,
 } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
 import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
@@ -281,38 +281,33 @@ async function syncBillingContact(
 }
 
 /**
- * Mirror the rep's quote note onto the HubSpot deal, as a note AUTHORED BY
- * THE REP and @-mentioning QUOTE_NOTE_WATCHER (Elizabeth Phillips) — both the
- * structured `hs_at_mentioned_owner_ids` property and the matching
- * `data-mention-id`/`data-mention-name` markup `createDealNote` builds into
- * the body. Neither half alone renders a working mention (see `noteHtml`).
+ * Mirror the rep's quote note onto the HubSpot deal's "Billing Notes" card —
+ * the `billing_notes` deal property (product owner, 2026-10-14).
  *
- * The author must NOT be Elizabeth: HubSpot does not notify anyone about
- * their own note, and authoring every one of these as her is exactly why the
- * mention never fired. So the rep's own HubSpot owner id is resolved via
- * `resolveSender` — the same `findOwnerByEmail` lookup `publishBillingQuote.ts`
- * already uses to verify `hs_sender_email` — rather than a second, un-synced
- * notion of "the rep's real address". A rep who resolves to no HubSpot owner
- * (the seeded dev rows `rep@aioapp.com`/`admin@aioapp.com` deliberately do)
- * gets `hubspot_owner_id` omitted entirely, so the note is authored by the
- * integration instead — never falling back to Elizabeth, which would
- * recreate the bug this fixes.
+ * This REPLACES a note engagement that was authored by the rep and
+ * @-mentioned QUOTE_NOTE_WATCHER (Elizabeth Phillips). The mention was the
+ * only thing that notified her, and a property notifies nobody, so that is
+ * the deliberate trade: the note is now where she reads it on the deal record
+ * instead of arriving as an alert. `createDealNote`, the mention markup it
+ * built and the `resolveSender` owner lookup that kept the rep as author were
+ * all deleted with it; see `setDealBillingNotes` for what is left and for how
+ * to get an alert back (a HubSpot-side workflow, needing nothing from here).
  *
  * Best-effort, like the company sync above: the quote is already saved, and a
  * note is a RECORD of a decision rather than a precondition for one — a
- * missing `crm.objects.notes.write` scope, or a failed owner lookup, must not
- * stop a rep quoting.
+ * missing scope must not stop a rep quoting.
  *
- * Only on CHANGE, and only when there is a deal to put it on. HubSpot notes
- * are append-only (there is no update-this-note here), so posting an unchanged
- * note on every save would bury the deal in copies of one sentence. The
- * trade-off runs the other way for a note written before the deal existed: it
- * is kept on the row and reaches HubSpot the next time the rep edits it, which
- * is the same bargain `deliverLeadLink` strikes — the rep's own copy is never
- * lost, even when the push is.
+ * Only on CHANGE, and only when there is a deal to put it on. A property
+ * overwrites rather than accumulating, so re-posting an unchanged note is
+ * merely a wasted call rather than the pile of duplicates it was under the
+ * old append-only note — but it is still a write to AIO's live CRM on every
+ * save, so the guard stays. The trade-off runs the other way for a note
+ * written before the deal existed: it is kept on the row and reaches HubSpot
+ * the next time the rep edits it, which is the same bargain `deliverLeadLink`
+ * strikes — the rep's own copy is never lost, even when the push is.
  */
 async function mirrorQuoteNote(
-  app: Pick<MerchantApplication, "id" | "hubspotDealId" | "quoteNote" | "quoteLines" | "ownerUserId">,
+  app: Pick<MerchantApplication, "id" | "hubspotDealId" | "quoteNote" | "quoteLines">,
   previous: string | null,
 ): Promise<void> {
   const note = (app.quoteNote ?? "").trim();
@@ -321,29 +316,19 @@ async function mirrorQuoteNote(
 
   // The delay is what makes this note mandatory, so it is what the note has
   // to open with — a reason with no number beside it is a sentence nobody can
-  // check. No literal "@Name" here: `createDealNote` builds the mention chip
-  // itself (see `noteHtml`) and prepends it ahead of this heading text, so
-  // writing one here too would duplicate it in the rendered note.
+  // check. Below the threshold the note stands on its own: the card is already
+  // labelled "Billing Notes", so a preamble saying so would only push the
+  // rep's actual sentence further down a one-line property.
   const delay = longestBillingDelayDays(app.quoteLines ?? []);
-  const heading = delay > DELAY_NOTE_THRESHOLD_DAYS
-    ? `— billing on this quote starts after ${delay} days ` +
-      `(past the ${DELAY_NOTE_THRESHOLD_DAYS}-day default). The rep's reason:`
-    : `— note from the rep on this quote:`;
-
-  // Best-effort: an owner-lookup failure (network, missing scope) must not
-  // block the note, it just means the integration authors it instead of the rep.
-  const sender = await resolveSender(app.ownerUserId).catch(() => null);
-  const repOwnerId = sender?.ok ? sender.ownerId : undefined;
+  const text = delay > DELAY_NOTE_THRESHOLD_DAYS
+    ? `Billing on this quote starts after ${delay} days ` +
+      `(past the ${DELAY_NOTE_THRESHOLD_DAYS}-day default). The rep's reason: ${note}`
+    : note;
 
   try {
-    await createDealNote(
-      app.hubspotDealId,
-      `${heading}\n\n${note}`,
-      repOwnerId,
-      { ownerId: QUOTE_NOTE_WATCHER.hubspotOwnerId, name: QUOTE_NOTE_WATCHER.name }
-    );
+    await setDealBillingNotes(app.hubspotDealId, text);
   } catch (err) {
-    console.error("HubSpot quote note push failed", app.id, app.hubspotDealId, err);
+    console.error("HubSpot billing notes push failed", app.id, app.hubspotDealId, err);
   }
 }
 

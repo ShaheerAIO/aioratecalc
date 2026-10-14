@@ -1,3 +1,7 @@
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db/client";
+import { users } from "@/lib/db/schema";
+import { canClaimLeadAccount } from "@/lib/leadAccount";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
 import { checklistNotice, getOnboardingModules } from "@/lib/onboardingModules";
@@ -52,6 +56,15 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
     hasQuote: hasQuoteBasis(app),
   });
 
+  // The emailed account link is one-shot, and /customer/login can't help an
+  // address with no account — so until a password exists, the post-payment
+  // rows go to account creation instead of a sign-in screen.
+  const customerUserId = lookup.row.customerUserId;
+  const [linked] = customerUserId
+    ? await db.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, customerUserId)).limit(1)
+    : [];
+  const needsAccount = canClaimLeadAccount(Boolean(app.quoteAcceptedAt), linked ?? null);
+
   return (
     <div className={shellStyles.shell}>
       <div className={shellStyles.container}>
@@ -60,7 +73,8 @@ export default async function LeadPage({ params }: { params: Promise<{ token: st
         <OnboardingChecklistPanel
           modules={modules}
           notice={checklistNotice(app, { billingHref: `${basePath}/quote` })}
-          signInHref="/customer/login"
+          signInHref={needsAccount ? `${basePath}/account` : "/customer/login"}
+          signInLabel={needsAccount ? "Create account to continue" : undefined}
         />
       </div>
     </div>

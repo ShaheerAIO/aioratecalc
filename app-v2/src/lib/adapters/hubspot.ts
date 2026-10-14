@@ -728,109 +728,42 @@ export async function createDeal(input: CreateDealInput): Promise<string> {
   return data.id;
 }
 
-// HUBSPOT_DEFINED note → deal. The note has to be associated at CREATE the
-// same way a deal's company is: a note with no association is a record nobody
-// will ever come across.
-export const NOTE_TO_DEAL_ASSOCIATION_TYPE_ID = 214;
-
-/** A person to @-mention: HubSpot's chip needs both the id and the display name. */
-export type DealNoteMention = { ownerId: string; name: string };
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-// Attribute context additionally needs `"` escaped, or a name containing one
-// would break out of the `data-mention-name="…"` attribute it sits in.
-function escapeAttr(s: string): string {
-  return escapeHtml(s).replace(/"/g, "&quot;");
-}
-
 /**
- * The rep's text, as safe HTML, with optional @-mentions rendered as the
- * markup the portal's own UI produces when a person types "@Name" — verified
- * live against portal 244508708 (2026-10-13) against real mentions in the
- * portal (note 406503541481 and others, all identical in shape):
+ * Put the rep's quote note on the deal's "Billing Notes" card.
  *
- *   <div style="" dir="auto" data-top-level="true"><p style="margin:0;">
- *     <strong><span data-mention-id="161690499" data-mention-name="Elizabeth Phillips"
- *       style="color: #425b76;font-weight: 600;">@Elizabeth Phillips</span></strong>
- *     please look at this one for pricing.</p></div>
+ * `billing_notes` is a plain string property on the DEAL (verified live
+ * against portal 244508708, 2026-10-14: type `string`, writable), rendered as
+ * its own card on the deal record — which is where the product owner asked
+ * for this to live on 2026-10-14, replacing the note ENGAGEMENT that used to
+ * carry it.
  *
- * `hs_at_mentioned_owner_ids` alone does NOT create the chip — the chip comes
- * from this markup living inside `hs_note_body`. Both halves are required;
- * `createDealNote` still sets the property to the same ids.
+ * Two things follow from it being a property rather than a note, and both are
+ * the point rather than a regression to fix:
  *
- * `body` is rep-entered free text and is always escaped (`escapeHtml`) before
- * it reaches this output. The mention markup is trusted content we construct
- * ourselves — its two inputs (id, name) are each escaped (`escapeAttr`/
- * `escapeHtml`) rather than relied upon to already be safe, but the two paths
- * never cross: the note text is never trusted enough to go unescaped, and the
- * mention markup never runs through the note-text escaper (which would mangle
- * its own `<`/`>`).
- */
-function noteHtml(body: string, mentions: DealNoteMention[] = []): string {
-  const paragraphs = escapeHtml(body).split(/\n{2,}/).map(p => p.replace(/\n/g, "<br>"));
-  const mentionMarkup = mentions
-    .map(m =>
-      `<strong><span data-mention-id="${escapeAttr(m.ownerId)}" data-mention-name="${escapeAttr(m.name)}" ` +
-      `style="color: #425b76;font-weight: 600;">@${escapeHtml(m.name)}</span></strong>`
-    )
-    .join(" ");
-  if (mentionMarkup) {
-    paragraphs[0] = paragraphs[0] ? `${mentionMarkup} ${paragraphs[0]}` : mentionMarkup;
-  }
-  const html = paragraphs.map(p => `<p style="margin:0;">${p}</p>`).join("");
-  return `<div style="" dir="auto" data-top-level="true">${html}</div>`;
-}
-
-/**
- * Put a note on a deal, owned by `ownerId` and optionally @-mentioning
- * `mentions`.
+ *  - It OVERWRITES. A note engagement is append-only, so the old path had to
+ *    guard against burying the deal in copies of one sentence; a property
+ *    simply holds the latest text, and the rep's current note wins over
+ *    whatever was there.
+ *  - It notifies NOBODY. The old path @-mentioned Elizabeth Phillips, which
+ *    was the only reason the note was authored by the rep rather than by her
+ *    (HubSpot doesn't notify you about your own note). None of that machinery
+ *    survives — `createDealNote`, the mention markup and the owner lookup for
+ *    it all went with this change. If the alert is wanted back, a HubSpot-side
+ *    workflow on "Billing Notes is known / has changed" is the way, and it
+ *    needs nothing from EasyOB.
  *
- * Verified live against portal 244508708 (2026-10-13): `hs_at_mentioned_owner_ids`
- * DOES exist on this portal's NOTE object (enumeration/checkbox, not
- * read-only) and a value POSTed there persists on read-back. But the property
- * ALONE does not render a mention chip and does not notify anyone — that
- * needs the `data-mention-id`/`data-mention-name` markup in `hs_note_body`
- * too (see `noteHtml`). Both halves are required.
- *
- * `hs_at_mentioned_owner_ids` is an enumeration/checkbox, so HubSpot wants
- * multiple values as one semicolon-separated string; a single id is just
- * that id.
- *
- * Every caller is fire-and-log — a note is a record of a decision, never a
+ * Every caller is fire-and-log — a note records a decision, it is never a
  * precondition for one — so the thrown message has to name the deal itself.
- * A 403 here means the billing app is missing `crm.objects.notes.write`.
  */
-export async function createDealNote(
-  dealId: string,
-  body: string,
-  ownerId?: string | null,
-  mentions?: DealNoteMention | DealNoteMention[] | null
-): Promise<string> {
-  const mentionList = Array.isArray(mentions) ? mentions : mentions ? [mentions] : [];
-  const properties: Record<string, string> = {
-    hs_timestamp: new Date().toISOString(),
-    hs_note_body: noteHtml(body, mentionList),
-  };
-  if (ownerId) properties.hubspot_owner_id = ownerId;
-  if (mentionList.length) properties.hs_at_mentioned_owner_ids = mentionList.map(m => m.ownerId).join(";");
-
-  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/notes`, {
-    method: "POST",
+export async function setDealBillingNotes(dealId: string, text: string): Promise<void> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/${dealId}`, {
+    method: "PATCH",
     headers: billingHeaders(),
-    body: JSON.stringify({
-      properties,
-      associations: [{
-        to: { id: dealId },
-        types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: NOTE_TO_DEAL_ASSOCIATION_TYPE_ID }],
-      }],
-    }),
+    body: JSON.stringify({ properties: { billing_notes: text } }),
   });
-  if (!res.ok) throw hubspotErr(`HubSpot note create failed (deal ${dealId})`, res.status, await res.text());
-  const data = await res.json() as { id: string };
-  return data.id;
+  if (!res.ok) {
+    throw hubspotErr(`HubSpot billing notes write failed (deal ${dealId})`, res.status, await res.text());
+  }
 }
 
 /**
