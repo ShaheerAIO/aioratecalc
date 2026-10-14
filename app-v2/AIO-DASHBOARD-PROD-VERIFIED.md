@@ -80,3 +80,28 @@ Two prod-only strictnesses — both now handled in `aioDashboard.ts`:
 Created during verification, named `EASYOB SMOKETEST` so it's identifiable:
 business `2028` / company `com_J0smWL7x2PHvW0QvZts0` / location `2065` / workplace
 `wrk_IPNk6RzC1y3tQLbw9czH`, with a real (now-open) Adyen live onboarding.
+
+Its **alias is `easyob_smoketest_20261009212643`** — record it, because the alias is the only
+thing `findAioBusinessByAlias` can be asked about, and it is not derivable from the ids above.
+
+## What `business-list` actually returns (read-only, re-verified 2026-10-14)
+
+The service account's credentials still work and authenticated reads succeed against prod.
+Three shapes, none of them obvious from the route name:
+
+- **Unfiltered** `GET /api/business/business-list` → `data` is an ARRAY of **275** businesses,
+  and each element has exactly ONE key, `businessAlias`. No id, no name. This is the shared
+  production tenant list (`ofarrell_cafe`, `luigi's_pizzeria_-_bellaire`, `enoteca-la-storia`…).
+  `findAioBusinessByAlias` returns null for an array, which is why calling it without a filter
+  looks like "not found" rather than "275 results".
+- **Filtered miss** `?businessAlias=nope` → HTTP 200, `data: null`, and a message reading
+  `"Logo for alias nope"`. The message is nonsense; `data: null` is the not-found signal.
+- **Filtered hit** → `{ businessName, restaurants: [...] }` and **no `id`** — confirming the
+  constraint provision.ts is built around. Note the restaurant objects carry `name` but no `id`
+  either, although the TS return type claims `{ id: number; name: string }`; `restaurants[0]?.id`
+  is therefore `undefined` in practice. Harmless today only because the `!existing.businessId`
+  check returns `needs_attention` before the locationId line is reached.
+
+So the reconcile guard can prove an alias is TAKEN but can never recover the ids behind it. That
+is the documented dead end, not a bug: a hit on an alias we have no persisted id for is a row for
+a human to unpick, because creating again would burn a second alias.
