@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildProspectPrefill, buildProspectPrefillForContact, businessDescription, channelsFromModules,
   contactOptionLabel, initialContactChoice,
-  monthlyVolumeFromCompany, normalizeCountry, normalizePhone, processorFromPos, streetLine,
+  normalizeCountry, normalizePhone, processorFromPos, streetLine,
 } from "@/lib/hubspotPrefill";
 import { mergeDealAndCompanyContacts, pickOwnerAssociation, rankContactAssociations, type CompanyAssociation, type HubspotCompanyProfile, type HubspotContact } from "@/lib/adapters/hubspot";
 
@@ -338,7 +338,6 @@ describe("buildProspectPrefill", () => {
     expect(p.processing).toEqual({
       currentProcessor: "Clover",
       businessDescription: "Authentic Lebanese dining, Mediterranean cuisine.",
-      monthlyVolume: "230000",
     });
     // "Website" is in FULL.modules but no longer maps to a channel — see
     // channelsFromModules above.
@@ -377,8 +376,13 @@ describe("buildProspectPrefill", () => {
     expect(p.business.annualRevenue).toBeUndefined();
   });
 
-  it("leaves monthly volume absent when the company has none", () => {
-    const p = buildProspectPrefill({ ...FULL, processingVolume: null }, CONTACT);
+  // 2026-10-13: the product owner asked for monthly volume to stop being
+  // prefilled at all, even though `processing_volume` is genuinely populated
+  // on the company (see the "NOT mapped" note on buildProspectPrefill) — a
+  // prefilled number is indistinguishable from a real rep answer in a field
+  // that feeds the rate matrix and the margin floor.
+  it("never prefills monthly volume, even when the company has it", () => {
+    const p = buildProspectPrefill(FULL, CONTACT);
     expect(p.processing.monthlyVolume).toBeUndefined();
     expect(p.fromHubspot).not.toContain("processing.monthlyVolume");
   });
@@ -391,7 +395,6 @@ describe("buildProspectPrefill", () => {
       "ownerContact.firstName", "ownerContact.lastName", "ownerContact.title",
       "ownerContact.email", "ownerContact.phone",
       "processing.currentProcessor", "processing.businessDescription",
-      "processing.monthlyVolume",
       "channels",
     ]);
   });
@@ -520,21 +523,5 @@ describe("buildProspectPrefill", () => {
       null
     );
     expect(p.business.dbaState).toBe("Baja California");
-  });
-});
-
-// `processing_volume` is the one volume property that is actually populated —
-// 24 companies on 2026-09-25, verified against the live portal. Its
-// near-namesake `monthly_card_volume` has 0 and is deliberately not read.
-describe("monthlyVolumeFromCompany", () => {
-  it("passes a real monthly volume through as a plain number string", () => {
-    expect(monthlyVolumeFromCompany("230000")).toBe("230000");
-    expect(monthlyVolumeFromCompany(" 80000 ")).toBe("80000");
-  });
-
-  it("drops zero, blank and non-numeric values rather than prefilling a wrong floor input", () => {
-    for (const v of ["0", "", "   ", null, undefined, "n/a", "-5"]) {
-      expect(monthlyVolumeFromCompany(v)).toBeUndefined();
-    }
   });
 });

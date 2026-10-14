@@ -109,24 +109,6 @@ export function processorFromPos(currentPos: string | null | undefined): string 
 }
 
 /**
- * `processing_volume` ("Processing Volume $") — the merchant's MONTHLY card
- * volume in dollars, as a plain number for the form's number input.
- *
- * Rejects anything that isn't a positive finite number, including the zeros
- * and blanks HubSpot returns for an unset numeric property. A zero here would
- * be indistinguishable from a real answer in the form, and `monthlyVolume`
- * feeds the margin floor — so an absent key (the form keeps its own value) is
- * strictly better than a wrong one.
- */
-export function monthlyVolumeFromCompany(processingVolume: string | null | undefined): string | undefined {
-  const raw = (processingVolume ?? "").trim();
-  if (!raw) return undefined;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
-  return String(n);
-}
-
-/**
  * A human business description. HubSpot's own `description` wins when it's
  * there; otherwise cuisine + restaurant type are stitched into a short phrase.
  * Deliberately prose, not a code: see the MCC note on buildProspectPrefill.
@@ -197,12 +179,20 @@ export function mccFromCompany(mccCode: string | null | undefined): string | und
  *    ~0% populated portal-wide.
  *  - Ticket and card-present split. No HubSpot property carries either; they
  *    come from the statement analysis.
- *
- * Monthly volume IS mapped, from `processing_volume` — an earlier version of
- * this comment claimed that property was empty portal-wide and it is not (24
- * companies carried a value on 2026-09-25). Its near-namesake
- * `monthly_card_volume` is the empty one. Both facts were checked against the
- * live portal, not inferred.
+ *  - Monthly volume, from `processing_volume` ("Processing Volume $") —
+ *    REVERSED 2026-10-13 (product owner: "get rid of the prefilled monthly
+ *    volume, just make it empty"). The property itself is real and genuinely
+ *    populated — 24 companies carried a value on 2026-09-25, checked against
+ *    the live portal, and its near-namesake `monthly_card_volume` is the empty
+ *    one — so this is NOT a rediscovery of the old "it's empty portal-wide"
+ *    mistake. The problem is what a prefilled number looks like once it's
+ *    sitting in the form: indistinguishable from an answer the rep actually
+ *    gave, and `monthlyVolume` feeds both the rate matrix (picks the
+ *    card-present rate) and the margin floor (can refuse the quote) — so a
+ *    stale or wrong value silently prices the deal. The number parser this
+ *    used to call (`monthlyVolumeFromCompany`, rejected non-positive/blank
+ *    values the same way `mccFromCompany` rejects a non-4-digit code) was
+ *    deleted with it; it had no other caller.
  */
 export function buildProspectPrefill(
   company: HubspotCompanyProfile | null | undefined,
@@ -304,7 +294,6 @@ export function buildProspectPrefill(
     currentProcessor: (company.previousProcessor ?? "").trim() || processorFromPos(company.currentPos),
     mcc: mccFromCompany(company.mccCode),
     businessDescription: businessDescription(company),
-    monthlyVolume: monthlyVolumeFromCompany(company.processingVolume),
   });
 
   const channels = channelsFromModules(company.modules);

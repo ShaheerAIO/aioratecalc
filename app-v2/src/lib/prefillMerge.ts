@@ -51,6 +51,15 @@ export const NO_REVIEW_PREFILL_APPLIED: AppliedReviewFields = {};
 // for those at all, so merging them would be a no-op dressed up as a rule; the
 // Review section marks them "HubSpot doesn't have this" instead (see
 // UNKNOWABLE_REVIEW_FIELDS below).
+//
+// processing.monthlyVolume is ALSO excluded, but for a different reason: that
+// one isn't unknowable — `processing_volume` is a real, populated HubSpot
+// property (see hubspotPrefill.ts) — it's a product decision (2026-10-13) not
+// to prefill it, because a prefilled number is indistinguishable from a real
+// answer in a field that drives the rate matrix and the margin floor. So it
+// doesn't belong in UNKNOWABLE_REVIEW_FIELDS either (that would claim HubSpot
+// has nothing, which is false); it's simply never in `incoming` any more, and
+// the Review section renders it as a plain, unbadged empty field.
 const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => string | undefined }> = [
   { path: "business.legalName", read: p => p.business.legalName },
   { path: "business.dba", read: p => p.business.dba },
@@ -71,9 +80,6 @@ const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => st
   { path: "ownerContact.phone", read: p => p.ownerContact.phone },
   { path: "processing.currentProcessor", read: p => p.processing.currentProcessor },
   { path: "processing.businessDescription", read: p => p.processing.businessDescription },
-  // From `processing_volume`. Sparse, but present on real companies — it was
-  // wrongly listed as unknowable until 2026-09-25.
-  { path: "processing.monthlyVolume", read: p => p.processing.monthlyVolume },
   // From `mcc_code`, which EasyOB writes back once a rep has entered one.
   { path: "processing.mcc", read: p => p.processing.mcc },
 ];

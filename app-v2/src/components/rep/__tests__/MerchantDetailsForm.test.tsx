@@ -82,19 +82,18 @@ describe("MerchantDetailsForm — Same as operating address", () => {
     expect(checkbox().checked).toBe(true);
   });
 
-  it("checking it copies the operating address into the legal fields and disables them", () => {
+  it("checking it copies the operating address into the legal fields, hides the legal inputs, and shows a summary", () => {
     render(<Harness initialBusiness={{
       ...BLANK_BUSINESS,
       dbaAddress: "1 Main St", dbaCity: "Springfield", dbaState: "CA", dbaZip: "90210",
     }} />);
     fireEvent.click(checkbox());
     expect(checkbox().checked).toBe(true);
-    const street = screen.getByPlaceholderText("The customer fills this in") as HTMLInputElement;
-    expect(street.value).toBe("1 Main St");
-    expect(street.disabled).toBe(true);
+    expect(screen.queryByPlaceholderText("The customer fills this in")).toBeNull();
+    expect(screen.getByText("1 Main St, Springfield, CA 90210")).toBeTruthy();
   });
 
-  it("stays in sync: editing the operating street address while checked updates the legal one too", () => {
+  it("stays in sync: editing the operating street address while checked updates the summary too", () => {
     render(<Harness initialBusiness={{
       ...BLANK_BUSINESS,
       dbaAddress: "1 Main St", dbaCity: "Springfield", dbaState: "CA", dbaZip: "90210",
@@ -105,11 +104,10 @@ describe("MerchantDetailsForm — Same as operating address", () => {
     const operatingStreet = screen.getByLabelText("Operating street address") as HTMLInputElement;
     fireEvent.change(operatingStreet, { target: { value: "2 Elm St" } });
 
-    const legalStreetInput = screen.getByPlaceholderText("The customer fills this in") as HTMLInputElement;
-    expect(legalStreetInput.value).toBe("2 Elm St");
+    expect(screen.getByText("2 Elm St, Springfield, CA 90210")).toBeTruthy();
   });
 
-  it("unchecking stops the sync and leaves the legal fields independently editable, holding their last value", () => {
+  it("unchecking stops the sync, brings the legal fields back, and holds their last value", () => {
     render(<Harness initialBusiness={{
       ...BLANK_BUSINESS,
       dbaAddress: "1 Main St", dbaCity: "Springfield", dbaState: "CA", dbaZip: "90210",
@@ -118,6 +116,8 @@ describe("MerchantDetailsForm — Same as operating address", () => {
     fireEvent.click(checkbox()); // uncheck
     expect(checkbox().checked).toBe(false);
 
+    // The summary line is gone, replaced by the editable field again.
+    expect(screen.queryByText("1 Main St, Springfield, CA 90210")).toBeNull();
     const legalStreetInput = screen.getByPlaceholderText("The customer fills this in") as HTMLInputElement;
     expect(legalStreetInput.disabled).toBe(false);
     expect(legalStreetInput.value).toBe("1 Main St"); // held, not cleared
@@ -130,5 +130,17 @@ describe("MerchantDetailsForm — Same as operating address", () => {
     // And the legal field is independently editable again.
     fireEvent.change(legalStreetInput, { target: { value: "42 Birch Ln" } });
     expect((screen.getByPlaceholderText("The customer fills this in") as HTMLInputElement).value).toBe("42 Birch Ln");
+  });
+
+  it("renders no summary line when the mirrored address is still blank", () => {
+    // Both addresses empty but "equal" (both blank) never starts checked (see
+    // the UNCHECKED-on-a-blank-form test above) — check it by hand instead,
+    // so the component is in the checked-but-blank state the guard protects.
+    render(<Harness initialBusiness={BLANK_BUSINESS} />);
+    fireEvent.click(checkbox());
+    expect(checkbox().checked).toBe(true);
+    expect(screen.queryByPlaceholderText("The customer fills this in")).toBeNull();
+    // No summary paragraph rendered — nothing to echo.
+    expect(document.querySelectorAll("section[aria-label='Legal'] p").length).toBe(0);
   });
 });

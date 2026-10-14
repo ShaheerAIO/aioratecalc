@@ -81,7 +81,7 @@ export default function MerchantDetailsForm({
     span: number,
     value: string,
     onChange: (v: string) => void,
-    opts: { placeholder?: string; type?: string; inputMode?: "numeric" | "decimal" | "tel"; disabled?: boolean } = {},
+    opts: { placeholder?: string; type?: string; inputMode?: "numeric" | "decimal" | "tel" } = {},
   ) => {
     const unknowable = UNKNOWABLE_REVIEW_FIELDS.includes(path);
     const fromHubspot = !unknowable && isFromHubspotField(applied, path, value);
@@ -98,7 +98,6 @@ export default function MerchantDetailsForm({
           onChange={e => onChange(e.target.value)}
           placeholder={unknowable && !opts.placeholder ? "Not in HubSpot" : opts.placeholder}
           className={styles.input}
-          disabled={opts.disabled}
         />
       </label>
     );
@@ -128,9 +127,12 @@ export default function MerchantDetailsForm({
   // second confirmation — the 10/12 button and its "silently keeps the two in
   // step" objection are superseded, not re-litigated here). Checked means the
   // legal address IS the operating address and tracks every edit to it; the
-  // legal fields go read-only below so it's visible they're derived rather
-  // than independently typed. Unchecked, the legal fields are free text again
-  // and keep whatever they already held. The risk the 10/12 comment named is
+  // legal fields are HIDDEN below (not merely disabled — product owner,
+  // 2026-10-13: "hide the duplicate rows for cleanliness") and replaced by a
+  // one-line summary of what they currently hold, since hiding the inputs
+  // would otherwise remove the only on-screen statement of what gets saved.
+  // Unchecked, the legal fields are free text again and keep whatever they
+  // already held. The risk the 10/12 comment named is
   // real and is the one being accepted: Adyen and Check verify the legal
   // address against the state independently, so a synced-but-wrong value now
   // reaches them silently instead of requiring a rep to click a button first.
@@ -181,11 +183,23 @@ export default function MerchantDetailsForm({
     }
   };
 
+  // The one-line stand-in for the legal address fields while they're hidden
+  // (sameAsOperating checked) — the only remaining on-screen statement of
+  // what will actually be saved. Null, not an empty string, when there's
+  // nothing to echo yet, so the caller renders nothing rather than a blank line.
+  const legalAddressSummary = (() => {
+    const street = business.address.trim();
+    if (!street) return null;
+    const cityState = [business.city.trim(), business.state.trim()].filter(Boolean).join(", ");
+    const tail = [cityState, business.zip.trim()].filter(Boolean).join(" ");
+    return tail ? `${street}, ${tail}` : street;
+  })();
+
   // Same CHECKBOX pattern as "Same as operating address" above (reversed
   // 10/13, product owner's second confirmation, from the one-time copy
   // button this superseded). Checked means Billing IS the Owner contact and
-  // tracks every edit to it (see `o` above); the four billing fields go
-  // read-only below, same visible tell as the legal address fields. Picking
+  // tracks every edit to it (see `o` above); the four billing fields are
+  // HIDDEN below, same treatment as the legal address fields above. Picking
   // an existing HubSpot contact while this is checked would let "same as
   // owner" silently PATCH that contact's record, so checking it always
   // clears `billingContactId` first — a synced billing contact can never be
@@ -221,6 +235,16 @@ export default function MerchantDetailsForm({
     setSameAsOwner(checked);
     if (checked) mirrorBillingFromOwner(ownerContact);
   };
+
+  // The one-line stand-in for the billing contact fields while they're
+  // hidden (sameAsOwner checked) — name and email, the two things a rep most
+  // needs to confirm. Null when there's nothing to echo yet.
+  const billingContactSummary = (() => {
+    const name = [billing.firstName.trim(), billing.lastName.trim()].filter(Boolean).join(" ");
+    const email = billing.email.trim();
+    if (!name && !email) return null;
+    return [name, email].filter(Boolean).join(" · ");
+  })();
 
   // The note below the Billing fields: only when an existing HubSpot contact
   // is picked AND the rep has actually changed something from what loaded —
@@ -272,21 +296,25 @@ export default function MerchantDetailsForm({
           {field("business.legalName", "Legal name, as registered", 8, business.legalName, v => b({ legalName: v }), { placeholder: "Not in HubSpot · saved back to the company" })}
           {select("Entity type", 4, business.bizType, v => b({ bizType: v as BusinessInfo["bizType"] }),
             BIZ_TYPES.map(([t, label]) => <option key={t} value={t}>{label}</option>))}
-          {field("business.address", "Legal street address", 4, business.address, v => b({ address: v }), { placeholder: "The customer fills this in", disabled: sameAsOperating })}
-          {field("business.city", "City", 3, business.city, v => b({ city: v }), { placeholder: "—", disabled: sameAsOperating })}
-          {field("business.state", "State", 2, business.state, v => b({ state: v }), { placeholder: "CA", disabled: sameAsOperating })}
-          {field("business.zip", "ZIP", 3, business.zip, v => b({ zip: v }), { inputMode: "numeric", placeholder: "90210", disabled: sameAsOperating })}
+          {!sameAsOperating && field("business.address", "Legal street address", 4, business.address, v => b({ address: v }), { placeholder: "The customer fills this in" })}
+          {!sameAsOperating && field("business.city", "City", 3, business.city, v => b({ city: v }), { placeholder: "—" })}
+          {!sameAsOperating && field("business.state", "State", 2, business.state, v => b({ state: v }), { placeholder: "CA" })}
+          {!sameAsOperating && field("business.zip", "ZIP", 3, business.zip, v => b({ zip: v }), { inputMode: "numeric", placeholder: "90210" })}
         </div>
+        {sameAsOperating && legalAddressSummary && (
+          <p className={styles.billingWarning}>{legalAddressSummary}</p>
+        )}
         <div className={styles.checkRow}>
           {/* A CHECKBOX again (reversed 10/13, product owner — see the note on
               `sameAsOperating` above for what this undoes and what it keeps:
               the 10/12 risk, that Adyen/Check verify the legal address against
               the state independently of whatever we hand them, is accepted
-              rather than designed around). Checked, the legal fields below go
-              read-only and mirror the operating address live, which is the
-              visible tell that they're derived rather than typed. Unchecked,
-              they're ordinary free text again and hold whatever was last in
-              them — nothing is cleared on uncheck. */}
+              rather than designed around). Checked, the legal fields below are
+              hidden and replaced by a one-line summary that mirrors the
+              operating address live. Unchecked, they're ordinary free text
+              again and hold whatever was last in them — nothing is cleared on
+              uncheck. The tooltip stays reachable either way — it matters
+              more, not less, once the fields themselves are out of view. */}
           <label className={styles.check}>
             <input
               type="checkbox"
@@ -361,17 +389,21 @@ export default function MerchantDetailsForm({
               {contactOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
             </select>
           </label>
-          {field("billing.firstName", "First name", 3, billing.firstName, v => onBillingChange({ ...billing, firstName: v }), { disabled: sameAsOwner })}
-          {field("billing.lastName", "Last name", 3, billing.lastName, v => onBillingChange({ ...billing, lastName: v }), { disabled: sameAsOwner })}
-          {field("billing.email", "Email", 3, billing.email, v => onBillingChange({ ...billing, email: v }), { type: "email", placeholder: "billing@business.com", disabled: sameAsOwner })}
-          {field("billing.phone", "Phone", 3, billing.phone, v => onBillingChange({ ...billing, phone: v }), { type: "tel", placeholder: "555-000-0000", disabled: sameAsOwner })}
+          {!sameAsOwner && field("billing.firstName", "First name", 3, billing.firstName, v => onBillingChange({ ...billing, firstName: v }))}
+          {!sameAsOwner && field("billing.lastName", "Last name", 3, billing.lastName, v => onBillingChange({ ...billing, lastName: v }))}
+          {!sameAsOwner && field("billing.email", "Email", 3, billing.email, v => onBillingChange({ ...billing, email: v }), { type: "email", placeholder: "billing@business.com" })}
+          {!sameAsOwner && field("billing.phone", "Phone", 3, billing.phone, v => onBillingChange({ ...billing, phone: v }), { type: "tel", placeholder: "555-000-0000" })}
         </div>
+        {sameAsOwner && billingContactSummary && (
+          <p className={styles.billingWarning}>{billingContactSummary}</p>
+        )}
         <div className={styles.checkRow}>
           {/* A CHECKBOX, not a one-time copy button (reversed 10/13 — see
               `sameAsOwner`'s comment above for what this undoes). Checked,
               Billing mirrors the Owner contact live and the four fields above
-              go read-only. Unchecked, they're ordinary free text again and
-              hold whatever was last in them. */}
+              are hidden, replaced by a one-line name-and-email summary.
+              Unchecked, they're ordinary free text again and hold whatever
+              was last in them. */}
           <label className={styles.check}>
             <input
               type="checkbox"

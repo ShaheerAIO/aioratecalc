@@ -102,15 +102,6 @@
   outline-offset: 1px;
 }
 
-/* The legal address fields while "Same as operating address" is checked —
-   derived, not typed, so they read differently from an ordinary blank or
-   filled field. */
-.input:disabled {
-  background: var(--paper-2);
-  color: var(--ink-2);
-  cursor: not-allowed;
-}
-
 .textarea { resize: vertical; min-height: 3.5rem; line-height: 1.45; }
 
 .check {
@@ -130,8 +121,10 @@
 .checkRow .check { margin-top: 0; }
 .checkRow + .grid { margin-top: var(--space-sm); }
 
-/* The "this will update HubSpot" note under Billing — same understated
-   register as .legend above, not an alarm. */
+/* The understated note/summary line used in a few places below a group's
+   grid — the "this will update HubSpot" note under Billing, and the
+   mirrored-value summary shown in place of the hidden legal-address /
+   billing-contact fields. Same register as .legend above, not an alarm. */
 .billingWarning {
   margin: var(--space-xs) 0 0;
   font-size: 0.75rem;

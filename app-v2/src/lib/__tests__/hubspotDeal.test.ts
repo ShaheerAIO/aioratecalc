@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   STAGE_MAP,
   HUBSPOT_DEAL_PIPELINE_ID,
@@ -13,6 +13,7 @@ import {
   buildDealAssociations,
   dedupeCompanyIds,
   parseDealIdInput,
+  hardwareCommissionWritebackEnabled,
 } from "@/lib/adapters/hubspot";
 import { STAGE_RANK } from "@/lib/stages";
 import type { DealStage, MerchantApplication, QuoteLine, TenantLink } from "@/types/merchant";
@@ -302,6 +303,67 @@ describe("buildDealProperties", () => {
       billingFrequency: "one_time",
       productType: "Hardware",
       ...over,
+    });
+
+    // Behind HARDWARE_COMMISSION_WRITEBACK_ENABLED, default OFF — see
+    // buildDealProperties' own comment. Every test below the flag section
+    // exercises the write path ITSELF, so each one turns the flag on; the
+    // flag's own default-off / exact-"true" behavior is covered separately.
+    const savedFlag = { value: undefined as string | undefined };
+    beforeEach(() => {
+      savedFlag.value = process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED;
+      process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = "true";
+    });
+    afterEach(() => {
+      if (savedFlag.value === undefined) delete process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED;
+      else process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = savedFlag.value;
+    });
+
+    describe("hardwareCommissionWritebackEnabled", () => {
+      it("is off by default — unset, 'false', '1', or '' are all off", () => {
+        delete process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED;
+        expect(hardwareCommissionWritebackEnabled()).toBe(false);
+        process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = "false";
+        expect(hardwareCommissionWritebackEnabled()).toBe(false);
+        process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = "1";
+        expect(hardwareCommissionWritebackEnabled()).toBe(false);
+        process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = "";
+        expect(hardwareCommissionWritebackEnabled()).toBe(false);
+      });
+
+      it("is on only for the exact string 'true'", () => {
+        process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = "true";
+        expect(hardwareCommissionWritebackEnabled()).toBe(true);
+      });
+    });
+
+    it("writes neither property when the flag is unset, even with full commission data on file", () => {
+      delete process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED;
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({ costToRep: 300, repCommissionBps: 1000, rsmCommissionBps: 500 })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(props).not.toHaveProperty("rep_commission");
+      expect(props).not.toHaveProperty("rsm_commission");
+    });
+
+    it("writes neither property when the flag is 'false', '1', or ''", () => {
+      for (const value of ["false", "1", ""]) {
+        process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = value;
+        const props = buildDealProperties(appAt("merchant_filling", {
+          quoteLines: [hwLine({ costToRep: 300, repCommissionBps: 1000, rsmCommissionBps: 500 })],
+        } as unknown as Partial<MerchantApplication>));
+        expect(props).not.toHaveProperty("rep_commission");
+        expect(props).not.toHaveProperty("rsm_commission");
+      }
+    });
+
+    it("writes both properties when the flag is exactly 'true'", () => {
+      process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED = "true";
+      const props = buildDealProperties(appAt("merchant_filling", {
+        quoteLines: [hwLine({ costToRep: 300, repCommissionBps: 1000, rsmCommissionBps: 500 })],
+      } as unknown as Partial<MerchantApplication>));
+      expect(props.rep_commission).toBe("40");
+      expect(props.rsm_commission).toBe("20");
     });
 
     it("writes both properties, as rounded DOLLAR totals, not percentages or bps", () => {

@@ -96,16 +96,17 @@ describe("MerchantDetailsForm — Billing contact (items 4/5)", () => {
     expect(screen.getByRole("option", { name: OPTIONS[0].label })).toBeTruthy();
   });
 
-  it("'Same as owner contact' checkbox copies the owner's fields into the billing fields", () => {
+  it("'Same as owner contact' checkbox copies the owner's fields into the billing fields, hidden behind a summary", () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("checkbox", { name: "Same as owner contact" }));
-    // "Ana"/"Reyes" now appear twice (Owner section + the copy landing in
-    // Billing) — proving the copy worked is exactly that there are two now,
-    // not one. The fuller lifecycle (disabling, live mirroring, unchecking)
-    // is covered in MerchantDetailsForm.sameAsOwner.test.tsx.
-    expect(screen.getAllByDisplayValue("Ana")).toHaveLength(2);
-    expect(screen.getAllByDisplayValue("Reyes")).toHaveLength(2);
-    expect(screen.getAllByDisplayValue("ana@tortapalace.com")).toHaveLength(2);
+    // The billing inputs are hidden once checked (product owner, 2026-10-13:
+    // hide the duplicate rows for cleanliness), so "Ana"/"Reyes" still only
+    // appear once each (the Owner section) — the copy lands in the summary
+    // line instead. The fuller lifecycle (live mirroring, unchecking) is
+    // covered in MerchantDetailsForm.sameAsOwner.test.tsx.
+    expect(screen.getAllByDisplayValue("Ana")).toHaveLength(1);
+    expect(screen.getAllByDisplayValue("Reyes")).toHaveLength(1);
+    expect(screen.getByText("Ana Reyes · ana@tortapalace.com")).toBeTruthy();
   });
 
   it("selecting an existing contact reports the id, and editing a billing field changes only that field", () => {

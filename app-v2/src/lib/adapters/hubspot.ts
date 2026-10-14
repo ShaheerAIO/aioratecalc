@@ -14,6 +14,15 @@ import type {
 
 const BASE = "https://api.hubapi.com";
 
+// BEHIND AN ENV FLAG, DEFAULT OFF — same posture as `COMMISSION_WRITEBACK_ENABLED`
+// (src/lib/billing/commissionWriteback.ts) and `AIO_DASHBOARD_ENABLED`: must be
+// exactly the string "true", not any other truthy value, so a stray "false" or
+// "0" can't switch it on. See buildDealProperties' hardware-commission block
+// for why it's gated.
+export function hardwareCommissionWritebackEnabled(): boolean {
+  return process.env.HARDWARE_COMMISSION_WRITEBACK_ENABLED === "true";
+}
+
 // AIO's real sales pipeline. Its *id* is the literal string "default" but its
 // *label* is "Sales " and it carries 17 custom, mostly-numeric stage ids
 // (verified live against portal 244508708, 2026-09-21 — do not re-probe). The
@@ -265,6 +274,15 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
   // PERCENTAGE (read into CatalogProduct as repCommissionBps/rsmCommissionBps).
   // These two are dollar amounts.
   //
+  // BEHIND `HARDWARE_COMMISSION_WRITEBACK_ENABLED`, DEFAULT OFF (see
+  // hardwareCommissionWritebackEnabled above) — these properties land on
+  // AIO's real CRM on every deal sync, and the product owner wants to inspect
+  // the first computed figures before they start writing, rather than leaving
+  // the window between "Elizabeth fills the product cost columns" and
+  // "numbers appear on live deals" at zero. When the flag is off neither
+  // property is written at all — not zeroed, omitted exactly as happens today
+  // when no commission data is on file.
+  //
   // Deliberately NOT gated on app.quoteAcceptedAt, unlike payment_processing_arr
   // above — that gate exists because payment_processing_arr feeds HubSpot's
   // calculated total_arr, which the sales org reads as booked revenue, so a
@@ -296,7 +314,7 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
   // Negative totals are written as-is — never floored at zero, a
   // package-covered line priced at 100% off legitimately nets a negative
   // margin.
-  if (app.quoteLines) {
+  if (hardwareCommissionWritebackEnabled() && app.quoteLines) {
     const commission = quoteHardwareCommission(app.quoteLines);
     if (commission.perLine.some(line => line.rep !== null)) {
       props.rep_commission = String(Math.round(commission.rep * 100) / 100);

@@ -66,6 +66,9 @@ function Harness({
 
 const checkbox = () => screen.getByRole("checkbox", { name: "Same as owner contact" }) as HTMLInputElement;
 const ownerFirstName = () => screen.getAllByLabelText("First name")[0] as HTMLInputElement;
+// Once "Same as owner contact" is checked, the billing First name INPUT is
+// hidden — there's only ever one "First name" field on screen (the owner's).
+// Billing's mirrored value is read from the summary line instead.
 const billingFirstName = () => screen.getAllByLabelText("First name")[1] as HTMLInputElement;
 
 describe("MerchantDetailsForm — Same as owner contact", () => {
@@ -97,31 +100,32 @@ describe("MerchantDetailsForm — Same as owner contact", () => {
     expect(checkbox().checked).toBe(true);
   });
 
-  it("checking it copies the owner contact into the billing fields and disables them", () => {
+  it("checking it copies the owner contact into the billing fields, hides the billing inputs, and shows a summary", () => {
     render(<Harness initialOwner={{ firstName: "Ana", lastName: "Reyes", title: "Owner", email: "ana@biz.com", phone: "555-0101" }} />);
     fireEvent.click(checkbox());
     expect(checkbox().checked).toBe(true);
-    const billing = billingFirstName();
-    expect(billing.value).toBe("Ana");
-    expect(billing.disabled).toBe(true);
+    expect(screen.getAllByLabelText("First name")).toHaveLength(1); // billing's is gone
+    expect(screen.getByText("Ana Reyes · ana@biz.com")).toBeTruthy();
   });
 
-  it("stays in sync: editing the owner contact while checked updates the billing contact too", () => {
+  it("stays in sync: editing the owner contact while checked updates the summary too", () => {
     const contact: OwnerContact = { firstName: "Ana", lastName: "Reyes", title: "Owner", email: "ana@biz.com", phone: "555-0101" };
     render(<Harness initialOwner={contact} initialBilling={{ ...contact }} />);
     expect(checkbox().checked).toBe(true); // already in sync on mount
 
     fireEvent.change(ownerFirstName(), { target: { value: "Diego" } });
 
-    expect(billingFirstName().value).toBe("Diego");
+    expect(screen.getByText("Diego Reyes · ana@biz.com")).toBeTruthy();
   });
 
-  it("unchecking stops the sync and leaves the billing fields independently editable, holding their last value", () => {
+  it("unchecking stops the sync, brings the billing fields back, and holds their last value", () => {
     const contact: OwnerContact = { firstName: "Ana", lastName: "Reyes", title: "Owner", email: "ana@biz.com", phone: "555-0101" };
     render(<Harness initialOwner={contact} initialBilling={{ ...contact }} />);
     fireEvent.click(checkbox()); // uncheck
     expect(checkbox().checked).toBe(false);
 
+    // The summary line is gone, replaced by the editable field again.
+    expect(screen.queryByText("Ana Reyes · ana@biz.com")).toBeNull();
     const billing = billingFirstName();
     expect(billing.disabled).toBe(false);
     expect(billing.value).toBe("Ana"); // held, not cleared
@@ -133,6 +137,16 @@ describe("MerchantDetailsForm — Same as owner contact", () => {
     // And the billing field is independently editable again.
     fireEvent.change(billingFirstName(), { target: { value: "Marco" } });
     expect(billingFirstName().value).toBe("Marco");
+  });
+
+  it("renders no summary line when the mirrored contact is still blank", () => {
+    render(<Harness />); // blank owner + blank billing
+    fireEvent.click(checkbox());
+    expect(checkbox().checked).toBe(true);
+    expect(screen.getAllByLabelText("First name")).toHaveLength(1);
+    // No summary paragraph in the Billing section — nothing to echo.
+    const billingSection = document.querySelector("section[aria-label='Billing']") as HTMLElement;
+    expect(billingSection.querySelectorAll("p").length).toBe(0);
   });
 });
 
