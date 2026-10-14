@@ -25,7 +25,7 @@ import { getPricingPreviewAction } from "@/lib/actions/pricing";
 // wording a few lines down, which explains why this file can't import
 // pricing.ts for anything but its types.
 import type { RoleScopedPricing } from "@/lib/pricing";
-import { ORDER_POINT_CHANNELS, quoteHasProcessing } from "@/lib/quoting";
+import { ORDER_POINT_CHANNELS, processesCardNotPresentOnly, quoteHasProcessing } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
 import { DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType } from "@/types/merchant";
@@ -133,6 +133,9 @@ function NewProspectFlow() {
   // so they get the ticket/volume inputs and a quoted rate — while still
   // getting none of the POS hardware, install lines or ordering points.
   const rated = quoteType !== null && quoteHasProcessing(quoteType, picks, adjustments);
+  // Every sale is online, so there is no card-present rate to show anywhere
+  // on this page — not in the boxes, not on the document preview.
+  const cnpOnly = quoteType !== null && processesCardNotPresentOnly(quoteType, picks, adjustments);
 
   // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
   // prefilled from the company on the deal — see prospects.ts's
@@ -383,6 +386,9 @@ function NewProspectFlow() {
         pricingModel,
         feeOverrides: { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 },
         activeTier: null,
+        // Online-only: all of the volume is card-not-present, so the margin
+        // and the floor are figured on the rate actually being quoted.
+        cardPresentPct: cnpOnly ? 0 : null,
       })
         .then(p => {
           if (!cancelled) {
@@ -399,7 +405,7 @@ function NewProspectFlow() {
     }, 200);
     return () => { cancelled = true; clearTimeout(handle); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rated, volume, ticket, quoteRates, pricingModel]);
+  }, [rated, cnpOnly, volume, ticket, quoteRates, pricingModel]);
 
   const submit = async () => {
     if (hardBlocks.length) {
@@ -570,7 +576,7 @@ function NewProspectFlow() {
       {/* freshQuote: this page always starts a new quote at the flat
           standard rate, often before a volume/ticket basis exists — see
           RateFields.tsx's doc comment on that prop. */}
-      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote />
+      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} />
       {/* Sits under the boxes rather than above them: the rep reads the rate
           they're quoting first, and what the card would have said second. It
           now ALWAYS applies what it suggests (2026-10-13, "get rid of the
@@ -641,13 +647,24 @@ function NewProspectFlow() {
   const documentRate = rated && (
     <div className={styles.docRate}>
       <span className={styles.docRateLabel}>Card processing</span>
+      {/* "card present" / "card not present", never "in person" / "online"
+          (2026-10-14): a cashier keying a card in by hand is standing in
+          front of the customer and is still card-not-present, so the
+          in-person framing names the wrong thing. One vocabulary everywhere
+          a rate is shown. */}
       <span className={styles.docRateValue}>
-        {`${pct(quoteRates.cardPresentRate)}% in person · ${pct(quoteRates.cardNotPresentRate)}% online · + ${fmt$(quoteRates.perTransactionFee)} per transaction`}
+        {[
+          ...(cnpOnly ? [] : [`${pct(quoteRates.cardPresentRate)}% card present`]),
+          `${pct(quoteRates.cardNotPresentRate)}% card not present`,
+          `+ ${fmt$(quoteRates.perTransactionFee)} per transaction`,
+        ].join(" · ")}
       </span>
       <span className={styles.docRateNote}>
-        {hasQuote
-          ? `On about ${fmt$(volume)}/mo at a ${fmt$(ticket)} average ticket`
-          : "Add their monthly volume and average ticket above to quote this"}
+        {cnpOnly
+          ? "They take orders online and nowhere else, so every sale is card-not-present."
+          : hasQuote
+            ? `On about ${fmt$(volume)}/mo at a ${fmt$(ticket)} average ticket`
+            : "Add their monthly volume and average ticket above to quote this"}
       </span>
     </div>
   );

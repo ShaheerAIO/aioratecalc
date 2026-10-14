@@ -35,6 +35,8 @@ import {
   resolveIncludedServices,
   resolvePlatformLine,
   toQuoteLine,
+  processesCardNotPresentOnly,
+  processingDisclosureText,
 } from "@/lib/quoting";
 import type { CatalogProduct, QuoteLine, QuoteType } from "@/types/merchant";
 
@@ -95,6 +97,11 @@ const CATALOG: CatalogProduct[] = [
 // deactivated. Published quotes still carry those lines, so `quoteTotals` has
 // to keep getting the 52/12 conversion right; this is the fixture for that.
 const RETIRED_WEEKLY_PLATFORM = p("217526517443", "AIO Platform (1 to 5 Order Points)", 99, "weekly", "Software");
+
+// The $0 rate-disclosure line. On EVERY quote AIO processes for since
+// 2026-10-14, appended past every adjustment — so it shows up at the end
+// of most built line sets in this file.
+const RATE_LINE = PROCESSING_DISCLOSURE_PRODUCT.name;
 
 const find = (name: string) => CATALOG.find(c => c.name === name)!;
 const line = (name: string, qty: number) => toQuoteLine(find(name), qty);
@@ -258,7 +265,9 @@ describe("always-included services", () => {
     expect(built.orderPoints.total).toBe(1);
     expect(built.platform.status).toBe("resolved");
     expect(built.includedServices.lines).toEqual([]);
-    expect(built.quoteLines.map(l => l.name)).toEqual(["All-in-One Platform"]);
+    // The $0 rate disclosure rides along on every quote AIO processes for
+    // (2026-10-14). It bills nothing and installs nothing.
+    expect(built.quoteLines.map(l => l.name)).toEqual(["All-in-One Platform", RATE_LINE]);
   });
 
   it("is LOUD when a required service isn't in the catalog", () => {
@@ -639,6 +648,7 @@ describe("platform line selection", () => {
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "All-in-One Platform",
       "Website",
+      RATE_LINE,
     ]);
     expect(built.totals.oneTime).toBe(0);
   });
@@ -699,6 +709,8 @@ describe("buildQuote — the one derivation", () => {
       "Cash Drawer",
       // One per POS unit, charged, on top of anything the rep picked.
       "Payment Terminal - AMS1",
+      // Last, past every adjustment — see `resolveProcessingDisclosure`.
+      RATE_LINE,
     ]);
     // 698 + 2×749 + 69 + 2×300 = $2,865 due once. The install ($999) and the
     // training ($499) are on the quote but comped to $0, so they add nothing.
@@ -934,7 +946,6 @@ describe("marketing plans", () => {
 // apart. Online ordering is optional: a plain website takes no payments.
 describe("website on a marketing quote", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
-  const RATE_LINE = PROCESSING_DISCLOSURE_PRODUCT.name;
   const SITE_ID = find("Website").hubspotProductId;
   const ORDERING = { [SITE_ID]: { onlineOrdering: true } };
 
@@ -982,8 +993,10 @@ describe("website on a marketing quote", () => {
     expect(built.blockers).toEqual([]);
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "AIO Marketing Platform",
-      RATE_LINE,
       "Website",
+      // Appended after the charged lines since 2026-10-14, alongside the
+      // pre-auth, so a $0 line can't be counted by `quoteSanityBlockers`.
+      RATE_LINE,
     ]);
     // It discloses, it doesn't bill: $199 + $50 and nothing one-time.
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 249 }]);
@@ -995,12 +1008,24 @@ describe("website on a marketing quote", () => {
     expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
   });
 
-  it("does NOT add it to a POS quote, which has always processed without one", () => {
-    // Every POS quote AIO has ever sent carries no rate line, and those
-    // documents can't be amended once published. The marketing case is
-    // different because nothing else on that quote says AIO touches the money.
+  it("adds it to a POS quote too, since 2026-10-14 — the rates have to be on the document", () => {
+    // REVERSED. It used to be marketing-only, on the reasoning that a POS
+    // merchant obviously knows they're buying payments — which left the rates
+    // written NOWHERE on the document a POS merchant signs. Product owner,
+    // 2026-10-14.
     const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Website", 1]]), [], CATALOG, ORDERING);
-    expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
+    expect(built.quoteLines.map(l => l.name)).toContain(RATE_LINE);
+  });
+
+  it("still leaves a RATE-ONLY quote with no lines at all — the one thing the guard protects", () => {
+    // A processing plan with nothing picked derives nothing. Putting the $0
+    // disclosure on it would make `quoteSanityBlockers` refuse it ("every
+    // line nets to $0"), stop `publishBillingQuote`'s empty-lines
+    // short-circuit firing, and pull in a $0.50 pre-auth — turning a quote
+    // that was never meant to charge anything into one that charges.
+    const built = buildQuote("all_in_one", [], [], CATALOG);
+    expect(built.quoteLines).toEqual([]);
+    expect(built.blockers).toEqual([]);
   });
 
   it("still installs nothing — a website merchant has nothing on site", () => {
@@ -1021,7 +1046,7 @@ describe("website on a marketing quote", () => {
     const stripped = CATALOG.filter(c => c.name !== RATE_LINE);
     const built = buildQuote("marketing_only", picked([["Website", 1]]), [], stripped, ORDERING);
     expect(built.blockers).toHaveLength(1);
-    expect(built.blockers[0]).toContain("state the card rates");
+    expect(built.blockers[0]).toContain("has to state their rates");
   });
 
   it("never hands the rate line back as a pick — no rep may put it on by hand", () => {
@@ -1376,5 +1401,101 @@ describe("quantities counted against what they attach to", () => {
     const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Cash Drawer", 4]]), [], CATALOG);
     expect(built.blockers).toHaveLength(1);
     expect(built.quoteLines.filter(l => l.name === "Cash Drawer").map(l => l.qty)).toEqual([4]);
+  });
+});
+
+// ── Card-not-present only ───────────────────────────────────────────────────
+// A merchant who takes orders online and has nothing on site makes every sale
+// card-not-present, so there is no card-present rate to quote them (product
+// owner, 2026-10-14). The predicate is deliberately NOT "is it marketing + a
+// website", which is what it looks like it should be — see the doc comment on
+// `processesCardNotPresentOnly`.
+describe("processesCardNotPresentOnly", () => {
+  const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
+  const SITE_ID = find("Website").hubspotProductId;
+  const ORDERING = { [SITE_ID]: { onlineOrdering: true } };
+
+  it("is true for a marketing quote whose website takes orders and nothing else", () => {
+    expect(processesCardNotPresentOnly("marketing_only", picked([["Website", 1]]), ORDERING)).toBe(true);
+  });
+
+  it("is FALSE once a kiosk is on it — a kiosk takes a card in person", () => {
+    // The trap the naive predicate falls into: `marketing_term` INCLUDES a
+    // kiosk, so "marketing + a website" would have called every 2-year-term
+    // merchant card-not-present-only.
+    const withKiosk = picked([["Website", 1], ["Mega Kiosk", 1]]);
+    expect(processesCardNotPresentOnly("marketing_only", withKiosk, ORDERING)).toBe(false);
+    expect(processesCardNotPresentOnly("marketing_term", withKiosk, ORDERING)).toBe(false);
+  });
+
+  it("is FALSE with an AMS1 on it, which carries ZERO ordering points but reads cards", () => {
+    // The second trap: the terminal is explicitly 0 points (ORDER_POINT_RULES),
+    // so a points-only test would wave it through.
+    const withTerminal = picked([["Website", 1], ["Payment Terminal - AMS1", 1]]);
+    expect(processesCardNotPresentOnly("marketing_only", withTerminal, ORDERING)).toBe(false);
+  });
+
+  it("is FALSE for every processing plan, whatever is or isn't picked", () => {
+    // A POS plan puts a system in a restaurant. That merchant takes cards
+    // across a counter even before a rep has picked anything.
+    for (const plan of ["all_in_one", "order_pay_only"] as const) {
+      expect(processesCardNotPresentOnly(plan, [])).toBe(false);
+      expect(processesCardNotPresentOnly(plan, picked([["Website", 1]]), ORDERING)).toBe(false);
+    }
+  });
+
+  it("is FALSE for a marketing quote that doesn't process at all", () => {
+    // Nothing to quote a rate on, in either lane.
+    expect(processesCardNotPresentOnly("marketing_only", picked([["Website", 1]]), {})).toBe(false);
+    expect(processesCardNotPresentOnly("marketing_only", [])).toBe(false);
+  });
+
+  it("works off PICKS, which carry no name — the product id is the primary key", () => {
+    // `ProductPick` is {hubspotProductId, qty}. The rep surfaces hold those,
+    // not quote lines, so a name-dependent lookup would silently never match.
+    expect(processesCardNotPresentOnly("marketing_only", [{ hubspotProductId: SITE_ID }], ORDERING)).toBe(true);
+    expect(processesCardNotPresentOnly(
+      "marketing_only",
+      [{ hubspotProductId: SITE_ID }, { hubspotProductId: find("Mega Kiosk").hubspotProductId }],
+      ORDERING
+    )).toBe(false);
+  });
+});
+
+// ── The rate text on the HubSpot line item ──────────────────────────────────
+// The disclosure PRODUCT's own description in HubSpot is static: it states
+// 2.49% / 3.50% and a retired AMEX split to every merchant alike. This is what
+// overrides it with the rates the rep actually quoted.
+describe("processingDisclosureText", () => {
+  const RATES = {
+    cardPresentRate: 0.0275,
+    cardNotPresentRate: 0.033,
+    amexCardPresentRate: 0.0275,
+    amexCardNotPresentRate: 0.033,
+    perTransactionFee: 0.15,
+  };
+
+  it("states both lanes at the quote's own rates", () => {
+    expect(processingDisclosureText(RATES)).toBe(
+      "Card Present — 2.75% + $0.15 per transaction\n" +
+      "Card Not Present — 3.30% + $0.15 per transaction\n" +
+      "\n" +
+      "Chargeback $25 · Retrieval $15"
+    );
+  });
+
+  it("drops the card-present row for a merchant who can never have one", () => {
+    const text = processingDisclosureText(RATES, true);
+    expect(text).not.toContain("Card Present —");
+    expect(text).toContain("Card Not Present — 3.30% + $0.15 per transaction");
+  });
+
+  it("prints two decimals, because every figure on AIO's rate card has two", () => {
+    expect(processingDisclosureText({ ...RATES, cardPresentRate: 0.025 }))
+      .toContain("Card Present — 2.50% + $0.15 per transaction");
+  });
+
+  it("names no AMEX rate — it stopped pricing apart on 2026-10-13", () => {
+    expect(processingDisclosureText({ ...RATES, amexCardPresentRate: 0.0279 })).not.toContain("AMEX");
   });
 });

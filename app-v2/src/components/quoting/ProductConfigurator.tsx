@@ -506,6 +506,11 @@ export default function ProductConfigurator({
       // — which is also what keeps the quote-wide discount and billing-start
       // sweeps from ever naming it.
       if (isPreAuthProduct(l.hubspotProductId, l.name)) continue;
+      // Nor is the rate disclosure, for the same reason: it is derived, it is
+      // $0, and there is nothing on it to discount or delay. It still RENDERS
+      // on the document — it's tagged "Card rates" below — it just carries no
+      // adjust control.
+      if (l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) continue;
       const prev = map.get(l.hubspotProductId);
       const amount = lineDiscountAmount(l);
       if (!prev) {
@@ -795,6 +800,34 @@ export default function ProductConfigurator({
     setAdjustment(id, { discountQty: qty === null || Number.isNaN(qty) ? null : qty });
   };
 
+  // A discount in DOLLARS (2026-10-14, "add a cash discount option for each
+  // line item ... do that math to see what percent discount u would need").
+  //
+  // It stores nothing of its own. `discountPercent` is still the only lever
+  // on the line, because it is the only one that reaches HubSpot
+  // (`hs_discount_percentage`) — so the dollars are converted here and the
+  // percent is what the quote, the receipt and the published document all
+  // carry. There is deliberately no `discountAmount` on `LineAdjustment`: two
+  // stored levers for one discount is a line nobody can say the truth about.
+  //
+  // The base respects `discountQty`, so "$200 off, applies to 1 of 3" takes
+  // $200 off that one unit rather than off all three.
+  const setDiscountAmount = (id: string, raw: string) => {
+    if (raw.trim() === "") { setAdjustment(id, { discountPercent: null, discountQty: null }); return; }
+    const amount = Number(raw);
+    const l = lineFor.get(id);
+    if (!l || Number.isNaN(amount)) return;
+    const base = l.unitPrice * (adjustments[id]?.discountQty ?? l.qty);
+    // Nothing to take a percentage OF. Leaving the discount alone is the only
+    // honest answer — any percent of $0 is $0.
+    if (!(base > 0)) return;
+    // Six decimals so the cent the rep typed is reachable on the largest line
+    // AIO sells; the resulting net is rendered under the field either way, so
+    // a figure that can't land exactly is visible rather than claimed.
+    const pct = Math.round(Math.min(100, Math.max(0, (amount / base) * 100)) * 1e6) / 1e6;
+    setAdjustment(id, pct > 0 ? { discountPercent: pct } : { discountPercent: null, discountQty: null });
+  };
+
   // ── Per-unit editing ──────────────────────────────────────────────────────
   // A line with several units can be edited as one ("2 of 3 free") or unit by
   // unit. The rows are shown for `qty` units whatever the stored array's
@@ -951,6 +984,9 @@ export default function ProductConfigurator({
     const delayed = mode !== "now";
     const unitMode = Array.isArray(adjustments[id]?.units) || openUnits.has(id);
     const units = unitMode ? unitsOf(id, l.qty) : [];
+    // What a dollar discount is a percentage OF — the quantity it is scoped
+    // to, not necessarily the whole line. Mirrors `setDiscountAmount`.
+    const discountBase = l.unitPrice * (adjustments[id]?.discountQty ?? l.qty);
 
     return (
       <div className={styles.adjustWrap}>
@@ -1051,8 +1087,12 @@ export default function ProductConfigurator({
             <label className={styles.adjustField}>
               <span className={styles.adjustLabel}>Percent off</span>
               <span className={styles.pctWrap}>
+                {/* `step="any"` since 2026-10-14: a discount typed in dollars
+                    back-fills a fractional percent ("$747 off $2,247" is
+                    33.244326%), and a step of 1 makes the browser flag the
+                    value the tool itself just put there. */}
                 <input
-                  type="number" min={0} max={100} step={1}
+                  type="number" min={0} max={100} step="any"
                   className={styles.adjustInput}
                   value={l.discountPercent ?? ""}
                   placeholder="0"
@@ -1060,6 +1100,25 @@ export default function ProductConfigurator({
                   aria-label={`Discount percent for ${l.name}`}
                 />
                 <span className={styles.pctSign}>%</span>
+              </span>
+            </label>
+
+            {/* The same discount in dollars. Two views of ONE stored number —
+                see `setDiscountAmount` for why the percent is what's kept. */}
+            <label className={styles.adjustField}>
+              <span className={styles.adjustLabel}>Amount off</span>
+              <span className={styles.pctWrap}>
+                <span className={styles.pctSign}>$</span>
+                <input
+                  type="number" min={0} step="any"
+                  className={`${styles.adjustInput} ${styles.amountInput}`}
+                  value={discountBase > 0 && discounted
+                    ? Math.round(discountBase * (l.discountPercent ?? 0)) / 100
+                    : ""}
+                  placeholder="0.00"
+                  onChange={e => setDiscountAmount(id, e.target.value)}
+                  aria-label={`Discount amount in dollars for ${l.name}`}
+                />
               </span>
             </label>
 
@@ -1084,6 +1143,20 @@ export default function ProductConfigurator({
                   <span className={styles.pctSign}>of {l.qty}</span>
                 </span>
               </label>
+            )}
+
+            {/* What the line actually comes to. A dollar figure can't always
+                be hit exactly by a percentage, so the rep is shown the real
+                result rather than told the number they typed worked. */}
+            {discounted && (
+              <p className={styles.adjustResult}>
+                {l.qty} × {fmt$(l.unitPrice)} →{" "}
+                {/* Off the SUMMED real discount, not off the merged line's
+                    percent: a split line's halves carry different percentages
+                    and only `discountAmount` adds them up correctly. */}
+                <strong>{fmt$(lineListAmount(l) - l.discountAmount)}</strong>
+                {l.billingFrequency !== "one_time" && `/${fmtCycle(l.billingFrequency)}`}
+              </p>
             )}
             </div>
 

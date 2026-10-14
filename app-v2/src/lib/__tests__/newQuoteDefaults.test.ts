@@ -33,6 +33,8 @@ const P: Array<[string, string, number, CatalogProduct["billingFrequency"], stri
   ["223152695032", "System Onboarding and Training", 499, "one_time", "Service"],
   ["335280960199", "Additional Software License", 19, "monthly", "Software"],
   [PRE_AUTH_PRODUCT.hubspotProductId, PRE_AUTH_PRODUCT.name, 0.5, "one_time", "Service"],
+  // $0 rate disclosure — on every quote AIO processes for since 2026-10-14.
+  ["260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"],
 ];
 const CATALOG: CatalogProduct[] = P.map(([hubspotProductId, name, price, billingFrequency, productType]) => ({
   hubspotProductId, name, price, billingFrequency, productType,

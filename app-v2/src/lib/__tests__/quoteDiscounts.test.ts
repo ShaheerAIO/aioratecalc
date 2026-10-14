@@ -9,6 +9,7 @@ import {
   amountDueAtCheckout,
   applyLineAdjustment,
   PRE_AUTH_PRODUCT,
+  PROCESSING_DISCLOSURE_PRODUCT,
   checkoutAmountBlockers,
   buildQuote,
   isAllowedForQuoteType,
@@ -61,6 +62,9 @@ const CATALOG: CatalogProduct[] = [
   p(INSTALL_ID, "Onsite Installation", 999, "one_time", "Service"),
   p(TRAINING_ID, "System Onboarding and Training", 499, "one_time", "Service"),
   p(PRE_AUTH_PRODUCT.hubspotProductId, PRE_AUTH_PRODUCT.name, 0.5, "one_time", "Service"),
+  // $0, and on every quote AIO processes for since 2026-10-14 — so it lands
+  // on the end of every built line set in this file.
+  p(PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId, PROCESSING_DISCLOSURE_PRODUCT.name, 0, "one_time", "AIO Payment Processing"),
 ];
 
 const line = (over: Partial<QuoteLine> = {}): QuoteLine => ({

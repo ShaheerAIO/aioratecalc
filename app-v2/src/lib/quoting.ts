@@ -9,7 +9,7 @@ import { monthlyEquivalent } from "@/lib/utils";
 import { decomposePackages, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
-  QuoteAdjustments, QuoteLine, QuoteTotals, QuoteType, StoredQuoteType, UnitAdjustment,
+  QuoteAdjustments, QuoteLine, QuoteRates, QuoteTotals, QuoteType, StoredQuoteType, UnitAdjustment,
 } from "@/types/merchant";
 
 // ── Quote types ─────────────────────────────────────────────────────────────
@@ -233,6 +233,49 @@ export function quoteHasProcessing(
   if (isProcessingQuote(quoteType)) return true;
   if ((items ?? []).some(i => i.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId)) return true;
   return websiteTakesOrders(items, adjustments);
+}
+
+/**
+ * Every sale this merchant makes is card-not-present: they take orders online
+ * and have nothing on site that a card is handed to. So there is no
+ * card-present rate to quote, and showing one invites a rep to negotiate a
+ * number that can never apply (product owner, 2026-10-14).
+ *
+ * Only a MARKETING quote can be this. A processing plan puts a system in a
+ * restaurant — the whole point of it is taking cards across a counter — so
+ * `all_in_one` and `order_pay_only` are card-present merchants by
+ * construction, whatever they have or haven't picked yet.
+ *
+ * Within marketing, the question is NOT "is it marketing + a website", which
+ * is what it looks like it should be: a `marketing_term` quote INCLUDES a
+ * kiosk, and a kiosk takes a card in person. So anything on the quote that a
+ * customer can tap a card against disqualifies it — every ordering-point
+ * product except the Website itself, plus the AMS1, which is a card reader
+ * and deliberately counts zero ordering points (see ORDER_POINT_RULES).
+ *
+ * The three surviving ORDER_POINT_CHANNELS (QR, third-party delivery,
+ * phone-AI) are all card-not-present, so none of them is checked here.
+ */
+export function processesCardNotPresentOnly(
+  quoteType: QuoteType,
+  /**
+   * Quote lines OR the rep's picks — `name` is optional because a
+   * `ProductPick` carries only an id. That costs nothing: the product id is
+   * the primary key for both lookups below, and the name is their fallback
+   * for a product created after the rules were written.
+   */
+  items: Array<{ hubspotProductId: string; name?: string }> | null | undefined,
+  adjustments?: QuoteAdjustments | null
+): boolean {
+  if (!isMarketingQuote(quoteType)) return false;
+  if (!quoteHasProcessing(quoteType, items, adjustments)) return false;
+  return !(items ?? []).some(item => {
+    const line = { hubspotProductId: item.hubspotProductId, name: item.name ?? "" };
+    return (
+      isAms1Product(line.hubspotProductId, line.name) ||
+      (line.hubspotProductId !== WEBSITE_PRODUCT_ID && orderPointsPerUnit(line) > 0)
+    );
+  });
 }
 
 // ── The rep-facing picker ───────────────────────────────────────────────────
@@ -1058,26 +1101,70 @@ export const PROCESSING_DISCLOSURE_PRODUCT = {
 } as const;
 
 /**
- * The rate-disclosure line, on a marketing quote whose website takes online
- * orders. A website without online ordering takes no payments, so it gets none.
+ * The incident fees AIO discloses alongside the card rates. Transcribed from
+ * the HubSpot product's own description, which is the only place they have
+ * ever been written down — nothing in EasyOB prices them, and no quote varies
+ * them.
+ */
+const DISCLOSURE_INCIDENT_FEES = "Chargeback $25 · Retrieval $15";
+
+/**
+ * The rate-disclosure line's text, as the merchant reads it on their quote.
  *
- * ONLY there. A POS quote processes too and has never carried this line, and
- * adding it would rewrite the line items on every quote AIO sends — onto
- * documents that can't be amended once published. The marketing case is
- * different because nothing else on that quote says AIO touches their money:
- * a POS merchant is obviously buying payments, a marketing merchant who added
- * a $50 website is not.
+ * This exists because the HubSpot product's own description is STATIC: it
+ * states 2.49% / 3.50% and a separate AMEX pair to every merchant alike,
+ * regardless of what the rep quoted, and the AMEX split was retired on
+ * 2026-10-13. So the line item carries its own description instead (see
+ * `toLineItemProperties`), composed here from the quote's real rates.
+ *
+ * `cardNotPresentOnly` drops the card-present row rather than printing a rate
+ * that can never apply — the same rule the rep's own rate boxes follow. See
+ * `processesCardNotPresentOnly`.
+ */
+export function processingDisclosureText(
+  rates: QuoteRates,
+  cardNotPresentOnly: boolean = false
+): string {
+  const pct = (fraction: number) => `${(fraction * 100).toFixed(2)}%`;
+  const fee = `$${rates.perTransactionFee.toFixed(2)} per transaction`;
+  const rows = [
+    ...(cardNotPresentOnly ? [] : [`Card Present — ${pct(rates.cardPresentRate)} + ${fee}`]),
+    `Card Not Present — ${pct(rates.cardNotPresentRate)} + ${fee}`,
+  ];
+  return [...rows, "", DISCLOSURE_INCIDENT_FEES].join("\n");
+}
+
+/**
+ * The rate-disclosure line: EVERY quote AIO processes money for now carries
+ * it (product owner, 2026-10-14). It used to go on marketing quotes with
+ * online ordering ONLY, on the reasoning that a POS merchant obviously knows
+ * they're buying payments — which left the rates written nowhere at all on
+ * the document a POS merchant signs.
+ *
+ * `hasChargedLines` is what keeps a RATE-ONLY quote rate-only, and it is not
+ * optional. A processing plan with nothing picked derives no lines at all;
+ * put a $0 line on it and three things break at once — `quoteSanityBlockers`
+ * refuses it ("every line nets to $0"), `publishBillingQuote`'s
+ * `lines.length === 0` short-circuit stops firing, and `resolvePreAuthLine`
+ * adds fifty cents to a quote that was never meant to charge anything. So
+ * this is resolved AFTER the charged lines exist, not alongside them.
  *
  * Derived rather than picked — the product is in `PICKER_EXCLUDED_PRODUCT_NAMES`
- * and stays there, so no rep can put it on a quote by hand.
+ * and stays there, so no rep can put it on a quote by hand. It is $0, so it
+ * changes no total; the rates themselves are written onto the HubSpot line
+ * item's description at publish (see publishBillingQuote.ts), because the
+ * product's own description in the portal is static text that knows nothing
+ * about this merchant.
  */
 export function resolveProcessingDisclosure(
   quoteType: QuoteType,
   pickedLines: QuoteLine[],
   catalog: CatalogProduct[],
-  adjustments: QuoteAdjustments = {}
+  adjustments: QuoteAdjustments = {},
+  hasChargedLines: boolean = true
 ): IncludedServicesResult {
-  if (!isMarketingQuote(quoteType) || !websiteTakesOrders(pickedLines, adjustments)) return { lines: [], missing: [] };
+  if (!hasChargedLines) return { lines: [], missing: [] };
+  if (!quoteHasProcessing(quoteType, pickedLines, adjustments)) return { lines: [], missing: [] };
 
   const product =
     catalog.find(p => p.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) ??
@@ -2029,7 +2116,15 @@ export function adjustmentsFromQuoteLines(
 
   // The online-ordering toggle is saved as the disclosure line it produces.
   // Without this, reopening a website quote that takes orders turns it off.
-  if ((lines ?? []).some(l => l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId)) {
+  //
+  // MARKETING ONLY, since 2026-10-14: the disclosure line goes on every quote
+  // AIO processes for now, so on a POS quote its presence says nothing about
+  // the website and reading it as the toggle would tick that box on every
+  // `all_in_one` quote reopened.
+  if (
+    quoteType && isMarketingQuote(quoteType) &&
+    (lines ?? []).some(l => l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId)
+  ) {
     out[WEBSITE_PRODUCT_ID] = { ...out[WEBSITE_PRODUCT_ID], onlineOrdering: true };
   }
   return out;
@@ -2138,7 +2233,6 @@ export function buildQuote(
   );
   const requiredTerminals = resolveRequiredAms1(quoteType, picks, catalog);
   const softwareLicense = resolveSoftwareLicense(quoteType, picks, catalog);
-  const processingDisclosure = resolveProcessingDisclosure(quoteType, picks, catalog, adjustments);
 
   // Everything a PLAN hands over at no charge, taken out of what the rep
   // picked before anything else runs: the 2-year term's kiosk, the marketing
@@ -2173,7 +2267,6 @@ export function buildQuote(
   const chargedLines = [
     ...(platform.line ? [platform.line] : []),
     ...softwareLicense.lines,
-    ...processingDisclosure.lines,
     ...packages.lines,
   ].flatMap(line => {
     const adjustment = adjustments[line.hubspotProductId];
@@ -2195,11 +2288,21 @@ export function buildQuote(
     return splitPartialDiscount(adjusted, adjustment);
   });
 
-  // The pre-authorization comes LAST and past every adjustment on purpose: it is
-  // judged on what the quote would collect after the rep's discounts and
-  // delays, and nothing the rep does can reach it. See PRE_AUTH_PRODUCT.
-  const preAuth = resolvePreAuthLine(chargedLines, catalog);
-  const quoteLines = [...chargedLines, ...preAuth.lines];
+  // The rate disclosure and the pre-authorization both come LAST and past
+  // every adjustment, for the same two reasons: neither is the rep's to edit,
+  // and neither may count toward `quoteSanityBlockers`. The disclosure is $0,
+  // so counting it would make "every line nets to $0" fire on a quote that
+  // charges nothing BECAUSE it's rate-only; the pre-auth is fifty cents, so
+  // counting it would rescue a quote that genuinely nets to $0.
+  //
+  // The disclosure is judged on whether anything is being CHARGED, and the
+  // pre-auth on what would be collected once it's there.
+  const processingDisclosure = resolveProcessingDisclosure(
+    quoteType, picks, catalog, adjustments, chargedLines.length > 0
+  );
+  const withDisclosure = [...chargedLines, ...processingDisclosure.lines];
+  const preAuth = resolvePreAuthLine(withDisclosure, catalog);
+  const quoteLines = [...withDisclosure, ...preAuth.lines];
 
   const totals = quoteTotals(quoteLines);
 
@@ -2230,9 +2333,9 @@ export function buildQuote(
   }
   for (const name of processingDisclosure.missing) {
     blockers.push(
-      `This quote's website takes online orders, so it has to state the card rates — but "${name}" ` +
-      `isn't in the HubSpot catalog (renamed, archived, or the catalog didn't load). The merchant ` +
-      `would be signed up for card processing with no rates written on the document.`
+      `AIO processes card payments for this merchant, so the quote has to state their rates — but ` +
+      `"${name}" isn't in the HubSpot catalog (renamed, archived, or the catalog didn't load). The ` +
+      `merchant would be signed up for card processing with no rates written on the document.`
     );
   }
   for (const name of requiredTerminals.missing) {

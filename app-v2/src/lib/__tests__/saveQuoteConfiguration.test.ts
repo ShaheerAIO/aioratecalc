@@ -104,6 +104,8 @@ const FULL_CATALOG: CatalogProduct[] = [
   p("332609247965", "AIO Marketing Platform", 199, "monthly", "Software"),
   p("332927902454", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
   p("223511653103", "Menu Board Computer", 99, "one_time", "inventory"),
+  // $0 rate disclosure — on every quote AIO processes for since 2026-10-14.
+  p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
 ];
 // The POS a rep picks on a processing quote, and the Menu Board Computer the
 // marketing plans preselect three of — both are ordinary picks now.
@@ -212,6 +214,9 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
     const names = updated.quoteLines!.map(l => l.name).sort();
     expect(names).toEqual([
+      // $0, derived, and on every quote AIO processes for (2026-10-14) — it
+      // is how the rates reach the document the merchant signs.
+      "AIO Processing Two Tiered Rate",
       "AIO Wifi Network Package - Unifi",
       "All-in-One Platform",
       "Onsite Installation",
@@ -358,7 +363,12 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     expect(wifiLines).toHaveLength(1);
     expect(updated.quoteLines!.filter(l => l.name === "AIO WiFi Network Package")).toHaveLength(0);
     expect(trainingLines).toHaveLength(1);
-    expect(updated.quoteLines).toHaveLength(6);
+    // 6 charged lines + the $0 rate disclosure, which is derived onto every
+    // quote AIO processes for (2026-10-14) and so must not duplicate either.
+    expect(updated.quoteLines).toHaveLength(7);
+    expect(
+      updated.quoteLines!.filter(l => l.name === "AIO Processing Two Tiered Rate")
+    ).toHaveLength(1);
     expect(updated.quoteLines!.filter(l => l.name === "Payment Terminal - AMS1")).toHaveLength(1);
   });
 });

@@ -96,11 +96,29 @@ export const CONFIG_QUOTE_ASSUMPTIONS = {
 // Fields a statement would supply but a config cannot (card brand mix, the
 // merchant's current processor and fees) stay zeroed; `confidence: "low"` and
 // `icEstimated: true` mark the result as derived rather than read.
-export function analysisFromQuoteConfig(config: QuoteConfig): StatementAnalysis {
+export function analysisFromQuoteConfig(
+  config: QuoteConfig,
+  /**
+   * The share of volume taken card-present, when the caller knows it and the
+   * standing 95% assumption would be wrong. Today exactly one caller does:
+   * a merchant who takes orders online and has nothing on site passes 0
+   * (`processesCardNotPresentOnly`, quoting.ts).
+   *
+   * Without it, hiding the card-present rate from that rep's screen — which
+   * is what the product owner asked for on 2026-10-14 — would leave the
+   * merchant's own headline effective rate 95% weighted on the rate we had
+   * just said can never apply. The display and the money have to agree.
+   *
+   * A real statement is untouched by this: it carries a measured split, and
+   * `basis.analysis` wins over the config everywhere this is reached from.
+   */
+  cardPresentPctOverride?: number | null
+): StatementAnalysis {
   const vol = config.monthlyVolume || 0;
   const ticket = config.avgTicket || 0;
   const txns = ticket > 0 ? Math.round(vol / ticket) : 0;
-  const { cardPresentPct: cpPct, cardNotPresentPct: cnpPct } = CONFIG_QUOTE_ASSUMPTIONS;
+  const cpPct = cardPresentPctOverride ?? CONFIG_QUOTE_ASSUMPTIONS.cardPresentPct;
+  const cnpPct = 1 - cpPct;
   const icRate = blendedInterchangeEstimate(cpPct, cnpPct);
 
   return {

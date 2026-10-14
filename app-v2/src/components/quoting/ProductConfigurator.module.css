@@ -746,6 +746,25 @@
 
 .adjustInput { width: 5.5rem; }
 
+/* The dollar twin of the percent box (2026-10-14). Wider because it holds a
+   figure like 2247.00 where the percent holds 33.24. */
+.amountInput { width: 6.5rem; }
+
+/* What the line comes to once the discount is on it. A dollar figure typed by
+   the rep can't always be reached exactly by a percentage, and the percentage
+   is what HubSpot gets — so the real result is stated rather than assumed. */
+.adjustResult {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.adjustResult strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 /* A date field has to hold mm/dd/yyyy AND the browser's picker icon. At the
    5.5rem the number inputs share it clipped the year (Elizabeth Phillips,
    2026-10-12) — a billing start reading "10/12/20" on the one control whose

@@ -198,12 +198,14 @@ export default function MerchantDetailsForm({
   // Same CHECKBOX pattern as "Same as operating address" above (reversed
   // 10/13, product owner's second confirmation, from the one-time copy
   // button this superseded). Checked means Billing IS the Owner contact and
-  // tracks every edit to it (see `o` above); the four billing fields are
-  // HIDDEN below, same treatment as the legal address fields above. Picking
-  // an existing HubSpot contact while this is checked would let "same as
-  // owner" silently PATCH that contact's record, so checking it always
-  // clears `billingContactId` first — a synced billing contact can never be
-  // a picked one. Unchecking leaves the copied values in place; nothing is
+  // tracks every edit to it (see `o` above); the four billing fields AND the
+  // contact picker are HIDDEN below, same treatment as the legal address
+  // fields above. Picking an existing HubSpot contact while this is checked
+  // would let "same as owner" silently PATCH that contact's record, so
+  // checking it always clears `billingContactId` first — a synced billing
+  // contact can never be a picked one, which is also why the picker itself
+  // goes rather than merely being reset (it was still usable until
+  // 2026-10-14). Unchecking leaves the copied values in place; nothing is
   // cleared. Initial state, like the address checkbox, is computed once from
   // whatever the form was handed on mount: checked only when both contacts
   // are already filled in and identical, never asserted for a blank form.
@@ -375,25 +377,42 @@ export default function MerchantDetailsForm({
           one in HubSpot the same way the owner contact already does
           (`ensureQuoteContact`). The quote's SIGNER stays `ownerContact.email`
           only — this section never feeds that path. */}
-      <section className={styles.group} aria-label="Billing">
-        <h3 className={styles.groupLabel} aria-hidden="true">Billing</h3>
-        <div className={styles.grid}>
-          <label className={styles.field} data-span={6}>
-            <span className={styles.label}>Use existing contact</span>
-            <select
-              value={billingContactId ?? ""}
-              onChange={e => onBillingContactIdChange(e.target.value || null)}
-              className={styles.input}
-            >
-              <option value="">New contact</option>
-              {contactOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
-            </select>
-          </label>
-          {!sameAsOwner && field("billing.firstName", "First name", 3, billing.firstName, v => onBillingChange({ ...billing, firstName: v }))}
-          {!sameAsOwner && field("billing.lastName", "Last name", 3, billing.lastName, v => onBillingChange({ ...billing, lastName: v }))}
-          {!sameAsOwner && field("billing.email", "Email", 3, billing.email, v => onBillingChange({ ...billing, email: v }), { type: "email", placeholder: "billing@business.com" })}
-          {!sameAsOwner && field("billing.phone", "Phone", 3, billing.phone, v => onBillingChange({ ...billing, phone: v }), { type: "tel", placeholder: "555-000-0000" })}
-        </div>
+      <section className={styles.group} aria-label="Billing contact">
+        <h3 className={styles.groupLabel} aria-hidden="true">Billing Contact</h3>
+        {/* In the CONTENT column, not under the label: at >=64rem `.group` is an
+            8.5rem | 1fr grid and `.groupLabel` spans the left one, which would
+            wrap this sentence to five lines. `.billingWarning` below already
+            sits in the same column. */}
+        <p className={styles.groupNote}>This is where your invoices will be emailed to</p>
+        {/* The WHOLE grid goes when "same as owner" is checked — the picker
+            with it, not just the four fields (2026-10-14). `sameAsOwner`
+            means billing IS the owner contact, so there is nothing left to
+            pick, and `mirrorBillingFromOwner` clears `billingContactId` on
+            every sync precisely so a synced billing contact is never also a
+            picked one. Leaving the picker up let a rep re-pick one while
+            checked and put the form straight back into the state that
+            invariant exists to prevent: "same as owner" silently PATCHing
+            that HubSpot contact's record. The summary line below stands in
+            for all of it. */}
+        {!sameAsOwner && (
+          <div className={styles.grid}>
+            <label className={styles.field} data-span={6}>
+              <span className={styles.label}>Use existing contact</span>
+              <select
+                value={billingContactId ?? ""}
+                onChange={e => onBillingContactIdChange(e.target.value || null)}
+                className={styles.input}
+              >
+                <option value="">New contact</option>
+                {contactOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
+              </select>
+            </label>
+            {field("billing.firstName", "First name", 3, billing.firstName, v => onBillingChange({ ...billing, firstName: v }))}
+            {field("billing.lastName", "Last name", 3, billing.lastName, v => onBillingChange({ ...billing, lastName: v }))}
+            {field("billing.email", "Email", 3, billing.email, v => onBillingChange({ ...billing, email: v }), { type: "email", placeholder: "billing@business.com" })}
+            {field("billing.phone", "Phone", 3, billing.phone, v => onBillingChange({ ...billing, phone: v }), { type: "tel", placeholder: "555-000-0000" })}
+          </div>
+        )}
         {sameAsOwner && billingContactSummary && (
           <p className={styles.billingWarning}>{billingContactSummary}</p>
         )}

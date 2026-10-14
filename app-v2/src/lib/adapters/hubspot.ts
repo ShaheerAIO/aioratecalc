@@ -1693,7 +1693,7 @@ export function coveredLineDescription(line: QuoteLine): string | null {
  * Never emits `hs_recurring_billing_period`; see the note above for why that
  * is deliberate.
  */
-export function toLineItemProperties(line: QuoteLine): Record<string, string> {
+export function toLineItemProperties(line: QuoteLine, description?: string | null): Record<string, string> {
   if (!QUOTABLE_FREQUENCY[line.billingFrequency]) {
     throw new Error(
       `Unsupported billing frequency '${line.billingFrequency}' on line '${line.name}'. ` +
@@ -1731,7 +1731,13 @@ export function toLineItemProperties(line: QuoteLine): Record<string, string> {
   // carry it (HubSpot takes the line's name from the product), so it rides in
   // the line item's own `description`. Only covered lines — a rep-typed
   // discount has no reason we know of, and inventing one would be wrong.
-  const label = coveredLineDescription(line);
+  //
+  // A caller-supplied `description` wins. Today that is the rate-disclosure
+  // line, whose text has to be THIS merchant's rates: the product's own
+  // description in the portal is static and currently states 2.49%/3.50% and
+  // an AMEX split that was retired on 2026-10-13, to every merchant alike.
+  // The two can't collide — a disclosure line is never package-covered.
+  const label = description ?? coveredLineDescription(line);
   if (label) props.description = label;
 
   // Delayed billing start. `hs_billing_start_delay_type` is the DISCRIMINATOR —
@@ -2133,11 +2139,19 @@ export async function updateContactDetails(contactId: string, patch: ContactDeta
  * with no quote association is invisible in the CRM, so leaving it behind
  * leaves litter nobody can find, and the caller has no id to clean up with.
  */
-export async function createQuoteLineItems(lines: QuoteLine[]): Promise<string[]> {
+export async function createQuoteLineItems(
+  lines: QuoteLine[],
+  /**
+   * Line-item descriptions the CALLER wants written, keyed by product id —
+   * today just the rate-disclosure line's rates (see `toLineItemProperties`).
+   * Everything absent from here keeps whatever the line itself implies.
+   */
+  descriptions: Record<string, string> = {}
+): Promise<string[]> {
   const created: string[] = [];
   for (const line of lines) {
     // Throws before any network call on an unsupported frequency.
-    const properties = toLineItemProperties(line);
+    const properties = toLineItemProperties(line, descriptions[line.hubspotProductId]);
     let res: Response;
     try {
       res = await fetchWithRetry(`${BASE}/crm/v3/objects/line_items`, {

@@ -69,17 +69,29 @@ describe("RateSuggestion", () => {
     });
   });
 
-  it("renders no 'Use it' button — there is nothing left to click", async () => {
-    render(<Harness initial={ALREADY_CHOSEN} />);
-    await waitFor(() => expect(screen.queryByText(/rate card/i)).toBeTruthy());
+  it("renders NOTHING at all — it is a headless applier (2026-10-14)", async () => {
+    // It used to print "Rate card: 2.17% ... for $100K – $125K a month at a
+    // $20+ ticket". The product owner asked for the grey volume/ticket bucket
+    // to go, and without it the rest of the line duplicated the rate boxes
+    // directly above it — the card always overrides, so those boxes ARE the
+    // rate card. What's asserted here is that it still APPLIES while showing
+    // nothing, which is the whole of its job now.
+    const { container } = render(<Harness initial={ALREADY_CHOSEN} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("cp").textContent).toBe(String(SUGGESTED.cardPresentRate));
+    });
+    expect(screen.queryByText(/rate card/i)).toBeNull();
+    expect(screen.queryByText(/\$100K/)).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.queryByText("Use it")).toBeNull();
+    // The harness's own <output> is all that's left in the tree.
+    expect(container.querySelectorAll("p")).toHaveLength(0);
   });
 
   it("takes no autoApply prop any more — TypeScript aside, passing one does nothing extra", async () => {
+    const onChange = vi.fn();
     // @ts-expect-error — autoApply was removed from RateSuggestionProps.
-    render(<RateSuggestion monthlyVolume={110_000} avgTicket={22} value={ALREADY_CHOSEN} onChange={() => {}} autoApply />);
-    await waitFor(() => expect(screen.queryByText(/rate card/i)).toBeTruthy());
+    render(<RateSuggestion monthlyVolume={110_000} avgTicket={22} value={ALREADY_CHOSEN} onChange={onChange} autoApply />);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(SUGGESTED));
   });
 
   it("renders nothing with no volume/ticket basis, and never calls onChange", async () => {

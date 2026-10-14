@@ -1,15 +1,28 @@
+/* The two lanes sit NEXT TO each other at their natural width, rather than
+   each owning half the panel. They used to be `repeat(2, minmax(0,1fr))` with
+   `width:100%` inputs inside, which stretched a four-character number across a
+   quarter of the panel and put a hand's width between "2.49" and "%". */
 .grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-sm);
+  grid-template-columns: repeat(2, max-content);
+  gap: var(--space-xl);
 }
 
-/* Rate and its per-transaction fee on one line: "[2.49 %] + [$ 0.15]". */
+/* Rate and its per-transaction fee on one line: "[2.49 %] + [$ 0.15] per
+   transaction". Flex, not grid: the boxes are a fixed width now, so there are
+   no columns left to share out. */
 .pair {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
   gap: var(--space-2xs);
+}
+
+/* "per transaction" after the fee, so each lane reads as the sentence the
+   merchant sees on their quote rather than as two unlabelled numbers. */
+.suffix {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .plus {
@@ -42,8 +55,12 @@
   align-items: center;
 }
 
+/* Sized to the number it holds — "99.99" and "0.15" — not to the panel. The
+   5.5rem of `.adjustInput` in the configurator is the precedent; these hold
+   fewer characters and the unit sits inside the box, so they're a touch
+   narrower. */
 .input {
-  width: 100%;
+  width: 4.75rem;
   min-width: 0;
   padding: var(--space-2xs) var(--space-sm) var(--space-2xs) var(--space-2xs);
   border: 1px solid var(--border);
@@ -82,8 +99,18 @@
 }
 
 .input[data-unit="leading"] {
+  width: 5rem;
   padding-left: var(--space-md);
   padding-right: var(--space-2xs);
+}
+
+/* One lane per row once two of them no longer fit. There was no breakpoint at
+   all before, because the lanes were fractional and simply squeezed. */
+@media (max-width: 48rem) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-sm);
+  }
 }
 
 .note {

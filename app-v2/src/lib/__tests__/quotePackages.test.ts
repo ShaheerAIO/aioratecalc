@@ -69,6 +69,8 @@ const CATALOG: CatalogProduct[] = [
   p(ID.install,   "Onsite Installation", 999, "one_time", "Service"),
   p(ID.training,  "System Onboarding and Training", 499, "one_time", "Service"),
   p(ID.platform,  "All-in-One Platform", 399, "monthly", ""),
+  // $0 rate disclosure — on every quote AIO processes for since 2026-10-14.
+  p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
 ];
 
 const product = (id: string) => CATALOG.find(c => c.hubspotProductId === id)!;

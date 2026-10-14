@@ -121,10 +121,19 @@ export async function getPricingPreviewAction(input: {
    * configurator's live totals.
    */
   recurringArr?: number | null;
+  /**
+   * The share of volume taken card-present, when the CALLER knows the
+   * standing 95% assumption is wrong — 0 for a merchant who takes orders
+   * online and has nothing on site (`processesCardNotPresentOnly`). Only
+   * reaches the `quoteConfig` path; a statement carries its own measured
+   * split. See `analysisFromQuoteConfig`'s own parameter for why it exists.
+   */
+  cardPresentPct?: number | null;
 }): Promise<RoleScopedPricing> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
-  const analysis = input.analysis ?? (input.quoteConfig ? analysisFromQuoteConfig(input.quoteConfig) : null);
+  const analysis = input.analysis
+    ?? (input.quoteConfig ? analysisFromQuoteConfig(input.quoteConfig, input.cardPresentPct) : null);
   if (!analysis) throw new Error("A statement or a volume and ticket is needed to price a quote.");
   const padding = await getActivePaddingPolicy();
   return derivePricingForRole(

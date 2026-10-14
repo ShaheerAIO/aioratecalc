@@ -314,3 +314,73 @@ Total Wholesale %
 1.79% 
 
  
+10/14
+Can you say "Billing Contact" and subheader that says "This is where your
+invoices will be emailed to"
+(DONE — the section is "Billing Contact" with that line under it. It sits in
+the CONTENT column, not under the label: at >=64rem the label column is 8.5rem
+and would wrap that sentence to five lines.)
+
+compact the cp and cnp rate its spaced out for no reason
+(DONE — the inputs were width:100% inside two fractional columns, so a
+four-character number stretched across a quarter of the panel. Fixed widths,
+lanes at their natural size. Also removed a `styles.brand` wrapper that
+referenced a class which doesn't exist — it had been rendering class="undefined".)
+
+remove the bucket "$75K – $100K a month at a $20+ ticket"
+(DONE — and with it the whole "Rate card:" row. Note this REVERSES 10/13's
+"make matrix bucketing explicit": that grey line WAS the explicit bucketing.
+Without it the row showed the same two numbers as the boxes directly above —
+the card always overrides now, so those boxes ARE the rate card. RateSuggestion
+is still mounted and still applies; it just renders nothing.)
+
+add the phrase "per transaction" after the rate
+(DONE — in both rate boxes and on the document preview. Also replaced "/txn"
+on the wizard's rate cards and the exported proposal, so there's one wording.)
+
+add a cash discount option for each line item
+(DONE — an "Amount off" $ box beside "Percent off" in each line's drawer.
+Nothing new is stored: it computes the percent, because the percent is the
+only lever that reaches HubSpot. The base respects "applies to N of qty".
+Under it the drawer now states the REAL net — "3 × $749.00 → $1,500.00" —
+because a percentage can't always land exactly on a dollar figure and the
+document can't be amended once published.
+OPEN: HubSpot's `hs_discount_percentage` is a plain number but we have not
+confirmed it keeps 6 decimals. Worth one throwaway line item on the test
+company before a rep uses this on a real quote.)
+
+confirm we are adding a payments line item on the hubspot quote
+(IT WASN'T, on most quotes. Checked the live portal: the $0 "AIO Processing
+Two Tiered Rate" line went on MARKETING quotes with online ordering only —
+never on all_in_one / order_pay_only — so on a normal POS quote the rates were
+written NOWHERE on the document the merchant signs. And its text was the
+product's own STATIC description, which still reads 2.49% / 3.50% plus the
+AMEX split you retired on 10/13, to every merchant alike.
+DONE — it now goes on every quote AIO processes for, and the line item carries
+THIS merchant's rates in its own description. Two things worth knowing: a
+RATE-ONLY quote is explicitly guarded and still derives no lines at all, and a
+quote saved BEFORE today has no such line until someone reopens and re-saves
+it — publish sends quoteLines verbatim.
+NOTE: every processing quote now hard-blocks if that SKU leaves the catalog.
+Same posture the marketing case already had.)
+
+get rid of the card present rate for online-ordering-only
+(DONE, with a note explaining why. The predicate is deliberately not
+"marketing + a website": marketing_term INCLUDES a kiosk, and a kiosk takes a
+card in person. It also isn't ordering points alone — the AMS1 is a card
+reader that counts zero points.
+AND the money followed the display: we assume 95% card-present on a
+no-statement quote, so hiding the lane alone would have left the merchant's
+own headline effective rate 95% weighted on a rate we'd just said can never
+apply. That blend, the rep's margin preview and the floor check now use 0.)
+
+keep consistent language around card present / card not present
+(DONE — "in person"/"online" is gone from both places it appeared, and
+"V/MC/Disc Not Present" is now "V/MC/Disc Card Not Present".)
+
+"same as owner contact" should hide the dropdown too
+(DONE — and it was more than untidy. Checking the box already cleared the
+picked contact id, because "same as owner" silently PATCHing someone's HubSpot
+contact record is exactly what that clearing prevents — but the picker stayed
+live, so a rep could re-pick one while checked and put the form straight back
+into that state. The whole grid goes now; the summary line stands in for it.)

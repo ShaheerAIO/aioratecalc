@@ -294,7 +294,10 @@ describe("publishing the billing quote", () => {
     expect(ensureQuoteContact).toHaveBeenCalledWith(
       expect.objectContaining({ email: SIGNER_EMAIL, firstName: "", lastName: "" })
     );
-    expect(createQuoteLineItems).toHaveBeenCalledWith(LINES);
+    // The second argument is the per-product description map. This row
+    // carries no quoteRates, so there is nothing to state and it's empty —
+    // see the rate-disclosure test below for the populated case.
+    expect(createQuoteLineItems).toHaveBeenCalledWith(LINES, {});
     expect(createDraftQuote.mock.calls[0][0]).toMatchObject({
       hs_title: "Torta Palace — AIO Platform Quote",
       hs_billing_enabled: true,
@@ -403,7 +406,7 @@ describe("publishing the billing quote", () => {
     await resume();
     // Reconciliation kept li-1 and created only the missing tail — a re-create
     // of both would have double-billed a $1,200 POS unit.
-    expect(createQuoteLineItems).toHaveBeenLastCalledWith([line(POS)]);
+    expect(createQuoteLineItems).toHaveBeenLastCalledWith([line(POS)], {});
     expect(storedIds()!.lineItemIds).toEqual(["li-1", "li-2"]);
   });
 

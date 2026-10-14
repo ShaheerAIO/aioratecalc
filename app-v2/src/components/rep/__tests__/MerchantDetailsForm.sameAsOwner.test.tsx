@@ -36,11 +36,13 @@ function Harness({
   initialBilling = BLANK_OWNER,
   billingContactLoaded = null,
   initialBillingContactId = null,
+  contactOptions = [],
 }: {
   initialOwner?: OwnerContact;
   initialBilling?: OwnerContact;
   billingContactLoaded?: OwnerContact | null;
   initialBillingContactId?: string | null;
+  contactOptions?: Array<{ id: string; label: string }>;
 }) {
   const [ownerContact, setOwnerContact] = useState(initialOwner);
   const [billingContactId, setBillingContactId] = useState<string | null>(initialBillingContactId);
@@ -56,6 +58,7 @@ function Harness({
       onOwnerChange={setOwnerContact}
       onProcessingChange={() => {}}
       billingContactId={billingContactId}
+      contactOptions={contactOptions}
       billing={billing}
       billingContactLoaded={billingContactLoaded}
       onBillingContactIdChange={setBillingContactId}
@@ -65,6 +68,7 @@ function Harness({
 }
 
 const checkbox = () => screen.getByRole("checkbox", { name: "Same as owner contact" }) as HTMLInputElement;
+const picker = () => screen.queryByLabelText("Use existing contact");
 const ownerFirstName = () => screen.getAllByLabelText("First name")[0] as HTMLInputElement;
 // Once "Same as owner contact" is checked, the billing First name INPUT is
 // hidden — there's only ever one "First name" field on screen (the owner's).
@@ -144,9 +148,13 @@ describe("MerchantDetailsForm — Same as owner contact", () => {
     fireEvent.click(checkbox());
     expect(checkbox().checked).toBe(true);
     expect(screen.getAllByLabelText("First name")).toHaveLength(1);
-    // No summary paragraph in the Billing section — nothing to echo.
-    const billingSection = document.querySelector("section[aria-label='Billing']") as HTMLElement;
-    expect(billingSection.querySelectorAll("p").length).toBe(0);
+    // No summary paragraph in the Billing Contact section — nothing to echo.
+    // The section's standing subheader ("This is where your invoices will be
+    // emailed to", 2026-10-14) is the one paragraph that is always there, so
+    // this asserts nothing BEYOND it rather than nothing at all.
+    const billingSection = document.querySelector("section[aria-label='Billing contact']") as HTMLElement;
+    const paragraphs = [...billingSection.querySelectorAll("p")].map(el => el.textContent);
+    expect(paragraphs).toEqual(["This is where your invoices will be emailed to"]);
   });
 });
 
@@ -176,5 +184,44 @@ describe("MerchantDetailsForm — billing contact overwrite warning", () => {
       billingContactLoaded={LOADED}
     />);
     expect(screen.getByText(/update this contact/i)).toBeTruthy();
+  });
+});
+
+// ── The contact picker goes with the fields ─────────────────────────────────
+// 2026-10-14. It used to stay up while "Same as owner contact" was checked,
+// which was not merely untidy: `mirrorBillingFromOwner` clears
+// `billingContactId` on every sync precisely so a synced billing contact is
+// never also a picked one, and a live picker let a rep put the form straight
+// back into the state that invariant exists to prevent — "same as owner"
+// silently PATCHing the picked HubSpot contact's record on save.
+describe("MerchantDetailsForm — the billing contact picker", () => {
+  afterEach(cleanup);
+
+  const OPTIONS = [{ id: "c-1", label: "Priya Shah · priya@biz.com" }];
+
+  it("is shown while the billing contact is its own", () => {
+    render(<Harness contactOptions={OPTIONS} />);
+    expect(picker()).toBeTruthy();
+  });
+
+  it("is HIDDEN once 'Same as owner contact' is checked — there is nothing left to pick", () => {
+    render(<Harness contactOptions={OPTIONS} />);
+    fireEvent.click(checkbox());
+    expect(checkbox().checked).toBe(true);
+    expect(picker()).toBeNull();
+  });
+
+  it("comes back, reset to 'New contact', when the checkbox is cleared again", () => {
+    // The reset is the point: checking cleared `billingContactId`, so the
+    // picker must not reappear still claiming the contact it no longer holds.
+    render(<Harness contactOptions={OPTIONS} initialBillingContactId="c-1" />);
+    expect((picker() as HTMLSelectElement).value).toBe("c-1");
+
+    fireEvent.click(checkbox());
+    expect(picker()).toBeNull();
+
+    fireEvent.click(checkbox());
+    expect(checkbox().checked).toBe(false);
+    expect((picker() as HTMLSelectElement).value).toBe("");
   });
 });

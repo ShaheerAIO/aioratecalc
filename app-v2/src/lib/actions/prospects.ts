@@ -24,7 +24,8 @@ import { buildAndPublishBillingQuote, resolveSender } from "@/lib/billing/publis
 import { analysisFromQuoteConfig, marginFloorBlockers } from "@/lib/pricing";
 import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "@/lib/actions/pricing";
 import {
-  buildQuote, isAllowedForQuoteType, isProcessingQuote, longestBillingDelayDays, quoteHasProcessing,
+  buildQuote, isAllowedForQuoteType, isProcessingQuote, longestBillingDelayDays,
+  processesCardNotPresentOnly, quoteHasProcessing,
   quoteNoteBlockers, quoteTypeOf, toQuoteLine, DELAY_NOTE_THRESHOLD_DAYS, QUOTE_NOTE_WATCHER,
 } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
@@ -558,7 +559,8 @@ async function assertRateAboveFloor(
   analysis: StatementAnalysis | null,
   quoteConfig: QuoteConfig | null,
   quoteRates: QuoteRates | null | undefined,
-  pricingModel: PricingModel
+  pricingModel: PricingModel,
+  cardNotPresentOnly: boolean = false
 ): Promise<void> {
   if (!rated || !(analysis || quoteConfig)) return;
   const pricing = await getPricingPreviewAction({
@@ -568,6 +570,10 @@ async function assertRateAboveFloor(
     pricingModel,
     feeOverrides: ZERO_FEE_OVERRIDES,
     activeTier: null,
+    // All card-not-present when they only take orders online, so the floor is
+    // cleared against the rate being quoted rather than against a 95%
+    // card-present blend that can never happen.
+    cardPresentPct: cardNotPresentOnly ? 0 : null,
   });
   const blockers = marginFloorBlockers(pricing);
   if (blockers.length) throw new Error(blockers.join(" "));
@@ -781,7 +787,10 @@ export async function createProspectAction(input: {
   // Server-side mirror of the rep form's own floor check — see the comment
   // above `assertRateAboveFloor` and the 2026-10-09 decision recorded above
   // `ZERO_FEE_OVERRIDES`.
-  await assertRateAboveFloor(rated, analysis, quoteConfig, input.quoteRates, input.pricingModel);
+  await assertRateAboveFloor(
+    rated, analysis, quoteConfig, input.quoteRates, input.pricingModel,
+    processesCardNotPresentOnly(quoteType, input.picks ?? [], input.adjustments)
+  );
 
   const quoteNote = (input.quoteNote ?? "").trim() || null;
   const { quoteLines, orderPoints } = await deriveQuoteLines(
@@ -982,7 +991,8 @@ export async function saveQuoteConfigurationAction(input: {
   const rated = quoteHasProcessing(quoteType, input.picks ?? [], input.adjustments ?? {});
   await assertRateAboveFloor(
     rated, app.analysis ?? null, quoteConfig ?? null,
-    input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES, input.pricingModel
+    input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES, input.pricingModel,
+    processesCardNotPresentOnly(quoteType, input.picks ?? [], input.adjustments ?? {})
   );
 
   const quoteNote = input.quoteNote === undefined
@@ -1180,11 +1190,20 @@ export async function resendLeadLinkAction(
  * Lives server-side because analysisFromQuoteConfig is in pricing.ts, and
  * pulling that into a client bundle would ship MARGIN_REQS to the browser.
  */
-export async function analysisFromQuoteConfigAction(config: QuoteConfig): Promise<StatementAnalysis> {
+export async function analysisFromQuoteConfigAction(
+  config: QuoteConfig,
+  /**
+   * 0 for a merchant who takes orders online and has nothing on site, so the
+   * synthesised split matches the rate they were actually quoted — see
+   * `analysisFromQuoteConfig`'s own parameter. Omitted keeps the standing
+   * 95% card-present assumption.
+   */
+  cardPresentPct?: number | null
+): Promise<StatementAnalysis> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
   if (!(config.avgTicket > 0) || !(config.monthlyVolume > 0)) {
     throw new Error("Enter both average ticket and monthly volume.");
   }
-  return analysisFromQuoteConfig(config);
+  return analysisFromQuoteConfig(config, cardPresentPct);
 }

@@ -10,7 +10,7 @@
 // pricing.ts itself. Client components receive the returned CustomerSafeQuote
 // as a prop; they never import this module.
 import { analysisFromQuoteConfig, derivePricing, type FeeOverrides } from "@/lib/pricing";
-import { quoteHasProcessing, quoteTotals, quoteTypeOf } from "@/lib/quoting";
+import { processesCardNotPresentOnly, quoteHasProcessing, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import type {
   CustomerSafeQuote, OrderPoints, QuoteConfig, QuoteLine, QuoteRates, StatementAnalysis, StoredQuoteType,
 } from "@/types/merchant";
@@ -59,8 +59,20 @@ function quotableAnalysis(basis: QuoteBasis): StatementAnalysis | null {
   // derive and nothing to derive it from — its lines are the whole quote.
   // UNLESS its Website takes online orders: that merchant sells through it,
   // and the rate on those sales is as real as a POS merchant's.
-  if (!quoteHasProcessing(quoteTypeOf(basis.quoteType), basis.quoteLines)) return null;
-  const analysis = basis.analysis ?? (basis.quoteConfig ? analysisFromQuoteConfig(basis.quoteConfig) : null);
+  const quoteType = quoteTypeOf(basis.quoteType);
+  if (!quoteHasProcessing(quoteType, basis.quoteLines)) return null;
+  // A merchant who takes orders online and has nothing on site makes every
+  // sale card-not-present, so the config path must not blend in 95% of a
+  // card-present rate they will never incur (2026-10-14). This is the number
+  // the merchant reads as their effective rate, so it has to match the rate
+  // the rep was shown — which no longer includes a card-present lane at all.
+  // A real statement carries a measured split and wins over the config.
+  const analysis = basis.analysis ?? (basis.quoteConfig
+    ? analysisFromQuoteConfig(
+        basis.quoteConfig,
+        processesCardNotPresentOnly(quoteType, basis.quoteLines) ? 0 : null
+      )
+    : null);
   if (!analysis || !(analysis.totalVolume > 0)) return null;
   return analysis;
 }

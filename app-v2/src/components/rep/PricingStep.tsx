@@ -192,7 +192,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
                     <div className={styles.box}>
                       <div className={styles.boxLabel}>All Cards</div>
                       <div className={`${styles.boxValue} ${styles["value--info"]}`}>{fmtPct2(pricing.flatRate)}</div>
-                      <div className={styles.boxSub}>+ ${(feeOverrides.perTxnFee || 0).toFixed(2)}/txn</div>
+                      <div className={styles.boxSub}>+ ${(feeOverrides.perTxnFee || 0).toFixed(2)} per transaction</div>
                     </div>
                   </div>
                 )}
@@ -207,12 +207,12 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
                   <div className={styles.rateGrid}>
                     {[
                       { lbl: "V/MC/Disc Card Present", val: pricing.cpRate, tone: styles["value--info"] },
-                      { lbl: "V/MC/Disc Not Present", val: pricing.cnpRate, tone: styles["value--warning"] },
+                      { lbl: "V/MC/Disc Card Not Present", val: pricing.cnpRate, tone: styles["value--warning"] },
                     ].map(r => (
                       <div key={r.lbl} className={styles.box}>
                         <div className={styles.boxLabel}>{r.lbl}</div>
                         <div className={`${styles.boxValue} ${r.tone}`}>{fmtPct2(r.val)}</div>
-                        <div className={styles.boxSub}>+ ${rates.perTransactionFee.toFixed(2)}/txn</div>
+                        <div className={styles.boxSub}>+ ${rates.perTransactionFee.toFixed(2)} per transaction</div>
                       </div>
                     ))}
                   </div>

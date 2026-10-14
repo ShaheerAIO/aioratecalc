@@ -45,7 +45,14 @@ import {
 } from "@/lib/adapters/hubspot";
 import { resolveQuoteTemplate, type ResolvedQuoteTemplate } from "@/lib/actions/quoteTemplates";
 import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
-import { DEFAULT_MAX_APPROVED_DELAY_DAYS, DEFAULT_MAX_DISCOUNT_PERCENT, quoteTypeOf } from "@/lib/quoting";
+import {
+  DEFAULT_MAX_APPROVED_DELAY_DAYS,
+  DEFAULT_MAX_DISCOUNT_PERCENT,
+  PROCESSING_DISCLOSURE_PRODUCT,
+  processesCardNotPresentOnly,
+  processingDisclosureText,
+  quoteTypeOf,
+} from "@/lib/quoting";
 import { canPublishBillingQuote, type PublishRefusal, type SenderResolution } from "@/lib/billing/preconditions";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds, type MerchantApplication } from "@/types/merchant";
 
@@ -250,6 +257,35 @@ function stepFailure(ids: HubspotIds, step: BillingStep, detail: string): string
  * `linkTenantCompanyAction`, which resumes a build that was held back waiting
  * for the HubSpot company.
  */
+/**
+ * Line-item descriptions this quote needs written, keyed by product id.
+ *
+ * Just the one today: the rate-disclosure line, whose text has to be THIS
+ * merchant's rates. The HubSpot product's own description is static — it
+ * states 2.49% / 3.50% and a retired AMEX split to every merchant alike — so
+ * a quote that didn't override it would put rates the rep never quoted onto a
+ * document nobody can amend.
+ *
+ * Composed at publish rather than baked onto the saved QuoteLine so that
+ * `buildQuote` keeps its signature and `QuoteLine` gains no field. The two
+ * can't drift: rates are frozen once `publishedAt` is set (EditQuotePanel
+ * refuses to reopen a published quote), so `app.quoteRates` here is the same
+ * value the rep was looking at.
+ */
+function lineItemDescriptions(app: MerchantApplication): Record<string, string> {
+  if (!app.quoteRates) return {};
+  const quoteType = quoteTypeOf(app.quoteType);
+  return {
+    // No adjustments passed: the row doesn't store them, and it doesn't need
+    // to here — by publish the online-ordering toggle has already become the
+    // disclosure line itself, which is what `quoteHasProcessing` reads.
+    [PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId]: processingDisclosureText(
+      app.quoteRates,
+      processesCardNotPresentOnly(quoteType, app.quoteLines)
+    ),
+  };
+}
+
 export async function buildAndPublishBillingQuote(
   app: MerchantApplication
 ): Promise<PublishBillingQuoteResult> {
@@ -416,7 +452,10 @@ export async function buildAndPublishBillingQuote(
     const plan = planLineItemReconciliation(ids.lineItemIds, lines, lines);
     if (plan.create.length > 0 || plan.delete.length > 0) {
       for (const staleId of plan.delete) await deleteQuoteLineItem(staleId);
-      const createdIds = await createQuoteLineItems(plan.create.map(c => c.line));
+      const createdIds = await createQuoteLineItems(
+        plan.create.map(c => c.line),
+        lineItemDescriptions(app)
+      );
       const byIndex = new Map<number, string>(plan.keep.map(k => [k.nextIndex, k.lineItemId]));
       plan.create.forEach((c, i) => byIndex.set(c.nextIndex, createdIds[i]));
       ids = { ...ids, lineItemIds: lines.map((_, i) => byIndex.get(i)!) };

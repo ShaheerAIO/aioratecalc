@@ -7,7 +7,9 @@ import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
 import RateFields from "@/components/rep/RateFields";
 import RateSuggestion from "@/components/rep/RateSuggestion";
-import { adjustmentsFromQuoteLines, picksFromQuoteLines, quoteHasProcessing, quoteTypeOf } from "@/lib/quoting";
+import {
+  adjustmentsFromQuoteLines, picksFromQuoteLines, processesCardNotPresentOnly, quoteHasProcessing, quoteTypeOf,
+} from "@/lib/quoting";
 import { fmt$, fmtPct2 } from "@/lib/utils";
 import { averageTicketOf, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
 import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
@@ -80,6 +82,8 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   // below hangs off this: the margin control, the rate preview, and whether an
   // empty picker is a legitimate quote.
   const rated = quoteHasProcessing(quoteType, picks, adjustments);
+  // Online ordering and nothing on site: no card-present rate to show.
+  const cnpOnly = processesCardNotPresentOnly(quoteType, picks, adjustments);
 
   // Whether there's ANY volume basis to preview or floor-check a margin
   // against — a statement, or a rep-entered volume/ticket config. Neither
@@ -103,7 +107,11 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
       return;
     }
     let cancelled = false;
-    analysisFromQuoteConfigAction(app.quoteConfig).then(a => {
+    // `cnpOnly` is the one input here that is NOT fixed for the panel's
+    // lifetime: ticking online ordering, or adding a kiosk to a marketing
+    // quote, changes the card mix this analysis is synthesised on, and with
+    // it the margin and the floor. So it re-derives on that, and only that.
+    analysisFromQuoteConfigAction(app.quoteConfig, cnpOnly ? 0 : null).then(a => {
       if (!cancelled) setConfigAnalysis(a);
     }).catch(() => { if (!cancelled) setConfigAnalysis(null); });
     return () => { cancelled = true; };
@@ -111,7 +119,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
     // surface edits products/margin/type, not the statement or config), so
     // they're read via closure rather than added as dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [cnpOnly]);
 
   const previewAnalysis = app.analysis ?? configAnalysis;
   const canPreview = rated && !!previewAnalysis;
@@ -251,7 +259,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
           )}
 
           <div>
-            <RateFields value={quoteRates} onChange={setQuoteRates} />
+            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} />
             {/* Used to deliberately skip auto-apply here ("these rates were
                 already chosen and saved"). OVERRIDDEN 2026-10-13 ("get rid of
                 the 'use it' and make it always override") — RateSuggestion no

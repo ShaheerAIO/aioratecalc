@@ -3,11 +3,19 @@
 import { useEffect, useState } from "react";
 import { getSuggestedRatesAction, type RateSuggestion as Suggestion } from "@/lib/actions/rateMatrix";
 import type { QuoteRates } from "@/types/merchant";
-import styles from "./RateSuggestion.module.css";
 
 /**
  * What AIO's rate card says to quote this merchant, given their volume and
- * average ticket — applied automatically wherever this renders.
+ * average ticket — applied automatically wherever this mounts.
+ *
+ * RENDERS NOTHING, deliberately (2026-10-14). It used to print "Rate card:
+ * 2.49% … for $75K – $100K a month at a $20+ ticket" under the rate boxes.
+ * The product owner asked for the grey volume/ticket bucket to go, and once
+ * it does the rest of the line is the same two numbers that are already in
+ * the boxes directly above it — the card always overrides now (see below), so
+ * those boxes ARE the rate card. What's left is this component's real job:
+ * fetching the card and applying it. Don't "fix" the empty render by putting
+ * the row back.
  *
  * ALWAYS APPLIES as of 2026-10-13 ("get rid of the 'use it' and make it
  * always override") — this reverses both of the gates that used to exist
@@ -43,8 +51,6 @@ const sameRates = (a: QuoteRates, b: QuoteRates) =>
   a.amexCardNotPresentRate === b.amexCardNotPresentRate &&
   a.perTransactionFee === b.perTransactionFee;
 
-const pct = (fraction: number) => (fraction * 100).toFixed(2);
-
 export default function RateSuggestion({
   monthlyVolume, avgTicket, value, onChange,
 }: RateSuggestionProps) {
@@ -74,21 +80,5 @@ export default function RateSuggestion({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suggestion]);
 
-  if (!suggestion) return null;
-
-  const { cardPresentRate, cardNotPresentRate, perTransactionFee } = suggestion.rates;
-
-  return (
-    <p className={styles.row} data-matches={true}>
-      <span className={styles.text}>
-        Rate card:{" "}
-        <strong className={styles.rate}>
-          {pct(cardPresentRate)}% in person · {pct(cardNotPresentRate)}% online · +${perTransactionFee.toFixed(2)}
-        </strong>{" "}
-        <span className={styles.basis}>
-          for {suggestion.volumeBand} a month at a ${suggestion.ticketColumn}+ ticket
-        </span>
-      </span>
-    </p>
-  );
+  return null;
 }

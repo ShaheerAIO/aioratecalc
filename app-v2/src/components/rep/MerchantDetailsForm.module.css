@@ -36,6 +36,15 @@
   color: var(--ink-2);
 }
 
+/* A section's one-line explanation, under its label and above its fields. Only
+   the billing contact has one — the others say what they are. */
+.groupNote {
+  margin: 0 0 var(--space-xs);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));

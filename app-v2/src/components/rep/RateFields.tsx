@@ -68,6 +68,19 @@ export type RateFieldsProps = {
    * landed a fuller suggestion, both win over this fallback seed.
    */
   freshQuote?: boolean;
+  /**
+   * This merchant takes orders online and nowhere else, so every sale is
+   * card-not-present and there is no card-present rate to quote (product
+   * owner, 2026-10-14). The lane is HIDDEN rather than disabled: a disabled
+   * box still shows a number, and the number it would show is one that can
+   * never apply.
+   *
+   * Computed by the host from `processesCardNotPresentOnly` (quoting.ts) —
+   * which asks whether the quote carries any in-person ordering point, not
+   * whether it's a marketing quote: a `marketing_term` quote includes a
+   * kiosk, and a kiosk takes cards in person.
+   */
+  cardNotPresentOnly?: boolean;
 };
 
 /**
@@ -78,7 +91,9 @@ export type RateFieldsProps = {
  */
 const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
-export default function RateFields({ value, onChange, hideNote, freshQuote }: RateFieldsProps) {
+export default function RateFields({
+  value, onChange, hideNote, freshQuote, cardNotPresentOnly,
+}: RateFieldsProps) {
   const setCardPresent = (pct: number) => onChange({ ...value, cardPresentRate: pct / 100 });
   const setCardNotPresent = (pct: number) => {
     const next = pct / 100;
@@ -120,11 +135,11 @@ export default function RateFields({ value, onChange, hideNote, freshQuote }: Ra
 
   return (
     <>
-      <div className={styles.brand}>
-        {/* Each lane reads as the sentence the merchant will see on their
-            quote: "2.49% + $0.15". The fee is ONE number on the quote, so
-            the two fee boxes are views of it — editing either moves both. */}
-        <div className={styles.grid}>
+      {/* Each lane reads as the sentence the merchant will see on their quote:
+          "2.49% + $0.15 per transaction". The fee is ONE number on the quote,
+          so the two fee boxes are views of it — editing either moves both. */}
+      <div className={styles.grid}>
+        {!cardNotPresentOnly && (
           <div className={styles.field}>
             <span className={styles.label}>Card Present</span>
             <div className={styles.pair}>
@@ -148,54 +163,65 @@ export default function RateFields({ value, onChange, hideNote, freshQuote }: Ra
                   aria-label="Card present, per transaction fee, dollars"
                 />
               </span>
+              <span className={styles.suffix}>per transaction</span>
             </div>
           </div>
-          <div className={styles.field}>
-            <span className={styles.label}>Card Not Present</span>
-            <div className={styles.pair}>
-              <span className={styles.inputWrap}>
-                {/* Locked once confirmed — see freshQuote's doc comment above
-                    for the unconfirmed window a brand-new quote starts in.
-                    `onChange` is a no-op while locked; `disabled` is what
-                    actually stops a rep typing here, and the browser never
-                    fires onChange on a disabled input in the first place. */}
-                <DecimalField
-                  className={styles.input}
-                  value={Number(pctText(value.cardNotPresentRate))}
-                  max={MAX_PLAUSIBLE_CARD_RATE * 100}
-                  onChange={cnpLocked ? () => {} : setCardNotPresent}
-                  disabled={cnpLocked}
-                  aria-label={
-                    cnpLocked
-                      ? "Card not present rate, percent — set by AIO's rate card, not editable"
-                      : "Card not present rate, percent — could not confirm AIO's rate card yet, enter it directly"
-                  }
-                />
-                <span className={styles.unit}>%</span>
-              </span>
-              <span className={styles.plus} aria-hidden="true">+</span>
-              <span className={styles.inputWrap}>
-                <span className={styles.unit} data-side="left">$</span>
-                <DecimalField
-                  className={styles.input} data-unit="leading"
-                  value={value.perTransactionFee}
-                  onChange={setPerTransactionFee}
-                  aria-label="Card not present, per transaction fee, dollars"
-                />
-              </span>
-            </div>
-            {freshQuote && !cnpLocked && (
-              <span className={styles.cnpStatus}>
-                {cnpFetchFailed
-                  ? "Could not confirm AIO's rate card — enter the card-not-present rate directly."
-                  : "Confirming AIO's rate card…"}
-              </span>
-            )}
+        )}
+        <div className={styles.field}>
+          <span className={styles.label}>Card Not Present</span>
+          <div className={styles.pair}>
+            <span className={styles.inputWrap}>
+              {/* Locked once confirmed — see freshQuote's doc comment above
+                  for the unconfirmed window a brand-new quote starts in.
+                  `onChange` is a no-op while locked; `disabled` is what
+                  actually stops a rep typing here, and the browser never
+                  fires onChange on a disabled input in the first place. */}
+              <DecimalField
+                className={styles.input}
+                value={Number(pctText(value.cardNotPresentRate))}
+                max={MAX_PLAUSIBLE_CARD_RATE * 100}
+                onChange={cnpLocked ? () => {} : setCardNotPresent}
+                disabled={cnpLocked}
+                aria-label={
+                  cnpLocked
+                    ? "Card not present rate, percent — set by AIO's rate card, not editable"
+                    : "Card not present rate, percent — could not confirm AIO's rate card yet, enter it directly"
+                }
+              />
+              <span className={styles.unit}>%</span>
+            </span>
+            <span className={styles.plus} aria-hidden="true">+</span>
+            <span className={styles.inputWrap}>
+              <span className={styles.unit} data-side="left">$</span>
+              <DecimalField
+                className={styles.input} data-unit="leading"
+                value={value.perTransactionFee}
+                onChange={setPerTransactionFee}
+                aria-label="Card not present, per transaction fee, dollars"
+              />
+            </span>
+            <span className={styles.suffix}>per transaction</span>
           </div>
+          {freshQuote && !cnpLocked && (
+            <span className={styles.cnpStatus}>
+              {cnpFetchFailed
+                ? "Could not confirm AIO's rate card — enter the card-not-present rate directly."
+                : "Confirming AIO's rate card…"}
+            </span>
+          )}
         </div>
       </div>
 
-      {!hideNote && (
+      {/* Why the card-present lane isn't there. Shown whether or not the host
+          hides the standing note, because its absence is the surprising part. */}
+      {cardNotPresentOnly && (
+        <p className={styles.note}>
+          This merchant takes orders online and nowhere else, so every sale is card-not-present.
+          There is no card-present rate to quote.
+        </p>
+      )}
+
+      {!hideNote && !cardNotPresentOnly && (
         <p className={styles.note}>
           Card-not-present is set by AIO&rsquo;s rate card and isn&rsquo;t rep-editable. Default is{" "}
           {pctText(DEFAULT_QUOTE_RATES.cardPresentRate)}% + ${DEFAULT_QUOTE_RATES.perTransactionFee.toFixed(2)} until
