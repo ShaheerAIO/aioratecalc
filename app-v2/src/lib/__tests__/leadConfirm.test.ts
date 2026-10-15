@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { validateOnboardingFields } from "@/lib/onboardingValidation";
 import {
   applyLeadConfirmation,
+  missingConfirmationFields,
   confirmationErrors,
   unreachableErrorPaths,
   CONFIRMABLE_PATHS,
@@ -16,6 +18,8 @@ import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchan
 const BUSINESS: Partial<BusinessInfo> = {
   legalName: "Torta Palace LLC",
   dba: "Torta Palace",
+  bizType: "llc",
+  ein: "12-3456789",
   address: "1200 Wilshire Blvd",
   city: "Los Angeles",
   state: "CA",
@@ -187,6 +191,111 @@ describe("confirmationErrors", () => {
   it("refuses a malformed phone rather than passing it to AIO verbatim", () => {
     const next = applyLeadConfirmation(current, { "business.phone": "call the office" });
     expect(confirmationErrors(next)).toHaveProperty("business.phone");
+  });
+});
+
+// EVERYTHING ON THIS FORM IS REQUIRED (2026-10-15, product owner). These rules
+// live on the confirmation step ALONE and must never migrate into
+// `validateOnboardingFields`: that function is what `isReadyForAioProvisioning`
+// runs, so a field added there is a field every already-paid row is suddenly
+// missing, held at `missing_business_details` for want of an EIN nobody had
+// ever been asked for. It is also what the rep form checks through
+// `stripBlanks`, where reps stay lenient by standing decision.
+describe("the confirmation step requires every box on it", () => {
+  const requiredNow: Array<[string, Record<string, string>]> = [
+    ["business.dba", { "business.dba": "" }],
+    ["business.bizType", { "business.bizType": "" }],
+    ["business.ein", { "business.ein": "" }],
+    ["ownerContact.title", { "ownerContact.title": "" }],
+  ];
+
+  for (const [path, blanked] of requiredNow) {
+    it(`refuses a blank ${path}`, () => {
+      expect(confirmationErrors(applyLeadConfirmation(current, blanked))).toHaveProperty(path);
+    });
+  }
+
+  it("checks the EIN's SHAPE, not just that something was typed", () => {
+    // Nine digits, always. Nothing downstream verifies this one — Adyen and
+    // Check each collect and verify their own — so an eight-digit typo would
+    // sit on the CRM record looking authoritative.
+    expect(confirmationErrors(applyLeadConfirmation(current, { "business.ein": "12-345678" })))
+      .toHaveProperty("business.ein");
+    expect(confirmationErrors(applyLeadConfirmation(current, { "business.ein": "not an ein" })))
+      .toHaveProperty("business.ein");
+    expect(confirmationErrors(applyLeadConfirmation(current, { "business.ein": "123456789" })))
+      .not.toHaveProperty("business.ein");
+  });
+
+  it("leaves the website and years-open optional — they were not on the list", () => {
+    const next = applyLeadConfirmation(current, { "business.website": "", "business.yearsInBusiness": "" });
+    expect(confirmationErrors(next)).toEqual({});
+  });
+
+  // None of the above may leak into the tenant rules, or the provisioning cron
+  // starts holding paid merchants over a box it never asked them for.
+  it("does NOT add any of this to validateOnboardingFields", () => {
+    const stripped = { business: { ...BUSINESS, dba: "", bizType: "" as const, ein: "" }, ownerContact: { ...OWNER, title: "" } };
+    expect(validateOnboardingFields(stripped)).toEqual({});
+    expect(Object.keys(confirmationErrors(stripped)).sort())
+      .toEqual(["business.bizType", "business.dba", "business.ein", "ownerContact.title"]);
+  });
+});
+
+describe("the billing contact, required only when it is someone else", () => {
+  it("is satisfied by 'same as the owner above' — that IS an answer", () => {
+    const next = applyLeadConfirmation(current, {
+      "billingContact.firstName": "", "billingContact.lastName": "",
+      "billingContact.email": "", "billingContact.phone": "",
+    });
+    expect(next.billingContact).toBeNull();
+    expect(confirmationErrors(next)).toEqual({});
+  });
+
+  it("demands the whole contact once the merchant names a different person", () => {
+    const next = applyLeadConfirmation(current, { "billingContact.firstName": "Luis" });
+    expect(Object.keys(confirmationErrors(next)).sort()).toEqual([
+      "billingContact.email", "billingContact.lastName", "billingContact.phone",
+    ]);
+  });
+
+  it("checks that contact's email is an email", () => {
+    const next = applyLeadConfirmation(current, {
+      "billingContact.firstName": "Luis", "billingContact.lastName": "Ortiz",
+      "billingContact.email": "not-an-email", "billingContact.phone": "555-000-0002",
+    });
+    expect(confirmationErrors(next)).toHaveProperty("billingContact.email");
+  });
+
+  it("accepts a complete one", () => {
+    const next = applyLeadConfirmation(current, {
+      "billingContact.firstName": "Luis", "billingContact.lastName": "Ortiz",
+      "billingContact.email": "ap@tortapalace.com", "billingContact.phone": "555-000-0002",
+    });
+    expect(confirmationErrors(next)).toEqual({});
+  });
+});
+
+describe("missingConfirmationFields — what a disabled button is waiting on", () => {
+  it("is empty exactly when the form is submittable", () => {
+    expect(missingConfirmationFields(current)).toEqual([]);
+  });
+
+  it("qualifies the fields this form asks for twice", () => {
+    // "City" and "First name" are unambiguous beside their own panel heading
+    // and are not, pulled out and listed under a button.
+    const next = applyLeadConfirmation(current, {
+      "business.city": "", "ownerContact.firstName": "", "billingContact.lastName": "Ortiz",
+    });
+    const missing = missingConfirmationFields(next);
+    expect(missing).toContain("Registered address — City");
+    expect(missing).toContain("Owner — First name");
+    expect(missing).toContain("Billing contact — First name");
+  });
+
+  it("lists them in the order the form asks for them", () => {
+    const next = applyLeadConfirmation(current, { "business.ein": "", "business.dba": "" });
+    expect(missingConfirmationFields(next)).toEqual(["Trading name (DBA)", "Federal EIN"]);
   });
 });
 

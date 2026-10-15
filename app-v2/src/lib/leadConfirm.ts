@@ -179,7 +179,151 @@ export function applyLeadConfirmation(
  * that asserts that hasn't happened.
  */
 export function confirmationErrors(next: LeadConfirmInput): OnboardingFieldErrors {
-  return validateOnboardingFields(next);
+  return { ...validateOnboardingFields(next), ...confirmationOnlyErrors(next) };
+}
+
+/**
+ * The label each field is asked for under, shared by the form and the
+ * "still needed" summary beneath its button.
+ *
+ * One map rather than a label on the input and a second copy in the summary:
+ * a merchant told to supply "Trading name" who is looking at a box marked
+ * "DBA" has been given a puzzle, and two literals drift the moment one is
+ * reworded.
+ */
+export const FIELD_LABELS: Record<string, string> = {
+  "business.legalName": "Legal business name, as registered",
+  "business.dba": "Trading name (DBA)",
+  "business.bizType": "Entity type",
+  "business.ein": "Federal EIN",
+  "business.phone": "Business phone",
+  "business.website": "Website",
+  "business.yearsInBusiness": "Years open",
+  "business.address": "Street address",
+  "business.city": "City",
+  "business.state": "State",
+  "business.zip": "ZIP",
+  "business.dbaAddress": "Operating street address",
+  "business.dbaCity": "City",
+  "business.dbaState": "State",
+  "business.dbaZip": "ZIP",
+  "ownerContact.firstName": "First name",
+  "ownerContact.lastName": "Last name",
+  "ownerContact.title": "Title",
+  "ownerContact.email": "Email",
+  "ownerContact.phone": "Mobile",
+  "billingContact.firstName": "First name",
+  "billingContact.lastName": "Last name",
+  "billingContact.email": "Email",
+  "billingContact.phone": "Phone",
+  "processing.mcc": "Merchant category code",
+  "processing.currentProcessor": "Current processor",
+};
+
+/**
+ * Which panel a field sits in, used to QUALIFY it in the "still needed"
+ * summary and nowhere else.
+ *
+ * The labels above are the ones printed beside the boxes, where the panel
+ * heading is already on screen — so "City" and "First name" are unambiguous
+ * there and prefixing them would just be noise. Pulled out of that context and
+ * listed under a disabled button they are not: this form asks for a city
+ * twice and a first name twice. Hence one label, qualified at the one place
+ * the context is missing.
+ */
+const SECTION_OF: Record<string, string> = {
+  "business.address": "Registered address",
+  "business.city": "Registered address",
+  "business.state": "Registered address",
+  "business.zip": "Registered address",
+  "business.dbaAddress": "Operating address",
+  "business.dbaCity": "Operating address",
+  "business.dbaState": "Operating address",
+  "business.dbaZip": "Operating address",
+  "ownerContact.firstName": "Owner",
+  "ownerContact.lastName": "Owner",
+  "ownerContact.title": "Owner",
+  "ownerContact.email": "Owner",
+  "ownerContact.phone": "Owner",
+  "billingContact.firstName": "Billing contact",
+  "billingContact.lastName": "Billing contact",
+  "billingContact.email": "Billing contact",
+  "billingContact.phone": "Billing contact",
+};
+
+// EINs are always nine digits, written NN-NNNNNNN. Checked for SHAPE as well
+// as presence, for the same reason `validateOnboardingFields` checks the ZIP
+// and the phone rather than merely requiring them: this is the one tax id AIO
+// stores, it lands on a CRM record a human later reads as fact, and nothing
+// downstream verifies it — Adyen and Check each collect and verify their own.
+// An eight-digit typo would otherwise sit there looking authoritative.
+const EIN = /^\d{2}-?\d{7}$/;
+
+const blank = (v: string | undefined | null) => !(v ?? "").trim();
+
+/**
+ * What the CONFIRMATION STEP requires on top of the tenant rules.
+ *
+ * Deliberately NOT folded into `validateOnboardingFields` (2026-10-15, product
+ * owner: everything on this form is required). That function is also what
+ * `isReadyForAioProvisioning` runs, and a field added there is a field every
+ * ALREADY-PAID row is suddenly missing — the provisioning cron would hold them
+ * at `missing_business_details` forever, for want of an EIN nobody had ever
+ * been asked for. It is also what the rep form checks through `stripBlanks`,
+ * where the standing decision is that reps stay lenient.
+ *
+ * So these are requirements of the MOMENT, not of the tenant: the merchant is
+ * in front of the form, every box is on screen, and this is the last point
+ * anything can be corrected. The provisioning gate is untouched.
+ *
+ * The billing contact is required only when the merchant says it is someone
+ * other than the owner. Ticking "same as the owner above" posts an all-blank
+ * contact, which `applyLeadConfirmation` reads as null — that IS an answer,
+ * and demanding four more boxes for a person already named above would be
+ * asking them to type it twice.
+ */
+function confirmationOnlyErrors(input: LeadConfirmInput): OnboardingFieldErrors {
+  const errors: OnboardingFieldErrors = {};
+  const biz = input.business ?? {};
+
+  if (blank(biz.dba)) errors["business.dba"] = "Enter the name customers know you by.";
+  if (blank(biz.bizType)) errors["business.bizType"] = "Choose how the business is registered.";
+  if (blank(biz.ein)) errors["business.ein"] = "Enter the business's 9-digit federal EIN.";
+  else if (!EIN.test((biz.ein ?? "").trim())) errors["business.ein"] = "An EIN is 9 digits, e.g. 12-3456789.";
+
+  if (blank(input.ownerContact?.title)) errors["ownerContact.title"] = "Enter their role, e.g. Owner.";
+
+  const billing = input.billingContact;
+  if (billing) {
+    if (blank(billing.firstName)) errors["billingContact.firstName"] = "Enter the billing contact's first name.";
+    if (blank(billing.lastName)) errors["billingContact.lastName"] = "Enter the billing contact's last name.";
+    if (blank(billing.email)) errors["billingContact.email"] = "Enter the billing contact's email address.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(billing.email!.trim())) {
+      errors["billingContact.email"] = "Enter a valid email address.";
+    }
+    if (blank(billing.phone)) errors["billingContact.phone"] = "Enter the billing contact's phone number.";
+  }
+
+  return errors;
+}
+
+/**
+ * The labels of everything still outstanding, in the order the form asks for
+ * them — so a disabled button can say what it is waiting on.
+ *
+ * Without this the merchant meets a dead button and no reason, which is the
+ * standing failure mode of a form that validates only on submit and then
+ * refuses to let you submit.
+ */
+export function missingConfirmationFields(input: LeadConfirmInput): string[] {
+  const errors = confirmationErrors(input);
+  const ordered = Object.keys(FIELD_LABELS).filter(p => errors[p]);
+  const rest = Object.keys(errors).filter(p => !(p in FIELD_LABELS));
+  return [...ordered, ...rest].map(p => {
+    const label = FIELD_LABELS[p] ?? p;
+    const section = SECTION_OF[p];
+    return section ? `${section} — ${label}` : label;
+  });
 }
 
 /**

@@ -44,3 +44,30 @@
   color: var(--ink-2);
   margin: 0 0 var(--space-md);
 }
+
+/* What a disabled button is waiting on. Deliberately NOT the danger colour:
+   nothing has gone wrong, the merchant simply hasn't finished — and this
+   renders on first paint, before they have touched anything, where red would
+   read as an accusation. */
+.stillNeeded {
+  background: var(--paper-3, rgba(127, 127, 127, 0.06));
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.stillNeededTitle {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--ink-1);
+  margin-bottom: var(--space-2xs, 4px);
+}
+
+.stillNeededList {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  color: var(--ink-2);
+}

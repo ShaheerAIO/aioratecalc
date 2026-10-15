@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { confirmLeadDetailsAction } from "@/lib/actions/leadConfirm";
-import { confirmationErrors } from "@/lib/leadConfirm";
+import { confirmationErrors, missingConfirmationFields, FIELD_LABELS } from "@/lib/leadConfirm";
 import { fmt$0 } from "@/lib/utils";
 import type { OnboardingFieldErrors } from "@/lib/onboardingValidation";
 import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
@@ -53,20 +53,40 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
   // legal address" and every consumer falls back (see `locationAddress`).
   const [separateOperating, setSeparateOperating] = useState(() => Boolean(initial.business.dbaAddress?.trim()));
 
-  const [attempted, setAttempted] = useState(false);
+  // Which boxes the merchant has actually left. A field goes red when they
+  // leave it wrong, never on first paint: the form opens mostly pre-filled and
+  // painting every empty box red before they have touched anything is
+  // scolding. The "still needed" summary under the button is what explains the
+  // disabled state in the meantime.
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [serverErrors, setServerErrors] = useState<OnboardingFieldErrors>({});
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // EXACTLY what will be posted, so the browser's verdict and the server's
+  // cannot differ. Both of these mirror `buildValues` below: an un-ticked
+  // "different operating address" means those four are blank whatever stale
+  // values the inputs still hold, and "same as the owner" means there is no
+  // separate billing contact — which is an answer, not an omission.
+  const pending = useMemo(() => ({
+    business: separateOperating
+      ? biz
+      : { ...biz, dbaAddress: "", dbaCity: "", dbaState: "", dbaZip: "" },
+    ownerContact: owner,
+    billingContact: sameAsOwner ? null : billing,
+    processing: proc,
+  }), [biz, owner, billing, proc, separateOperating, sameAsOwner]);
+
   // Same validator the Server Action gates on, so the merchant sees exactly
-  // what would be rejected before any round trip. Live only after the first
-  // submit attempt: flagging empty boxes before they've tried is scolding.
-  const liveErrors = useMemo(
-    () => confirmationErrors({ business: biz, ownerContact: owner }),
-    [biz, owner]
+  // what would be rejected before any round trip.
+  const liveErrors = useMemo(() => confirmationErrors(pending), [pending]);
+  const stillNeeded = useMemo(() => missingConfirmationFields(pending), [pending]);
+  const complete = stillNeeded.length === 0;
+
+  const fieldErrors: OnboardingFieldErrors = Object.fromEntries(
+    Object.entries({ ...serverErrors, ...liveErrors }).filter(([path]) => touched[path] || serverErrors[path])
   );
-  const fieldErrors: OnboardingFieldErrors = attempted ? { ...serverErrors, ...liveErrors } : {};
 
   const b = <T extends Record<string, unknown>>(setter: (fn: (prev: T) => T) => void) =>
     (k: keyof T) =>
@@ -78,8 +98,12 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
   const setProcF = b<Partial<ProcessingInfo>>(setProc as Parameters<typeof b>[0]);
   const setBillingF = b<Partial<OwnerContact>>(setBilling as Parameters<typeof b>[0]);
 
+  const markTouched = (path: string) => () => setTouched(t => (t[path] ? t : { ...t, [path]: true }));
+
+  // The label comes from FIELD_LABELS, not from the call site, so the box a
+  // merchant is looking at and the name the "still needed" list gives it are
+  // the same string by construction.
   const input = (
-    label: string,
     path: string,
     val: string,
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => void,
@@ -88,11 +112,12 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
     const fieldErr = fieldErrors[path];
     return (
       <div className={styles.field}>
-        <label className={styles.label}>{label}</label>
+        <label className={styles.label}>{FIELD_LABELS[path] ?? path}</label>
         <input
           type="text"
           value={val}
           onChange={onChange}
+          onBlur={markTouched(path)}
           placeholder={placeholder}
           className={fieldErr ? `${styles.input} ${styles.inputError}` : styles.input}
           aria-invalid={fieldErr ? true : undefined}
@@ -180,9 +205,14 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
   // build claim, its own idempotency and its own merchant-safe error
   // vocabulary. Reimplementing any of that here would be a second door.
   const handleConfirm = async () => {
-    setAttempted(true);
     setErr(null);
+    // Unreachable through the UI — the button that opens the confirmation
+    // panel is disabled while anything is outstanding. Kept because the
+    // server re-validates regardless and a silent no-op here would be worse
+    // than a sentence; every field is marked touched so the boxes turn red
+    // rather than the merchant hunting for what moved.
     if (Object.keys(liveErrors).length) {
+      setTouched(Object.fromEntries(Object.keys(liveErrors).map(k => [k, true])));
       setServerErrors({});
       setConfirming(false);
       setErr("Please correct the highlighted fields above, then confirm.");
@@ -247,8 +277,8 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
       <div className={styles.panel}>
         <h2 className={styles.sectionTitle}>Your Business</h2>
         <div className={styles.grid2}>
-          {input("Legal business name, as registered", "business.legalName", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("Trading name (DBA)", "business.dba", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("business.legalName", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("business.dba", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           <div className={styles.field}>
@@ -264,14 +294,14 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
               ))}
             </select>
           </div>
-          {input("Federal EIN", "business.ein", biz.ein || "", setBizF("ein") as (e: React.ChangeEvent<HTMLInputElement>) => void, "12-3456789")}
+          {input("business.ein", biz.ein || "", setBizF("ein") as (e: React.ChangeEvent<HTMLInputElement>) => void, "12-3456789")}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
-          {input("Business phone", "business.phone", biz.phone || "", setBizF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
-          {input("Website", "business.website", biz.website || "", setBizF("website") as (e: React.ChangeEvent<HTMLInputElement>) => void, "yourrestaurant.com")}
+          {input("business.phone", biz.phone || "", setBizF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+          {input("business.website", biz.website || "", setBizF("website") as (e: React.ChangeEvent<HTMLInputElement>) => void, "yourrestaurant.com")}
         </div>
         <div className={styles.row}>
-          {input("Years open", "business.yearsInBusiness", biz.yearsInBusiness || "", setBizF("yearsInBusiness") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("business.yearsInBusiness", biz.yearsInBusiness || "", setBizF("yearsInBusiness") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
         </div>
       </div>
 
@@ -279,14 +309,14 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         <h2 className={styles.sectionTitle}>Registered Address</h2>
         <p className={styles.hint}>The address your business is registered under with the government.</p>
         <div className={styles.row}>
-          {input("Street address", "business.address", biz.address || "", setBizF("address") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("business.address", biz.address || "", setBizF("address") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
-          {input("City", "business.city", biz.city || "", setBizF("city") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("State", "business.state", biz.state || "", setBizF("state") as (e: React.ChangeEvent<HTMLInputElement>) => void, "CA")}
+          {input("business.city", biz.city || "", setBizF("city") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("business.state", biz.state || "", setBizF("state") as (e: React.ChangeEvent<HTMLInputElement>) => void, "CA")}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
-          {input("ZIP", "business.zip", biz.zip || "", setBizF("zip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
+          {input("business.zip", biz.zip || "", setBizF("zip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
         </div>
 
         <label className={`${styles.checkboxRow} ${styles.row}`}>
@@ -302,14 +332,14 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         {separateOperating && (
           <>
             <div className={styles.row}>
-              {input("Operating street address", "business.dbaAddress", biz.dbaAddress || "", setBizF("dbaAddress") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("business.dbaAddress", biz.dbaAddress || "", setBizF("dbaAddress") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
             </div>
             <div className={`${styles.grid2} ${styles.row}`}>
-              {input("City", "business.dbaCity", biz.dbaCity || "", setBizF("dbaCity") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-              {input("State", "business.dbaState", biz.dbaState || "", setBizF("dbaState") as (e: React.ChangeEvent<HTMLInputElement>) => void, "CA")}
+              {input("business.dbaCity", biz.dbaCity || "", setBizF("dbaCity") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("business.dbaState", biz.dbaState || "", setBizF("dbaState") as (e: React.ChangeEvent<HTMLInputElement>) => void, "CA")}
             </div>
             <div className={`${styles.grid2} ${styles.row}`}>
-              {input("ZIP", "business.dbaZip", biz.dbaZip || "", setBizF("dbaZip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
+              {input("business.dbaZip", biz.dbaZip || "", setBizF("dbaZip") as (e: React.ChangeEvent<HTMLInputElement>) => void, "90210")}
             </div>
           </>
         )}
@@ -322,15 +352,15 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
           signature.
         </p>
         <div className={styles.grid2}>
-          {input("First name", "ownerContact.firstName", owner.firstName || "", setOwnerF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("Last name", "ownerContact.lastName", owner.lastName || "", setOwnerF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("ownerContact.firstName", owner.firstName || "", setOwnerF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("ownerContact.lastName", owner.lastName || "", setOwnerF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
-          {input("Title", "ownerContact.title", owner.title || "", setOwnerF("title") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Owner")}
-          {input("Mobile", "ownerContact.phone", owner.phone || "", setOwnerF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+          {input("ownerContact.title", owner.title || "", setOwnerF("title") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Owner")}
+          {input("ownerContact.phone", owner.phone || "", setOwnerF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
         </div>
         <div className={styles.row}>
-          {input("Email", "ownerContact.email", owner.email || "", setOwnerF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "owner@business.com")}
+          {input("ownerContact.email", owner.email || "", setOwnerF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "owner@business.com")}
         </div>
       </div>
 
@@ -349,12 +379,12 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         {!sameAsOwner && (
           <>
             <div className={`${styles.grid2} ${styles.row}`}>
-              {input("First name", "billingContact.firstName", billing.firstName || "", setBillingF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-              {input("Last name", "billingContact.lastName", billing.lastName || "", setBillingF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("billingContact.firstName", billing.firstName || "", setBillingF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("billingContact.lastName", billing.lastName || "", setBillingF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
             </div>
             <div className={`${styles.grid2} ${styles.row}`}>
-              {input("Email", "billingContact.email", billing.email || "", setBillingF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "billing@business.com")}
-              {input("Phone", "billingContact.phone", billing.phone || "", setBillingF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+              {input("billingContact.email", billing.email || "", setBillingF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "billing@business.com")}
+              {input("billingContact.phone", billing.phone || "", setBillingF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
             </div>
           </>
         )}
@@ -376,8 +406,8 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
           </>
         )}
         <div className={`${styles.grid2} ${styles.row}`}>
-          {input("Current processor", "processing.currentProcessor", proc.currentProcessor || "", setProcF("currentProcessor") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("Merchant category code", "processing.mcc", proc.mcc || "", setProcF("mcc") as (e: React.ChangeEvent<HTMLInputElement>) => void, "5812")}
+          {input("processing.currentProcessor", proc.currentProcessor || "", setProcF("currentProcessor") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("processing.mcc", proc.mcc || "", setProcF("mcc") as (e: React.ChangeEvent<HTMLInputElement>) => void, "5812")}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           <div className={styles.field}>
@@ -431,11 +461,34 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
           </div>
         </div>
       ) : (
-        <div className={styles.actions}>
-          <button onClick={() => setConfirming(true)} disabled={saving} className={styles.btnPrimary}>
-            Confirm &amp; Continue →
-          </button>
-        </div>
+        <>
+          {/* EVERYTHING ON THIS FORM IS REQUIRED (2026-10-15, product owner),
+              so the button is dead until it is. A dead button with no reason
+              is the standing failure of forms that validate only on submit,
+              and this one cannot even be submitted to find out — hence the
+              list. It names what is outstanding in the order the form asks
+              for it, qualified by panel, because this page asks for a city
+              twice and a first name twice. */}
+          {!complete && (
+            <div className={confirmStyles.stillNeeded}>
+              <strong className={confirmStyles.stillNeededTitle}>
+                {stillNeeded.length} {stillNeeded.length === 1 ? "thing" : "things"} still needed
+              </strong>
+              <ul className={confirmStyles.stillNeededList}>
+                {stillNeeded.map(label => <li key={label}>{label}</li>)}
+              </ul>
+            </div>
+          )}
+          <div className={styles.actions}>
+            <button
+              onClick={() => setConfirming(true)}
+              disabled={saving || !complete}
+              className={styles.btnPrimary}
+            >
+              Confirm &amp; Continue →
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
