@@ -105,6 +105,29 @@ export function isUsStateCode(state: string | undefined): boolean {
   return code !== undefined && US_STATE_CODE_SET.has(code);
 }
 
+/**
+ * Normalise a business's State boxes to USPS codes before persisting.
+ *
+ * Every State box a human types into is free text, so "California" is a
+ * perfectly ordinary answer. adapters/adyen.ts normalises on the way out, but
+ * Check, AIO and HubSpot read `business.state` as-is — so normalise once, at
+ * the point of saving, and persist the code every consumer expects.
+ *
+ * Lives here rather than in actions/customer.ts (where it started) because the
+ * merchant now reaches it from two places: their authenticated onboarding form
+ * and the public confirmation step. actions/customer.ts is "use server", where
+ * every export becomes a callable endpoint, so sharing it from there was not
+ * an option.
+ */
+export function withStateCode<T extends { state: string; dbaState?: string }>(business: T): T {
+  return {
+    ...business,
+    state: usStateCode(business.state) ?? "",
+    // Only when present: a blank DBA address must stay absent, not become "".
+    ...(business.dbaState ? { dbaState: usStateCode(business.dbaState) ?? "" } : {}),
+  };
+}
+
 export function parseJSON(text: string): Record<string, unknown> | null {
   try {
     const clean = text.replace(/```json|```/g, "").trim();

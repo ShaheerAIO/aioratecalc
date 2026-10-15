@@ -31,7 +31,7 @@ function appWithAnalysisOnly(): MerchantApplication {
     stage: "analysis", hubspotDealId: null, dealLink: null, tenantLink: null,
     adyenIds: null, adyenOnboardingUrl: null, aioTenant: null, checkIds: null, foodbuyIds: null,
     hubspotIds: null, quoteType: null, quoteConfig: null, quoteLines: null, orderPoints: null,
-    quoteAcceptedAt: null, quoteNote: null, quoteRates: null, targetMargin: null, pricingModel: null,
+    quoteAcceptedAt: null, detailsConfirmedAt: null, quoteNote: null, quoteRates: null, targetMargin: null, pricingModel: null,
     customerLinkToken: null, customerLinkPurpose: null, customerLinkSentAt: null, customerLinkExpiresAt: null,
     analysis: ANALYSIS, proposal: null,
     // No saved `business` yet — this is the fresh-wizard case ApplyStep's

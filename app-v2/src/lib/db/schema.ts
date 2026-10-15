@@ -231,6 +231,11 @@ export const merchantApplications = pgTable("merchant_applications", {
   // Frozen alongside quoteConfig/quoteLines — the record of what was agreed,
   // not a piece of live deal state (that's `stage`).
   quoteAcceptedAt: timestamp("quote_accepted_at", { withTimezone: true }),
+  // Set once, when the MERCHANT confirms their own details on the public lead
+  // link — which is what authorises the HubSpot quote to be built at all.
+  // Earlier than both `quoteAcceptedAt` above and `hubspotIds.publishedAt`,
+  // and the marker the rep's quote editor freezes on first.
+  detailsConfirmedAt: timestamp("details_confirmed_at", { withTimezone: true }),
   // The rep's note on this quote, mirrored onto the HubSpot deal. Nullable:
   // most quotes have nothing to say. It becomes REQUIRED only when a first
   // charge doesn't sit on the plan's own default — see `quoteNoteBlockers`.

@@ -22,15 +22,20 @@ import styles from "./LeadQuoteView.module.css";
 // accept again, which is one acceptance too many. Entering billing details IS
 // accepting the quote.
 //
-// THE MERCHANT OPENS THE DOOR. Until 2026-09-25 the HubSpot quote had to be
-// published by a rep first, and a merchant who opened the link they had just
-// been emailed saw "your quote is being finalised" and could do nothing at
-// all. That gate is gone: "Continue to Billing" POSTs ../checkout, which
-// builds and publishes the quote on the spot and hands back the hosted URL.
+// THE MERCHANT OPENS THE DOOR, and since 2026-10-15 there is a step in front
+// of it: they confirm their own details at ../confirm, and confirming is what
+// builds and publishes the HubSpot quote. Nothing is published when the rep
+// sends the link any more, because a published quote can't be edited,
+// replaced or voided — so a rep's typo of a billing contact or an address was
+// frozen onto a document nobody could amend, and the rep was locked out of
+// their own quote the moment they sent it.
 //
-// Publishing is irreversible, so the button asks first. The confirmation talks
-// about what the MERCHANT loses — the chance to have the pricing changed — not
-// about HubSpot's inability to unpublish, which is not their problem.
+// So the primary CTA here is a LINK to the confirmation form, not a fetch, and
+// the irreversibility prompt went with it: it belongs next to the fields the
+// merchant is being asked to vouch for, not next to a summary. What survives
+// here is `continueToBilling`, for the two states where the merchant has
+// already confirmed — their publish is still catching up, or they signed and
+// never paid.
 //
 // The in-app accept form below survives for exactly one case, `canAcceptHere`:
 // a rate-only quote, which creates no HubSpot document at all (see the header
@@ -54,12 +59,18 @@ type Props = {
   canAcceptHere?: boolean;
   /** True when this quote has already been accepted (re-opened link). */
   alreadyAccepted?: boolean;
+  /**
+   * True once the merchant has confirmed their details at ../confirm — which
+   * is what authorises the publish. False is the ORDINARY state for a fresh
+   * link, not a wait: it just means nobody has been through the form yet.
+   */
+  detailsConfirmed?: boolean;
 };
 
 export default function LeadQuoteView({
   token, quote, businessName, contactEmail,
   checkoutUrl = null, canAcceptHere = false, alreadyAccepted = false,
-  signedWithoutPaying = false,
+  signedWithoutPaying = false, detailsConfirmed = false,
 }: Props) {
   const [email, setEmail]         = useState(contactEmail || "");
   const [accepting, setAccepting] = useState(false);
@@ -68,10 +79,10 @@ export default function LeadQuoteView({
   const [devUrl, setDevUrl]       = useState<string | null>(null);
   const [error, setError]         = useState<string | null>(null);
 
-  // The billing hand-off. `confirming` is the irreversibility prompt; `going`
-  // covers the publish, which is 8-12 HubSpot calls plus a ~3s link read, so
-  // the merchant is told it is working rather than left on a dead button.
-  const [confirming, setConfirming] = useState(false);
+  // The billing hand-off. `going` covers the publish, which is 8-12 HubSpot
+  // calls plus a ~3s link read, so the merchant is told it is working rather
+  // than left on a dead button. There is no `confirming` prompt here any more
+  // — the confirmation form owns it, next to the fields it is about.
   const [going, setGoing]           = useState(false);
   const [goError, setGoError]       = useState<string | null>(null);
 
@@ -83,6 +94,9 @@ export default function LeadQuoteView({
     not_ready: "We couldn't open billing just yet. Your AIO representative has been notified and will sort it out — no need to do anything.",
     rate_only: "This quote has nothing to bill, so there's nothing to pay. Accept it below instead.",
     no_quote: "There's no quote on this link yet.",
+    // Only reachable from a stale tab: the button that reaches this route is
+    // only rendered once `detailsConfirmed` is true.
+    not_confirmed: "Please check and confirm your details first.",
     expired: "This link has expired. Ask your AIO representative for a new one.",
     invalid: "This link is no longer valid. Ask your AIO representative for a new one.",
   };
@@ -100,7 +114,6 @@ export default function LeadQuoteView({
       if (!res.ok || !data.url) {
         setGoError(CHECKOUT_ERRORS[data.error] ?? CHECKOUT_ERRORS.not_ready);
         setGoing(false);
-        setConfirming(false);
         return;
       }
       // Deliberately not resetting `going` — the navigation is the end of this
@@ -110,7 +123,6 @@ export default function LeadQuoteView({
     } catch {
       setGoError(CHECKOUT_ERRORS.not_ready);
       setGoing(false);
-      setConfirming(false);
     }
   };
 
@@ -222,31 +234,29 @@ export default function LeadQuoteView({
               </div>
               {goError && <div className={styles.acceptError}>{goError}</div>}
             </>
-          ) : confirming ? (
-            // The one-way door, in the merchant's own terms. What they lose is
-            // the chance to have the pricing changed — say that, rather than
-            // anything about HubSpot.
+          ) : !detailsConfirmed ? (
+            // THE ORDINARY STARTING STATE, and the step that now precedes
+            // everything else — rate-only quotes included, which is why this
+            // branch sits above `canAcceptHere`. The merchant checks what the
+            // rep entered about them before any of it is committed: on a
+            // billed quote that's a HubSpot document nobody can amend, and on
+            // a rate-only one it's the detail AIO's tenant create refuses to
+            // run without.
+            //
+            // A link rather than a fetch. The irreversibility prompt lives on
+            // that page, beside the fields it is actually about.
             <>
-              <h2 className={styles.panelTitle}>Ready to lock this quote in?</h2>
+              <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
-                Continuing prepares your final quote and takes you to a secure page to sign it and
-                set up payment. From that point the pricing and products above are fixed — if
-                anything looks wrong, talk to your AIO representative first and they&apos;ll put
-                together a new one for you.
+                First, have a quick look at the details we hold for you — your business, your
+                address and who we should bill. They go on your final quote exactly as they read,
+                so it&apos;s worth thirty seconds now.
               </p>
               <div className={styles.acceptRow}>
-                <button onClick={continueToBilling} disabled={going} className={styles.acceptBtn}>
-                  {going ? "Preparing your quote…" : "Yes, continue to billing →"}
-                </button>
-                <button
-                  onClick={() => { setConfirming(false); setGoError(null); }}
-                  disabled={going}
-                  className={styles.secondaryBtn}
-                >
-                  Not yet
-                </button>
+                <a href={`/lead/${token}/confirm`} className={styles.acceptBtn}>
+                  Review &amp; Confirm Details →
+                </a>
               </div>
-              {goError && <div className={styles.acceptError}>{goError}</div>}
             </>
           ) : canAcceptHere ? (
             // Rate-only: no HubSpot document exists or ever will, so there is
@@ -275,12 +285,15 @@ export default function LeadQuoteView({
               {error && <div className={styles.acceptError}>{error}</div>}
             </>
           ) : (
-            // The ordinary case. There used to be a fourth branch below this
-            // one — "your quote is being finalised", shown whenever no rep had
-            // published yet — and it was a dead end on a link the merchant had
-            // already been sent. It is gone: an unpublished quote is not a
-            // wait any more, it is simply a quote nobody has pressed the
-            // button on, and this is that button.
+            // Confirmed, with a billed quote: straight through to HubSpot.
+            // No prompt — they gave their answer on the confirmation form, and
+            // asking a second time would be asking them to authorise something
+            // they already did.
+            //
+            // `continueToBilling` still handles the publish itself, because
+            // confirming and publishing are two steps and the second can lag
+            // or fail: a merchant who confirmed while HubSpot was unreachable
+            // lands here with no `checkoutUrl`, and this button is their retry.
             <>
               <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
@@ -288,11 +301,7 @@ export default function LeadQuoteView({
                 secure page. That&apos;s everything; we&apos;ll set your account up from there.
               </p>
               <div className={styles.acceptRow}>
-                <button
-                  onClick={() => (checkoutUrl ? continueToBilling() : setConfirming(true))}
-                  disabled={going}
-                  className={styles.acceptBtn}
-                >
+                <button onClick={continueToBilling} disabled={going} className={styles.acceptBtn}>
                   {going ? "Opening…" : "Continue to Billing →"}
                 </button>
               </div>

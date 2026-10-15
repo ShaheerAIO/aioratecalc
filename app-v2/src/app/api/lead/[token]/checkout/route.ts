@@ -26,14 +26,18 @@ import { EMPTY_HUBSPOT_IDS, type HubspotIds } from "@/types/merchant";
 // and this route is the third arrow. It builds and publishes the HubSpot quote
 // on demand and hands back the hosted URL to redirect to.
 //
-// UNCHANGED, but no longer the ONLY door (10/13/2026, product owner): the rep's
-// own link-send now usually publishes the quote first (`publishAtSend` in
-// `lib/actions/prospects.ts`, called from `createProspectAction`), so most
-// merchants who get this far find `app.hubspotIds?.publishedAt` already set
-// and this route just hands back the existing link below. This remains the
-// FALLBACK for whatever wasn't publishable at send time — most commonly a
-// rate-only quote or one with nothing picked yet — and everything below is
-// unchanged: same preconditions, same idempotency, same irreversibility.
+// THE ONLY DOOR AGAIN (2026-10-15, product owner), and the sequence now has a
+// step in front of it. `publishAtSend` is GONE from `createProspectAction` —
+// the rep's link-send builds nothing — because publishing before the merchant
+// had confirmed anything froze the rep's own typo of a billing contact or an
+// address onto a document nobody can amend. So:
+//
+//   receive link → see quote → CONFIRM YOUR DETAILS → continue to billing
+//
+// and the confirmation is a precondition here (see the gate below), not a
+// suggestion. Everything else is unchanged: same preconditions, same
+// idempotency, same irreversibility. Rows published under the old rule still
+// short-circuit on `publishedAt` above and never reach the new gate.
 //
 // WHAT THE MERCHANT IS TOLD FIRST. Publishing cannot be undone — no API edit
 // (400 LOCKED), no delete, no void — so the page puts an explicit confirmation
@@ -73,6 +77,24 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ to
 
     if (!hasQuoteBasis(app)) {
       return NextResponse.json({ error: "no_quote" }, { status: 409 });
+    }
+
+    // THE CONFIRMATION GATE (2026-10-15). Nothing may be published until the
+    // merchant has confirmed their own details at /lead/[token]/confirm.
+    //
+    // This is the whole point of the change that introduced it: the document
+    // this route creates cannot afterwards be edited, replaced or voided, so
+    // the billing contact and the addresses printed on it have to have been
+    // checked by the person they describe — not just typed by a rep working
+    // from a HubSpot deal. It also sits ABOVE the one-way door rather than
+    // beside it, so the merchant's own route to the form is a redirect and
+    // never a failed publish.
+    //
+    // Below the idempotent `publishedAt` return above, deliberately: rows
+    // published under the old publish-at-send rule have no confirmation and
+    // must still be handed their existing link.
+    if (!app.detailsConfirmedAt) {
+      return NextResponse.json({ error: "not_confirmed" }, { status: 409 });
     }
 
     // A RATE-ONLY quote builds no HubSpot document at all — AIO's margin comes

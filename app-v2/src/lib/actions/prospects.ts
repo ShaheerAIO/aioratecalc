@@ -20,7 +20,7 @@ import {
   deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot,
   setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
-import { buildAndPublishBillingQuote, resolveSender } from "@/lib/billing/publishBillingQuote";
+import { resolveSender } from "@/lib/billing/publishBillingQuote";
 import { analysisFromQuoteConfig, marginFloorBlockers, monthlyRevenueFloorBlockers } from "@/lib/pricing";
 import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "@/lib/actions/pricing";
 import {
@@ -60,24 +60,22 @@ function mintLeadLink(now: Date) {
 }
 
 // Called with the exact same arguments `sendLeadLinkEmail` was already given
-// whenever there's nothing extra to report — so a caller with neither a quote
-// link nor a resolved rep (every existing one, before 10/13) makes the exact
-// 3-argument call it always did. That arity matters: `toHaveBeenCalledWith(a,
-// b, c)` in Jest/Vitest does NOT match a call made as `fn(a, b, c, undefined)`
-// — an explicitly-passed trailing `undefined` is a real 4th argument, not the
-// same as omitting it — so this avoids silently widening every existing call
-// site. `rep` (10/13, "can the email go through the sales rep?") follows the
-// same rule as `quoteLink`: a call with a rep but no quoteLink still has to
-// pass something in the 4th slot to reach the 5th, so that one case alone
-// passes an explicit `undefined` — never reachable by the pre-existing tests,
-// which never resolve a rep at all (see `resolveReplyToRep`'s own comment).
-function sendLeadLinkEmailWithOptionalQuoteLink(
+// whenever there's no rep to report — so a caller with no resolved rep (every
+// existing one, before 10/13) makes the exact 3-argument call it always did.
+// That arity matters: `toHaveBeenCalledWith(a, b, c)` in Jest/Vitest does NOT
+// match a call made as `fn(a, b, c, undefined)` — an explicitly-passed
+// trailing `undefined` is a real 4th argument, not the same as omitting it —
+// so this avoids silently widening every existing call site.
+//
+// It used to carry a `quoteLink` too, for the "go straight to billing" CTA.
+// That went with publish-at-send on 2026-10-15: the quote is no longer built
+// until the merchant confirms their details, so there is no HubSpot document
+// to link to at the moment this email is written.
+function sendLeadLinkEmailWithOptionalRep(
   to: string, url: string, merchantName: string | undefined,
-  quoteLink: string | null | undefined, rep: ReplyToRep | null | undefined,
+  rep: ReplyToRep | null | undefined,
 ) {
-  if (quoteLink && rep) return sendLeadLinkEmail(to, url, merchantName, quoteLink, rep);
-  if (quoteLink) return sendLeadLinkEmail(to, url, merchantName, quoteLink);
-  if (rep) return sendLeadLinkEmail(to, url, merchantName, undefined, rep);
+  if (rep) return sendLeadLinkEmail(to, url, merchantName, rep);
   return sendLeadLinkEmail(to, url, merchantName);
 }
 
@@ -92,13 +90,6 @@ async function deliverLeadLink(
   /** A second address to send the same link to. Best-effort; its result isn't reported. */
   altEmail?: string | null,
   /**
-   * HubSpot's `hs_quote_link`, when the quote already published by the time
-   * this link goes out (10/13/2026 — see publishAtSend below). Carried onto
-   * the email as a second path to the quote; see sendLeadLinkEmail's own
-   * comment for why.
-   */
-  quoteLink?: string | null,
-  /**
    * The owning rep's verified reply-to identity, when `resolveReplyToRep`
    * could establish one (10/13/2026). Best-effort and independent of
    * everything else here — a failed lookup just means this email reads like
@@ -106,13 +97,13 @@ async function deliverLeadLink(
    */
   rep?: ReplyToRep | null,
 ): Promise<{ emailResult: SendMagicLinkResult; smsResult: SendSmsResult | null }> {
-  const emailResult = await sendLeadLinkEmailWithOptionalQuoteLink(email, url, merchantName, quoteLink, rep).catch(err => {
+  const emailResult = await sendLeadLinkEmailWithOptionalRep(email, url, merchantName, rep).catch(err => {
     console.error("lead link email failed", err);
     return { sent: false, devUrl: url };
   });
   const alt = altEmail?.trim();
   if (alt && alt.toLowerCase() !== email.trim().toLowerCase()) {
-    await sendLeadLinkEmailWithOptionalQuoteLink(alt, url, merchantName, quoteLink, rep)
+    await sendLeadLinkEmailWithOptionalRep(alt, url, merchantName, rep)
       .catch(err => console.error("lead link email (second address) failed", err));
   }
   const smsResult = phone
@@ -148,44 +139,6 @@ async function resolveReplyToRep(ownerUserId: string): Promise<ReplyToRep | null
     return { email: resolved.email, name: name || undefined };
   } catch (err) {
     console.error("resolveReplyToRep failed", ownerUserId, err);
-    return null;
-  }
-}
-
-/**
- * Attempt to publish this prospect's HubSpot billing quote right now, instead
- * of waiting for the merchant to click "Continue to Billing" on their own
- * link later. Product owner, 10/13 — REVERSES the 2026-09-25 decision
- * recorded in billing.ts's header and in CLAUDE.md's acceptance section ("THE
- * MERCHANT OPENS THE DOOR"): publish as soon as the rep sends the link, not
- * whenever the merchant happens to get around to it. Nothing about the door
- * itself changes — same preconditions (`canPublishBillingQuote`), same
- * single irreversible publish, same `400 LOCKED`-means-already-published
- * rule. Only WHEN the first attempt happens moves earlier.
- *
- * MUST NEVER THROW past this point. The prospect row is already saved and the
- * lead link is about to go out regardless — same posture as the email/SMS
- * sends in `deliverLeadLink` and the HubSpot company sync in
- * `syncCompanyDetails`. `buildAndPublishBillingQuote` already treats "not
- * publishable yet" (no quote lines, rate-only — the common case for a
- * brand-new prospect with nothing picked; `no_tenant_company`/`no_deal` are
- * unreachable here, since the company and deal above are already resolved
- * before this is ever called) as a QUIET SKIP, not an error, and it persists
- * any real precondition refusal or HubSpot failure onto
- * `hubspotIds.lastSyncError` itself. The one thing it does NOT wrap in its
- * own try/catch is its initial DB build-claim write, which is what this
- * try/catch is for.
- *
- * The merchant's own "Continue to Billing" (`/api/lead/[token]/checkout`)
- * is UNCHANGED and remains the fallback for every quote that wasn't
- * publishable yet at send time, and for the rare case this attempt fails.
- */
-async function publishAtSend(app: MerchantApplication): Promise<string | null> {
-  try {
-    const outcome = await buildAndPublishBillingQuote(app);
-    return outcome.status === "published" ? outcome.quoteLink : null;
-  } catch (err) {
-    console.error("createProspectAction: publish-at-send failed", app.id, err);
     return null;
   }
 }
@@ -805,6 +758,26 @@ export async function createProspectAction(input: {
     quoteType, analysis, quoteConfig, quoteRates: null, targetMargin: null, pricingModel: null, quoteLines,
   });
 
+  // A LINK WITHOUT A QUOTE IS NOT SENDABLE (2026-10-15, product owner: "there
+  // is no situation where the rep hasnt made the quote because they cant send
+  // the initial link without making it"). That was the intent all along but
+  // nothing enforced it — an All-in-One quote with nothing picked, no declared
+  // channels and no volume resolves `none_needed` for its platform line,
+  // derives zero lines, has no rate basis, and sailed through every existing
+  // block. The merchant then received a link to "your quote is on its way".
+  //
+  // It matters more now that confirmation is the publish trigger: the merchant
+  // is being asked to confirm their details so a quote can be built, and there
+  // has to be a quote to build. Blocking here also makes the lead page's
+  // "still preparing" branch unreachable for new rows, which is why that
+  // branch is kept rather than deleted — rows created before today can still
+  // be in that state.
+  if (!hasQuote) {
+    throw new Error(
+      "This quote has nothing on it yet — pick the products or enter a monthly volume and average ticket before sending the link."
+    );
+  }
+
   const app: MerchantApplication = {
     id: `prospect_${now.getTime()}`,
     ownerUserId: effective.userId,
@@ -832,6 +805,10 @@ export async function createProspectAction(input: {
     quoteLines,
     orderPoints,
     quoteAcceptedAt: null,
+    // Nothing is confirmed and nothing is published at send time — the
+    // merchant does both, from their own link. See the note above the
+    // delivery block.
+    detailsConfirmedAt: null,
     quoteNote,
     quoteRates: rated ? (input.quoteRates ?? DEFAULT_QUOTE_RATES) : null,
     // Not written any more — rates replaced it as the input. Null on every new
@@ -857,14 +834,18 @@ export async function createProspectAction(input: {
 
   await postgresStorage.saveApplication({ userId: effective.userId, role: effective.role }, app);
 
-  // Publish the HubSpot billing quote right here, at send time — see
-  // publishAtSend's own comment for the 10/13 reversal this is. Before the
-  // email goes out, so a quote that's already publishable (most new
-  // prospects aren't) can carry its `hs_quote_link` on that email too.
-  const quoteLink = await publishAtSend(app);
+  // NOTHING IS PUBLISHED HERE (2026-10-15, product owner). The 10/13 reversal
+  // that published the HubSpot quote at this exact point has itself been
+  // reversed: a published quote cannot be edited, replaced or voided, so
+  // publishing before the merchant has confirmed their own details froze the
+  // rep's typo of a billing contact or an address onto a document nobody can
+  // amend — and froze the rep out of their own quote the instant they sent
+  // the link. The merchant now confirms at `/lead/[token]/confirm`, and THAT
+  // is what opens the door (`/api/lead/[token]/checkout`). Until they do, this
+  // quote stays editable, which is the point.
 
-  // Best-effort, same posture as publishAtSend above — a failed resolution
-  // just means the email goes out without the rep's name on it.
+  // Best-effort — a failed resolution just means the email goes out without
+  // the rep's name on it.
   const rep = await resolveReplyToRep(app.ownerUserId);
 
   // Best-effort from here — the prospect row is already saved, so a Resend or
@@ -876,7 +857,6 @@ export async function createProspectAction(input: {
     app.business?.dba || app.business?.legalName,
     app.ownerContact!.phone,
     app.ownerContact!.altEmail,
-    quoteLink,
     rep,
   );
   const companySync = await syncCompanyDetails(input.hubspotCompanyId, app);
@@ -907,7 +887,9 @@ export async function createProspectAction(input: {
  * (the account-detail "Edit Quote" panel calls it too) — which is why the
  * guard below lives here rather than in either caller's UI.
  *
- * Refuses once `quoteAcceptedAt` is set. `quoteLines`/`quoteConfig` are frozen
+ * Refuses once the merchant has confirmed their details (`detailsConfirmedAt`),
+ * which is what publishes the quote, and goes on refusing at every later
+ * marker. `quoteLines`/`quoteConfig` are frozen
  * at acceptance on purpose: they record what the merchant was actually quoted,
  * and the gap between that frozen snapshot and the live billing state is the
  * whole quoted-vs-actual comparison the admin view is built on. Worse,
@@ -962,12 +944,35 @@ export async function saveQuoteConfigurationAction(input: {
     );
   }
 
-  // Published beats accepted as the freeze point now. The rep sends the quote
-  // BEFORE the merchant accepts it (acceptance is them signing and paying it
-  // on HubSpot), so there is a window — sometimes days long — where the
-  // document is live and unamendable but `quoteAcceptedAt` is still null.
-  // Editing our copy in that window would silently desynchronize it from the
-  // one the merchant is actually looking at.
+  // CONFIRMATION beats both of the others as the freeze point (2026-10-15).
+  // The merchant confirming their own details is what BUILDS the HubSpot
+  // quote, so it is strictly the earliest of the three markers: confirm →
+  // publishedAt (seconds later) → quoteAcceptedAt (days later, when they sign
+  // and pay). Checked first because it is the one that names what actually
+  // happened — "the customer confirmed" rather than "a document exists" —
+  // and because in the seconds between the two, or if the publish itself
+  // failed and is waiting to be retried, `publishedAt` alone would let an
+  // edit through on a quote the merchant has already signed off.
+  //
+  // This is also the promise the rep is given right up until this moment:
+  // until the customer confirms, the quote is theirs to change.
+  if (app.detailsConfirmedAt) {
+    throw new Error(
+      "The customer confirmed their details on " + new Date(app.detailsConfirmedAt).toLocaleDateString() +
+      " and this quote is frozen — confirming is what published it to HubSpot, and a published " +
+      "quote can't be edited, replaced or voided through the API. Start a new quote instead of " +
+      "editing this one."
+    );
+  }
+
+  // Published beats accepted as the freeze point. The quote goes out BEFORE
+  // the merchant accepts it (acceptance is them signing and paying it on
+  // HubSpot), so there is a window — sometimes days long — where the document
+  // is live and unamendable but `quoteAcceptedAt` is still null. Editing our
+  // copy in that window would silently desynchronize it from the one the
+  // merchant is actually looking at. Kept beneath the confirmation check
+  // above rather than replaced by it: rows published under the old
+  // publish-at-send rule have no `detailsConfirmedAt` at all.
   if (app.hubspotIds?.publishedAt) {
     throw new Error(
       "This quote was sent to the merchant on " + new Date(app.hubspotIds.publishedAt).toLocaleDateString() +
@@ -1175,7 +1180,6 @@ export async function resendLeadLinkAction(
     merchantName,
     updated.ownerContact?.phone,
     updated.ownerContact?.altEmail,
-    undefined,
     rep,
   );
 

@@ -866,13 +866,16 @@ export function AccountsDashboard({
                       Rework is allowed at any time up to acceptance — things
                       change. Owner rep or any admin, same gate as the tenant
                       link above. saveQuoteConfigurationAction (which this
-                      calls) refuses once quoteAcceptedAt is set; EditQuotePanel
+                      calls) refuses once detailsConfirmedAt is set — the
+                      customer confirming their details is what publishes the
+                      quote, so that is the real end of the window, earlier
+                      than both publishedAt and quoteAcceptedAt. EditQuotePanel
                       shows the frozen notice instead of the form in that case. */}
                   {(isAdmin || selected.ownerUserId === userId) && (
                     <Section
                       label="Quote"
                       action={
-                        !selected.quoteAcceptedAt ? (
+                        !selected.quoteAcceptedAt && !selected.detailsConfirmedAt ? (
                           <button className={styles.btnGhost} onClick={() => setEditQuoteOpen(o => !o)}>
                             {editQuoteOpen ? "Close" : "Edit Quote"}
                           </button>
@@ -907,10 +910,30 @@ export function AccountsDashboard({
                                 : "No products configured yet."}
                             </div>
                           )}
-                          {selected.quoteAcceptedAt && (
+                          {selected.quoteAcceptedAt ? (
                             <div className={styles.detailMeta}>
                               Accepted {new Date(selected.quoteAcceptedAt).toLocaleDateString()} — locked. Start a new
                               quote to change terms.
+                            </div>
+                          ) : selected.detailsConfirmedAt ? (
+                            // The lock, stamped. Confirming is what published
+                            // this quote, so it is the moment the rep's window
+                            // shut — days before acceptance, and seconds
+                            // before `publishedAt`.
+                            <div className={styles.detailMeta}>
+                              Customer confirmed their details{" "}
+                              {new Date(selected.detailsConfirmedAt).toLocaleDateString()} — locked and published to
+                              HubSpot. Start a new quote to change terms.
+                            </div>
+                          ) : (
+                            // The window, while it is open. Worth saying out
+                            // loud: before 2026-10-15 sending the link
+                            // published the quote and ended this immediately,
+                            // so "I already sent it" used to mean "too late"
+                            // and no longer does.
+                            <div className={styles.detailMeta}>
+                              Not confirmed by the customer yet — you can still change this quote. Nothing has been
+                              sent to HubSpot.
                             </div>
                           )}
                         </>

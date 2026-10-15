@@ -241,7 +241,7 @@ describe("resendLeadLinkAction — reply-to rep", () => {
     expect(resolveSender).toHaveBeenCalledWith("rep-1");
     expect(sendLeadLinkEmail).toHaveBeenCalledWith(
       "jane@testco.com", expect.stringContaining("/lead/tok-live"), "Test Co",
-      undefined, { email: "rita@aioapp.com", name: "Rita Rep" },
+      { email: "rita@aioapp.com", name: "Rita Rep" },
     );
   });
 

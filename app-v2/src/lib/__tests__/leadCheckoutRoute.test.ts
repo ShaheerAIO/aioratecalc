@@ -55,6 +55,10 @@ const row = (over: Record<string, unknown> = {}) => ({
   quoteLines: [{ name: "AIO Platform", hubspotProductId: "p-1", quantity: 1, unitPrice: 99, billingFrequency: "weekly" }],
   orderPoints: null,
   quoteAcceptedAt: null,
+  // The default fixture is a merchant who has ALREADY confirmed — every test
+  // below it is about the publish, which now sits behind that gate. The gate
+  // itself has its own test at the bottom of this file.
+  detailsConfirmedAt: new Date("2026-10-15T10:00:00.000Z"),
   targetMargin: 0.008,
   pricingModel: "2-tier",
   customerLinkToken: TOKEN,
@@ -132,6 +136,40 @@ describe("the merchant's checkout door", () => {
     const res = await post();
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "rate_only" });
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
+  });
+
+  // THE CONFIRMATION GATE (2026-10-15). Publishing is irreversible, so the
+  // details printed on the document have to have been checked by the person
+  // they describe — not just typed by a rep working from a HubSpot deal.
+  it("refuses to publish anything until the merchant has confirmed their details", async () => {
+    getLeadApplicationByToken.mockResolvedValue({ ok: true, row: row({ detailsConfirmedAt: null }) });
+
+    const res = await post();
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "not_confirmed" });
+    expect(ensureDealForPublish).not.toHaveBeenCalled();
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
+    // Not a failure — the merchant simply hasn't been through the form yet, so
+    // nothing is written to the account for a rep to chase.
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // Rows published under the old publish-at-send rule have no confirmation and
+  // never will. The idempotent return sits ABOVE the gate for exactly this
+  // reason: they must still be handed the link they already have.
+  it("still hands back an already-published link to a row that predates the gate", async () => {
+    getLeadApplicationByToken.mockResolvedValue({
+      ok: true,
+      row: row({
+        detailsConfirmedAt: null,
+        hubspotIds: { publishedAt: "2026-10-01T00:00:00.000Z", quoteLink: QUOTE_LINK },
+      }),
+    });
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ url: QUOTE_LINK });
     expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
   });
 

@@ -762,6 +762,25 @@ export type BusinessInfo = {
   website: string;
   yearsInBusiness: string;
   annualRevenue: string;
+  /**
+   * The business's federal EIN, collected ONCE — on the merchant's own
+   * confirmation step at `/lead/[token]/confirm` (2026-10-15, product owner).
+   *
+   * This is the one narrow exception to the no-tax-id rule stated throughout
+   * this codebase, and the rest of that rule is UNCHANGED: AIO still never
+   * collects an SSN, a bank account or a routing number, and Adyen and Check
+   * still collect their own EIN on their own hosted pages — we neither send
+   * them this one nor read theirs back. Its only consumer is the HubSpot
+   * Company record (`updateCompanyEin`), so the sales org has it on file.
+   *
+   * Deliberately NOT on the Foodbuy form: that document's "Federal ID #" line
+   * sits above a legal attestation the merchant signs themselves, so it stays
+   * a blank line for them to fill in (`foodbuyForm.ts`), and a test asserts it.
+   *
+   * Optional, so every row written before this existed still parses —
+   * `business` is a jsonb column, so there is no migration for it.
+   */
+  ein?: string;
 };
 
 /**
@@ -1007,6 +1026,26 @@ export type MerchantApplication = {
   // it's the moment the quote was agreed, and it belongs with the frozen
   // quoteConfig/quoteLines rather than with the live deal state.
   quoteAcceptedAt: string | null;
+  /**
+   * When the MERCHANT confirmed their own details and so authorised the
+   * HubSpot quote to be built (2026-10-15, product owner). A moment, not a
+   * stage — same reasoning as `quoteAcceptedAt` above, and it belongs beside
+   * it rather than with the live deal state.
+   *
+   * THIS IS THE LOCK. Until it is set, nothing has been published, and the rep
+   * may keep editing the quote; once it is set, the quote has been published
+   * to HubSpot and the one-way door has shut. It is therefore the EARLIEST of
+   * the three freeze markers (this → `hubspotIds.publishedAt` →
+   * `quoteAcceptedAt`) and the one `saveQuoteConfigurationAction` and
+   * `EditQuotePanel` check first.
+   *
+   * It is also the precondition on both public merchant doors
+   * (`/api/lead/[token]/checkout` and `.../accept`): a merchant who has not
+   * confirmed has not told us the details that end up on a document nobody
+   * can amend, and — for a rate-only quote, which builds no document at all —
+   * the details AIO's tenant create refuses to run without.
+   */
+  detailsConfirmedAt: string | null;
   // The rep's own note on this quote, mirrored onto the HubSpot deal as a
   // note owned by QUOTE_NOTE_WATCHER. Optional in general, and REQUIRED when a
   // first charge doesn't sit on the plan's own default — see
@@ -1037,8 +1076,9 @@ export type MerchantApplication = {
   /**
    * Who AIO bills and sends subscription paperwork to, if different from the
    * owner contact above (2026-10-13, "add billing contact"). Same shape and
-   * same no-PII rule as OwnerContact — no SSN/EIN/bank, Adyen/Check collect
-   * those on their own hosted pages. Optional (`?:`, not just `| null`) so
+   * same no-PII rule as OwnerContact — no SSN and no bank details, Adyen and
+   * Check collect those on their own hosted pages. (The merchant's EIN IS held,
+   * on `BusinessInfo` — it belongs to the business, not to a contact person.) Optional (`?:`, not just `| null`) so
    * this stays additive: every pre-existing literal `MerchantApplication` in
    * the codebase (tests, other action files) is still valid without being
    * touched, which a required field would have forced across every one of

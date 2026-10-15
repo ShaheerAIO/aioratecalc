@@ -1,0 +1,30 @@
+/* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app
+ * The page chrome for the public confirmation route. Same shell as the quote
+ * route next door — the merchant walks straight from one to the other, so they
+ * have to read as one page — but widened, because this one carries a form
+ * rather than a summary and two-up field rows need the room.
+ */
+
+.page {
+  min-height: 100dvh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+
+.container {
+  max-width: 48rem;
+  margin-inline: auto;
+  padding: var(--space-3xl) var(--space-lg);
+}
+
+.backLink {
+  display: inline-block;
+  margin-bottom: var(--space-lg);
+  font-size: 0.83rem;
+  font-weight: 700;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.backLink:hover { color: var(--ink); }

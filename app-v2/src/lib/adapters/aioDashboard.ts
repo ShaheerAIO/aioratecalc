@@ -19,8 +19,12 @@
 // the alias is deterministic, why findAioBusinessByAlias exists, and why the
 // two retries below are narrowly predicated instead of blanket.
 //
-// AIO never collects EIN, bank account, or SSN through this path — Adyen
-// collects those on its own hosted onboarding page, same rule as check.ts.
+// AIO never collects a bank account or SSN through this path — Adyen collects
+// those on its own hosted onboarding page, same rule as check.ts. EasyOB does
+// hold the merchant's EIN since 2026-10-15 (`business.ein`, from their
+// confirmation step), and it is deliberately NOT sent here: Adyen asks for it
+// during KYC and verifies it, so passing our copy would substitute an
+// unverified value for a verified one.
 //
 // Contract facts below were verified live against internal dev on 2026-09-23 and
 // then end-to-end against PROD (backend.prod.aioapp.com) on 2026-10-09 with the

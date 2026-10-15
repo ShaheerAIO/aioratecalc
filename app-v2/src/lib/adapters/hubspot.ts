@@ -1031,6 +1031,43 @@ export async function updateCompanyMerchantDetails(
   return written;
 }
 
+/**
+ * The HubSpot Company property the merchant's EIN is written to. AIO created
+ * it by hand for this (2026-10-15); if it is ever renamed in the portal, this
+ * single constant is the change.
+ */
+const COMPANY_EIN_PROP = "ein";
+
+/**
+ * Write the merchant's EIN to their Company — its own PATCH, deliberately,
+ * and NOT a sixth entry in COMPANY_WRITE_PROPS.
+ *
+ * HubSpot v3 rejects the ENTIRE request with 400 PROPERTY_DOESNT_EXIST when
+ * any one property name is unknown — the same mechanism as the five phantom
+ * DEAL properties documented above, which silently broke every deal write for
+ * months. `updateCompanyMerchantDetails` sends the legal name, the legal
+ * address, the previous processor and the MCC in one PATCH; folding the EIN in
+ * there would mean that a property missing, renamed, or not yet created in the
+ * portal takes all four of those down with it, on the one call that runs just
+ * before an irreversible publish. Separated, the worst case is that the EIN
+ * alone fails to land and the caller logs it.
+ *
+ * Blank is a no-op rather than a write: EIN is optional on the confirmation
+ * form, and sending "" would erase whatever the portal already holds.
+ */
+export async function updateCompanyEin(companyId: string, ein: string | null | undefined): Promise<boolean> {
+  const value = clean(ein);
+  if (!value) return false;
+
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/${companyId}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ properties: { [COMPANY_EIN_PROP]: value } }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot company EIN update failed", res.status, await res.text());
+  return true;
+}
+
 /** The wide read behind the prospect prefill. A superset of getTenantCompany. */
 export async function getCompanyProfile(companyId: string): Promise<HubspotCompanyProfile | null> {
   const res = await fetch(

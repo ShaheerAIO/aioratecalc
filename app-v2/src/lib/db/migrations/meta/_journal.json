@@ -169,6 +169,13 @@
       "when": 1792013500000,
       "tag": "0023_billing_contact",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792190000000,
+      "tag": "0024_details_confirmed_at",
+      "breakpoints": true
     }
   ]
 }

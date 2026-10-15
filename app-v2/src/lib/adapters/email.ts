@@ -258,24 +258,6 @@ type Template = {
   /** Small print under the button: what the link is good for. */
   footnote: string;
   /**
-   * A second, independent path to the SAME quote — specifically HubSpot's own
-   * `hs_quote_link`, the hosted page the merchant actually signs and pays on.
-   * Added 10/13/2026. There is no explicit "send quote" endpoint in HubSpot's
-   * v3/v4 Quotes API (checked against HubSpot's own docs: create, read,
-   * update, associate — nothing resembling send/email); the only thing that
-   * has ever delivered this link to a merchant is HubSpot's own IMPLICIT
-   * e-signature-request email, triggered as a side effect of publishing with
-   * a signer contact (association 702, see publishBillingQuote.ts). That
-   * side effect has never been asserted by code or a test — only by a
-   * comment and the 2026-08-24 gate run. This field is the fix available to
-   * us: a path to the quote that EasyOB itself sends and controls, so the
-   * merchant's copy no longer depends entirely on an undocumented mechanism.
-   * Optional, because most quotes aren't publishable yet when this email goes
-   * out (no HubSpot company link, rate-only, no lines) — the primary
-   * cta/url above (our own `/lead` page) always works regardless.
-   */
-  secondary?: { cta: string; url: string; note: string };
-  /**
    * The rep's first name, when `sendLeadLinkEmail` was given a verified one —
    * changes only the closing line's wording (see `render`'s footer below) to
    * say replying reaches them by name, rather than the generic "one of our
@@ -326,11 +308,6 @@ function render(t: Template): string {
         </td>
       </tr></table>
       <p style="margin:0 0 20px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.ink3};">${esc(t.footnote)}</p>
-      ${t.secondary ? `
-      <div style="border-top:1px solid ${C.rule};padding-top:18px;padding-bottom:18px;">
-        <p style="margin:0 0 6px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.ink2};">${esc(t.secondary.note)}</p>
-        <p style="margin:0;font-family:${FONT};font-size:13px;line-height:1.5;"><a href="${esc(t.secondary.url)}" style="color:#be260b;font-weight:700;text-decoration:underline;">${esc(t.secondary.cta)}</a></p>
-      </div>` : ""}
       <div style="border-top:1px solid ${C.rule};padding-top:18px;">
         <p style="margin:0 0 6px;font-family:${FONT};font-size:12px;line-height:1.5;color:${C.ink3};">Button not working? Paste this into your browser:</p>
         <p style="margin:0;font-family:${FONT};font-size:12px;line-height:1.5;word-break:break-all;"><a href="${url}" style="color:#be260b;text-decoration:underline;">${url}</a></p>
@@ -373,23 +350,22 @@ export async function sendMagicLinkEmail(to: string, url: string): Promise<SendM
 // Phase 4 — the prospect-creation link, a 14-day `lead_upload` token, not the
 // short-lived KYC-handoff one above. Same transport, different copy/TTL.
 //
-// `quoteLink` (10/13/2026): HubSpot's `hs_quote_link`, when the quote already
-// published by the time this goes out. As of item 1 of the 10/13 list, that
-// is now the common case — `createProspectAction` attempts the publish
-// before this email is sent, not after the merchant clicks through. See the
-// `secondary` field on Template for why this is wired in at all: it's the one
-// delivery path for the quote EasyOB actually controls, rather than leaning
-// on HubSpot's own implicit signer email. Optional and additive — the
-// primary CTA (our own `/lead` page) is unaffected either way.
+// There is NO "go straight to billing" secondary CTA here any more, and there
+// cannot be one (2026-10-15). It carried HubSpot's `hs_quote_link`, which only
+// existed because `createProspectAction` published the quote before sending
+// this email. The merchant now confirms their own details first and the
+// publish happens after that, so at the moment this email is written there is
+// no HubSpot document to link to — and offering a route that skipped the
+// confirmation step would defeat the point of having one. The primary CTA,
+// our own `/lead` page, is where everything starts.
 //
 // `rep` (10/13/2026, "can the email go through the sales rep?"): the owning
 // rep's VERIFIED identity, when `actions/prospects.ts`'s `resolveReplyToRep`
 // could establish one. See `ReplyToRep`'s own comment above for why this is a
-// reply-to + display name, never a true send-as. Both trailing params are
-// optional and independent of each other — a quote with no rep resolved still
-// carries its quoteLink, and vice versa.
+// reply-to + display name, never a true send-as. Optional — a lookup that
+// fails just means this email reads like every one sent before 10/13.
 export async function sendLeadLinkEmail(
-  to: string, url: string, merchantName?: string, quoteLink?: string | null, rep?: ReplyToRep | null
+  to: string, url: string, merchantName?: string, rep?: ReplyToRep | null
 ): Promise<SendMagicLinkResult> {
   const name = merchantName?.trim();
   return send(
@@ -405,13 +381,6 @@ export async function sendLeadLinkEmail(
       cta: "View your quote",
       url,
       footnote: "This link is valid for 14 days.",
-      secondary: quoteLink
-        ? {
-            cta: "Go straight to billing",
-            url: quoteLink,
-            note: "Ready to move forward now? This opens your quote directly on our billing partner's secure page, where you can review it, sign, and set up payment.",
-          }
-        : undefined,
       repName: rep?.name,
     }),
     url,

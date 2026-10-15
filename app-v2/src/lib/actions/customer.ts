@@ -28,26 +28,13 @@ import {
   validateOnboardingSubmission,
   type OnboardingFieldErrors,
 } from "@/lib/onboardingValidation";
-import { usStateCode } from "@/lib/utils";
+import { withStateCode } from "@/lib/utils";
 import { rollUpSubscriptionStatus } from "@/types/merchant";
 import type {
   MerchantApplication, BusinessInfo, OwnerContact, ProcessingInfo, AgreementInfo, CustomerSafeQuote,
 } from "@/types/merchant";
 
 const LOGIN_TOKEN_TTL_MINUTES = 30;
-
-// The onboarding form's State box is free text, so a customer can type
-// "California". adapters/adyen.ts normalizes on the way out, but Check and
-// HubSpot read app.business.state as-is — so normalize once, here, and persist
-// the USPS code every consumer expects.
-function withStateCode(business: BusinessInfo): BusinessInfo {
-  return {
-    ...business,
-    state: usStateCode(business.state) ?? "",
-    // Only when present: a blank DBA address must stay absent, not become "".
-    ...(business.dbaState ? { dbaState: usStateCode(business.dbaState) ?? "" } : {}),
-  };
-}
 
 async function requireCustomer(): Promise<{ userId: string }> {
   const session = await getCustomerSession();

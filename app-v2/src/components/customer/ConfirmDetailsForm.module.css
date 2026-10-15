@@ -1,0 +1,46 @@
+/* Only what the confirmation step adds on top of CustomerOnboardStep.module.css,
+   which it otherwise reuses wholesale — this is the same merchant filling in
+   the same kinds of boxes, and a second full stylesheet would be a second
+   visual language for no reason. */
+
+/* A figure the merchant can read but not change: the pricing basis their rates
+   were worked out from. Shaped like an input so it reads as part of the form,
+   and muted so it plainly isn't one. */
+.lockedValue {
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--paper-3, var(--paper-1));
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+
+/* The lock, stated before it happens. Deliberately given the page's accent
+   rather than its danger colour: confirming is what the merchant came to do,
+   not a mistake they're being warned off. */
+.confirmPanel {
+  background: var(--paper-2);
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+
+.confirmTitle {
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink-1);
+  margin: 0 0 var(--space-sm);
+}
+
+.confirmBody {
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+  margin: 0 0 var(--space-md);
+}

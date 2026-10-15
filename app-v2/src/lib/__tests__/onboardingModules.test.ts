@@ -26,6 +26,7 @@ const BASE_APP: MerchantApplication = {
   quoteLines: null,
   orderPoints: null,
   quoteAcceptedAt: null,
+  detailsConfirmedAt: null,
   quoteNote: null,
   quoteRates: null,
   targetMargin: null,

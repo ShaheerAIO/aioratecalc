@@ -193,13 +193,27 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
     setSaving(false);
   };
 
-  // Frozen — the same two rules saveQuoteConfigurationAction enforces
+  // Frozen — the same three rules saveQuoteConfigurationAction enforces
   // server-side, shown here so a rep never fills out a form the save call is
-  // just going to refuse. PUBLISHED is checked first and is the earlier of the
-  // two: the rep sends the quote before the merchant signs it, so there is a
-  // window where the document is live and unamendable but nothing is accepted
-  // yet, and "accepted" copy would be wrong for it.
-  const frozen = app.hubspotIds?.publishedAt
+  // just going to refuse.
+  //
+  // CONFIRMED is checked first because it is the earliest of the three
+  // (2026-10-15): the merchant confirming their own details is what BUILDS the
+  // HubSpot quote, so confirmation → published (seconds later) → accepted
+  // (days later, when they sign and pay). It also names what actually
+  // happened, which is the half a rep can act on — "the customer confirmed"
+  // rather than "a document exists" — and it covers the gap where a publish
+  // is still in flight or waiting to be retried, during which `publishedAt`
+  // alone would offer an edit on a quote the merchant has signed off.
+  //
+  // The other two stay beneath it rather than being replaced by it: rows
+  // published under the old publish-at-send rule have no confirmation at all.
+  const frozen = app.detailsConfirmedAt
+    ? {
+        title: `Customer confirmed their details ${new Date(app.detailsConfirmedAt).toLocaleDateString()} — locked.`,
+        body: "Confirming is what published this quote to HubSpot, and a published quote can't be edited, replaced or voided through the API. Start a new quote instead of editing this one.",
+      }
+    : app.hubspotIds?.publishedAt
     ? {
         title: `Quote sent ${new Date(app.hubspotIds.publishedAt).toLocaleDateString()} — locked.`,
         body: "A published HubSpot quote can't be edited, replaced or voided through the API, so our copy has to keep matching the document the merchant is signing. Start a new quote instead of editing this one.",
@@ -222,6 +236,17 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Say the window is OPEN, rather than letting an unlocked form imply
+          it. A rep who knows the customer hasn't confirmed yet knows they can
+          still fix a wrong price or a wrong contact — and knows it stops the
+          moment the customer presses confirm. */}
+      <div style={{ padding: 12, background: "var(--paper-3, rgba(127,127,127,0.06))", border: "1px solid var(--rule)", borderRadius: 8, fontSize: "0.8125rem", lineHeight: 1.5 }}>
+        <strong>Not confirmed by the customer yet — you can still change this quote.</strong>
+        <span style={{ opacity: 0.8 }}>
+          {" "}Nothing has been sent to HubSpot. The customer confirms their details from their own
+          link, and that is what creates the quote they sign — after which none of this can change.
+        </span>
+      </div>
       <ProductConfigurator
         quoteType={quoteType}
         picks={picks}

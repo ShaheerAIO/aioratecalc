@@ -96,6 +96,10 @@ function baseRow(extra: Partial<Row> = {}): Row {
     quoteLines: null,
     orderPoints: null,
     quoteAcceptedAt: null,
+    // Confirmed by default — a rate-only merchant reaches this route THROUGH
+    // the confirmation form, which is where their details are collected. The
+    // gate itself is tested separately below.
+    detailsConfirmedAt: NOW,
     targetMargin: "0.019000",
     pricingModel: "2-tier",
     customerLinkToken: TOKEN,
@@ -180,6 +184,31 @@ describe("accepting a quote", () => {
     const res = await post();
     expect(res.status).toBe(409);
     expect(syncDealFromApplication).not.toHaveBeenCalled();
+  });
+
+  // THE CONFIRMATION GATE (2026-10-15). A rate-only quote builds no HubSpot
+  // document, so none of the publish-side reasoning applies to it — but
+  // accepting is what starts this merchant's onboarding, and AIO's tenant
+  // create 400s outright on a blank business or owner phone, burning one of
+  // five attempts behind a checklist that says "no action needed". These
+  // merchants never pass through a HubSpot checkout that would have collected
+  // anything, so this is the only place to ask.
+  it("refuses to accept until the merchant has confirmed their details", async () => {
+    row = baseRow({ detailsConfirmedAt: null });
+    const res = await post();
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "not_confirmed" });
+    expect(loginTokens).toHaveLength(0);
+    expect(row!.quoteAcceptedAt).toBeNull();
+  });
+
+  it("lets an already-accepted merchant re-request their login even with no confirmation on file", async () => {
+    // Rows accepted before the gate existed have no confirmation and never
+    // will. "Email Me a New Link" must keep working for them.
+    row = baseRow({ detailsConfirmedAt: null, quoteAcceptedAt: NOW, stage: "adyen_kyc_pending" });
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(loginTokens).toHaveLength(1);
   });
 
   it("re-opening an accepted link only re-issues the login, touching no CRM state", async () => {

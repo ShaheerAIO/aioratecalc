@@ -47,25 +47,21 @@ describe("sendLeadLinkEmail — the quote-link secondary path (10/13)", () => {
     expect(html).not.toContain("Go straight to billing");
   });
 
-  it("carries hs_quote_link as a second, labeled path when one is published at send time", async () => {
+  // The "go straight to billing" CTA is GONE (2026-10-15). It carried
+  // HubSpot's hs_quote_link, which only existed because the rep's link-send
+  // published the quote; the merchant now confirms their details first, so at
+  // the moment this email is written there is no document to link to — and a
+  // route that skipped the confirmation step would defeat the point of it.
+  it("offers exactly one way in — the lead link — and never a direct billing link", async () => {
     const { sendLeadLinkEmail } = await import("@/lib/adapters/email");
     await sendLeadLinkEmail(
-      "ana@tortapalace.com", "http://localhost:3000/lead/tok-1", "Torta Palace",
-      "https://customers.aioapp.com/abc123"
+      "ana@tortapalace.com", "http://localhost:3000/lead/tok-1", "Torta Palace"
     );
     const html = await sentHtml();
-    expect(html).toContain("https://customers.aioapp.com/abc123");
-    expect(html).toContain("Go straight to billing");
-    // The primary CTA (our own lead page) is unaffected — both appear.
+    expect(html).not.toContain("Go straight to billing");
+    expect(html).not.toContain("customers.aioapp.com");
     expect(html).toContain("http://localhost:3000/lead/tok-1");
     expect(html).toContain("View your quote");
-  });
-
-  it("omits the secondary path when the quote link is null or blank", async () => {
-    const { sendLeadLinkEmail } = await import("@/lib/adapters/email");
-    await sendLeadLinkEmail("ana@tortapalace.com", "http://localhost:3000/lead/tok-1", "Torta Palace", null);
-    const html = await sentHtml();
-    expect(html).not.toContain("Go straight to billing");
   });
 });
 
@@ -94,7 +90,7 @@ describe("sendLeadLinkEmail — reply-to rep, not send-as (10/13)", () => {
   it("with a verified rep, sets reply_to to the rep's address and the display name to their name", async () => {
     const { sendLeadLinkEmail } = await import("@/lib/adapters/email");
     await sendLeadLinkEmail(
-      "ana@tortapalace.com", "http://localhost:3000/lead/tok-1", "Torta Palace", null,
+      "ana@tortapalace.com", "http://localhost:3000/lead/tok-1", "Torta Palace",
       { email: "rita@aioapp.com", name: "Rita Rep" }
     );
     const body = await sentBody();
@@ -109,7 +105,7 @@ describe("sendLeadLinkEmail — reply-to rep, not send-as (10/13)", () => {
   it("a rep with no name still sets reply_to, but the footer and display name fall back to generic", async () => {
     const { sendLeadLinkEmail } = await import("@/lib/adapters/email");
     await sendLeadLinkEmail(
-      "ana@tortapalace.com", "http://localhost:3000/lead/tok-1", "Torta Palace", null,
+      "ana@tortapalace.com", "http://localhost:3000/lead/tok-1", "Torta Palace",
       { email: "rita@aioapp.com" }
     );
     const body = await sentBody();

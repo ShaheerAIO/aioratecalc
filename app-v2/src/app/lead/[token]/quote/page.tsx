@@ -45,11 +45,12 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
   const contactEmail = app.ownerContact?.email || null;
 
   // `publishedAt` is the one-way-door marker: null means no HubSpot document
-  // exists yet, which is now the ORDINARY state rather than a wait — pressing
-  // "Continue to Billing" is what creates and publishes it
-  // (/api/lead/[token]/checkout). Same surfacing rule as the authenticated
-  // /customer/applications/[id]/billing route: a draft's link is never shown,
-  // because a draft has none.
+  // exists yet, which is the ORDINARY state rather than a wait. Since
+  // 2026-10-15 it is the merchant CONFIRMING THEIR DETAILS at ../confirm that
+  // creates and publishes it (/api/lead/[token]/checkout), not the rep's
+  // link-send and not a button on this page. Same surfacing rule as the
+  // authenticated /customer/applications/[id]/billing route: a draft's link is
+  // never shown, because a draft has none.
   const checkoutUrl = app.hubspotIds?.publishedAt ? app.hubspotIds.quoteLink ?? null : null;
   // Signed but never finished checkout — the state the merchant is least
   // likely to understand on their own, so it gets its own panel.
@@ -92,6 +93,7 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
             canAcceptHere={canAcceptHere}
             alreadyAccepted={!!app.quoteAcceptedAt}
             signedWithoutPaying={signedWithoutPaying}
+            detailsConfirmed={!!app.detailsConfirmedAt}
           />
         ) : (
           <>

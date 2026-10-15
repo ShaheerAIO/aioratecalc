@@ -60,6 +60,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       return NextResponse.json({ error: "billed_quote" }, { status: 409 });
     }
 
+    // THE CONFIRMATION GATE (2026-10-15) — the same one on the checkout route,
+    // and it belongs here for a reason that is specific to these merchants
+    // rather than inherited.
+    //
+    // A rate-only quote builds no HubSpot document, so none of the
+    // publish-side arguments apply to it. What does apply is that accepting is
+    // what starts this merchant's onboarding, and AIO's tenant create refuses
+    // a blank business phone or owner phone outright — burning one of five
+    // attempts and backing off for hours behind a checklist that says "no
+    // action needed". These are exactly the merchants that reaches, because
+    // they never pass through a HubSpot checkout that would have collected
+    // anything. Confirming runs the full validator, so a confirmed row is a
+    // provisionable one.
+    //
+    // Below `firstAcceptance`'s concerns on purpose: see the re-entry note
+    // beneath this. An already-accepted merchant clicking "Email Me a New
+    // Link" has confirmed long ago, so this costs them nothing.
+    if (!row.quoteAcceptedAt && !row.detailsConfirmedAt) {
+      return NextResponse.json({ error: "not_confirmed" }, { status: 409 });
+    }
+
     // Acceptance is recorded once. Re-opening an accepted link to get another
     // login email keeps the original timestamp, and the stage move is
     // forward-only (same rule as the Adyen webhook) so a deal already in

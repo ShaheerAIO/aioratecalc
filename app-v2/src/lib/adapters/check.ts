@@ -5,8 +5,12 @@
 //   POST /companies              → company (persist its id)
 //   POST /companies/{id}/onboard → { url }   one-time, 24h
 //   GET  /companies/{id}         → { onboard: { status, ... } }
-// AIO never collects EIN, bank account, or the signer's SSN — Check collects
-// those on its own hosted onboarding pages, mirroring the Adyen constraint.
+// AIO never collects a bank account or the signer's SSN — Check collects those
+// on its own hosted onboarding pages, mirroring the Adyen constraint. EasyOB
+// does hold the merchant's EIN since 2026-10-15 (`business.ein`, from their
+// confirmation step), and it is deliberately NOT sent here: Check asks for it
+// on its own pages and verifies what it is given, so handing over our copy
+// would substitute an unverified value for a verified one.
 
 import type { MerchantApplication, CheckOnboardStatus } from "@/types/merchant";
 

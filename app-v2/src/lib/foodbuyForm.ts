@@ -12,7 +12,12 @@
 //
 // Only fields AIO already holds are PRE-filled: business identity/address and
 // the main contact. Everything else starts as a blank line, on purpose:
-//   - Federal ID # (EIN) — AIO never collects this, same rule as Adyen/Check.
+//   - Federal ID # (EIN) — EasyOB DOES hold one since 2026-10-15
+//     (`business.ein`, collected on the merchant's confirmation step), and it
+//     is still deliberately NOT printed here. This line sits above a legal
+//     attestation the merchant signs; pre-filling a tax id onto a document
+//     they are about to swear to is a different act from recording it, and the
+//     merchant is the one who should write it. A test asserts it stays blank.
 //   - GPO Affiliation, Acknowledgement & signature — legal attestations only
 //     the merchant can make; AIO must not answer or sign on their behalf.
 //   - Distributor/location table, direct manufacturer agreements, Program

@@ -90,8 +90,8 @@ export default function ApplyStep({ app, onSaved, onBack, onSkip }: Props) {
       <h1 className={styles.pageTitle}>Business Details (Optional)</h1>
       <p className={styles.pageSubtitle}>
         Anything you fill in here is pre-filled on the merchant&apos;s own onboarding form, so all they
-        have to do is confirm it. Skip it and they&apos;ll simply fill it in themselves. SSN, bank account,
-        and EIN are collected by Adyen directly — AIO never touches that data. Accepting the terms is
+        have to do is confirm it. Skip it and they&apos;ll simply fill it in themselves. SSN and bank
+        account details are collected by Adyen directly — AIO never touches that data. Accepting the terms is
         the merchant&apos;s to do on their own form, so it isn&apos;t here.
       </p>
 

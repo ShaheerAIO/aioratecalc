@@ -1,0 +1,13 @@
+-- MIGRATION 0024 — details_confirmed_at (2026-10-15). See types/merchant.ts's
+-- detailsConfirmedAt comment and lib/db/schema.ts's column comment.
+--
+-- THE LOCK. The merchant's own confirmation of their details on the public
+-- lead link, which is now what authorises the HubSpot quote to be built at
+-- all ("have the customer be required to confirm and fill out all their
+-- information ... THEN, when they press confirm, we build the hubspot quote").
+--
+-- NULL on every existing row, and that is correct rather than a backfill
+-- problem: those rows were published at link-send under the old rule, so
+-- `hubspotIds.publishedAt` is already set on them and both public doors
+-- short-circuit on it before they ever reach the confirmation gate.
+ALTER TABLE "merchant_applications" ADD COLUMN "details_confirmed_at" timestamp with time zone;

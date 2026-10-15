@@ -225,7 +225,7 @@ export default function CustomerOnboardStep({ app }: Props) {
         {isEditing ? "Edit Your Application" : "Complete Your Application"}
       </h1>
       <p className={styles.pageSubtitle}>
-        Fill in the details below to continue onboarding. SSN, bank account, and EIN are collected securely by Adyen directly — AIO never touches that data.
+        Fill in the details below to continue onboarding. SSN and bank account details are collected securely by Adyen directly — AIO never touches that data.
       </p>
       {prefilled.size > 0 && (
         <p className={styles.prefillNote}>

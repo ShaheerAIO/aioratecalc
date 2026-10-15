@@ -375,6 +375,25 @@ function NewProspectFlow() {
       `card rate, or this merchant is too small to process for.`
     );
   }
+  // A LINK WITHOUT A QUOTE IS NOT SENDABLE (2026-10-15, product owner: "there
+  // is no situation where the rep hasnt made the quote because they cant send
+  // the initial link without making it"). Nothing enforced that before — an
+  // All-in-One quote with nothing picked, no declared channels and no volume
+  // resolves `none_needed` for its platform line and derives zero lines, so
+  // the merchant got a link to "your quote is on its way".
+  //
+  // The condition is `hasQuoteBasis`'s, restated rather than called: that
+  // helper lives in leadQuote.ts, which imports pricing.ts, and pulling
+  // MARGIN_REQS and the true floor table into this client bundle is the exact
+  // hazard the margin-floor block above is written the long way to avoid. A
+  // fresh prospect has no statement, so its basis is either priced lines or
+  // the rep's own volume AND ticket — and `createProspectAction` runs the real
+  // `hasQuoteBasis` server-side regardless.
+  if ((quote?.quoteLines.length ?? 0) === 0 && !(rated && volume > 0 && ticket > 0)) {
+    hardBlocks.push(
+      "This quote has nothing on it yet — pick the products, or enter a monthly volume and average ticket."
+    );
+  }
   // A confirmation, not a veto — but it has to be answered, or it is a banner
   // nobody reads. One click clears it, and the whole quote is priced on this
   // number: the rate, the savings and the floor above.

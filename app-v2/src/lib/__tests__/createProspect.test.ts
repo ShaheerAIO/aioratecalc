@@ -100,6 +100,12 @@ function baseInput(over: Partial<Input> = {}): Input {
     quoteType: "all_in_one",
     picks: [],
     channels: [],
+    // A quote has to HAVE something on it before a link can be sent
+    // (2026-10-15) — the merchant is being asked to confirm their details so a
+    // quote can be built, so there has to be one to build. With no picks, the
+    // basis is the rep's own volume + ticket, which keeps this fixture
+    // rate-only exactly as the comment above describes.
+    quoteConfig: { monthlyVolume: 100000, avgTicket: 30 },
     hubspotCompanyId: COMPANY_ID,
     deal: { mode: "existing", dealId: DEAL.id },
     ...over,
@@ -274,58 +280,57 @@ describe("createProspectAction — the margin floor", () => {
 // creation regardless of outcome, it passes the saved row (deal/company
 // already resolved) to the orchestrator, and a successful publish's
 // `hs_quote_link` reaches the lead-link email.
-describe("createProspectAction — publish at send time (10/13)", () => {
-  it("attempts the publish with the saved application, after the row exists", async () => {
+// THE REVERSAL OF THE 10/13 PUBLISH-AT-SEND (2026-10-15, product owner).
+//
+// `publishAtSend` is gone. Publishing a HubSpot quote is a one-way door — no
+// API edit, no delete, no void — so publishing the instant the rep sent the
+// link froze whatever the rep had typed about the merchant onto a document
+// nobody could amend, and locked the rep out of their own quote at the same
+// moment. The merchant now confirms their details first
+// (/lead/[token]/confirm), and THAT is what publishes.
+//
+// This block is what keeps the reversal honest: the whole point is that
+// sending a link reaches HubSpot's quote machinery not at all.
+describe("createProspectAction — publishes NOTHING at send time", () => {
+  it("never touches the publish path", async () => {
     await createProspectAction(baseInput());
-    expect(buildAndPublishBillingQuote).toHaveBeenCalledTimes(1);
-    expect(buildAndPublishBillingQuote).toHaveBeenCalledWith(
-      expect.objectContaining({ hubspotDealId: "deal-1", tenantLink: expect.objectContaining({ hubspotCompanyId: COMPANY_ID }) })
-    );
-    // Called after the save, not before — a publish must never run against a
-    // row that was never persisted.
-    const saveOrder = saveApplication.mock.invocationCallOrder[0];
-    const publishOrder = buildAndPublishBillingQuote.mock.invocationCallOrder[0];
-    expect(saveOrder).toBeLessThan(publishOrder);
+    expect(saveApplication).toHaveBeenCalledTimes(1);
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
   });
 
-  it("is a quiet no-op when the quote isn't publishable yet — still saves and emails the link", async () => {
-    buildAndPublishBillingQuote.mockResolvedValue({ status: "skipped", reason: "nothing_to_bill" });
+  it("saves the row unpublished — hubspotIds stays null for the merchant to open", async () => {
+    await createProspectAction(baseInput());
+    const saved = saveApplication.mock.calls[0][1] as { hubspotIds: unknown; detailsConfirmedAt: unknown };
+    expect(saved.hubspotIds).toBeNull();
+    // Nothing is confirmed either — the merchant does that themselves, and it
+    // is what both public doors gate on.
+    expect(saved.detailsConfirmedAt).toBeNull();
+  });
+
+  it("emails the lead link and nothing else — never a direct route to billing", async () => {
     const result = await createProspectAction(baseInput());
-    expect(saveApplication).toHaveBeenCalledTimes(1);
     expect(result.emailResult).toEqual({ sent: true });
-    // No quote link exists yet, so the email gets the ordinary 3-argument call.
+    // The ordinary 3-argument call. The "go straight to billing" CTA carried
+    // hs_quote_link, which cannot exist at this point any more.
     expect(sendLeadLinkEmail).toHaveBeenCalledWith(OWNER.email, expect.stringContaining("/lead/"), "Torta Palace");
   });
+});
 
-  it("is a quiet no-op on a precondition refusal — never thrown back at the rep", async () => {
-    buildAndPublishBillingQuote.mockResolvedValue({
-      status: "refused",
-      reasons: [{ code: "no_signer_email", message: "There's no email address to send the quote to for signature." }],
-    });
+// A LINK WITHOUT A QUOTE IS NOT SENDABLE (2026-10-15, product owner: "there is
+// no situation where the rep hasnt made the quote because they cant send the
+// initial link without making it"). It was the intent all along and nothing
+// enforced it — and it matters more now, because the merchant is being asked
+// to confirm their details so that a quote can be built.
+describe("createProspectAction — a link needs a quote", () => {
+  it("refuses a quote with no picks and no rate basis", async () => {
+    await expect(createProspectAction(baseInput({ quoteConfig: null })))
+      .rejects.toThrow(/nothing on it yet/);
+    expect(saveApplication).not.toHaveBeenCalled();
+  });
+
+  it("accepts a rate-only quote — a volume and a ticket ARE a quote", async () => {
     await expect(createProspectAction(baseInput())).resolves.toBeTruthy();
     expect(saveApplication).toHaveBeenCalledTimes(1);
-  });
-
-  it("never throws past a publish failure — the row is already saved and the link is going out regardless", async () => {
-    buildAndPublishBillingQuote.mockRejectedValue(new Error("db down mid-claim"));
-    const result = await createProspectAction(baseInput());
-    expect(saveApplication).toHaveBeenCalledTimes(1);
-    expect(result.linkUrl).toContain("/lead/");
-  });
-
-  it("carries the published hs_quote_link onto the lead-link email", async () => {
-    buildAndPublishBillingQuote.mockResolvedValue({
-      status: "published", quoteId: "q-1", quoteLink: "https://customers.aioapp.com/abc123", alreadyPublished: false,
-    });
-    await createProspectAction(baseInput());
-    expect(sendLeadLinkEmail).toHaveBeenCalledWith(
-      OWNER.email, expect.stringContaining("/lead/"), "Torta Palace", "https://customers.aioapp.com/abc123"
-    );
-  });
-
-  it("does not pass a quote link to the email when nothing published at send time", async () => {
-    await createProspectAction(baseInput());
-    expect(sendLeadLinkEmail).toHaveBeenCalledWith(OWNER.email, expect.stringContaining("/lead/"), "Torta Palace");
   });
 });
 
@@ -341,28 +346,12 @@ describe("createProspectAction — reply-to rep (10/13)", () => {
     await createProspectAction(baseInput());
 
     expect(resolveSender).toHaveBeenCalledWith("rep-1");
-    // No quote link in this case (baseInput's rate-only quote never
-    // publishes), so the rep lands in the 4th slot as an explicit
-    // `undefined` placeholder for the unused quoteLink — see
-    // sendLeadLinkEmailWithOptionalQuoteLink's own comment for why that one
-    // combination is the exception to "never pass an explicit undefined".
+    // The rep is the 4th argument now that the quote link is gone — nothing
+    // publishes at send time, so there was never anything to put in front of
+    // it. See sendLeadLinkEmailWithOptionalRep's own comment.
     expect(sendLeadLinkEmail).toHaveBeenCalledWith(
       OWNER.email, expect.stringContaining("/lead/"), "Torta Palace",
-      undefined, { email: "rita@aioapp.com", name: "Rita Rep" },
-    );
-  });
-
-  it("carries both the rep AND the quote link when both are available", async () => {
-    resolveSender.mockResolvedValue({ ok: true, email: "rita@aioapp.com", firstName: "Rita", lastName: "Rep", ownerId: "161" });
-    buildAndPublishBillingQuote.mockResolvedValue({
-      status: "published", quoteId: "q-1", quoteLink: "https://customers.aioapp.com/abc123", alreadyPublished: false,
-    });
-
-    await createProspectAction(baseInput());
-
-    expect(sendLeadLinkEmail).toHaveBeenCalledWith(
-      OWNER.email, expect.stringContaining("/lead/"), "Torta Palace",
-      "https://customers.aioapp.com/abc123", { email: "rita@aioapp.com", name: "Rita Rep" },
+      { email: "rita@aioapp.com", name: "Rita Rep" },
     );
   });
 
