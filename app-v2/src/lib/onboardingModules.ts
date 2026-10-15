@@ -122,6 +122,19 @@ export type OnboardingModulesOpts = {
 //
 // adyenModule can return null (a marketing-only quote — see its comment), so
 // the list below is variable-length before the lock pass runs.
+//
+// PAYROLL (Check) IS HIDDEN — product owner, 2026-10-14. Nothing is deleted:
+// `payrollModule` below, the Check adapter, the onboarding routes and the
+// stored `checkIds` all stay exactly as they are, and flipping this constant
+// back to true restores the row with no other change. It is a visibility
+// switch rather than a removal for the same reason the tablet products are
+// (quoting.ts): payroll is built and in sandbox, it is simply not part of
+// what a merchant is offered today. The two payroll ROUTES read this constant
+// too, so a bookmarked URL can't start a Check company behind a hidden row —
+// which matters while "who owns the Check company" is still open (AIO creates
+// one at tenant create, startPayrollOnboardingAction creates another).
+export const SHOW_PAYROLL_MODULE: boolean = false;
+
 export function getOnboardingModules(
   app: MerchantApplication,
   opts?: OnboardingModulesOpts,
@@ -135,7 +148,7 @@ export function getOnboardingModules(
   const modules = [
     quoteBillingModule(app, { hasQuote: opts?.hasQuote ?? false, quoteHref, billingHref }),
     adyenModule(app, basePath, detailsHref),
-    payrollModule(app, basePath),
+    SHOW_PAYROLL_MODULE ? payrollModule(app, basePath) : null,
     foodbuyModule(app, basePath),
   ].filter((m): m is OnboardingModule => m !== null);
 
@@ -553,7 +566,12 @@ function adyenModule(
 // customer starts this module themselves. Status reads the cached
 // checkIds.onboardStatus snapshot rather than calling Check — the list and
 // dashboard views render many applications at once (see syncPayrollStatusAction).
-function payrollModule(app: MerchantApplication, basePath: string): OnboardingModule {
+// Exported ONLY so its regression net survives the hide (SHOW_PAYROLL_MODULE):
+// with the row omitted, a test going through getOnboardingModules has nothing
+// to assert on, and deleting those tests would mean the module comes back
+// unverified. No production caller — getOnboardingModules is still the one
+// place it is rendered from.
+export function payrollModule(app: MerchantApplication, basePath: string): OnboardingModule {
   const label = "Payroll (Check)";
 
   if (app.checkIds?.companyId) {

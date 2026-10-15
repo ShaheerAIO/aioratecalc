@@ -23,9 +23,37 @@
 // create and waits for you to type the application id back before it writes.
 
 import { loadEnvConfig } from "@next/env";
+import { createRequire, Module } from "node:module";
 import { createInterface } from "node:readline/promises";
 
 loadEnvConfig(process.cwd());
+
+// `lib/aio/provision.ts` imports `lib/db/client.ts`, which opens with
+// `import "server-only"` — a package whose whole job is to THROW when it is
+// loaded outside a React Server Component, so a server module can't be pulled
+// into the browser bundle. Under tsx there is no bundler and no `react-server`
+// export condition, so it resolves to the throwing entry point and this script
+// died on its first import ("This module cannot be imported from a Client
+// Component module") before printing anything.
+//
+// Seeding require.cache with an empty module neutralises the guard FOR THIS
+// PROCESS ONLY. It is not a loosening of the rule: the point of `server-only`
+// is to fail a client BUNDLE, and a CLI run by a human on their own machine is
+// the one caller that legitimately wants the server module. The alternative —
+// having provision.ts take a db handle as an argument — would change shipping
+// code to suit a script, and the whole value of this script is that it calls
+// the shipping path unaltered.
+//
+// `scripts/db.ts` exists for the same reason and does NOT solve this: it gives
+// the SCRIPT a non-guarded client, but provision.ts imports the guarded one
+// itself.
+const req = createRequire(`${process.cwd()}/`);
+const serverOnlyId = req.resolve("server-only");
+const serverOnlyStub = new Module(serverOnlyId);
+serverOnlyStub.filename = serverOnlyId;
+serverOnlyStub.loaded = true;
+serverOnlyStub.exports = {};
+req.cache[serverOnlyId] = serverOnlyStub;
 
 // The gate reasons this script may override. Everything else is a real refusal:
 // a missing name or address would create a tenant nobody can fix, an already

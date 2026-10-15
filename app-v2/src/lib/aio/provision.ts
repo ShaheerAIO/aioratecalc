@@ -33,6 +33,7 @@ import {
   createAioLocation,
   findAioBusinessByAlias,
   adyenEnvironmentFromOnboardingUrl,
+  isTenantSchemaNotReady,
 } from "@/lib/adapters/aioDashboard";
 import { shouldAdvance } from "@/lib/stages";
 import { CLAIM_STALE_MS } from "@/lib/aio/provisioningGate";
@@ -41,12 +42,37 @@ export type ProvisionOutcome =
   | { status: "provisioned"; businessId: number; locationId: number }
   | { status: "not_claimed" }
   | { status: "needs_attention"; error: string }
+  /** Waiting on AIO's tenant schema. NOT a failure — see `defer` below. */
+  | { status: "waiting"; until: string }
   | { status: "failed"; error: string };
+
+/**
+ * How long after `business/create` the tenant's Postgres schema takes to
+ * appear, before which `restaurant/post/create` 500s AND leaves an
+ * undeletable half-created row (see AioTenantSchemaNotReadyError).
+ *
+ * Observed once, live, at ~100 seconds (2026-10-14, tenant 2047). FIVE
+ * minutes is deliberately generous against a single measurement: the cost of
+ * waiting too long is a few more minutes before the merchant sees their KYC
+ * link, and the cost of waiting too little is a permanent junk row in AIO's
+ * shared database. Those are not symmetrical.
+ */
+const SCHEMA_WARMUP_MS = 5 * 60 * 1000;
+
+/**
+ * How long to wait after a schema-not-ready 500 before trying again. Longer
+ * than the warm-up, because reaching here means five minutes was not enough
+ * for this tenant and another junk row has just been created.
+ */
+const SCHEMA_RETRY_MS = 15 * 60 * 1000;
 
 /** Take the lease. Conditional on the row still being unprovisioned and not
  *  freshly claimed, so a second concurrent run gets rowCount 0 and backs off.
  *  Bumps attempts in the same statement — a claim that never reports back
- *  still counts as a try, which is what makes the backoff real. */
+ *  still counts as a try, which is what makes the backoff real.
+ *
+ *  `defer` below gives that bump back when the run turns out to have been a
+ *  wait rather than a try. */
 async function claim(id: string, now: Date): Promise<boolean> {
   const nowIso = now.toISOString();
   const staleBefore = new Date(now.getTime() - CLAIM_STALE_MS).toISOString();
@@ -107,6 +133,7 @@ export async function provisionAioTenant(app: MerchantApplication): Promise<Prov
     claimedAt: now.toISOString(),
     attempts: (app.aioTenant?.attempts ?? 0) + 1,
     lastAttemptAt: now.toISOString(),
+    locationNotBefore: app.aioTenant?.locationNotBefore ?? null,
     lastError: null,
     lastErrorAt: null,
   };
@@ -115,6 +142,35 @@ export async function provisionAioTenant(app: MerchantApplication): Promise<Prov
     tenant = { ...tenant, claimedAt: null, lastError: error, lastErrorAt: new Date().toISOString() };
     await patch(app.id, tenant);
     return { status, error } as ProvisionOutcome;
+  };
+
+  /**
+   * Stop for now, and charge the merchant nothing for it.
+   *
+   * Waiting on AIO's tenant schema is not a failure, and the difference is
+   * load-bearing in three places at once. `attempts` and `lastAttemptAt` are
+   * restored to what they were BEFORE this run's claim, so a deferral: does
+   * not consume one of the five attempts (`too_many_attempts` can't be
+   * reached by waiting); does not start an exponential backoff (the gate's
+   * `backing_off` check reads `lastAttemptAt`, and on a first provision that
+   * is still null, so the very next tick is free to continue); and leaves
+   * `lastError` alone, so the admin sync tripwire doesn't light up for an
+   * account that is simply mid-flight.
+   *
+   * That last point is why this exists at all rather than reusing `fail`.
+   * On 2026-10-14 a first attempt cost one attempt and a one-hour backoff,
+   * and the merchant's tenant sat unfinished for the rest of it.
+   */
+  const defer = async (until: Date) => {
+    tenant = {
+      ...tenant,
+      claimedAt: null,
+      locationNotBefore: until.toISOString(),
+      attempts: app.aioTenant?.attempts ?? 0,
+      lastAttemptAt: app.aioTenant?.lastAttemptAt ?? null,
+    };
+    await patch(app.id, tenant);
+    return { status: "waiting", until: until.toISOString() } as ProvisionOutcome;
   };
 
   try {
@@ -148,18 +204,57 @@ export async function provisionAioTenant(app: MerchantApplication): Promise<Prov
           companyId: created.companyId,
           businessName: created.businessName,
         };
+        // The tenant's schema is built asynchronously from here, so the
+        // location step CANNOT run in this same pass — see SCHEMA_WARMUP_MS.
+        // Setting the clock only on the create branch is deliberate: a
+        // reconciled business is one AIO made minutes or days ago, and making
+        // it wait five more would be waiting for something that has already
+        // happened.
+        tenant = {
+          ...tenant,
+          locationNotBefore: new Date(Date.now() + SCHEMA_WARMUP_MS).toISOString(),
+        };
       }
       await patch(app.id, tenant);
     }
 
     // ── Step 2: the location ──────────────────────────────────────────────
+    //
+    // ONE location per tenant is the whole requirement here (product owner,
+    // 2026-10-14), and the only way to honour it is to not call this before
+    // AIO can serve it: a premature call still creates a row, it just creates
+    // a broken one. So the step is time-gated, and the wait is taken across
+    // cron ticks rather than inside this function — sleeping here would hold
+    // the lease, burn function time, and risk the 15-minute claim going stale
+    // underneath us.
     if (!tenant.locationId) {
-      const loc = await createAioLocation(app, {
-        businessId: tenant.businessId,
-        companyId: tenant.companyId,
-      });
-      tenant = { ...tenant, locationId: loc.locationId, workplaceId: loc.workplaceId };
-      await patch(app.id, tenant);
+      const notBefore = tenant.locationNotBefore ? Date.parse(tenant.locationNotBefore) : 0;
+      if (Number.isFinite(notBefore) && Date.now() < notBefore) {
+        return await defer(new Date(notBefore));
+      }
+
+      try {
+        const loc = await createAioLocation(app, {
+          businessId: tenant.businessId,
+          companyId: tenant.companyId,
+        });
+        tenant = { ...tenant, locationId: loc.locationId, workplaceId: loc.workplaceId };
+        await patch(app.id, tenant);
+      } catch (err) {
+        // "Too early", not "broken". A junk restaurant now exists and nothing
+        // can remove it, so the answer is to wait LONGER, not to try harder —
+        // and not to spend one of the merchant's five attempts on AIO being
+        // slow.
+        if (isTenantSchemaNotReady(err)) {
+          console.warn(
+            `[aio] tenant ${tenant.businessId} schema not ready; a half-created restaurant now ` +
+              `exists under it and cannot be deleted. Waiting ${SCHEMA_RETRY_MS / 60000}m.`,
+            app.id
+          );
+          return await defer(new Date(Date.now() + SCHEMA_RETRY_MS));
+        }
+        throw err;
+      }
     }
 
     // ── Step 3: the Adyen KYC link ────────────────────────────────────────

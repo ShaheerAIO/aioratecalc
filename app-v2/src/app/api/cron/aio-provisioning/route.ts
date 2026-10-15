@@ -56,6 +56,11 @@ export async function GET(req: NextRequest) {
   const summary = {
     considered: 0,
     provisioned: 0,
+    // Deliberately its own counter and NOT a failure: a row here is mid-flight,
+    // waiting for AIO to finish building the tenant's Postgres schema before
+    // the location can be created without leaving an undeletable half-created
+    // one behind. See SCHEMA_WARMUP_MS in lib/aio/provision.ts.
+    waiting: 0,
     skipped: {} as Record<string, number>,
     needsAttention: [] as { applicationId: string; error: string }[],
     failed: [] as { applicationId: string; error: string }[],
@@ -85,6 +90,8 @@ export async function GET(req: NextRequest) {
 
     if (outcome.status === "provisioned") {
       summary.provisioned++;
+    } else if (outcome.status === "waiting") {
+      summary.waiting++;
     } else if (outcome.status === "needs_attention") {
       // Not counted as a failure: it's a stuck row a human must unpick, and
       // failing the whole run for it would mask genuine outages.

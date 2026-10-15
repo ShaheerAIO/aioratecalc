@@ -1,10 +1,17 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getMyApplicationAction } from "@/lib/actions/customer";
+import { SHOW_PAYROLL_MODULE } from "@/lib/onboardingModules";
 import PayrollOnboardStep from "@/components/customer/PayrollOnboardStep";
 import styles from "../../../customer.module.css";
 
 export default async function CustomerPayrollPage({ params }: { params: Promise<{ id: string }> }) {
+  // Payroll is hidden from the checklist, so this page is unlinked — but the
+  // URL is still guessable and this is the one that CREATES a Check company.
+  // Refuse before anything is read, so a stale bookmark can't open an account
+  // with Check behind a row nobody can see.
+  if (!SHOW_PAYROLL_MODULE) notFound();
+
   const { id } = await params;
   const app = await getMyApplicationAction(id);
 

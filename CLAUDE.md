@@ -476,12 +476,39 @@ secret stays valid but you no longer have it).
   The action deliberately does NOT push to HubSpot or kick provisioning: the 15-minute cron re-reads
   the row and the gate now passes it, and an unauthenticated route triggering the creation of objects
   AIO can never delete, to save fifteen minutes, is not a trade worth making.
-- **Two AIO endpoints are buggy on their FIRST call and the handling is narrow on purpose.**
-  `restaurant/post/create` 500s with `relation "tenant_N.state" does not exist`;
-  `restaurant/adyen-onboard` returns HTTP 201 `success:true` with `url: ""`. So **success is the
-  PAYLOAD, never the status code** — a status-only client hands the merchant a blank KYC link.
-  Never widen these to a blanket retry: there is no idempotency key, so retrying the wrong error
-  creates a duplicate nobody can delete.
+- **Two AIO endpoints are buggy on their FIRST call, and they need OPPOSITE handling.**
+  `restaurant/adyen-onboard` returns HTTP 201 `success:true` with `url: ""`, so **success is the
+  PAYLOAD, never the status code** — a status-only client hands the merchant a blank KYC link, and
+  retrying it is free because it mints a fresh link for the same legal entity.
+  `restaurant/post/create` is the opposite and **MUST NOT BE RETRIED AT ALL** (2026-10-14).
+  - **A schema-not-ready 500 is NOT a no-op, and the earlier rule assumed it was.** The restaurant
+    row IS inserted; AIO just hasn't built the tenant's Postgres schema yet (`relation
+    "tenant_N.state" does not exist`). What it leaves is a HALF-CREATED restaurant that shows in the
+    tenant's list forever and answers `404 Restaurant not found` on `GET /api/restaurant/{id}`
+    permanently. Proven live on tenant 2047: three attempts left 2080, 2081 and 2082; the first two
+    still 404'd fifteen minutes later. Nothing can delete them.
+  - **So the retry-once-after-2s was a machine for manufacturing undeletable junk.** It is deleted.
+    `createAioLocation` makes exactly ONE attempt and throws `AioTenantSchemaNotReadyError` for that
+    signature, which exists so the PROVISIONER can tell "too early" from "broken".
+  - **The wait moved to `provisionAioTenant`, which can defer across cron ticks for free.**
+    `AioTenantIds.locationNotBefore` gates step 2; creating the business sets it to
+    `now + SCHEMA_WARMUP_MS` (5 min — observed ~100s once, and the asymmetry favours waiting), and a
+    schema-not-ready 500 pushes it out by `SCHEMA_RETRY_MS` (15 min). **A business create therefore
+    ENDS the pass** — the location is never attempted in the same run that minted the tenant.
+  - **Deferring is NOT failing, and `defer` vs `fail` is load-bearing in three places.** A deferral
+    restores `attempts` and `lastAttemptAt` to their pre-claim values, so waiting cannot consume one
+    of the five attempts, cannot start an exponential backoff, and leaves `lastError` null so the
+    admin sync tripwire doesn't light up for an account that is merely mid-flight. On 2026-10-14 the
+    equivalent moment cost one attempt and a ONE-HOUR backoff, and the tenant sat unfinished through
+    all of it. The cron reports these as `waiting`, its own counter, never as a failure.
+  - **The provisioning cron runs every 5 minutes** (was 15) so that a deferral is cheap: pay →
+    tenant on the next tick → location + KYC link ~5 minutes later, one location, no junk.
+  - **Do not "fix" this by scanning for the created location and adopting it.** It was designed and
+    rejected: `business-list?businessAlias=` embeds restaurants with `name`/`address` and **no id**,
+    `GET /api/restaurant` and `/api/restaurant/nearby/{businessId}` are 500 for every tenant, and
+    `GET /api/restaurant/{id}` answers `400 "Business not found"` for both a nonexistent id and an
+    id whose business is missing — so there is no sound way to enumerate or binary-search them. A
+    half-created row is unusable anyway, so there would be nothing worth adopting.
 - **`adyenIds.tenantNumber` is the AIO business id, and the settlement ingest builds `prod-{n}` from
   it.** If AIO's store reference is not literally `prod-{businessId}`, the Phase G P&L silently
   stops attributing revenue and nothing alerts. Verify against one real settlement row before

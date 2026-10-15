@@ -404,12 +404,38 @@ export async function createAioBusiness(
 
 // ── Step 2: the location ("restaurant") ─────────────────────────────────────
 
-// Known AIO bug, verified 2026-09-23: the FIRST call 500s because the
-// per-tenant Postgres schema isn't provisioned yet. The second succeeds.
+// Known AIO bug, verified 2026-09-23: `restaurant/post/create` 500s because
+// the per-tenant Postgres schema isn't provisioned yet.
 // The quotes arrive BACKSLASH-ESCAPED: the body is JSON, so res.text() yields
 //   {"message":"...relation \"tenant_5217.state\" does not exist"}
 // Matching a bare quote here would never fire in production.
 const TENANT_SCHEMA_NOT_READY = /relation\s+\\?"tenant_\d+\.[a-z_]+\\?"\s+does not exist/i;
+
+/**
+ * The tenant schema wasn't ready. Thrown so the PROVISIONER can tell this
+ * apart from a real failure — it is "too early", not "broken", and the cure
+ * is to wait rather than to count it against the merchant's attempts.
+ *
+ * It carries one hard-won fact: **the restaurant row was still created.**
+ * This reverses the assumption the old retry-once was built on, which held
+ * that a schema-not-ready 500 left nothing behind and was therefore safe to
+ * retry immediately. It isn't. Verified live 2026-10-14 on tenant 2047:
+ * three attempts produced restaurants 2080, 2081 and 2082, all listed under
+ * the tenant; the first two answer `404 Restaurant not found` on
+ * `GET /api/restaurant/{id}` and still did fifteen minutes later, so a
+ * half-created row never heals and can never be deleted.
+ */
+export class AioTenantSchemaNotReadyError extends Error {
+  readonly tenantSchemaNotReady = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "AioTenantSchemaNotReadyError";
+  }
+}
+
+export function isTenantSchemaNotReady(err: unknown): boolean {
+  return err instanceof AioTenantSchemaNotReadyError;
+}
 
 export async function createAioLocation(
   app: MerchantApplication,
@@ -463,28 +489,33 @@ export async function createAioLocation(
     pocEmployees: [],
   };
 
-  // Retries EXACTLY ONCE, and only for the known schema-not-ready 500. A
-  // blanket retry-all-500s is unacceptable: there is no idempotency key, so a
-  // transient 500 that actually succeeded server-side would leave two
-  // Locations and neither can be deleted.
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const json = await aioCall("/api/restaurant/post/create", "location create", body);
-      const { data } = unwrap(json);
-      const locationId = Number(data?.id);
-      if (!Number.isFinite(locationId)) {
-        throw new Error(`AIO dashboard location create returned no id: ${JSON.stringify(data)}`);
-      }
-      return { locationId, workplaceId: data?.workplaceId ?? null };
-    } catch (err) {
-      lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!TENANT_SCHEMA_NOT_READY.test(msg)) throw err;
-      await sleep(2000);
+  // EXACTLY ONE attempt. There is deliberately no retry here any more.
+  //
+  // It used to try twice, two seconds apart, on the belief that a
+  // schema-not-ready 500 created nothing. It creates a half-made restaurant
+  // that never heals (see AioTenantSchemaNotReadyError), so that retry was a
+  // machine for manufacturing undeletable junk: on 2026-10-14 one provisioning
+  // run left two of them, 2080 and 2081, before a later run made the real one.
+  //
+  // Two seconds was never going to be enough either — the schema took ~100
+  // seconds on that tenant. Retrying is therefore the wrong instrument at the
+  // wrong altitude: the WAIT belongs in the provisioner, which can defer to a
+  // later cron tick for free (`locationNotBefore`), instead of being paid for
+  // in permanent rows inside a process that has to hold a lease while it
+  // sleeps.
+  try {
+    const json = await aioCall("/api/restaurant/post/create", "location create", body);
+    const { data } = unwrap(json);
+    const locationId = Number(data?.id);
+    if (!Number.isFinite(locationId)) {
+      throw new Error(`AIO dashboard location create returned no id: ${JSON.stringify(data)}`);
     }
+    return { locationId, workplaceId: data?.workplaceId ?? null };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (TENANT_SCHEMA_NOT_READY.test(msg)) throw new AioTenantSchemaNotReadyError(msg);
+    throw err;
   }
-  throw lastErr;
 }
 
 // ── Step 3: the Adyen KYC link ──────────────────────────────────────────────

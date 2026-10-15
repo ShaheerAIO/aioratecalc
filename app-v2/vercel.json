@@ -14,7 +14,7 @@
     },
     {
       "path": "/api/cron/aio-provisioning",
-      "schedule": "*/15 * * * *"
+      "schedule": "*/5 * * * *"
     }
   ]
 }

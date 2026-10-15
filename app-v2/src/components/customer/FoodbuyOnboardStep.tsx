@@ -13,8 +13,10 @@ type Props = { app: MerchantApplication };
 // Foodbuy has no API to onboard through (see lib/foodbuyForm.ts) — this opens
 // a pre-filled copy of Foodbuy's own enrollment PDF in a new tab, using the
 // same client-side html2pdf pattern ProposalStep.tsx uses for proposal PDFs.
-// The customer completes the remaining fields (EIN, GPO affiliation,
-// signature) by hand and sends it on themselves.
+// That document is EDITABLE: the customer fills the fields AIO doesn't hold
+// (EIN, GPO affiliation) in the tab, exports the PDF, then signs and sends it
+// on themselves. The edits never come back here — the tab is the only place
+// they exist, so nothing is saved and nothing can be half-saved.
 export default function FoodbuyOnboardStep({ app }: Props) {
   const [generating, setGenerating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -43,14 +45,15 @@ export default function FoodbuyOnboardStep({ app }: Props) {
       <h1 className={styles.pageTitle}>Set Up Foodbuy</h1>
       <p className={styles.pageSubtitle}>
         Foodbuy enrollment is a paper participation agreement, not something we can submit for you. We'll
-        pre-fill what we already know about your business, and you'll complete the rest (your Federal ID #,
-        GPO affiliation, and signature) and send it to your AIO representative or Foodbuy account executive.
+        pre-fill what we already know about your business and open it for you to edit — fill in the rest
+        (your Federal ID # and GPO affiliation), export it as a PDF, then sign it and send it to your AIO
+        representative or Foodbuy account executive.
       </p>
 
       {err && <div className={styles.errorBanner}>{err}</div>}
 
       <button className={styles.btnPrimary} disabled={generating} onClick={handleGenerate}>
-        {generating ? "Preparing…" : alreadyGenerated ? "Download Again →" : "Download Enrollment Form →"}
+        {generating ? "Preparing…" : alreadyGenerated ? "Open Form Again →" : "Open Enrollment Form →"}
       </button>
     </div>
   );

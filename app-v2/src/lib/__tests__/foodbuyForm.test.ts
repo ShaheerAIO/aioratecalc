@@ -70,6 +70,20 @@ describe("buildFoodbuyFormHtml", () => {
     expect(html).not.toContain("Unspecified");
   });
 
+  it("makes every value editable before export — blanks and pre-filled values alike", () => {
+    const html = buildFoodbuyFormHtml(BUSINESS, CONTACT);
+    // The blanks are the point: EIN, suite, GPO answer, signature, date.
+    expect(html).toContain('<span class="blank" contenteditable="true">');
+    // A pre-filled value is editable too — AIO's copy of a legal name can be
+    // out of date, and this form has to match what the state has on file.
+    expect(html).toContain('<span class="filled" contenteditable="true">Torta Palace LLC</span>');
+    // And no checkbox ships ticked — the GPO answer and the acknowledgement
+    // are attestations only the merchant can make. (The ticked glyph appears
+    // once, in the toggle script; never as rendered content.)
+    expect(html).not.toContain(">☑<");
+    expect(html).toContain('<span class="cb" onclick="tog(this)">☐</span>');
+  });
+
   it("embeds the html2pdf export script and a download button", () => {
     const html = buildFoodbuyFormHtml(BUSINESS, CONTACT);
     expect(html).toContain("html2pdf.js/0.10.1/html2pdf.bundle.min.js");

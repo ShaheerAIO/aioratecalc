@@ -105,7 +105,7 @@ export default function MyDataSection({ app }: Props) {
     <div className={styles.section}>
       <h2 className={styles.heading}>My Data</h2>
       <p className={styles.subtitle}>
-        Saved from your application — reused to autofill other AIO services like payroll and Foodbuy.
+        Saved from your application — reused to autofill other AIO services like Foodbuy.
       </p>
       <div className={styles.panel}>
         {app ? <DataGroups app={app} /> : (

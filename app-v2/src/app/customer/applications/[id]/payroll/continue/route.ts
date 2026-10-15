@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCustomerSession } from "@/lib/auth/getCustomerSession";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { createCheckOnboardLink } from "@/lib/adapters/check";
+import { SHOW_PAYROLL_MODULE } from "@/lib/onboardingModules";
 
 // "Continue Payroll Setup" target. Check onboard links are one-time use and
 // expire after 24h, so the stored one is never re-served — every click mints a
 // fresh link for the app's existing Check company and redirects to it. Mirrors
 // the Adyen continue route one directory up.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Hidden with the checklist row it belongs to — 404 rather than minting a
+  // Check link for a module the merchant isn't being offered.
+  if (!SHOW_PAYROLL_MODULE) return new NextResponse(null, { status: 404 });
+
   const { id } = await params;
   const session = await getCustomerSession();
   if (!session) {

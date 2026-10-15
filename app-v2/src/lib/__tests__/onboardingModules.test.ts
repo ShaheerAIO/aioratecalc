@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { checklistNotice, getOnboardingModules, hasSignedWithoutPaying } from "@/lib/onboardingModules";
+import { checklistNotice, getOnboardingModules, hasSignedWithoutPaying, payrollModule } from "@/lib/onboardingModules";
 import type { HubspotIds, HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/merchant";
 
 // Minimal, fully-populated application fixture. Every module under test reads
@@ -276,9 +276,25 @@ describe("rate-only quote (empty quoteLines) discriminator", () => {
 });
 
 describe("getOnboardingModules — order and composition", () => {
-  it("returns quote (& billing), adyen, payroll, foodbuy in that order", () => {
+  it("returns quote (& billing), adyen, foodbuy in that order", () => {
     const keys = getOnboardingModules(BASE_APP).map(m => m.key);
-    expect(keys).toEqual(["quote", "adyen", "payroll", "foodbuy"]);
+    expect(keys).toEqual(["quote", "adyen", "foodbuy"]);
+  });
+
+  // Hidden, not deleted — SHOW_PAYROLL_MODULE. The module itself is still
+  // covered by its own regression net below; this pins that no merchant is
+  // offered the row while the switch is off.
+  it("omits payroll entirely while it is hidden", () => {
+    const fullyPaid: MerchantApplication = {
+      ...BASE_APP,
+      quoteAcceptedAt: "2026-08-10T00:00:00.000Z",
+      checkIds: {
+        companyId: "check-co-1", environment: "sandbox", startDate: "2026-09-01",
+        signer: { name: "Jane Doe", title: "Owner", email: "jane@testco.com" },
+        createdAt: "2026-08-01T00:00:00.000Z", onboardStatus: "needs_attention", onboardStatusAt: "2026-08-02T00:00:00.000Z",
+      },
+    };
+    expect(getOnboardingModules(fullyPaid).find(m => m.key === "payroll")).toBeUndefined();
   });
 });
 
@@ -312,7 +328,7 @@ describe("getOnboardingModules is pure and network-free", () => {
 
     const modules = getOnboardingModules(fullyPopulated);
 
-    expect(modules).toHaveLength(4);
+    expect(modules).toHaveLength(3);
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
@@ -432,8 +448,10 @@ describe("adyenModule (regression net)", () => {
   });
 });
 
+// Called directly rather than through getOnboardingModules, which omits the
+// row while SHOW_PAYROLL_MODULE is off — see the hide test above.
 describe("payrollModule (regression net)", () => {
-  const payroll = (app: MerchantApplication) => getOnboardingModules(app).find(m => m.key === "payroll")!;
+  const payroll = (app: MerchantApplication) => payrollModule(app, "/customer/applications/app-1");
 
   it("is not_started without an href when business/ownerContact are missing", () => {
     const m = payroll({ ...BASE_APP, business: null, ownerContact: null });
@@ -547,7 +565,7 @@ describe("the lock rule (post-pass)", () => {
   it("everything after quote is locked (reason: quote) until the quote is accepted", () => {
     const app = { ...BASE_APP, hubspotIds: EMPTY_HUBSPOT_IDS };
     const modules = keyed(app);
-    for (const key of ["adyen", "payroll", "foodbuy"]) {
+    for (const key of ["adyen", "foodbuy"]) {
       expect(modules[key].locked).toEqual({ reason: "quote", message: "Available after your quote is signed" });
     }
   });
@@ -558,7 +576,7 @@ describe("the lock rule (post-pass)", () => {
       hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "q1" },
     };
     const modules = keyed(app);
-    for (const key of ["adyen", "payroll", "foodbuy"]) {
+    for (const key of ["adyen", "foodbuy"]) {
       expect(modules[key].locked).toBeUndefined();
     }
   });
@@ -598,7 +616,6 @@ describe("basePath interpolation", () => {
     // the hosted page via billingHref — and that defaults under basePath.
     expect(byKey.quote).toBe("/lead/tok123/billing");
     expect(byKey.adyen).toBe("/lead/tok123/edit");
-    expect(byKey.payroll).toBe("/lead/tok123/payroll");
     expect(byKey.foodbuy).toBe("/lead/tok123/foodbuy");
   });
 

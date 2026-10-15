@@ -8,6 +8,7 @@ import {
   createAioBusiness,
   createAioLocation,
   createAioAdyenOnboardingLink,
+  isTenantSchemaNotReady,
   __resetAioSession,
 } from "@/lib/adapters/aioDashboard";
 
@@ -256,22 +257,40 @@ describe("createAioBusiness", () => {
   });
 });
 
+// 2026-10-14: this used to retry once, two seconds later, believing a
+// schema-not-ready 500 created nothing. It creates a HALF-MADE restaurant that
+// answers 404 forever and cannot be deleted — tenant 2047 collected 2080 and
+// 2081 that way before a later call made the real 2082. So the retry is gone
+// and the wait moved to the provisioner, which can defer across cron ticks
+// for free. See AioTenantSchemaNotReadyError.
 describe("createAioLocation — the first-call schema bug", () => {
-  it("retries exactly once when the per-tenant schema is not ready yet", async () => {
-    vi.useFakeTimers();
+  it("does NOT retry a schema-not-ready 500 — every attempt leaves an undeletable row", async () => {
     aio
       .mockResolvedValueOnce(res(LOGIN_OK))
       .mockResolvedValueOnce(
         res({ message: 'Error while performing operation :relation "tenant_5217.state" does not exist' }, 500)
-      )
-      .mockResolvedValueOnce(res({ statusCode: 200, response: { success: true, data: { id: 4690, workplaceId: "wrk_1" } } }));
+      );
 
-    const p = createAioLocation(APP, { businessId: 5217, companyId: "com_x" });
-    await vi.advanceTimersByTimeAsync(2000);
-
-    expect(await p).toEqual({ locationId: 4690, workplaceId: "wrk_1" });
+    await expect(createAioLocation(APP, { businessId: 5217, companyId: "com_x" })).rejects.toThrow(/does not exist/);
     const creates = fetchMock.mock.calls.filter(c => String(c[0]).includes("restaurant/post/create"));
-    expect(creates).toHaveLength(2);
+    expect(creates).toHaveLength(1);
+  });
+
+  it("marks that 500 as schema-not-ready so the provisioner can wait rather than fail", async () => {
+    aio
+      .mockResolvedValueOnce(res(LOGIN_OK))
+      .mockResolvedValueOnce(
+        res({ message: 'Error while performing operation :relation "tenant_5217.state" does not exist' }, 500)
+      );
+
+    const err = await createAioLocation(APP, { businessId: 5217, companyId: null }).catch(e => e);
+    expect(isTenantSchemaNotReady(err)).toBe(true);
+  });
+
+  it("does NOT mark an ordinary 500 as schema-not-ready", async () => {
+    aio.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValueOnce(res({ message: "Internal server error" }, 500));
+    const err = await createAioLocation(APP, { businessId: 5217, companyId: null }).catch(e => e);
+    expect(isTenantSchemaNotReady(err)).toBe(false);
   });
 
   it("does NOT retry any other 500 — a blind retry could create two locations", async () => {
@@ -284,19 +303,6 @@ describe("createAioLocation — the first-call schema bug", () => {
     expect(creates).toHaveLength(1);
   });
 
-  it("gives up after the one permitted retry", async () => {
-    vi.useFakeTimers();
-    const schemaErr = res({ message: 'relation "tenant_5217.state" does not exist' }, 500);
-    aio.mockResolvedValueOnce(res(LOGIN_OK)).mockResolvedValue(schemaErr);
-
-    const p = createAioLocation(APP, { businessId: 5217, companyId: null });
-    const assertion = expect(p).rejects.toThrow(/does not exist/);
-    await vi.advanceTimersByTimeAsync(5000);
-    await assertion;
-
-    const creates = fetchMock.mock.calls.filter(c => String(c[0]).includes("restaurant/post/create"));
-    expect(creates).toHaveLength(2);
-  });
 });
 
 describe("createAioLocation — the coordinates prod insists on", () => {

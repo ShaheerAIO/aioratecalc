@@ -77,7 +77,7 @@ export default function ApplicationTabs({ app, modules, quote }: Props) {
           {!editing && (
             <p className={styles.tabHint}>
               This is what AIO has on file for this application. It&apos;s reused to autofill other
-              AIO services, like payroll and Foodbuy —{" "}
+              AIO services, like Foodbuy —{" "}
               <Link href="/customer">view across all applications</Link>.
             </p>
           )}

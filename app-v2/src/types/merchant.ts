@@ -856,6 +856,21 @@ export type AioTenantIds = {
   claimedAt: string | null;      // cron lease; stale after 15 minutes
   attempts: number;
   lastAttemptAt: string | null;
+  /**
+   * The earliest the LOCATION step may be attempted — AIO's tenant schema is
+   * provisioned asynchronously after `business/create`, and
+   * `restaurant/post/create` 500s with `relation "tenant_N.state" does not
+   * exist` until it lands. Observed live 2026-10-14: ~100 seconds.
+   *
+   * It exists because that 500 is NOT a no-op. The restaurant row IS inserted
+   * and then left half-created: it shows in the tenant's restaurant list
+   * forever and `GET /api/restaurant/{id}` answers 404 for it permanently
+   * (checked on 2080 and 2081 fifteen minutes later). So every premature
+   * attempt is one undeletable junk row in AIO's shared database, and the
+   * cure is to wait rather than to retry — the product owner's goal is ONE
+   * location per tenant.
+   */
+  locationNotBefore: string | null;
   // Persisted, not merely logged. Provisioning is a cron with no human in the
   // loop, and the repo has already been bitten once by a failure that lived
   // only in a Vercel log (see HubspotIds.lastSyncError).
