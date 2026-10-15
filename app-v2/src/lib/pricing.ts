@@ -10,7 +10,7 @@
 // without pulling in MARGIN_REQS — see its doc comment there for the full
 // history of the 90→95 disagreement this constant fixes.
 import {
-  DEFAULT_QUOTE_RATES, DEFAULT_CARD_PRESENT_PCT, MAX_PLAUSIBLE_CARD_RATE,
+  averageTicketOf, DEFAULT_QUOTE_RATES, DEFAULT_CARD_PRESENT_PCT, MAX_PLAUSIBLE_CARD_RATE,
   MIN_MONTHLY_PROCESSING_REVENUE,
 } from "@/types/merchant";
 import type { ProcessorTier, QuoteConfig, QuoteRates, StatementAnalysis } from "@/types/merchant";
@@ -440,8 +440,10 @@ export function derivePricingForRole(
   // deliberately not folded into the new floor below: a commission on a
   // negative forecast is nonsense, where a negative forecast is precisely
   // what the floor has to see.
+  // The commission is still figured on a WHOLE-DOLLAR ARR, as it always was —
+  // `recurringArr`, the other half of the sum, is an integer too.
   const projectedCommission = commissionFromTotalArr(
-    sumArrOrNull(processing && processing.annual > 0 ? processing.annual : null, recurringArr)
+    sumArrOrNull(processing && processing.annual > 0 ? Math.round(processing.annual) : null, recurringArr)
   );
   const revenueView = {
     monthlyProcessingRevenue: processing ? processing.monthly : null,
@@ -489,13 +491,27 @@ export function derivePricingForRole(
  * this and processingArr.ts call the identical wholesale.ts primitives.
  */
 function projectedProcessingRevenue(
-  analysis: Parameters<typeof derivePricing>[0],
+  // `averageTicket` is optional here only because `derivePricing`'s own
+  // analysis parameter doesn't declare it — every real caller passes a whole
+  // StatementAnalysis, which carries it. Absent, `averageTicketOf` falls back
+  // to volume ÷ transactions, which is what this used to do unconditionally.
+  analysis: Parameters<typeof derivePricing>[0] & { averageTicket?: number },
   rates: QuoteRates | null | undefined
 ): { monthly: number; annual: number } | null {
   const vol = analysis.totalVolume || 0;
-  const txns = analysis.totalTransactions || 0;
-  if (!(vol > 0) || !(txns > 0)) return null;
-  const avgTicket = vol / txns;
+  if (!(vol > 0)) return null;
+  // `averageTicketOf`, NOT volume ÷ transactions. They are not the same number
+  // on a quote with no statement behind it: `analysisFromQuoteConfig` ROUNDS
+  // the transaction count (a merchant doesn't take 4000.08 cards a month), so
+  // dividing back out returns a ticket slightly off the one the rep typed —
+  // $100,002 at a $25 ticket came back as $25.0005, which moved the margin by
+  // 6/10000 of a point and the monthly figure from $300.01 to $299.99.
+  //
+  // It also put this preview at odds with `paymentProcessingArrBreakdown`
+  // (lib/billing/processingArr.ts), which has always used `averageTicketOf`
+  // — so the ARR a rep read here was not the ARR the deal would carry. Same
+  // helper on both sides now; they're meant to be the same formula.
+  const avgTicket = averageTicketOf({ ...analysis, averageTicket: analysis.averageTicket ?? 0 });
   if (!(avgTicket > 0)) return null;
 
   const quoted = ratesFor(rates);
@@ -505,15 +521,26 @@ function projectedProcessingRevenue(
   const revenue = totalRevenue(quoted.cardPresentRate, vol, avgTicket, quoted.perTransactionFee);
   const takeRate = totalTakeRate(revenue, vol);
   const margin = takeRate - wholesalePctFor(avgTicket);
-  const monthly = margin * vol;
-  if (!Number.isFinite(monthly)) return null;
-  // NOT clamped at zero, and the commission caller below is what still drops
-  // a non-positive figure. A thin or negative margin is exactly what
+  const exact = margin * vol;
+  if (!Number.isFinite(exact)) return null;
+  // ROUNDED TO CENTS, and then annualised FROM the rounded figure — so the
+  // two numbers a rep reads side by side multiply (2026-10-15). They are both
+  // rendered to the cent, so an annual figure taken from the unrounded
+  // monthly visibly fails the one arithmetic check anybody does on it: here,
+  // $300.01 a month printed beside $3,600.07 a year. The monthly is the
+  // figure a rep says out loud, so it is the one the year is built from.
+  //
+  // It therefore differs by pennies from `payment_processing_arr`, which is
+  // computed at acceptance from the merchant's own row and rounded to whole
+  // dollars (lib/billing/processingArr.ts) — a different moment and a
+  // different rounding, not a disagreement about the money.
+  //
+  // NOT clamped at zero, and the commission caller is what still drops a
+  // non-positive figure. A thin or negative margin is exactly what
   // `MIN_MONTHLY_PROCESSING_REVENUE` exists to refuse, and a null here would
-  // read as "no basis to judge" — which is the one answer that lets it
-  // through. Annualised as the monthly × 12 so the two figures a rep reads
-  // side by side can never disagree by a rounding step.
-  return { monthly, annual: Math.round(monthly * 12) };
+  // read as "no basis to judge" — the one answer that lets it through.
+  const monthly = Math.round(exact * 100) / 100;
+  return { monthly, annual: monthly * 12 };
 }
 
 /**

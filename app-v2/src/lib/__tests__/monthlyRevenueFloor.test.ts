@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { derivePricingForRole, monthlyRevenueFloorBlockers, type PaddingConfig } from "@/lib/pricing";
+import {
+  analysisFromQuoteConfig, derivePricingForRole, monthlyRevenueFloorBlockers, type PaddingConfig,
+} from "@/lib/pricing";
 import {
   DEFAULT_QUOTE_RATES, MIN_MONTHLY_PROCESSING_REVENUE,
   type QuoteRates, type StatementAnalysis,
@@ -79,6 +81,30 @@ describe("the $10 monthly processing-revenue floor", () => {
     // The commission still drops a non-positive forecast — a commission on
     // negative revenue is nonsense, where the refusal above is the point.
     expect(p.projectedCommission.total).toBeNull();
+  });
+
+  // Both halves of what a rep spotted on 2026-10-15: $299.99 printed beside
+  // $3,600.00, which neither multiplies nor matches the margin the typed
+  // figures imply.
+  describe("the figures a rep reads off a quote with no statement behind it", () => {
+    // $100,002 at a $25 ticket, quoted 2.06% + $0.15. Take rate 2.66%,
+    // wholesale 2.36% at that ticket, so the margin is exactly 0.30%.
+    const config = analysisFromQuoteConfig({ monthlyVolume: 100_002, avgTicket: 25 });
+    const p = preview(config, cp(0.0206));
+
+    it("reads the ticket the rep TYPED, not one divided back out of a rounded count", () => {
+      // analysisFromQuoteConfig rounds 4000.08 transactions to 4000; dividing
+      // back out gives a $25.0005 ticket, which moved the margin enough to
+      // print $299.99 instead of $300.01.
+      expect(config.totalTransactions).toBe(4_000);
+      expect(config.totalVolume / config.totalTransactions).not.toBe(25);
+      expect(p.monthlyProcessingRevenue).toBe(300.01);
+    });
+
+    it("annualises the figure it PRINTS, so the two multiply", () => {
+      expect(p.processingArr).toBe(3_600.12);
+      expect(p.processingArr).toBe(p.monthlyProcessingRevenue! * 12);
+    });
   });
 
   it("holds reps and admins to the identical figure — this one is not padded", () => {
