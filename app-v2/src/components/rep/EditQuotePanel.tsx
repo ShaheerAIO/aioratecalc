@@ -11,7 +11,9 @@ import {
   adjustmentsFromQuoteLines, picksFromQuoteLines, processesCardNotPresentOnly, quoteHasProcessing, quoteTypeOf,
 } from "@/lib/quoting";
 import { fmt$, fmtPct2 } from "@/lib/utils";
-import { averageTicketOf, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import {
+  averageTicketOf, DEFAULT_QUOTE_RATES, MIN_MONTHLY_PROCESSING_REVENUE, SELECTABLE_PRICING_MODELS,
+} from "@/types/merchant";
 import type { AppSettings, MerchantApplication, PricingModel, ProcessorTier, QuoteAdjustments, QuoteRates, QuoteType, StatementAnalysis } from "@/types/merchant";
 import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 
@@ -156,13 +158,18 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   // 2026-10-06. A rate under the floor warns the rep and still saves.
   const belowFloor = pricing?.belowCostFloor ?? false;
   const belowMin = pricing?.belowMarginFloor ?? false;
+  // The $10-a-month minimum on AIO's own processing revenue (2026-10-15).
+  // Refuses the save like `belowMin`, and for the same reason — but it is a
+  // SEPARATE test on a separate margin, so a quote has to clear both. See
+  // `monthlyRevenueFloorBlockers` (pricing.ts).
+  const belowRevenueFloor = pricing?.belowMonthlyRevenueFloor ?? false;
   const blockers = quote?.blockers ?? [];
 
   // Below the minimum margin REFUSES the save (2026-10-09, "card rate minimums
   // are needed"), where it used to be a note the rep could read past. Below
   // COST stays a warning: it is the sharper of the two, but it is measured
   // against the processor tier on file, which a rep can't fix from here.
-  const disabled = saving || blockers.length > 0 || belowMin || (!rated && !picks.length);
+  const disabled = saving || blockers.length > 0 || belowMin || belowRevenueFloor || (!rated && !picks.length);
 
   const save = async () => {
     if (disabled) return;
@@ -298,7 +305,26 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
               <div style={{ marginTop: 10, fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
                 <div>Projected fees: <strong>{fmt$(pricing.projectedMonthlyFees)}/mo</strong></div>
                 <div>Margin at this rate: <strong>{pricing.appliedTargetMargin == null ? "—" : fmtPct2(pricing.appliedTargetMargin)}</strong></div>
+                {/* What this rate is worth to AIO (2026-10-15, product owner:
+                    "show montly revenue and yearly arr in the card rate
+                    box"). The two are the same figure at two horizons — the
+                    yearly one is `payment_processing_arr`, what the deal
+                    carries once the merchant accepts. Both from the server's
+                    role-scoped preview; this panel derives neither. */}
+                {pricing.monthlyProcessingRevenue != null && (
+                  <div style={belowRevenueFloor ? { color: "var(--danger, #e5484d)" } : undefined}>
+                    AIO revenue: <strong>{fmt$(pricing.monthlyProcessingRevenue)}/mo</strong>
+                    {" · "}
+                    Yearly ARR: <strong>{fmt$(pricing.processingArr ?? 0)}</strong>
+                  </div>
+                )}
                 <div>Your commission (est., signing + activation): <strong>{pricing.projectedCommission.total == null ? "—" : `${fmt$(pricing.projectedCommission.total)}/yr`}</strong></div>
+                {belowRevenueFloor && (
+                  <div style={{ color: "var(--danger, #e5484d)" }}>
+                    Under the {fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} a month AIO processes for. Raise
+                    the card rate to save this quote, or this merchant is too small to process for.
+                  </div>
+                )}
                 {belowFloor && (
                   <div style={{ color: "var(--danger, #e5484d)" }}>
                     Below cost — AIO loses money on this deal at this rate. Not blocked, but don&rsquo;t

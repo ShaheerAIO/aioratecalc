@@ -1854,28 +1854,76 @@ export function longestBillingDelayDays(lines: Array<{ billingStart?: BillingSta
 }
 
 /**
- * The delay past which a rep has to write down why.
- *
- * Deliberately the plan's own default, so the rule reads as "anything longer
- * than what the plan already gives them". Distinct from the delay CEILING
- * (`maxBillingDelayDays`), which REFUSES and is raised by an admin: this one
- * doesn't refuse the delay, it refuses the silence. Between the two numbers —
- * 61 to 90 days by default — a note is the whole requirement.
+ * The one billing delay this plan's quotes carry silently: its own default.
+ * 60 days on the two POS plans, "at checkout" on the marketing plans.
  */
-export const DELAY_NOTE_THRESHOLD_DAYS = PLAN_DEFAULT_BILLING_DELAY_DAYS;
+export function planDefaultBillingDelayDays(quoteType: QuoteType): number {
+  return billingStartDelayDays(planDefaultBillingStart(quoteType));
+}
 
+/**
+ * Why this quote doesn't bill when the plan says it bills.
+ *
+ * A note is required whenever the first charge sits anywhere OTHER than the
+ * plan's own default — product owner, 2026-10-15: "if billing delay is not 60
+ * days that should force rep to put note as well". That REVERSES the
+ * "anything longer than 60" rule this started as (Elizabeth Phillips,
+ * 2026-10-12): pulling the first charge FORWARD is a decision about AIO's own
+ * cash as much as pushing it back is, and it was the one direction nobody had
+ * to explain.
+ *
+ * Still distinct from the delay CEILING (`maxBillingDelayDays`), which REFUSES
+ * and is raised by an admin. This one doesn't refuse the delay, it refuses the
+ * silence.
+ *
+ * Three things are load-bearing about how it's measured:
+ *
+ *  - **It compares against the PLAN's default, not against 60.** A marketing
+ *    quote has no 60-day default — `planDefaultBillingStart` returns null for
+ *    one — so a flat "must be 60" would have demanded a note on every
+ *    marketing quote ever sent, for billing exactly when its plan says to.
+ *  - **It reads the LONGEST delay, the same scalar the rep-facing control and
+ *    the HubSpot preamble read**, rather than asking each line separately. A
+ *    rep who seeds the plan's 60 days and then adds a monthly line that bills
+ *    at checkout has a quote whose longest delay is still 60 — and the global
+ *    "Billing starts" control, which is how a rep sets this, moves every
+ *    recurring line together anyway.
+ *  - **A quote with no RECURRING line is exempt.** A one-time line can't carry
+ *    a billing start at all (HubSpot refuses to publish one that does — see
+ *    `applyLineAdjustment`), so its delay is structurally 0; without this a
+ *    rate-only quote, which has no lines whatsoever, would read as "bills at
+ *    checkout, not 60 days" and demand a note about billing it never does.
+ */
 export function quoteNoteBlockers(
-  lines: Array<{ billingStart?: BillingStart | null }>,
-  note: string | null | undefined
+  lines: Array<{ billingFrequency?: BillingFrequency; billingStart?: BillingStart | null }>,
+  note: string | null | undefined,
+  quoteType: QuoteType
 ): string[] {
-  const days = longestBillingDelayDays(lines);
-  if (days <= DELAY_NOTE_THRESHOLD_DAYS) return [];
+  const recurring = lines.filter(l => l.billingFrequency !== "one_time");
+  if (!recurring.length) return [];
+
+  const days = longestBillingDelayDays(recurring);
+  const expected = planDefaultBillingDelayDays(quoteType);
+  if (days === expected) return [];
   if ((note ?? "").trim().length >= MIN_QUOTE_NOTE_LENGTH) return [];
+
   return [
-    `This quote holds a first charge for ${days} days, past the ${DELAY_NOTE_THRESHOLD_DAYS}-day ` +
-    `default — write a note saying why. It goes onto the HubSpot deal's Billing Notes ` +
-    `for ${QUOTE_NOTE_WATCHER.name}.`,
+    `${describeDelayDeviation(days, expected)} — write a note saying why. ` +
+    `It goes onto the HubSpot deal's Billing Notes for ${QUOTE_NOTE_WATCHER.name}.`,
   ];
+}
+
+/**
+ * How the deviation is said, in one sentence — shared by the rep-facing
+ * blocker above and the HubSpot Billing Notes preamble
+ * (`mirrorQuoteNote`, actions/prospects.ts), so the reason a rep is asked for
+ * is phrased the same way as the record it lands in.
+ */
+export function describeDelayDeviation(days: number, expected: number): string {
+  const plan = expected > 0 ? `the plan's ${expected}-day default` : "the plan's start at checkout";
+  return days === 0
+    ? `This quote takes its first charge at checkout rather than on ${plan}`
+    : `This quote holds a first charge for ${days} days rather than on ${plan}`;
 }
 
 /**

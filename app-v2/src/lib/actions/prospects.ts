@@ -21,12 +21,13 @@ import {
   setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
 import { buildAndPublishBillingQuote, resolveSender } from "@/lib/billing/publishBillingQuote";
-import { analysisFromQuoteConfig, marginFloorBlockers } from "@/lib/pricing";
+import { analysisFromQuoteConfig, marginFloorBlockers, monthlyRevenueFloorBlockers } from "@/lib/pricing";
 import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "@/lib/actions/pricing";
 import {
-  buildQuote, isAllowedForQuoteType, isProcessingQuote, longestBillingDelayDays,
+  buildQuote, describeDelayDeviation, isAllowedForQuoteType, isProcessingQuote,
+  longestBillingDelayDays, planDefaultBillingDelayDays,
   processesCardNotPresentOnly, quoteHasProcessing,
-  quoteNoteBlockers, quoteTypeOf, toQuoteLine, DELAY_NOTE_THRESHOLD_DAYS,
+  quoteNoteBlockers, quoteTypeOf, toQuoteLine,
 } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
 import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
@@ -307,7 +308,7 @@ async function syncBillingContact(
  * strikes — the rep's own copy is never lost, even when the push is.
  */
 async function mirrorQuoteNote(
-  app: Pick<MerchantApplication, "id" | "hubspotDealId" | "quoteNote" | "quoteLines">,
+  app: Pick<MerchantApplication, "id" | "hubspotDealId" | "quoteNote" | "quoteLines" | "quoteType">,
   previous: string | null,
 ): Promise<void> {
   const note = (app.quoteNote ?? "").trim();
@@ -316,13 +317,19 @@ async function mirrorQuoteNote(
 
   // The delay is what makes this note mandatory, so it is what the note has
   // to open with — a reason with no number beside it is a sentence nobody can
-  // check. Below the threshold the note stands on its own: the card is already
-  // labelled "Billing Notes", so a preamble saying so would only push the
+  // check. A quote billing exactly when its plan says to needs no preamble:
+  // the card is already labelled "Billing Notes", so one would only push the
   // rep's actual sentence further down a one-line property.
-  const delay = longestBillingDelayDays(app.quoteLines ?? []);
-  const text = delay > DELAY_NOTE_THRESHOLD_DAYS
-    ? `Billing on this quote starts after ${delay} days ` +
-      `(past the ${DELAY_NOTE_THRESHOLD_DAYS}-day default). The rep's reason: ${note}`
+  //
+  // Measured exactly as `quoteNoteBlockers` measures it — recurring lines
+  // only, against the PLAN's own default — so the record can't describe a
+  // deviation the rep was never asked about, or miss one they were.
+  const quoteType = quoteTypeOf(app.quoteType);
+  const recurring = (app.quoteLines ?? []).filter(l => l.billingFrequency !== "one_time");
+  const delay = longestBillingDelayDays(recurring);
+  const expected = planDefaultBillingDelayDays(quoteType);
+  const text = recurring.length && delay !== expected
+    ? `${describeDelayDeviation(delay, expected)}. The rep's reason: ${note}`
     : note;
 
   try {
@@ -530,9 +537,16 @@ export type QuotePick = { hubspotProductId: string; qty: number };
 const ZERO_FEE_OVERRIDES = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
 
 /**
- * Refuses when `quoteRates` don't clear AIO's margin floor for this volume —
- * the shared guard both `createProspectAction` and `saveQuoteConfigurationAction`
- * call. A no-op with no basis to check (no statement, no rep-entered
+ * Refuses when `quoteRates` don't clear AIO's margin floor for this volume, OR
+ * when they leave AIO under `MIN_MONTHLY_PROCESSING_REVENUE` a month on this
+ * merchant (2026-10-15) — the shared guard both `createProspectAction` and
+ * `saveQuoteConfigurationAction` call. Two independent tests off ONE preview:
+ * they are measured on different margins and neither implies the other, so a
+ * quote has to pass both. Both are reported together rather than one at a
+ * time, so a rep raising a rate to clear the first doesn't then discover the
+ * second.
+ *
+ * A no-op with no basis to check (no statement, no rep-entered
  * volume/ticket): the same `hasFloorBasis`/`hasVolumeBasis` condition the two
  * client forms already gate their own preview on, because there is no floor to
  * clear until there's a volume to clear it against — a config-less or
@@ -560,7 +574,7 @@ async function assertRateAboveFloor(
     // card-present blend that can never happen.
     cardPresentPct: cardNotPresentOnly ? 0 : null,
   });
-  const blockers = marginFloorBlockers(pricing);
+  const blockers = [...marginFloorBlockers(pricing), ...monthlyRevenueFloorBlockers(pricing)];
   if (blockers.length) throw new Error(blockers.join(" "));
 }
 
@@ -623,7 +637,7 @@ async function deriveQuoteLines(
   // an ACH mandate nobody can amend.
   const [maxDiscountPercent, limits] = await Promise.all([getMaxDiscountPercent(), getQuoteLimits()]);
   const built = buildQuote(quoteType, lines, channels, catalog.all, adjustments, maxDiscountPercent, limits);
-  const blockers = [...built.blockers, ...quoteNoteBlockers(built.quoteLines, note)];
+  const blockers = [...built.blockers, ...quoteNoteBlockers(built.quoteLines, note, quoteType)];
   if (blockers.length) throw new Error(blockers.join(" "));
 
   return {
@@ -689,9 +703,9 @@ export async function createProspectAction(input: {
    */
   adjustments?: QuoteAdjustments | null;
   /**
-   * The rep's note on this quote. Optional, and REQUIRED when a first charge
-   * is held past DELAY_NOTE_THRESHOLD_DAYS — `deriveQuoteLines` refuses
-   * without one. Mirrored onto the HubSpot deal below.
+   * The rep's note on this quote. Optional, and REQUIRED when the first
+   * charge doesn't sit on the plan's own default — `deriveQuoteLines` refuses
+   * without one (see `quoteNoteBlockers`). Mirrored onto the HubSpot deal below.
    */
   quoteNote?: string | null;
   // Required — the Company & Deal section makes both mandatory before submit
@@ -918,7 +932,8 @@ export async function saveQuoteConfigurationAction(input: {
   /**
    * The rep's note on this quote. Undefined keeps whatever the row already
    * has — a caller that doesn't offer the box must not erase one. Required
-   * when a first charge is held past DELAY_NOTE_THRESHOLD_DAYS.
+   * when the first charge doesn't sit on the plan's own default
+   * (`quoteNoteBlockers`).
    */
   quoteNote?: string | null;
   /** What this quote is priced on. Omitted keeps whatever the row already has. */

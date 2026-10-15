@@ -143,6 +143,32 @@ export const DEFAULT_QUOTE_RATES: QuoteRates = {
  */
 export const DEFAULT_CARD_PRESENT_PCT = 0.95;
 
+/**
+ * The least AIO will process a merchant's cards for: $10 a month of its own
+ * processing revenue (product owner, 2026-10-15 — "dont allow the montly
+ * revenue to be less than 10 dollars", and "dont allow rep to change CP rate
+ * to make monthly rev less than 10$"). The two are one rule: the rate is the
+ * only input a rep moves, so refusing the quote IS refusing the rate.
+ *
+ * Measured on `commissionMargin × monthlyVolume` — wholesale.ts's Total Take
+ * Rate minus the ticket-indexed Wholesale %, the SAME margin
+ * `payment_processing_arr` is built from (lib/billing/processingArr.ts), so
+ * the figure a rep is held to is the figure their own quote reports and the
+ * deal eventually carries. Deliberately NOT `derivePricing`'s
+ * `appliedTargetMargin`: that one is revenue over interchange and is what
+ * `belowMarginFloor` already refuses against, a separate and still-secret
+ * test this one does not replace. A quote has to clear both.
+ *
+ * Unlike that floor, this one is NOT a secret and is not padded — the dollar
+ * figure is shown to the rep live beside the rates, because a refusal they
+ * can't see themselves out of is a rate they have to guess at.
+ *
+ * In this file rather than pricing.ts for the same reason
+ * MAX_PLAUSIBLE_CARD_RATE is: the rate surfaces are client components, and
+ * importing pricing.ts into one would ship AIO's true margin floors with it.
+ */
+export const MIN_MONTHLY_PROCESSING_REVENUE = 10;
+
 export type DealStage =
   | "prospect_created"      // rep created a prospect + set a margin target, no link sent yet
   | "lead_link_sent"        // rep sent the tokenized self-serve upload link, awaiting customer
@@ -983,7 +1009,7 @@ export type MerchantApplication = {
   quoteAcceptedAt: string | null;
   // The rep's own note on this quote, mirrored onto the HubSpot deal as a
   // note owned by QUOTE_NOTE_WATCHER. Optional in general, and REQUIRED when a
-  // first charge is held longer than DELAY_NOTE_THRESHOLD_DAYS — see
+  // first charge doesn't sit on the plan's own default — see
   // `quoteNoteBlockers`. Frozen with the rest of the quote at acceptance,
   // like everything else `saveQuoteConfigurationAction` writes.
   quoteNote: string | null;

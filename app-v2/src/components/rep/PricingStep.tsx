@@ -3,7 +3,10 @@
 import { useState, useEffect, useMemo } from "react";
 import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import { fmt$, fmtPct2 } from "@/lib/utils";
-import { averageTicketOf, DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import {
+  averageTicketOf, DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES,
+  MIN_MONTHLY_PROCESSING_REVENUE, SELECTABLE_PRICING_MODELS,
+} from "@/types/merchant";
 import type { StatementAnalysis, ProposalOutput, Processor, ProcessorTier, PricingModel, QuoteRates } from "@/types/merchant";
 import RateFields from "./RateFields";
 import RateSuggestion from "./RateSuggestion";
@@ -110,6 +113,18 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   // — see /admin?view=commissions (CommissionsPanel) for the full picture.
   const belowMin    = pricing?.belowMarginFloor ?? false;
   const earnedMargin = pricing?.appliedTargetMargin ?? null;
+  // The $10-a-month minimum on AIO's own processing revenue (2026-10-15). It
+  // refuses the proposal here for the same reason `belowMin` does: a proposal
+  // is a document handed to a merchant, and a rate this step let through is
+  // one `assertRateAboveFloor` will refuse to save afterwards.
+  //
+  // The standing revenue/ARR readout the other two rep surfaces now carry is
+  // deliberately NOT here (product owner, 2026-10-15): this is the step a rep
+  // works through with the merchant in the room — the same reason the margin
+  // slider was taken off it — so AIO's own take appears only as this refusal,
+  // inside the AIO Internal disclosure, and only when something is wrong.
+  const belowRevenueFloor = pricing?.belowMonthlyRevenueFloor ?? false;
+  const monthlyAioRevenue = pricing?.monthlyProcessingRevenue ?? null;
 
   const generate = async () => {
     setLoading(true);
@@ -320,6 +335,14 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
                   <strong>Below margin floor.</strong> This rate earns less than AIO&rsquo;s minimum for this volume. Raise it to generate the proposal.
                 </div>
               )}
+              {belowRevenueFloor && (
+                <div className={styles.alertDanger}>
+                  <strong>Under the {fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} monthly minimum.</strong> At
+                  this rate AIO earns {fmt$(monthlyAioRevenue ?? 0)} a month on this merchant&rsquo;s
+                  processing. Raise the rate to generate the proposal, or this merchant is too small
+                  to process for.
+                </div>
+              )}
               </div>
             )}
           </div>
@@ -377,7 +400,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
         <button
           className={styles.btnPrimary}
           style={{ opacity: (loading || !pricing) ? 0.6 : 1 }}
-          disabled={loading || !pricing || belowMin}
+          disabled={loading || !pricing || belowMin || belowRevenueFloor}
           onClick={generate}
         >
           {loading ? "Preparing proposal…" : "Continue to Products →"}

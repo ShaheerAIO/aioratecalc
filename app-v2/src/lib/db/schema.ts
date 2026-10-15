@@ -233,7 +233,7 @@ export const merchantApplications = pgTable("merchant_applications", {
   quoteAcceptedAt: timestamp("quote_accepted_at", { withTimezone: true }),
   // The rep's note on this quote, mirrored onto the HubSpot deal. Nullable:
   // most quotes have nothing to say. It becomes REQUIRED only when a first
-  // charge is held past DELAY_NOTE_THRESHOLD_DAYS — see `quoteNoteBlockers`.
+  // charge doesn't sit on the plan's own default — see `quoteNoteBlockers`.
   quoteNote: text("quote_note"),
   analysis: jsonb("analysis").$type<StatementAnalysis | null>(),
   proposal: jsonb("proposal").$type<ProposalOutput | null>(),

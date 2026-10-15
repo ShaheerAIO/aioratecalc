@@ -27,7 +27,9 @@ import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import type { RoleScopedPricing } from "@/lib/pricing";
 import { ORDER_POINT_CHANNELS, processesCardNotPresentOnly, quoteHasProcessing } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
-import { DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, SELECTABLE_PRICING_MODELS } from "@/types/merchant";
+import {
+  DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, MIN_MONTHLY_PROCESSING_REVENUE, SELECTABLE_PRICING_MODELS,
+} from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo, PricingModel, QuoteAdjustments, QuoteRates, QuoteType } from "@/types/merchant";
 import type { ProspectPrefill } from "@/lib/hubspotPrefill";
 import { buildProspectPrefillForContact, contactOptionLabel } from "@/lib/hubspotPrefill";
@@ -97,8 +99,15 @@ function NewProspectFlow() {
   // comment — the margin is AIO's own forecast, not a secret, and the
   // commission is derived from it), so holding onto them here is no wider
   // than what this page already fetches.
+  // `monthlyProcessingRevenue`/`processingArr`/`belowMonthlyRevenueFloor` are
+  // the 2026-10-15 addition — rep-safe for the same reason the two above are
+  // (see RoleScopedPricing's own doc comments), and they have to come from
+  // here rather than from a local calculation because the wholesale table
+  // they're built on sits behind pricing.ts.
   const [floorCheck, setFloorCheck] = useState<Pick<
-    RoleScopedPricing, "belowMarginFloor" | "appliedTargetMargin" | "projectedCommission"
+    RoleScopedPricing,
+    | "belowMarginFloor" | "appliedTargetMargin" | "projectedCommission"
+    | "monthlyProcessingRevenue" | "processingArr" | "belowMonthlyRevenueFloor"
   > | null>(null);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
@@ -353,6 +362,19 @@ function NewProspectFlow() {
       "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote."
     );
   }
+  // The $10-a-month minimum (2026-10-15). A SECOND refusal, independent of the
+  // one above — different margin, neither implies the other, and the server
+  // re-runs both (`assertRateAboveFloor`). Unlike that one this message can
+  // name its own figures: see `monthlyRevenueFloorBlockers` in pricing.ts for
+  // why stating this number is safe, and why the sentence has to allow that
+  // raising the rate may not be enough.
+  if (floorCheck?.belowMonthlyRevenueFloor) {
+    hardBlocks.push(
+      `At this rate AIO earns ${fmt$(floorCheck.monthlyProcessingRevenue ?? 0)} a month on this ` +
+      `merchant's processing, under the ${fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} minimum. Raise the ` +
+      `card rate, or this merchant is too small to process for.`
+    );
+  }
   // A confirmation, not a veto — but it has to be answered, or it is a banner
   // nobody reads. One click clears it, and the whole quote is priced on this
   // number: the rate, the savings and the floor above.
@@ -396,6 +418,9 @@ function NewProspectFlow() {
               belowMarginFloor: p.belowMarginFloor,
               appliedTargetMargin: p.appliedTargetMargin,
               projectedCommission: p.projectedCommission,
+              monthlyProcessingRevenue: p.monthlyProcessingRevenue,
+              processingArr: p.processingArr,
+              belowMonthlyRevenueFloor: p.belowMonthlyRevenueFloor,
             });
           }
         })
@@ -568,26 +593,12 @@ function NewProspectFlow() {
         </div>
       )}
 
-      {/* Card present is rep-editable; card not present is locked to AIO's
-          rate card and renders disabled — see RateFields.tsx. There's no
-          "one rate for every card" collapse any more (2026-10-13): that
-          relied on being able to set the CNP lane to match, which locking it
-          rules out. */}
-      {/* freshQuote: this page always starts a new quote at the flat
-          standard rate, often before a volume/ticket basis exists — see
-          RateFields.tsx's doc comment on that prop. */}
-      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} />
-      {/* Sits under the boxes rather than above them: the rep reads the rate
-          they're quoting first, and what the card would have said second. It
-          now ALWAYS applies what it suggests (2026-10-13, "get rid of the
-          'use it' and make it always override") — see RateSuggestion.tsx. */}
-      <RateSuggestion
-        monthlyVolume={volume}
-        avgTicket={ticket}
-        value={quoteRates}
-        onChange={setQuoteRates}
-      />
-
+      {/* The basis comes FIRST, above the rates (2026-10-15, product owner:
+          "move monthly volume and avg ticket to sit above the rates"). They
+          are what the rate is read off — the matrix picks a card-present rate
+          from this volume and this ticket, and the revenue readout underneath
+          is figured on them — so the panel now runs in the order the numbers
+          are decided rather than putting its inputs under its outputs. */}
       <div className={styles.basisRow}>
         <label className={styles.field}>
           <span className={styles.label}>Monthly volume</span>
@@ -634,6 +645,55 @@ function NewProspectFlow() {
           </button>
         </div>
       )}
+
+      {/* Card present is rep-editable; card not present is locked to AIO's
+          rate card and renders disabled — see RateFields.tsx. There's no
+          "one rate for every card" collapse any more (2026-10-13): that
+          relied on being able to set the CNP lane to match, which locking it
+          rules out. */}
+      {/* freshQuote: this page always starts a new quote at the flat
+          standard rate, often before a volume/ticket basis exists — see
+          RateFields.tsx's doc comment on that prop. */}
+      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} />
+      {/* Sits under the boxes rather than above them: the rep reads the rate
+          they're quoting first, and what the card would have said second. It
+          now ALWAYS applies what it suggests (2026-10-13, "get rid of the
+          'use it' and make it always override") — see RateSuggestion.tsx. */}
+      <RateSuggestion
+        monthlyVolume={volume}
+        avgTicket={ticket}
+        value={quoteRates}
+        onChange={setQuoteRates}
+      />
+
+      {/* What the rate the rep just typed is worth to AIO (2026-10-15, product
+          owner: "show montly revenue and yearly arr in the card rate box").
+          Directly under the boxes, because it is the one thing on this screen
+          that moves when they change — and because the $10 minimum below is
+          otherwise a refusal with nothing to steer by.
+
+          Both figures come from the SERVER's role-scoped preview, never
+          derived here: the wholesale table they're built on lives behind
+          pricing.ts, which a client page must not import (see `floorCheck`). */}
+      {floorCheck?.monthlyProcessingRevenue != null && (
+        <div className={styles.revenueRow} data-below={floorCheck.belowMonthlyRevenueFloor || undefined}>
+          <span className={styles.revenueCell}>
+            <span className={styles.revenueLabel}>AIO monthly revenue</span>
+            <span className={styles.revenueValue}>{fmt$(floorCheck.monthlyProcessingRevenue)}</span>
+          </span>
+          <span className={styles.revenueCell}>
+            <span className={styles.revenueLabel}>Yearly ARR</span>
+            <span className={styles.revenueValue}>{fmt$(floorCheck.processingArr ?? 0)}</span>
+          </span>
+        </div>
+      )}
+      {floorCheck?.belowMonthlyRevenueFloor && (
+        <p className={styles.revenueFloorNote} role="alert">
+          Under the {fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} a month AIO processes for. Raise the
+          card-present rate, or this merchant is too small to board.
+        </p>
+      )}
+
       <p className={styles.prefillNote}>
         {basisHalfSet
           ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — until both are set, this quote has no rate on it.`

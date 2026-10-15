@@ -36,7 +36,7 @@ import {
   isTabletProduct,
   longestBillingDelayDays,
   quoteNoteBlockers,
-  DELAY_NOTE_THRESHOLD_DAYS,
+  planDefaultBillingDelayDays,
   QUOTE_NOTE_WATCHER,
   lineDiscountAmount,
   lineListAmount,
@@ -400,7 +400,7 @@ export default function ProductConfigurator({
       // condition on sending one. The server re-runs the same check against
       // its own copy of the note (`deriveQuoteLines`), so this is the
       // courtesy and that is the authority.
-      const noteBlockers = quoteNoteBlockers(quote.quoteLines, note);
+      const noteBlockers = quoteNoteBlockers(quote.quoteLines, note, planned);
       return noteBlockers.length ? { ...quote, blockers: [...quote.blockers, ...noteBlockers] } : quote;
     },
     [planned, pickedLines, channels, fullCatalog, adjustments, maxDiscountPercent, limits, note]
@@ -1346,24 +1346,31 @@ export default function ProductConfigurator({
     );
   }
 
-  // Why this quote delays what it delays. Required past the plan's own 60
-  // days — Elizabeth Phillips, 2026-10-12: "force them to leave a note
-  // explaining why and tagging me automatically". It sits with the billing
-  // controls rather than near the send button because this is where the rep
-  // makes the decision it is asking about.
-  const longestDelay = longestBillingDelayDays(quoteLines);
-  const noteRequired = longestDelay > DELAY_NOTE_THRESHOLD_DAYS;
+  // Why this quote bills when it bills. Required whenever the first charge
+  // sits anywhere other than the plan's own default — product owner,
+  // 2026-10-15, widening Elizabeth Phillips' 2026-10-12 "longer than 60 days"
+  // rule in both directions (see `quoteNoteBlockers`). It sits with the
+  // billing controls rather than near the send button because this is where
+  // the rep makes the decision it is asking about.
+  //
+  // Measured the way the blocker measures it, not independently: recurring
+  // lines only, against this plan's default.
+  const planDelay = planDefaultBillingDelayDays(planned);
+  const longestDelay = longestBillingDelayDays(recurringLines);
+  const noteRequired = recurringLines.length > 0 && longestDelay !== planDelay;
   const noteControl = onNoteChange ? (
     <label className={styles.noteField} data-required={noteRequired || undefined}>
       <span className={styles.adjustLabel}>
-        {noteRequired ? `Why billing starts after ${longestDelay} days — required` : "Note (optional)"}
+        {noteRequired
+          ? `${longestDelay === 0 ? "Why billing starts at checkout" : `Why billing starts after ${longestDelay} days`} — required`
+          : "Note (optional)"}
       </span>
       <textarea
         className={styles.noteInput}
         rows={2}
         value={note}
         placeholder={noteRequired
-          ? "The reason this quote holds the first charge longer than usual."
+          ? `The reason this quote doesn't bill on ${planDelay > 0 ? `the plan's ${planDelay} days` : "the plan's start at checkout"}.`
           : "Anything about this quote worth recording."}
         onChange={e => onNoteChange(e.target.value)}
         aria-label="Note on this quote"

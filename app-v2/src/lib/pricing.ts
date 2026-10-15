@@ -9,10 +9,14 @@
 // components that need it (PricingStep, the prospect form) can import it
 // without pulling in MARGIN_REQS — see its doc comment there for the full
 // history of the 90→95 disagreement this constant fixes.
-import { DEFAULT_QUOTE_RATES, DEFAULT_CARD_PRESENT_PCT, MAX_PLAUSIBLE_CARD_RATE } from "@/types/merchant";
+import {
+  DEFAULT_QUOTE_RATES, DEFAULT_CARD_PRESENT_PCT, MAX_PLAUSIBLE_CARD_RATE,
+  MIN_MONTHLY_PROCESSING_REVENUE,
+} from "@/types/merchant";
 import type { ProcessorTier, QuoteConfig, QuoteRates, StatementAnalysis } from "@/types/merchant";
 import { totalRevenue, totalTakeRate, wholesalePctFor } from "@/lib/wholesale";
 import { commissionFromTotalArr, sumArrOrNull, type CommissionFromArr } from "@/lib/commission";
+import { fmt$ } from "@/lib/utils";
 
 export const MARGIN_REQS = [
   { maxVol: 25000,    minMargin: 0.0067, desiredMargin: 0.0133,   maxMargin: 0.0200, desiredArr: 2000 },
@@ -380,6 +384,27 @@ export type RoleScopedPricing = DerivedPricing & {
    * back out AIO's cost basis, not a bug to solve here.
    */
   projectedCommission: CommissionFromArr;
+  /**
+   * What AIO itself earns on this merchant's processing at the quoted rates —
+   * a month of it, and the same figure annualised (`payment_processing_arr`'s
+   * own number; see `projectedProcessingRevenue`). Null when there is no
+   * volume/ticket basis to compute against, or when a quoted rate is past
+   * `MAX_PLAUSIBLE_CARD_RATE` and the inputs are therefore a typo.
+   *
+   * Shown to reps verbatim (2026-10-15 — "show montly revenue and yearly arr
+   * in the card rate box"). Rep-safe for the same reason `projectedCommission`
+   * is: it is built on the wholesale table, which is AIO's own forecast of its
+   * own revenue, not the padded margin floor this type keeps secret.
+   */
+  monthlyProcessingRevenue: number | null;
+  processingArr: number | null;
+  /**
+   * `monthlyProcessingRevenue` is under `MIN_MONTHLY_PROCESSING_REVENUE`.
+   * False when there is no basis to judge — the same posture
+   * `belowMarginFloor` takes, and the reason a quote with no volume on it
+   * still goes out with priced lines and no rate.
+   */
+  belowMonthlyRevenueFloor: boolean;
 };
 
 // Returns a pricing view scoped to who's asking. Admins get the true
@@ -410,7 +435,19 @@ export function derivePricingForRole(
   const tier = getMarginFloor(vol);
   const trueAdyenCostRate = activeTier ? adyenRateOnVolume(activeTier, analysis.totalVolume, analysis.totalTransactions) : 0;
   const belowCostFloor = !!activeTier && appliedMargin - trueAdyenCostRate < 0;
-  const projectedCommission = commissionFromTotalArr(sumArrOrNull(projectedProcessingArr(analysis, rates), recurringArr));
+  const processing = projectedProcessingRevenue(analysis, rates);
+  // Only a POSITIVE annual figure feeds the commission — unchanged, and
+  // deliberately not folded into the new floor below: a commission on a
+  // negative forecast is nonsense, where a negative forecast is precisely
+  // what the floor has to see.
+  const projectedCommission = commissionFromTotalArr(
+    sumArrOrNull(processing && processing.annual > 0 ? processing.annual : null, recurringArr)
+  );
+  const revenueView = {
+    monthlyProcessingRevenue: processing ? processing.monthly : null,
+    processingArr: processing ? processing.annual : null,
+    belowMonthlyRevenueFloor: !!processing && processing.monthly < MIN_MONTHLY_PROCESSING_REVENUE,
+  };
 
   if (role === "admin") {
     return {
@@ -421,6 +458,7 @@ export function derivePricingForRole(
       desiredMargin: tier.desiredMargin,
       maxMargin: tier.maxMargin,
       projectedCommission,
+      ...revenueView,
     };
   }
 
@@ -436,6 +474,7 @@ export function derivePricingForRole(
     desiredMargin: tier.desiredMargin,
     maxMargin: tier.maxMargin,
     projectedCommission,
+    ...revenueView,
   };
 }
 
@@ -449,10 +488,10 @@ export function derivePricingForRole(
  * no number, not a typo annualised), reused rather than reimplemented: both
  * this and processingArr.ts call the identical wholesale.ts primitives.
  */
-function projectedProcessingArr(
+function projectedProcessingRevenue(
   analysis: Parameters<typeof derivePricing>[0],
   rates: QuoteRates | null | undefined
-): number | null {
+): { monthly: number; annual: number } | null {
   const vol = analysis.totalVolume || 0;
   const txns = analysis.totalTransactions || 0;
   if (!(vol > 0) || !(txns > 0)) return null;
@@ -466,8 +505,15 @@ function projectedProcessingArr(
   const revenue = totalRevenue(quoted.cardPresentRate, vol, avgTicket, quoted.perTransactionFee);
   const takeRate = totalTakeRate(revenue, vol);
   const margin = takeRate - wholesalePctFor(avgTicket);
-  const arr = margin * vol * 12;
-  return Number.isFinite(arr) && arr > 0 ? Math.round(arr) : null;
+  const monthly = margin * vol;
+  if (!Number.isFinite(monthly)) return null;
+  // NOT clamped at zero, and the commission caller below is what still drops
+  // a non-positive figure. A thin or negative margin is exactly what
+  // `MIN_MONTHLY_PROCESSING_REVENUE` exists to refuse, and a null here would
+  // read as "no basis to judge" — which is the one answer that lets it
+  // through. Annualised as the monthly × 12 so the two figures a rep reads
+  // side by side can never disagree by a rounding step.
+  return { monthly, annual: Math.round(monthly * 12) };
 }
 
 /**
@@ -508,5 +554,35 @@ export function marginFloorBlockers(pricing: Pick<RoleScopedPricing, "belowMargi
   if (!pricing.belowMarginFloor) return [];
   return [
     "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote.",
+  ];
+}
+
+/**
+ * The $10-a-month minimum on AIO's own processing revenue (product owner,
+ * 2026-10-15). A SECOND, independent refusal alongside `marginFloorBlockers`
+ * — a quote has to clear both — and the two are deliberately unalike:
+ *
+ *  - The margin floor is a RATE test against a padded, never-disclosed table,
+ *    so its message states no figure and a rep can only ever hear "yes" or
+ *    "no". This one is a DOLLAR test against a number the rep is shown live
+ *    beside the rates, so it names both sides. Stating it costs nothing: a
+ *    merchant doing $3,000 a month clears the margin floor comfortably and
+ *    still isn't worth boarding, and that is what this sentence has to say.
+ *  - It therefore binds hardest on SMALL volume, where a rate rise can't
+ *    always fix it — hence "raise the rate, or this merchant is too small",
+ *    rather than pointing at a rate that may have no reachable value.
+ *
+ * `MIN_MONTHLY_PROCESSING_REVENUE` lives in types/merchant.ts, not here, so
+ * the rep surfaces can name the same number without bundling MARGIN_REQS.
+ */
+export function monthlyRevenueFloorBlockers(
+  pricing: Pick<RoleScopedPricing, "belowMonthlyRevenueFloor" | "monthlyProcessingRevenue">
+): string[] {
+  if (!pricing.belowMonthlyRevenueFloor) return [];
+  const earned = pricing.monthlyProcessingRevenue ?? 0;
+  return [
+    `At this rate AIO earns ${fmt$(earned)} a month on this merchant's processing, under the ` +
+    `${fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} minimum. Raise the card rate, or this merchant is ` +
+    `too small to process for.`,
   ];
 }

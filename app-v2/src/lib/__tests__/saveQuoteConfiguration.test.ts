@@ -113,6 +113,14 @@ const PICKABLE = FULL_CATALOG.filter(
   c => c.hubspotProductId === "217445755632" || c.hubspotProductId === MENU_BOARD_ID
 );
 
+// The 60-day billing start the two POS plans seed onto their recurring lines
+// the moment a rep clicks the plan (planDefaultBillingStart, quoting.ts), on
+// the platform line it lands on here. Every save below that isn't ABOUT
+// billing starts carries it, because a quote billing anywhere other than its
+// plan's default now needs a note (quoteNoteBlockers, 2026-10-15) — these
+// tests are about re-derivation and the acceptance guard, not about that.
+const PLAN_START = { "335283119838": { billingStart: { mode: "days" as const, days: 60 } } };
+
 const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
   ({
     id: "app-1",
@@ -190,6 +198,7 @@ describe("saveQuoteConfigurationAction — acceptance guard", () => {
         applicationId: "app-1",
         picks: [{ hubspotProductId: "217445755632", qty: 1 }],
         channels: [],
+        adjustments: PLAN_START,
         // Above the rep-padded floor for this volume (~0.01005) — this test is
         // about the acceptance guard, not the margin floor.
         pricingModel: "2-tier",
@@ -206,6 +215,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       applicationId: "app-1",
       picks: [{ hubspotProductId: "217445755632", qty: 1 }],
       channels: [],
+      adjustments: PLAN_START,
       // Above the rep-padded floor for this volume (~0.01005) — this test is
       // about re-derivation, not the margin floor.
       pricingModel: "2-tier",
@@ -347,6 +357,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       applicationId: "app-1",
       picks: rehydratedPicks,
       channels: [],
+      adjustments: PLAN_START,
       // Above the rep-padded floor for this volume (~0.01005) — this test is
       // about line-item deduplication, not the margin floor.
       pricingModel: "2-tier",

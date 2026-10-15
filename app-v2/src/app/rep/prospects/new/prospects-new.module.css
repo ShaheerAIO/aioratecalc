@@ -171,18 +171,70 @@
 .basisRow .affix { display: flex; }
 .basisRow .rateInput { width: 100%; }
 
+/* Above the rates since 2026-10-15, so the rule that separated it from them
+   is now a bottom border rather than a top one — it still divides the basis
+   from the rates, it is just on the other side of the pair now. */
 .basisRow {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   gap: var(--space-md);
   align-items: end;
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--rule);
+}
+
+.basisRow .field { margin-bottom: 0; }
+
+/* What this rate earns AIO — the two figures sit side by side under the rate
+   boxes they move with. Tabular numerals so a rep comparing two rates is
+   comparing digits in the same columns. */
+.revenueRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-lg);
   margin-top: var(--space-md);
   padding-top: var(--space-md);
   border-top: 1px solid var(--rule);
 }
 
-.basisRow .field { margin-bottom: 0; }
-.basisRow + .prefillNote { margin: var(--space-sm) 0 0; }
+.revenueCell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+}
+
+.revenueLabel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.revenueValue {
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* Under the $10 minimum: the figures themselves go red, so the number the
+   rep is steering by is the thing that reads as wrong. */
+.revenueRow[data-below] .revenueValue { color: var(--danger); }
+
+.revenueFloorNote {
+  margin: var(--space-2xs) 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--danger);
+}
+
+/* The panel's closing note. It used to inherit its spacing from an adjacency
+   rule on .basisRow, which moved above the rates on 2026-10-15 — so the gap
+   is attached to its position (last in the block) rather than to whichever
+   element happens to precede it now. */
+.rateBlock .prefillNote:last-child { margin: var(--space-sm) 0 0; }
 
 .linkBtn {
   background: none;
