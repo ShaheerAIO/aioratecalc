@@ -28,7 +28,6 @@ import {
   describeBillingStart,
   groupProducts,
   isAllowedForQuoteType,
-  isCompedService,
   isPosRequiringTerminal,
   isPreAuthProduct,
   isKitReplacementProduct,
@@ -1652,7 +1651,13 @@ export default function ProductConfigurator({
         return { tag: "Auto", why: `${built.softwareLicense.screens} screens, ${INCLUDED_SCREEN_COUNT} included in the plan` };
       }
       if (INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === l.hubspotProductId)) {
-        return { tag: isCompedService(l) && lineNetAmount(l) === 0 ? "Comped" : "Included" };
+        // ONE word for everything AIO gives away, whatever gave it away: a
+        // policy comp at $0 and a service that simply comes with the plan are
+        // the same fact to anyone reading the quote, and "Comped" was the one
+        // chip on this screen that is AIO vocabulary rather than English
+        // (Shaheer, 2026-10-16). `isCompedService` still decides the MONEY —
+        // see `applyServiceComp` — this only decides what the line is called.
+        return { tag: "Included" };
       }
       return {};
     };

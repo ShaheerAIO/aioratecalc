@@ -42,7 +42,10 @@
 // percentage (5.00%, 10.00%) that is exact in bps and not in a float, feeding
 // a number that pays people.
 
-import { isCompedService, lineNetAmount, quoteTotals } from "@/lib/quoting";
+import {
+  isCompedService, isPreAuthProduct, lineNetAmount,
+  PROCESSING_DISCLOSURE_PRODUCT, quoteTotals,
+} from "@/lib/quoting";
 import type { QuoteLine } from "@/types/merchant";
 
 // ── Processing commission ───────────────────────────────────────────────────
@@ -279,12 +282,33 @@ export function isPolicyComped(line: QuoteLine): boolean {
   return isCompedService(line) && lineNetAmount(line) === 0;
 }
 
+/**
+ * A line that is not a sale at all: the $0 rate-disclosure line, which exists
+ * to state this merchant's card rates on the document, and the $0.50 pre-auth,
+ * which exists to clear HubSpot's checkout minimum. Both are derived and
+ * untouchable — no rep put them on the quote and nobody could take them off.
+ *
+ * It matters that this is NOT `no_cost`. "No cost on file" is a live warning
+ * that someone should go and price a product in HubSpot (POS Unit, mPOS and
+ * both tablets genuinely are unpriced), and these two were landing in it —
+ * printing "n/a" beside them on the quote and listing them in the admin panel
+ * as data gaps to fix, when there is nothing to fix and never will be.
+ */
+export function isNotCommissionable(line: QuoteLine): boolean {
+  return (
+    line.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId ||
+    isPreAuthProduct(line.hubspotProductId, line.name)
+  );
+}
+
 /** Why a line produced the figure it did — or produced none. */
 export type LineCommissionStatus =
   /** A real figure, from a real cost and at least one real rate. */
   | "computed"
   /** AIO comps it (in-plan, in-package, or a comped service) — earns nothing. */
   | "included"
+  /** Never a sale — the rate disclosure and the pre-auth. See `isNotCommissionable`. */
+  | "not_commissionable"
   /** Recurring: not hardware dollars. Carries a rate only by mistake. */
   | "recurring"
   /** One-time, but no "Cost to Rep" on file — unknown, not zero. */
@@ -326,8 +350,10 @@ export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission 
   });
 
   if (line.billingFrequency !== "one_time") return none("recurring");
-  // Before the cost check, so a comped line with no cost on file reads as
-  // "AIO gives this away" rather than as missing data someone should go fix.
+  // Both before the cost check, so a line with no cost on file reads as "AIO
+  // gives this away" / "this was never a sale" rather than as missing data
+  // someone should go fix.
+  if (isNotCommissionable(line)) return none("not_commissionable");
   if (isPolicyComped(line)) return none("included");
 
   const cost = line.costToRep ?? null;

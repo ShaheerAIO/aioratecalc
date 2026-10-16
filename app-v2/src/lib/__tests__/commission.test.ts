@@ -12,6 +12,7 @@ import {
   quoteHardwareCommission,
   sumArrOrNull,
 } from "@/lib/commission";
+import { PRE_AUTH_PRODUCT, PROCESSING_DISCLOSURE_PRODUCT } from "@/lib/quoting";
 import type { QuoteLine } from "@/types/merchant";
 
 const line = (over: Partial<QuoteLine> = {}): QuoteLine => ({
@@ -319,6 +320,26 @@ describe("quoteHardwareCommission", () => {
     const result = quoteHardwareCommission(lines);
     expect(result.missingCost).toEqual(["Customer Facing Display"]);
     expect(result.rep).toBe(0);
+  });
+
+  it("leaves the rate disclosure and the pre-auth out of missingCost — they were never a sale", () => {
+    // Both are derived, untouchable and will never carry a cost; before
+    // 2026-10-16 they read as `no_cost`, so the AE's quote printed "n/a"
+    // beside them and the admin gaps panel listed them as data to go and fix.
+    const lines = [
+      hwLine({
+        hubspotProductId: PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId,
+        name: PROCESSING_DISCLOSURE_PRODUCT.name, qty: 1, unitPrice: 0, costToRep: null,
+      }),
+      hwLine({
+        hubspotProductId: PRE_AUTH_PRODUCT.hubspotProductId,
+        name: PRE_AUTH_PRODUCT.name, qty: 1, unitPrice: 0.5, costToRep: null,
+      }),
+      hwLine({ hubspotProductId: "b", name: "Customer Facing Display", costToRep: null }),
+    ];
+    const result = quoteHardwareCommission(lines);
+    expect(result.perLine.map(l => l.status)).toEqual(["not_commissionable", "not_commissionable", "no_cost"]);
+    expect(result.missingCost).toEqual(["Customer Facing Display"]);
   });
 
   it("is all zero/empty for an empty quote", () => {

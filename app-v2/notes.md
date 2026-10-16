@@ -540,7 +540,21 @@ it comes from the server's own charged-only total.)
 
 
 1. The chips — PLAN, IN PLAN, COMPED, CARD RATES, PRE-AUTH are five different vocabularies on one screen. COMPED in particular means nothing to a non-technical reader; "Free" or "Included" would. That's a copy decision, not a layout one, so I didn't guess.
+(DONE — "Included", your call, 10/16. COMPED and INCLUDED had been two chips
+for one fact: a $0 line is a $0 line whether a policy comp put it there or the
+plan did. Now one word, and it takes the green the comped chip had, which is
+the same green IN PLAN already wears — so the screen says "AIO gives this
+away" in one colour and one word however it came about. `isCompedService`
+still decides the MONEY; only the label merged.)
 2. The n/a commission cells on the Processing and Pre-Auth rows — they're structural noise on lines that can never carry commission. Could be blank instead.
+(DONE — and it was worse than noise. Those two were falling into the `no_cost`
+status, which is a live warning that somebody should go and price a product in
+HubSpot — so they also appeared in the AE's "not counted, no cost or rate yet"
+footnote and in the admin Commissions gaps panel, as two products to go and
+fix that can never be fixed and never should be. They now carry their own
+status (`isNotCommissionable`): the cell is blank, both lists drop them, and
+"n/a" is left meaning the one thing it should — a real product nobody has
+entered a cost for yet.)
 
 10/16
 swappability is now gone from the qsr kit. return the swapping functionality. I

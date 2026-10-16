@@ -36,7 +36,7 @@ import { derivePricingForRole, analysisFromQuoteConfig, type PaddingConfig } fro
 import { paymentProcessingArrBreakdown } from "@/lib/billing/processingArr";
 import {
   commissionFromTotalArr, estimatedRecurringArrFromQuoteLines, sumArrOrNull,
-  isPolicyComped, quoteHardwareCommission,
+  isPolicyComped, isNotCommissionable, quoteHardwareCommission,
 } from "@/lib/commission";
 import type { MerchantApplication, ProcessorTier } from "@/types/merchant";
 
@@ -251,6 +251,10 @@ export function buildCommissionDataGaps(apps: MerchantApplication[]): Commission
       // `quoteHardwareCommission.missingCost` follows, so the admin panel and
       // the AE's own view of a quote can't disagree about what's missing.
       if (isPolicyComped(line)) continue;
+      // Nor a line that was never a sale — the rate disclosure and the
+      // pre-auth will never carry a cost and nobody should be sent to give
+      // them one. Same rule, same reason. See `isNotCommissionable`.
+      if (isNotCommissionable(line)) continue;
       if (line.costToRep == null) missingCost.add(line.name);
       else if (line.costToRep === 0) zeroCost.add(line.name);
     }

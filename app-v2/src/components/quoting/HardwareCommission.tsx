@@ -25,10 +25,12 @@ import styles from "./ProductConfigurator.module.css";
 
 /**
  * The per-line annotation. Renders NOTHING for a line that earns nothing by
- * design — a recurring line, or hardware AIO comps (in-plan, in-package,
- * comped install/training), both of which already carry a tag on the line
- * saying so. A dollar figure of $0.00 next to "In plan" would read as a
- * mistake rather than as the deal AIO chose to offer.
+ * design — a recurring line, hardware AIO comps (in-plan, in-package, comped
+ * install/training), or a line that was never a sale at all (the $0 rate
+ * disclosure, the $0.50 pre-auth). All of those already carry a tag on the
+ * line saying what they are. A dollar figure of $0.00 next to "In plan" would
+ * read as a mistake rather than as the deal AIO chose to offer, and an "n/a"
+ * next to "Card rates" is a cell of noise on a line nobody sold.
  *
  * It DOES render for a line with no cost or no rate on file, because that is
  * the one case an AE must not read as "this product earns nothing": POS Unit,
@@ -45,7 +47,7 @@ export function LineCommissionNote({
 }: { line: QuoteLine; className?: string; compact?: boolean }) {
   const c = lineHardwareCommission(line);
 
-  if (c.status === "recurring" || c.status === "included") return null;
+  if (c.status === "recurring" || c.status === "included" || c.status === "not_commissionable") return null;
 
   if (c.status === "no_cost" || c.status === "no_rate") {
     const why = `${c.status === "no_cost" ? "No cost on file" : "No commission rate on file"} — commission not calculated`;
@@ -76,7 +78,7 @@ export function LineCommissionNote({
  */
 export function hasLineCommissionNote(line: QuoteLine): boolean {
   const c = lineHardwareCommission(line);
-  if (c.status === "recurring" || c.status === "included") return false;
+  if (c.status === "recurring" || c.status === "included" || c.status === "not_commissionable") return false;
   if (c.status === "no_cost" || c.status === "no_rate") return true;
   return c.rep != null;
 }

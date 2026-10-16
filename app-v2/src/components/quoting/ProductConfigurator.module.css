@@ -1196,7 +1196,9 @@
   padding: 1px var(--space-xs);
 }
 
-.docTag[data-tag="Comped"],
+/* Green is "AIO gives this away", whichever way it did so — the plan covering
+   it, or a policy comp. One word on the chip since 10/16, one colour with it. */
+.docTag[data-tag="Included"],
 .docTag[data-tag="In plan"] {
   color: var(--success);
   background: var(--success-bg);
