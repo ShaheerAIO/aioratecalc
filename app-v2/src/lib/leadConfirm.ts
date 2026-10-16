@@ -148,8 +148,13 @@ export function applyLeadConfirmation(
     sections[section][key] = (raw ?? "").trim();
   }
 
+  // Judged on the four boxes the merchant answers, never on everything stored.
+  // A rep who copied the owner in carries a `title` this form has no box for,
+  // and it would keep a contact the merchant just cleared alive — the server
+  // then demands a name and email on inputs the merchant can no longer see.
   const billing = sections.billingContact;
-  const hasBilling = Object.values(billing).some(v => String(v ?? "").trim());
+  const hasBilling = (["firstName", "lastName", "email", "phone"] as const)
+    .some(k => String(billing[k] ?? "").trim());
 
   return {
     business: sections.business as Partial<BusinessInfo>,

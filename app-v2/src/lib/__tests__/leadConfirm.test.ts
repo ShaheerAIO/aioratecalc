@@ -143,6 +143,25 @@ describe("applyLeadConfirmation — the billing contact", () => {
     });
     expect(next.billingContact).toBeNull();
   });
+
+  // Live 2026-10-16: the rep copied the owner into the billing contact, title
+  // included. 'Same as owner' blanked the four boxes, the stored title — which
+  // has no box here — kept the contact alive, and the server demanded a name,
+  // email and phone on inputs the merchant could not see.
+  it("is cleared even when the stored contact carries a field this form has no box for", () => {
+    const withBilling = {
+      ...current,
+      billingContact: { firstName: "Elizabeth", lastName: "Phillips", email: "e@x.com", phone: "", title: "Marketing Associate" },
+    };
+    const next = applyLeadConfirmation(withBilling, {
+      "billingContact.firstName": "",
+      "billingContact.lastName": "",
+      "billingContact.email": "",
+      "billingContact.phone": "",
+    });
+    expect(next.billingContact).toBeNull();
+    expect(Object.keys(confirmationErrors(next)).filter(p => p.startsWith("billingContact."))).toEqual([]);
+  });
 });
 
 describe("applyLeadConfirmation — the operating address", () => {

@@ -71,3 +71,67 @@
   line-height: 1.7;
   color: var(--ink-2);
 }
+
+/* Server refusals on a field with no box on screen, listed inside the error
+   banner so "highlighted fields" is never a sentence pointing at nothing. */
+.bannerList {
+  margin: var(--space-xs) 0 0;
+  padding-left: 1.1rem;
+  line-height: 1.7;
+}
+
+/* Held over the page while the quote is built and published. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+  background: oklch(0% 0 0 / 0.45);
+}
+
+.overlayCard {
+  max-width: 24rem;
+  text-align: center;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-lg);
+}
+
+.overlaySpinner {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--rule);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: overlaySpin 0.9s linear infinite;
+  margin-bottom: var(--space-md);
+}
+
+@keyframes overlaySpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlaySpinner { animation-duration: 3s; }
+}
+
+.overlayTitle {
+  display: block;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  color: var(--ink-1);
+  margin-bottom: var(--space-sm);
+}
+
+.overlayBody {
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+  margin: 0;
+}

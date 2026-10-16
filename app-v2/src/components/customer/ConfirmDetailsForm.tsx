@@ -88,6 +88,23 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
     Object.entries({ ...serverErrors, ...liveErrors }).filter(([path]) => touched[path] || serverErrors[path])
   );
 
+  // Whether a path has a box on screen that can show its error right now. The
+  // operating address and billing contact are hidden behind their checkboxes,
+  // and the entity-type select renders no error line. Anything else the server
+  // refuses — a path with no box at all — is named in the banner instead, so
+  // "the highlighted fields" is never a sentence pointing at nothing.
+  const hasVisibleBox = (path: string) => {
+    if (path.startsWith("business.dba") && path !== "business.dba") return separateOperating;
+    if (path.startsWith("billingContact.")) return !sameAsOwner;
+    return path in FIELD_LABELS;
+  };
+  const unseenServerErrors = Object.entries(serverErrors).filter(
+    ([path]) => path === "business.bizType" || !hasVisibleBox(path)
+  );
+  const bannerText = unseenServerErrors.length > 0 && unseenServerErrors.length === Object.keys(serverErrors).length
+    ? "Please fix the following, then confirm:"
+    : err;
+
   const b = <T extends Record<string, unknown>>(setter: (fn: (prev: T) => T) => void) =>
     (k: keyof T) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -264,6 +281,22 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
 
   return (
     <div className={styles.page}>
+      {/* Building the quote is several HubSpot round trips — contact, line
+          items, the quote, its associations, the publish — and takes long
+          enough that a button label alone reads as a hang. Kept up through the
+          redirect, since `saving` deliberately stays set while navigating. */}
+      {saving && (
+        <div className={confirmStyles.overlay} role="status" aria-live="polite">
+          <div className={confirmStyles.overlayCard}>
+            <span className={confirmStyles.overlaySpinner} aria-hidden="true" />
+            <strong className={confirmStyles.overlayTitle}>Creating your quote…</strong>
+            <p className={confirmStyles.overlayBody}>
+              This usually takes 10–30 seconds. Please keep this page open — you&apos;ll be taken to
+              your quote automatically.
+            </p>
+          </div>
+        </div>
+      )}
       <h1 className={styles.pageTitle}>
         {businessName ? `${businessName}, please check your details` : "Please check your details"}
       </h1>
@@ -431,7 +464,16 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         </div>
       </div>
 
-      {err && <p className={styles.errorBanner}>{err}</p>}
+      {err && (
+        <div className={styles.errorBanner} role="alert">
+          {bannerText}
+          {unseenServerErrors.length > 0 && (
+            <ul className={confirmStyles.bannerList}>
+              {unseenServerErrors.map(([path, message]) => <li key={path}>{message}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* The lock, stated before it happens. Phrased around what the MERCHANT
           loses — the chance to have any of this changed — rather than around
