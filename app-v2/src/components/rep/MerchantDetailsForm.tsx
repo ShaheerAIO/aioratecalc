@@ -273,6 +273,15 @@ export default function MerchantDetailsForm({
         <span className={styles.dot} aria-hidden="true" /> from HubSpot · everything is editable, and what you type wins
       </p>
 
+      {/* DBA, first field on the form (product owner, 2026-10-15: "move dba
+          to the top"). */}
+      <section className={styles.group} aria-label="DBA">
+        <h3 className={styles.groupLabel} aria-hidden="true">DBA</h3>
+        <div className={styles.grid}>
+          {field("business.dba", "DBA (trading name)", 4, business.dba, v => b({ dba: v }))}
+        </div>
+      </section>
+
       {/* The restaurant itself — the address HubSpot actually carries, because
           the HubSpot Company IS the restaurant. Shown FIRST, and the legal
           address below it is the one that comes back blank, which is the
@@ -344,10 +353,8 @@ export default function MerchantDetailsForm({
       <section className={styles.group} aria-label="Business">
         <h3 className={styles.groupLabel} aria-hidden="true">Business</h3>
         <div className={styles.grid}>
-          {field("business.dba", "DBA (trading name)", 4, business.dba, v => b({ dba: v }))}
           {field("business.website", "Website", 3, business.website, v => b({ website: v }), { placeholder: "https://" })}
           {field("business.phone", "Business phone", 3, business.phone, v => b({ phone: v }), { type: "tel", placeholder: "555-000-0000" })}
-          {field("business.yearsInBusiness", "Years open", 2, business.yearsInBusiness, v => b({ yearsInBusiness: v }), { inputMode: "numeric", placeholder: "—" })}
         </div>
       </section>
 

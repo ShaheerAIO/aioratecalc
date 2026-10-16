@@ -339,30 +339,19 @@ add the phrase "per transaction" after the rate
 on the wizard's rate cards and the exported proposal, so there's one wording.)
 
 add a cash discount option for each line item
-(DONE, then REBUILT the same day after you pointed out HubSpot takes cash
-discounts natively — you were right and the first version was bad. It
-converted your dollars into a percentage, because I believed
-`hs_discount_percentage` was the only discount HubSpot would accept. It
-isn't. The conversion meant a figure you typed could not actually be billed:
-$100 off a $749 line became 13.4% and charged $100.37, and the box you typed
-$100 into settled to $100.37 in front of you.
-
-Now the dollars ARE the stored figure. Two things I had to prove first,
-because the portal couldn't: HubSpot's `discount` property is PER UNIT (all
-166 live line items carrying one have quantity 1, where both readings look
-identical), and it keeps six decimals while rounding the TOTAL. So we store
-the line total you type and divide once at the boundary —
-`scripts/probe-cash-discount.ts` is the proof and is worth keeping.
-
-Verified end to end against live HubSpot through the real code path: $100 off
-3 × $749, $747 off 3 × $749, $1,000 off 7 × $999.99, $12.34 off one. All four
-match to the cent.
-
-The percentage box stays for "give them 20% off" and still rounds to one
-decimal, which costs nothing now. Typing in either box clears the other. The
-cap applies to both — $700 off a $749 line is 93% and would otherwise have
-walked straight around the admin limit. Your merchant's quote prints
-"$747.00 off", not the percentage it works out as.)
+(DONE — an "Amount off" $ box beside "Percent off" in each line's drawer.
+Nothing new is stored: it computes the percent, because the percent is the
+only lever that reaches HubSpot. The base respects "applies to N of qty".
+Under it the drawer now states the REAL net — "3 × $749.00 → $1,500.00" —
+because a percentage can't always land exactly on a dollar figure and the
+document can't be amended once published.
+CLOSED by limiting every percent to ONE DECIMAL (your call, same day) — a
+tenth is unarguably safe in HubSpot, so the open question about
+`hs_discount_percentage`'s precision no longer blocks anything. Applies to
+hand-typed percents too, so it's true of the line and not just of the dollar
+box. The cost: a dollar figure usually can't be hit exactly. $747 off $2,247
+stores 33.2% and bills $1,501.00, and the box you typed $100 into settles to
+$100.37. Both figures are shown rather than hidden.)
 
 confirm we are adding a payments line item on the hubspot quote
 (IT WASN'T, on most quotes. Checked the live portal: the $0 "AIO Processing
@@ -399,3 +388,152 @@ picked contact id, because "same as owner" silently PATCHing someone's HubSpot
 contact record is exactly what that clearing prevents — but the picker stayed
 live, so a rep could re-pick one while checked and put the form straight back
 into that state. The whole grid goes now; the summary line stands in for it.)
+
+
+
+card proc two lines
+lizzy note on the deal
+
+
+10/15
+dont allow the montly revenue to be less than 10 dollars
+show montly revenue and yearly arr in the card rate box
+dont allow rep to change CP rate to make monthly rev less than 10$
+move monthly volume and avg ticket to sit above the rates in the "card rate" card
+(DONE earlier today — on /rep/prospects/new, the one surface where those two are
+editable next to the rates. EditQuotePanel has no such boxes, and PricingStep
+collects them a step earlier.)
+if billing delay is not 60 days that should force rep to put note as well
+
+
+move dba to the top
+(DONE — DBA is now the first thing asked on every form that asks it: its own
+section above Operating on the rep's merchant details, and first in the grid on
+the review panel, ApplyStep, the customer's confirmation step and the customer
+onboarding step.)
+
+remove years open
+(DONE — gone from all five forms. The field STAYS on the BusinessInfo type:
+saved rows carry it and prefillMerge still lists it as something HubSpot can't
+know. What's gone with the boxes: its entry in CONFIRMABLE_PATHS — a public
+lead token had been allowed to write a field nobody can type any more — its
+label, its row in the customer's "My Data" summary, and its slot in the rep
+form's completeness counter, which would otherwise have counted a field that
+can never be filled.)
+
+aio, order n pay, marketing should be the order of the packages
+(DONE — All-in-One, Order & Pay Only, Marketing Only, Marketing 2-Year. Third
+reversal of this order (10/6 → 10/13 → 10/15); the array's comment carries the
+history. QUOTE_TYPES is the only positional consumer — the labels elsewhere are
+id-keyed, so nothing else moved.)
+
+add floor for rate (wholesale + minimum), editable in settings
+(BUILT, SHIPPED SWITCHED OFF — your call, same day. The floor is
+wholesalePctFor(avgTicket) + an admin minimum in bps, editable at Admin →
+Quote limits, refused server-side in assertRateAboveFloor beside the other two
+floors. It is a THIRD floor: the margin floor is revenue over interchange and
+padded and secret; the $10/mo floor is wholesale margin in dollars; this one is
+the same wholesale basis expressed as a RATE, so it binds on a merchant of any
+size where the $10 only binds on small ones. Open and unpadded like the $10 —
+the refusal names the minimum rate.
+WHY IT'S OFF: 0 bps is NOT the inert default it looks like. It means "never
+below wholesale", and AIO's own §10.3 rate card sits below the wholesale table
+in 48 of its 81 cells — every ticket from $10 to $50 once a merchant is over
+$75K/mo, by as much as 133bps. The card is built on margin over INTERCHANGE,
+the wholesale table is the flat ticket-indexed figure you gave on 10/13 for
+commission/ARR, and wholesale.ts already says the two "will not agree, and are
+not supposed to". This floor is the first thing that would have made them
+agree, silently, by refusing the rate the card itself suggests. So blank = off,
+a number turns it on, and the number is yours to pick once you decide which
+basis is the truth. Migration 0026 — the column is nullable for that reason.)
+
+Instead of of adding a "in package" chip group them all under one "in package" banner or header thingy
+(DONE — covered lines come out of the itemized one-time list and sit under one
+banner per package, "{name} — already paid for, in the package", each with its
+qty and struck-through MSRP. The "In plan" chip STAYS a chip: it marks a single
+derived line, and a banner over one row reads worse than the chip did.
+Found while doing it: the document layout already printed "{package} covers
+{list}" per applied package, and that list was one GLOBAL string — with two
+packages applied it printed every covered item under BOTH names. Deleted; the
+new banner says it per group, correctly.)
+
+make "QSR kit" pop
+make all the headers pop
+(DONE — package names move onto the display font at 800, so "QSR Kit" stops
+reading as body text beside its own price; section headings go to 1.25rem with
+tighter tracking and the document layout's headings match them; picker group
+labels come up from --ink-3 to --ink-2 for contrast.
+Worth knowing: QSR Kit is ACTIVE and the styling is generic, not special-cased
+to that name. CLAUDE.md still says the kit ships inactive because its HubSpot
+record is $0 — that is stale. The $0 SKU is a vestigial HARDWARE_BUNDLES entry
+from the pre-10/08 design; today's kit has no HubSpot product at all, it IS the
+real hardware lines at 100% off. Same expression as the comped install.)
+
+make max discounts per line item instead of a global. Put this next to the quote limits
+(DONE — "Discount caps" sits directly under "Unit caps" on Admin → Quote limits,
+one cap per product, same jsonb shape and same blank-means-default behaviour.
+The old single "Maximum discount" is KEPT and relabelled "Default discount cap":
+a product with no cap of its own has to be limited by something, and that number
+is still the approval lever — raising it is how a discount over 50% gets granted.
+The blocker now names WHICH cap it hit, so a rep knows whether to ask for this
+product or for the default. The cash-dollar lever is converted against the list
+amount and held to the same per-product cap, so the $ box can't walk around it.
+Migration 0025.)
+
+you cannot discount the plan
+(DONE — any discount on the plan line is refused outright, percent or dollars,
+and the discount controls are hidden from its drawer. The BILLING START control
+stays: the plan line is exactly the line that carries the 60-day delay, so
+removing the whole drawer would have taken that with it. Keyed to the plan id
+the quote resolves NOW, not to isPlatformProduct — a retired platform line is
+always dropped and re-derived on reopen, so a legacy row can't become
+unsavable. One real edge: a quote saved earlier WITH a discount on the current
+plan product shows the blocker on reopen and the rep clears it.)
+
+
+fix email template, dont say that they can reply to it cuz i dont know where those replies go. Put a big heading saying they cant reply to the email. (or tell me if its possible to read the emails somewhere or we can forward them to certain people i have powershell access with admin)
+(ANSWERED, then DONE the other way — your call, same day. The replies DO have a
+known destination, in two cases. When resolveReplyToRep could verify the owning
+rep (10/13), Reply-To is set to that rep's own address and a reply lands in
+their mailbox — that promise is true and is kept. When it couldn't, there is no
+Reply-To at all, so a reply goes to aiodocuments@aioapp.com, a real shared
+mailbox in the tenant that you can grant access to or forward with PowerShell.
+So no "do not reply" heading: the one branch that was lying — "Questions? Just
+reply to this email" with no Reply-To behind it — now points at the link and at
+their AIO representative instead.)
+
+
+the quote preview is too cluttered — make the different types (monthly and one
+time) contained in boxes/bubbles so its obvious, non-tech people use this
+(DONE — each billing type is now its own bordered card with a tinted header
+bar: periwinkle for monthly, neutral for one-time, the group total set large
+enough to read before any line under it, and a plain-English line saying WHEN
+it is charged ("charged once, at checkout"). They had been told apart only by
+a small grey word and a hairline, which is the single most expensive thing on
+this screen to misread.
+Also: "Billing starts 60 days after checkout" was printing under EVERY monthly
+line. When every line in the group starts together it is now said once, in the
+header. It goes back to per-line the moment the starts differ — which is the
+only case where anyone has to compare them.)
+
+
+Customer portal:
+get rid of the whole rate breakdown in the customer preview of the quote just show the line items
+(DONE — the effective-rate / annual-savings hero and the whole stat ticker are
+gone from QuoteSummary, which is the ONE component behind both the public
+/lead/[token]/quote page and the authenticated "Your Quote" tab. The note under
+it explaining what the rate was priced on went too — it only existed to explain
+a number that is no longer there. The rates still reach the merchant on the
+document they actually sign: the $0 disclosure line added on 10/14 carries
+THIS merchant's rates in its own description.)
+
+for "ongoing" rename it to software
+(DONE — the heading and the footnote under the lines.)
+
+block the preview by package and  not package
+(DONE — covered lines are lifted out of the one-time list and grouped under
+"Included in your {package}". A covered line reads as its struck-through MSRP
+and the word "Included" rather than a $0.00 charge, which is what a package
+actually is. Only one-time lines group: package coverage never applies to a
+recurring line, so "Software" is untouched. "Total due once" is unchanged —
+it comes from the server's own charged-only total.)

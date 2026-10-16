@@ -84,11 +84,17 @@
 
 .sectionHead { margin-bottom: var(--space-md); }
 
+/* Bumped from 1rem (2026-10-15, product owner: "make all the headers pop" —
+   every panel on the page was titled at the same weight as its own body
+   text, so nothing read as a landmark to scan for). Weight stays 800 — the
+   loaded Coolvetica cut tops out there — so the size and tracking carry the
+   emphasis instead. */
 .sectionTitle {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 1rem;
-  letter-spacing: -0.01em;
+  font-size: 1.25rem;
+  letter-spacing: -0.015em;
+  color: var(--ink);
   margin: 0 0 var(--space-3xs);
 }
 
@@ -164,12 +170,14 @@
 .group { margin-top: var(--space-md); }
 .group:first-of-type { margin-top: var(--space-sm); }
 
+/* Darkened from --ink-3 (2026-10-15, "make all the headers pop") — a picker
+   group label this muted read as a caption, not something worth scanning for. */
 .groupTitle {
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--ink-2);
   padding-bottom: var(--space-2xs);
   border-bottom: 1px solid var(--rule);
   margin-bottom: var(--space-2xs);
@@ -871,7 +879,16 @@
 
 .packageRow + .packageRow { margin-top: var(--space-2xs); }
 
-.packageName { font-size: 0.88rem; font-weight: 700; color: var(--ink); }
+/* Moved onto the display face at a headline size (2026-10-15, product owner:
+   "make 'QSR kit' pop" — a package name was the same weight-700 body type as
+   everything else in the row and disappeared next to its own price). */
+.packageName {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
 
 .packageContents {
   font-size: 0.75rem;
@@ -952,11 +969,13 @@
   gap: var(--space-md);
 }
 
+/* Bumped from 1.05rem for the same reason as .sectionTitle, which this is the
+   document layout's equivalent of (2026-10-15, "make all the headers pop"). */
 .buildHead {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 1.05rem;
-  letter-spacing: -0.01em;
+  font-size: 1.25rem;
+  letter-spacing: -0.015em;
   color: var(--ink);
   margin: 0 0 var(--space-sm);
 }
@@ -1051,25 +1070,88 @@
 
 .docControls .globalGrid { margin-bottom: 0; }
 
-.docGroup { margin-top: var(--space-md); }
+/* Each billing type is its OWN CARD, not a run of rows under a label
+   (2026-10-15: "too cluttered ... make the diff types more contained in
+   boxes/bubbles so its obvious. non tech people are gonna use this"). The
+   two used to be told apart only by a small grey word and a hairline, so a
+   monthly fee and a one-off charge read as one undifferentiated list — the
+   single most expensive thing on this screen to misread. Hence a boxed group
+   with a tinted header bar: periwinkle for what recurs, neutral for what
+   doesn't, each stating in plain words WHEN it is charged. */
+.docGroup {
+  margin-top: var(--space-sm);
+  padding: 0 var(--space-sm) var(--space-2xs);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  /* Same surface as the document around it — the border and the tinted head
+     draw the box, so a second shade here would only muddy it. */
+  background: var(--paper-2);
+  /* The head bar full-bleeds to the card's edge via negative margins, so the
+     rounding has to clip it. */
+  overflow: hidden;
+}
+
+/* The card already fences the group, so the last row's rule would just be a
+   second line beside the border. */
+.docGroup > .docLine:last-child { border-bottom: none; }
 
 .docGroupHead {
   display: grid;
   grid-template-columns: var(--doc-cols);
   column-gap: var(--space-sm);
+  align-items: baseline;
+  margin: 0 calc(-1 * var(--space-sm)) var(--space-2xs);
+  padding: var(--space-xs) var(--space-sm);
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
-  padding-bottom: var(--space-2xs);
   border-bottom: 1px solid var(--rule);
 }
 
 /* The head's own cells: the group name left, everything after it over its
    column, right-aligned like the figures underneath. */
 .docGroupHead > * + * { text-align: right; }
+
+.docGroup[data-kind="recurring"] .docGroupHead {
+  background: color-mix(in oklab, var(--accent-2) 9%, transparent);
+}
+.docGroup[data-kind="recurring"] .docGroupLabel { color: var(--accent-2-text); }
+
+.docGroup[data-kind="onetime"] .docGroupHead {
+  background: color-mix(in oklab, var(--ink-3) 11%, transparent);
+}
+.docGroup[data-kind="onetime"] .docGroupLabel { color: var(--ink-2); }
+
+/* "when is this charged", in words, because the label alone only means
+   something to someone who already knows how the billing works. */
+.docGroupNote {
+  display: block;
+  margin-top: 0.15em;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--ink-3);
+}
+
+/* The group's own total, sized to be read before any line under it. */
+.docGroupTotal {
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.docGroupTotal span {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-3);
+}
 
 .docLine {
   display: grid;
@@ -1115,8 +1197,7 @@
 }
 
 .docTag[data-tag="Comped"],
-.docTag[data-tag="In plan"],
-.docTag[data-tag="In package"] {
+.docTag[data-tag="In plan"] {
   color: var(--success);
   background: var(--success-bg);
 }
@@ -1126,6 +1207,53 @@
   color: var(--ink-3);
   line-height: 1.45;
   margin: var(--space-3xs) 0 0;
+}
+
+/* One banner per package, grouping every line it covers, instead of an
+   "In package" chip repeated on each one (2026-10-15, product owner: "group
+   them all under one 'in package' banner or header thingy"). Borrows the
+   chip's old success-green language — this is the app deciding the line is
+   already paid for, not a charge and not a rep's discount — stated once per
+   package rather than once per line. */
+.packageBanner {
+  margin: var(--space-xs) 0 0;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--success-bg);
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+}
+
+.packageBannerHead {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--success);
+}
+
+.packageBannerHead span {
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--ink-3);
+}
+
+.packageBannerLine {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  padding: var(--space-3xs) 0 0;
+}
+
+.packageBannerAmount {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.35em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The AE's own commission, its own column beside the price (.docCol mirrors

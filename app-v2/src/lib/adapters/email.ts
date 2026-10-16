@@ -317,7 +317,7 @@ function render(t: Template): string {
     <tr><td style="padding:20px 4px 0;font-family:${FONT};font-size:12px;line-height:1.6;color:${C.ink3};">
       ${t.repName
         ? `Sent by AIO Payments on behalf of ${esc(t.repName)}, your AIO representative. Questions? Just reply to this email — it goes straight to them.`
-        : "Sent by AIO Payments because you&rsquo;re working with one of our representatives. Questions? Just reply to this email."}
+        : "Sent by AIO Payments because you&rsquo;re working with one of our representatives. Questions? Use the link above, or ask your AIO representative."}
     </td></tr>
 
   </table>

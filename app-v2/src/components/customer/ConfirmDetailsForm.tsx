@@ -184,7 +184,6 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
       "business.dba": biz.dba ?? "",
       "business.phone": biz.phone ?? "",
       "business.website": biz.website ?? "",
-      "business.yearsInBusiness": biz.yearsInBusiness ?? "",
       "business.ein": biz.ein ?? "",
       "ownerContact.firstName": owner.firstName ?? "",
       "ownerContact.lastName": owner.lastName ?? "",
@@ -277,8 +276,8 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
       <div className={styles.panel}>
         <h2 className={styles.sectionTitle}>Your Business</h2>
         <div className={styles.grid2}>
-          {input("business.legalName", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
           {input("business.dba", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("business.legalName", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           <div className={styles.field}>
@@ -299,9 +298,6 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         <div className={`${styles.grid2} ${styles.row}`}>
           {input("business.phone", biz.phone || "", setBizF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
           {input("business.website", biz.website || "", setBizF("website") as (e: React.ChangeEvent<HTMLInputElement>) => void, "yourrestaurant.com")}
-        </div>
-        <div className={styles.row}>
-          {input("business.yearsInBusiness", biz.yearsInBusiness || "", setBizF("yearsInBusiness") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
         </div>
       </div>
 

@@ -104,10 +104,14 @@ function NewProspectFlow() {
   // (see RoleScopedPricing's own doc comments), and they have to come from
   // here rather than from a local calculation because the wholesale table
   // they're built on sits behind pricing.ts.
+  // `minCardPresentRate`/`belowMinRateFloor` are the SAME DAY's third floor
+  // (wholesale + an admin-set minimum, editable at /admin/settings/quote-limits)
+  // — also rep-safe for the identical reason, and also computed server-side.
   const [floorCheck, setFloorCheck] = useState<Pick<
     RoleScopedPricing,
     | "belowMarginFloor" | "appliedTargetMargin" | "projectedCommission"
     | "monthlyProcessingRevenue" | "processingArr" | "belowMonthlyRevenueFloor"
+    | "minCardPresentRate" | "belowMinRateFloor"
   > | null>(null);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
@@ -375,6 +379,18 @@ function NewProspectFlow() {
       `card rate, or this merchant is too small to process for.`
     );
   }
+  // The wholesale-plus-minimum rate floor (2026-10-15, product owner: "add
+  // floor for rate (wholesale + minimum), editable in settings"). A THIRD
+  // refusal, independent of the two above — see `minRateFloorBlockers` in
+  // pricing.ts. Same hand-copied-sentence posture as `belowMarginFloor`'s
+  // block above, for the identical reason: calling that function here would
+  // bundle pricing.ts's runtime code into this client page.
+  if (floorCheck?.belowMinRateFloor) {
+    hardBlocks.push(
+      `The card-present rate is below AIO's minimum of ${pct(floorCheck.minCardPresentRate ?? 0)}% ` +
+      `for this merchant's average ticket. Raise the rate to send this quote.`
+    );
+  }
   // A LINK WITHOUT A QUOTE IS NOT SENDABLE (2026-10-15, product owner: "there
   // is no situation where the rep hasnt made the quote because they cant send
   // the initial link without making it"). Nothing enforced that before — an
@@ -430,6 +446,9 @@ function NewProspectFlow() {
         // Online-only: all of the volume is card-not-present, so the margin
         // and the floor are figured on the rate actually being quoted.
         cardPresentPct: cnpOnly ? 0 : null,
+        // Same signal, for the wholesale-plus-minimum floor: a hidden,
+        // un-editable card-present lane has nothing to refuse.
+        cardNotPresentOnly: cnpOnly,
       })
         .then(p => {
           if (!cancelled) {
@@ -440,6 +459,8 @@ function NewProspectFlow() {
               monthlyProcessingRevenue: p.monthlyProcessingRevenue,
               processingArr: p.processingArr,
               belowMonthlyRevenueFloor: p.belowMonthlyRevenueFloor,
+              minCardPresentRate: p.minCardPresentRate,
+              belowMinRateFloor: p.belowMinRateFloor,
             });
           }
         })
@@ -576,7 +597,7 @@ function NewProspectFlow() {
   const detailFields = [
     business.legalName, business.dba,
     business.dbaAddress, business.dbaCity, business.dbaState, business.dbaZip,
-    business.phone, business.website, business.yearsInBusiness,
+    business.phone, business.website,
     ownerContact.firstName, ownerContact.lastName, ownerContact.title, ownerContact.phone,
     ...(rated ? [processing.mcc, processing.currentProcessor] : []),
   ];
@@ -710,6 +731,14 @@ function NewProspectFlow() {
         <p className={styles.revenueFloorNote} role="alert">
           Under the {fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} a month AIO processes for. Raise the
           card-present rate, or this merchant is too small to board.
+        </p>
+      )}
+      {/* The wholesale-plus-minimum rate floor (2026-10-15) — a THIRD,
+          independent refusal. See `minRateFloorBlockers` (pricing.ts). */}
+      {floorCheck?.belowMinRateFloor && (
+        <p className={styles.revenueFloorNote} role="alert">
+          Below AIO&rsquo;s minimum of {pct(floorCheck.minCardPresentRate ?? 0)}% for this
+          merchant&rsquo;s average ticket. Raise the card-present rate to send this quote.
         </p>
       )}
 

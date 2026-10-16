@@ -1,76 +1,10 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app
- * The quote itself — headline stat, ticker, priced lines. Moved here verbatim
- * from LeadQuoteView.module.css when the authenticated "Your Quote" tab started
- * sharing the same render.
+ * The quote itself — priced lines and their totals. Moved here verbatim from
+ * LeadQuoteView.module.css when the authenticated "Your Quote" tab started
+ * sharing the same render. The headline stat/ticker (effective rate,
+ * projected cost, estimated savings) was removed 2026-10-15 along with the
+ * styles that rendered it.
  */
-
-/* ---------- Quote result (Stat-Led — headline number sits directly on the page) ---------- */
-
-.statWrap {
-  text-align: center;
-  margin-bottom: var(--space-xl);
-  animation: fadeUp 500ms var(--ease-out) both;
-}
-
-.statCaption {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  margin: 0 0 var(--space-xs);
-}
-
-.statHero {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  color: var(--success);
-  line-height: 1;
-  letter-spacing: -0.02em;
-  font-size: clamp(2.75rem, 6vw + 1rem, 4rem);
-  margin-bottom: var(--space-lg);
-}
-
-/* A quoted rate isn't a saving — don't dress it in the savings green. */
-.statHero[data-tone="rate"] { color: var(--ink); }
-
-.statTicker {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: baseline;
-  gap: var(--space-xl);
-  padding-top: var(--space-lg);
-  border-top: 1px solid var(--rule);
-}
-
-.statTickerItem {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3xs);
-}
-
-.statTickerValue {
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-}
-
-.statTickerLabel {
-  font-size: 0.75rem;
-  color: var(--ink-3);
-}
-
-.basisNote {
-  font-size: 0.82rem;
-  color: var(--ink-2);
-  line-height: 1.6;
-  text-align: center;
-  margin: 0 0 var(--space-xl);
-}
 
 /* The ordering-point count — a configuration fact, not a price, so it gets
    the same quiet grey treatment as .lineFootnote rather than anything that
@@ -81,11 +15,6 @@
   line-height: 1.6;
   text-align: center;
   margin: 0 0 var(--space-lg);
-}
-
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ---------- Quote lines (hardware, platform, services) ---------- */
@@ -197,10 +126,18 @@
   padding: 0 var(--space-xs);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .statWrap {
-    animation: none;
-    opacity: 1;
-    transform: none;
-  }
+/* A package/plan-covered sub-group within "One-Time" — set off from the
+   charged lines above it rather than interleaved with them. */
+.coveredGroup {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px dashed var(--rule);
+}
+
+.coveredGroupTitle {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  margin: 0 0 var(--space-sm);
 }

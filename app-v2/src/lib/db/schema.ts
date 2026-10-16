@@ -97,6 +97,33 @@ export const quoteLimitPolicy = pgTable("quote_limit_policy", {
   // map is uncapped; see DEFAULT_UNIT_CAPS, which seeds the editor and is what
   // an unseeded table falls back to.
   unitCaps: jsonb("unit_caps").$type<Record<string, number>>().notNull().default({}),
+  // productId → the most that LINE may be discounted, as a whole percent.
+  // Added migration 0025 (2026-10-15, product owner: "make max discounts per
+  // line item instead of a global"). A product absent from the map falls back
+  // to `margin_policy.maxDiscountPercent` — that global did not go away, it
+  // became the DEFAULT for anything not listed here, because a product absent
+  // from this map still has to be capped by something. Same jsonb-over-column
+  // reasoning as unitCaps: the catalog is an open set maintained in HubSpot by
+  // non-engineers, so a new product must be cappable without a deploy.
+  discountCaps: jsonb("discount_caps").$type<Record<string, number>>().notNull().default({}),
+  // The minimum margin a quoted card-present rate must clear ABOVE
+  // wholesalePctFor(avgTicket) (lib/wholesale.ts), in whole basis points.
+  // Added migration 0026 (2026-10-15, product owner: "add floor for rate
+  // (wholesale + minimum), editable in settings") — a THIRD floor, sibling of
+  // `belowMonthlyRevenueFloor` rather than the (padded, secret) margin floor:
+  // same wholesale basis, expressed as a rate instead of monthly dollars, so
+  // it binds on a merchant of any size where the $10/mo floor only binds on
+  // small ones. See `minRateFloorBlockers` in pricing.ts. Lives here, not on
+  // margin_policy or rate_matrix_policy, for the same reason unitCaps/
+  // discountCaps do: this table is already "limits on what a rep may put on
+  // a quote," and nothing about this number is secret or printed on the
+  // merchant's own document.
+  // NULL means the floor is OFF, which is how it shipped (2026-10-15). It is
+  // not "0 bps": 0 means "never below wholesale", and AIO's own rate card sits
+  // below the wholesale table in 48 of its 81 cells, so a 0 would have refused
+  // most of what the card itself suggests. An admin types a number to turn it
+  // on, and clears the box to turn it off again.
+  minRateMarginBps: integer("min_rate_margin_bps"),
   // The longest billing delay a rep may set without an admin raising it.
   maxBillingDelayDays: integer("max_billing_delay_days").notNull().default(90),
   // Whether the picker offers the two tablets. A visibility switch, not a

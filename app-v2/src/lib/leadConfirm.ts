@@ -93,7 +93,6 @@ export const CONFIRMABLE_PATHS: readonly string[] = [
   "business.dba",
   "business.phone",
   "business.website",
-  "business.yearsInBusiness",
   "business.ein",
   // The owner — and the SIGNER: `resolveSigner` puts `ownerContact.email` on
   // the HubSpot quote, so this is the one section where a typo is both the
@@ -198,7 +197,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "business.ein": "Federal EIN",
   "business.phone": "Business phone",
   "business.website": "Website",
-  "business.yearsInBusiness": "Years open",
   "business.address": "Street address",
   "business.city": "City",
   "business.state": "State",

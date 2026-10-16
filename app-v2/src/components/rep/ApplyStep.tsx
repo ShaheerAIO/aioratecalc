@@ -104,8 +104,8 @@ export default function ApplyStep({ app, onSaved, onBack, onSkip }: Props) {
           <div className={styles.panel}>
             <h2 className={styles.sectionTitle}>Business Information</h2>
             <div className={styles.grid2}>
-              {input("Legal Business Name", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
               {input("DBA (Doing Business As)", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("Legal Business Name", biz.legalName || "", setBizF("legalName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
             </div>
             <div className={styles.row}>
               <label className={styles.label}>Business Type</label>
@@ -128,7 +128,6 @@ export default function ApplyStep({ app, onSaved, onBack, onSkip }: Props) {
             </div>
             <div className={`${styles.grid2} ${styles.row}`}>
               {input("Website", biz.website || "", setBizF("website") as (e: React.ChangeEvent<HTMLInputElement>) => void, "https://")}
-              {input("Years in Business", biz.yearsInBusiness || "", setBizF("yearsInBusiness") as (e: React.ChangeEvent<HTMLInputElement>) => void, "5")}
             </div>
           </div>
 

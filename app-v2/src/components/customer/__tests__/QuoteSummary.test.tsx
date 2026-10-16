@@ -1,13 +1,11 @@
 // @vitest-environment jsdom
 //
-// The rep-side statement dropzone is gone (2026-10-13) and the customer was
-// never given one to begin with, so a "config" basis quote (priced on the
-// rep's own volume/ticket entry, no statement) is now the ORDINARY rated
-// quote rather than a rare edge case. leadQuote.test.ts already pins the DATA
-// contract — every savings field comes back null on that path, never a $0 or
-// a negative — but this is the render, and the render is what the merchant
-// actually sees. It must omit the savings section entirely rather than print
-// "$0 saved", "0.00% saved" or a negative number.
+// The rate/savings headline (effective rate, projected cost, estimated
+// savings) was removed 2026-10-15 (product owner: "get rid of the whole rate
+// breakdown in the customer preview of the quote just show the line items").
+// leadQuote.test.ts still pins the DATA contract on CustomerSafeQuote; this
+// file now only guards that none of those fields ever render here, on any
+// basis, and exercises the line-item rendering itself.
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import QuoteSummary from "@/components/customer/QuoteSummary";
@@ -42,34 +40,28 @@ const STATEMENT_QUOTE_WITH_SAVINGS: CustomerSafeQuote = {
   savingsPct: 0.2029,
 };
 
-describe("QuoteSummary — savings section with no current cost on file", () => {
-  it("renders the AIO effective rate, not a savings hero, when there's no statement", () => {
+describe("QuoteSummary — no rate/savings breakdown, on any basis", () => {
+  it("never renders the rate headline, on a config-basis quote", () => {
     render(<QuoteSummary quote={CONFIG_QUOTE_NO_SAVINGS} />);
-    expect(screen.getByText("Your AIO Effective Rate")).toBeTruthy();
-    expect(screen.queryByText("Estimated Annual Savings")).toBeNull();
-    expect(screen.queryByText("Monthly Savings")).toBeNull();
+    expect(screen.queryByText("Your AIO Effective Rate")).toBeNull();
+    expect(screen.queryByText("Estimated Monthly Cost")).toBeNull();
+    expect(screen.queryByText("Monthly Volume")).toBeNull();
+    expect(screen.queryByText("Average Ticket")).toBeNull();
   });
 
-  it("never prints $0.00, 0.00% or a negative figure for the savings labels", () => {
+  it("never renders the savings headline, even when a statement supplies real savings", () => {
+    render(<QuoteSummary quote={STATEMENT_QUOTE_WITH_SAVINGS} />);
+    expect(screen.queryByText("Estimated Annual Savings")).toBeNull();
+    expect(screen.queryByText("Monthly Savings")).toBeNull();
+    expect(screen.queryByText("New Effective Rate")).toBeNull();
+  });
+
+  it("never prints $0.00, 0.00% or a negative figure left over from a removed stat", () => {
     render(<QuoteSummary quote={CONFIG_QUOTE_NO_SAVINGS} />);
     const body = document.body.textContent ?? "";
     expect(body).not.toMatch(/\$0\.00 saved/i);
     expect(body).not.toMatch(/0\.00% saved/i);
     expect(body).not.toMatch(/-\$/);
-    expect(body).not.toContain("Monthly Savings");
-    expect(body).not.toContain("New Effective Rate");
-  });
-
-  it("still shows the savings hero once a statement supplies a current cost", () => {
-    render(<QuoteSummary quote={STATEMENT_QUOTE_WITH_SAVINGS} />);
-    expect(screen.getByText("Estimated Annual Savings")).toBeTruthy();
-    expect(screen.getByText("Monthly Savings")).toBeTruthy();
-  });
-
-  it("also omits the savings section for a quote with zero savings (never a $0 headline)", () => {
-    render(<QuoteSummary quote={{ ...STATEMENT_QUOTE_WITH_SAVINGS, monthlySavings: 0, annualSavings: 0, savingsPct: 0 }} />);
-    expect(screen.queryByText("Estimated Annual Savings")).toBeNull();
-    expect(screen.getByText("Your AIO Effective Rate")).toBeTruthy();
   });
 });
 
@@ -208,5 +200,79 @@ describe("QuoteSummary — how a discount is described", () => {
     // 3 × $749 = $2,247, less $747, is $1,500.00 exactly.
     render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);
     expect(screen.getByText("$1,500.00")).toBeTruthy();
+  });
+});
+
+// ── Recurring lines render under "Software" ─────────────────────────────────
+// Renamed from "Ongoing" 2026-10-15 (product owner).
+const RECURRING_ONLY_QUOTE: CustomerSafeQuote = {
+  basis: "products",
+  lines: [
+    { hubspotProductId: "217526517443", name: "AIO Platform", qty: 1, unitPrice: 399, billingFrequency: "monthly", productType: "Software" },
+  ],
+  lineTotals: { oneTime: 0, recurring: [{ frequency: "monthly", amount: 399 }], monthlyEquivalent: 399 },
+  orderPoints: null,
+};
+
+describe("QuoteSummary — recurring section heading", () => {
+  it("labels the recurring section 'Software', not 'Ongoing'", () => {
+    render(<QuoteSummary quote={RECURRING_ONLY_QUOTE} />);
+    expect(screen.getByText("Software")).toBeTruthy();
+    expect(screen.queryByText("Ongoing")).toBeNull();
+  });
+});
+
+// ── Package-covered one-time lines are grouped separately ───────────────────
+// A pre-made package (or a plan-included item) covers a one-time line at MSRP
+// less a 100% discount, carrying `coveredByPackage` with the package/plan
+// name (lib/quotePackages.ts, types/merchant.ts). The customer preview groups
+// those under their own heading rather than interleaving them with what's
+// actually being charged (2026-10-15, "block the preview by package and not
+// package").
+const PACKAGE_QUOTE: CustomerSafeQuote = {
+  basis: "products",
+  lines: [
+    { hubspotProductId: "217445755632", name: "POS Unit", qty: 2, unitPrice: 749, billingFrequency: "one_time", productType: "inventory", discountPercent: 100, coveredByPackage: "QSR Kit" },
+    { hubspotProductId: "223452690133", name: "Onsite Installation", qty: 1, unitPrice: 999, billingFrequency: "one_time", productType: "Service", discountPercent: 100, coveredByPackage: "QSR Kit" },
+    { hubspotProductId: "223511653105", name: "Payment Terminal - AMS1", qty: 1, unitPrice: 300, billingFrequency: "one_time", productType: "inventory" },
+  ],
+  lineTotals: { oneTime: 300, recurring: [], monthlyEquivalent: 0 },
+  orderPoints: null,
+};
+
+describe("QuoteSummary — package-covered lines are grouped, not interleaved", () => {
+  it("groups covered lines under a heading naming the package", () => {
+    render(<QuoteSummary quote={PACKAGE_QUOTE} />);
+    expect(screen.getByText("Included in your QSR Kit")).toBeTruthy();
+  });
+
+  it("shows covered lines as 'Included' rather than a $0.00 charge", () => {
+    render(<QuoteSummary quote={PACKAGE_QUOTE} />);
+    expect(screen.getAllByText("Included")).toHaveLength(2);
+    expect(screen.queryByText("$0.00")).toBeNull();
+  });
+
+  it("still shows the list price struck through on a covered line", () => {
+    render(<QuoteSummary quote={PACKAGE_QUOTE} />);
+    // 2 × $749 = $1,498.00
+    expect(screen.getByText("$1,498.00")).toBeTruthy();
+  });
+
+  it("keeps the uncovered line priced normally, outside the package heading", () => {
+    render(<QuoteSummary quote={PACKAGE_QUOTE} />);
+    const name = screen.getByText("Payment Terminal - AMS1");
+    const row = name.closest("div")?.parentElement;
+    expect(row?.textContent).toContain("$300.00");
+  });
+
+  it("totals due once still reflects only what's actually charged", () => {
+    render(<QuoteSummary quote={PACKAGE_QUOTE} />);
+    const total = screen.getByText("Total due once").closest("div");
+    expect(total?.textContent).toContain("$300.00");
+  });
+
+  it("renders no package heading when nothing is package-covered", () => {
+    render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);
+    expect(screen.queryByText(/Included in your/)).toBeNull();
   });
 });

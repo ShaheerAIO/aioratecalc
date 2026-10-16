@@ -80,8 +80,8 @@ export default function ReviewSection({
       <div className={styles.panel}>
         <h2 className={styles.sectionTitle}>Business Information</h2>
         <div className={styles.grid2}>
-          {field("business.legalName", "Legal Business Name", business.legalName, v => onBusinessChange({ ...business, legalName: v }))}
           {field("business.dba", "DBA (Doing Business As)", business.dba, v => onBusinessChange({ ...business, dba: v }))}
+          {field("business.legalName", "Legal Business Name", business.legalName, v => onBusinessChange({ ...business, legalName: v }))}
         </div>
         <div className={styles.row}>
           <label className={styles.label}>
@@ -123,7 +123,6 @@ export default function ReviewSection({
         </div>
         <div className={`${styles.grid2} ${styles.row}`}>
           {field("business.website", "Website", business.website, v => onBusinessChange({ ...business, website: v }), { placeholder: "https://" })}
-          {field("business.yearsInBusiness", "Years in Business", business.yearsInBusiness, v => onBusinessChange({ ...business, yearsInBusiness: v }), { placeholder: "5" })}
         </div>
       </div>
 

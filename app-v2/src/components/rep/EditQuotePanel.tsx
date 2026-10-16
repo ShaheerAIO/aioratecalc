@@ -147,12 +147,15 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         feeOverrides: ZERO_FEES,
         activeTier,
         recurringArr,
+        cardNotPresentOnly: cnpOnly,
       }).then(setPricing).catch(() => setPricing(null));
     }, 150);
     return () => clearTimeout(handle);
     // previewAnalysis is a derived value (app.analysis, or the once-fetched
     // configAnalysis), not a ref-stable dependency worth excluding — include it.
-  }, [canPreview, previewAnalysis, quoteRates, pricingModel, activeTier, recurringArr]);
+    // cnpOnly too: it can change (a kiosk added/removed) without previewAnalysis
+    // changing identity on the statement path, and it feeds the new rate floor.
+  }, [canPreview, previewAnalysis, quoteRates, pricingModel, activeTier, recurringArr, cnpOnly]);
 
   // Reported, never enforced — floor enforcement went with the margin input on
   // 2026-10-06. A rate under the floor warns the rep and still saves.
@@ -163,13 +166,17 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   // SEPARATE test on a separate margin, so a quote has to clear both. See
   // `monthlyRevenueFloorBlockers` (pricing.ts).
   const belowRevenueFloor = pricing?.belowMonthlyRevenueFloor ?? false;
+  // The wholesale-plus-minimum rate floor (2026-10-15). A THIRD, independent
+  // test alongside `belowMin`/`belowRevenueFloor` — see `minRateFloorBlockers`
+  // (pricing.ts).
+  const belowMinRate = pricing?.belowMinRateFloor ?? false;
   const blockers = quote?.blockers ?? [];
 
   // Below the minimum margin REFUSES the save (2026-10-09, "card rate minimums
   // are needed"), where it used to be a note the rep could read past. Below
   // COST stays a warning: it is the sharper of the two, but it is measured
   // against the processor tier on file, which a rep can't fix from here.
-  const disabled = saving || blockers.length > 0 || belowMin || belowRevenueFloor || (!rated && !picks.length);
+  const disabled = saving || blockers.length > 0 || belowMin || belowRevenueFloor || belowMinRate || (!rated && !picks.length);
 
   const save = async () => {
     if (disabled) return;
@@ -360,6 +367,12 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
                   <div style={{ color: "var(--danger, #e5484d)" }}>
                     Below AIO&rsquo;s minimum margin for this volume. Raise the card rate to save
                     this quote.
+                  </div>
+                )}
+                {belowMinRate && (
+                  <div style={{ color: "var(--danger, #e5484d)" }}>
+                    Below AIO&rsquo;s minimum of {pricing.minCardPresentRate == null ? "—" : fmtPct2(pricing.minCardPresentRate)}{" "}
+                    for this merchant&rsquo;s average ticket. Raise the card rate to save this quote.
                   </div>
                 )}
               </div>

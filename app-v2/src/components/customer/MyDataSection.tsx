@@ -40,7 +40,6 @@ export function buildGroups(app: MerchantApplication): Group[] {
         b?.dbaAddress && { label: "DBA Address", value: [b.dbaAddress, b.dbaCity, b.dbaState, b.dbaZip].filter(Boolean).join(", ") },
         b?.phone && { label: "Phone", value: b.phone },
         b?.website && { label: "Website", value: b.website },
-        b?.yearsInBusiness && { label: "Years in Business", value: b.yearsInBusiness },
       ].filter(Boolean) as Row[],
     },
     {

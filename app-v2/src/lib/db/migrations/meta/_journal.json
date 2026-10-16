@@ -176,6 +176,20 @@
       "when": 1792190000000,
       "tag": "0024_details_confirmed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792200000000,
+      "tag": "0025_discount_caps",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792201000000,
+      "tag": "0026_min_rate_floor",
+      "breakpoints": true
     }
   ]
 }

@@ -5,7 +5,7 @@ import { db } from "@/lib/db/client";
 import { marginPolicy, quoteLimitPolicy, commissionPolicy } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import {
-  analysisFromQuoteConfig, derivePricingForRole,
+  analysisFromQuoteConfig, derivePricingForRole, DEFAULT_MIN_RATE_MARGIN_BPS,
   type PaddingConfig, type RoleScopedPricing, type FeeOverrides,
 } from "@/lib/pricing";
 import {
@@ -129,6 +129,16 @@ export async function getPricingPreviewAction(input: {
    * split. See `analysisFromQuoteConfig`'s own parameter for why it exists.
    */
   cardPresentPct?: number | null;
+  /**
+   * This quote's card-present lane is hidden and nothing on it is
+   * rep-editable (`processesCardNotPresentOnly`, quoting.ts) — tells the new
+   * wholesale-plus-minimum rate floor (`minRateFloorBlockers`, pricing.ts)
+   * there is no basis to refuse against. Distinct from `cardPresentPct`
+   * above: that one only reaches the `quoteConfig` path and reshapes the
+   * analysis the OTHER two floors price off; this one reaches both paths and
+   * affects only this one floor.
+   */
+  cardNotPresentOnly?: boolean;
 }): Promise<RoleScopedPricing> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
@@ -136,9 +146,11 @@ export async function getPricingPreviewAction(input: {
     ?? (input.quoteConfig ? analysisFromQuoteConfig(input.quoteConfig, input.cardPresentPct) : null);
   if (!analysis) throw new Error("A statement or a volume and ticket is needed to price a quote.");
   const padding = await getActivePaddingPolicy();
+  const minRateMarginBps = await getMinRateMarginBps();
   return derivePricingForRole(
     analysis, input.quoteRates, input.pricingModel, input.feeOverrides,
-    effective.role, input.activeTier, padding, input.recurringArr ?? null
+    effective.role, input.activeTier, padding, input.recurringArr ?? null,
+    minRateMarginBps, input.cardNotPresentOnly ?? false
   );
 }
 
@@ -204,6 +216,7 @@ export async function updateHardwareCommissionPolicyAction(hardwareCommissionBps
 export async function getQuoteLimits(): Promise<QuoteLimits> {
   const fallback = {
     unitCaps: DEFAULT_UNIT_CAPS,
+    discountCaps: {},
     maxBillingDelayDays: DEFAULT_MAX_APPROVED_DELAY_DAYS,
     showTablets: DEFAULT_SHOW_TABLETS,
   };
@@ -225,8 +238,13 @@ export async function getQuoteLimits(): Promise<QuoteLimits> {
   // before this column existed, or one whose jsonb came back as something
   // other than an object, is not an answer at all.
   const caps = row.unitCaps;
+  // Same posture for discount_caps, a row written before migration 0025 reads
+  // undefined here too — falls back to {}, which means "nothing per-product
+  // yet, the global margin_policy cap applies everywhere" (see discountCapFor).
+  const discountCaps = row.discountCaps;
   return {
     unitCaps: caps && typeof caps === "object" && !Array.isArray(caps) ? caps : DEFAULT_UNIT_CAPS,
+    discountCaps: discountCaps && typeof discountCaps === "object" && !Array.isArray(discountCaps) ? discountCaps : {},
     maxBillingDelayDays: row.maxBillingDelayDays || DEFAULT_MAX_APPROVED_DELAY_DAYS,
     // A row written before migration 0020 reads undefined, which is the same
     // answer as "an admin left them hidden" — the default either way.
@@ -259,14 +277,74 @@ export async function updateQuoteLimitsAction(input: QuoteLimits): Promise<void>
     unitCaps[productId] = cap;
   }
 
+  // Same validation shape as unitCaps, but 0–100: this is a PERCENTAGE, and
+  // unlike a quantity, 0 is a real answer ("this product can never be
+  // discounted") rather than a value nobody would choose. Removing the entry
+  // is how you fall back to the global `maxDiscountPercent` for this product.
+  const discountCaps: Record<string, number> = {};
+  for (const [productId, cap] of Object.entries(input.discountCaps ?? {})) {
+    if (!Number.isInteger(cap) || cap < 0 || cap > 100) {
+      throw new Error(`The discount cap on product ${productId} has to be a whole percentage between 0 and 100, or removed entirely.`);
+    }
+    discountCaps[productId] = cap;
+  }
+
   const [existing] = await db.select({ id: quoteLimitPolicy.id }).from(quoteLimitPolicy).where(eq(quoteLimitPolicy.isActive, true)).limit(1);
   const values = {
     unitCaps,
+    discountCaps,
     maxBillingDelayDays: input.maxBillingDelayDays,
     showTablets: input.showTablets === true,
     updatedByUserId: effective.userId,
     updatedAt: new Date(),
   };
+  if (existing) {
+    await db.update(quoteLimitPolicy).set(values).where(eq(quoteLimitPolicy.id, existing.id));
+  } else {
+    await db.insert(quoteLimitPolicy).values(values);
+  }
+}
+
+// ── The wholesale-plus-minimum card-present rate floor (2026-10-15) ────────
+// Its own accessor pair on the SAME `quote_limit_policy` row as the caps and
+// the delay ceiling above — same reasoning as `getMaxDiscountPercent`'s own
+// separate accessor on `margin_policy`: this number is edited and read on its
+// own, independent of `QuoteLimits`/`updateQuoteLimitsAction`, so a save of
+// one never has to carry the other along. See `minRateFloorBlockers` /
+// `DEFAULT_MIN_RATE_MARGIN_BPS` in pricing.ts for what this guards and why
+// the default is 0.
+
+/**
+ * The active minimum, in whole basis points, or NULL — which means the rate
+ * floor is OFF, the state it shipped in (see `DEFAULT_MIN_RATE_MARGIN_BPS`,
+ * pricing.ts, for why off and not 0 bps). Fails to the default, so an
+ * unseeded table or an unrun migration 0026 leaves the floor off rather than
+ * starting to refuse quotes nobody configured it to refuse. That is the
+ * opposite direction from `getMaxDiscountPercent`, deliberately: failing safe
+ * on a CAP means capping, and failing safe on a FLOOR means not blocking.
+ */
+export async function getMinRateMarginBps(): Promise<number | null> {
+  let row;
+  try {
+    [row] = await db.select().from(quoteLimitPolicy).where(eq(quoteLimitPolicy.isActive, true)).limit(1);
+  } catch (err) {
+    console.error("[quote-limits] could not read min_rate_margin_bps; using the default in code", err);
+    return DEFAULT_MIN_RATE_MARGIN_BPS;
+  }
+  return row?.minRateMarginBps ?? DEFAULT_MIN_RATE_MARGIN_BPS;
+}
+
+/** `null` turns the floor off; a number turns it on at that many bps. */
+export async function updateMinRateMarginBpsAction(minRateMarginBps: number | null): Promise<void> {
+  const effective = await getEffectiveRole();
+  if (!effective || effective.role !== "admin") throw new Error("Admin only");
+  if (minRateMarginBps !== null
+    && (!Number.isInteger(minRateMarginBps) || minRateMarginBps < 0 || minRateMarginBps > 10000)) {
+    throw new Error("The minimum rate margin has to be a whole number of basis points between 0 and 10000 (0%–100%), or blank to switch the floor off.");
+  }
+
+  const [existing] = await db.select({ id: quoteLimitPolicy.id }).from(quoteLimitPolicy).where(eq(quoteLimitPolicy.isActive, true)).limit(1);
+  const values = { minRateMarginBps, updatedByUserId: effective.userId, updatedAt: new Date() };
   if (existing) {
     await db.update(quoteLimitPolicy).set(values).where(eq(quoteLimitPolicy.id, existing.id));
   } else {

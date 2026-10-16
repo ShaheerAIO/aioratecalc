@@ -125,6 +125,15 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   // inside the AIO Internal disclosure, and only when something is wrong.
   const belowRevenueFloor = pricing?.belowMonthlyRevenueFloor ?? false;
   const monthlyAioRevenue = pricing?.monthlyProcessingRevenue ?? null;
+  // The wholesale-plus-minimum rate floor (2026-10-15, product owner: "add
+  // floor for rate (wholesale + minimum), editable in settings"). A THIRD,
+  // independent refusal alongside `belowMin`/`belowRevenueFloor` — see
+  // `minRateFloorBlockers` (pricing.ts). This step has no quote type or picks
+  // yet, so there is no `cardNotPresentOnly` to pass above and this floor
+  // always applies here — the same posture the step already takes toward the
+  // card-present rate box, which is never hidden at this stage.
+  const belowMinRate = pricing?.belowMinRateFloor ?? false;
+  const minCardPresentRate = pricing?.minCardPresentRate ?? null;
 
   const generate = async () => {
     setLoading(true);
@@ -343,6 +352,13 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
                   to process for.
                 </div>
               )}
+              {belowMinRate && (
+                <div className={styles.alertDanger}>
+                  <strong>Below AIO&rsquo;s minimum rate.</strong> This card-present rate is under the{" "}
+                  {minCardPresentRate == null ? "minimum" : fmtPct2(minCardPresentRate)} floor for this
+                  merchant&rsquo;s average ticket. Raise it to generate the proposal.
+                </div>
+              )}
               </div>
             )}
           </div>
@@ -400,7 +416,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
         <button
           className={styles.btnPrimary}
           style={{ opacity: (loading || !pricing) ? 0.6 : 1 }}
-          disabled={loading || !pricing || belowMin || belowRevenueFloor}
+          disabled={loading || !pricing || belowMin || belowRevenueFloor || belowMinRate}
           onClick={generate}
         >
           {loading ? "Preparing proposal…" : "Continue to Products →"}

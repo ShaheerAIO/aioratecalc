@@ -21,7 +21,7 @@ import {
   setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
 import { resolveSender } from "@/lib/billing/publishBillingQuote";
-import { analysisFromQuoteConfig, marginFloorBlockers, monthlyRevenueFloorBlockers } from "@/lib/pricing";
+import { analysisFromQuoteConfig, marginFloorBlockers, minRateFloorBlockers, monthlyRevenueFloorBlockers } from "@/lib/pricing";
 import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "@/lib/actions/pricing";
 import {
   buildQuote, describeDelayDeviation, isAllowedForQuoteType, isProcessingQuote,
@@ -490,14 +490,16 @@ export type QuotePick = { hubspotProductId: string; qty: number };
 const ZERO_FEE_OVERRIDES = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
 
 /**
- * Refuses when `quoteRates` don't clear AIO's margin floor for this volume, OR
- * when they leave AIO under `MIN_MONTHLY_PROCESSING_REVENUE` a month on this
- * merchant (2026-10-15) — the shared guard both `createProspectAction` and
- * `saveQuoteConfigurationAction` call. Two independent tests off ONE preview:
- * they are measured on different margins and neither implies the other, so a
- * quote has to pass both. Both are reported together rather than one at a
- * time, so a rep raising a rate to clear the first doesn't then discover the
- * second.
+ * Refuses when `quoteRates` don't clear AIO's margin floor for this volume,
+ * leave AIO under `MIN_MONTHLY_PROCESSING_REVENUE` a month on this merchant
+ * (2026-10-15), OR undercut AIO's wholesale cost by less than the admin-set
+ * minimum (2026-10-15, "add floor for rate (wholesale + minimum), editable in
+ * settings") — the shared guard both `createProspectAction` and
+ * `saveQuoteConfigurationAction` call. Three independent tests off ONE
+ * preview: each is measured on a different margin and none implies another,
+ * so a quote has to pass all three. All three are reported together rather
+ * than one at a time, so a rep raising a rate to clear one doesn't then
+ * discover the next.
  *
  * A no-op with no basis to check (no statement, no rep-entered
  * volume/ticket): the same `hasFloorBasis`/`hasVolumeBasis` condition the two
@@ -526,8 +528,14 @@ async function assertRateAboveFloor(
     // cleared against the rate being quoted rather than against a 95%
     // card-present blend that can never happen.
     cardPresentPct: cardNotPresentOnly ? 0 : null,
+    // Same signal, for the wholesale-plus-minimum floor: a hidden,
+    // un-editable card-present lane has nothing to refuse (see
+    // `minimumCardPresentRate` in pricing.ts).
+    cardNotPresentOnly,
   });
-  const blockers = [...marginFloorBlockers(pricing), ...monthlyRevenueFloorBlockers(pricing)];
+  const blockers = [
+    ...marginFloorBlockers(pricing), ...monthlyRevenueFloorBlockers(pricing), ...minRateFloorBlockers(pricing),
+  ];
   if (blockers.length) throw new Error(blockers.join(" "));
 }
 

@@ -159,9 +159,9 @@ describe("picker exclusions", () => {
 });
 
 describe("quote types", () => {
-  it("shows Order & Pay Only before All-in-One in the picker (10/13: reverted to original order)", () => {
+  it("shows All-in-One, Order & Pay Only, then the two marketing plans (10/15 product-owner order)", () => {
     expect(QUOTE_TYPES.map(t => t.id)).toEqual([
-      "order_pay_only", "all_in_one", "marketing_only", "marketing_term",
+      "all_in_one", "order_pay_only", "marketing_only", "marketing_term",
     ]);
   });
 
@@ -1082,7 +1082,7 @@ describe("one website per merchant", () => {
     const id = find("POS Unit").hubspotProductId;
     const built = buildQuote(
       "all_in_one", picked([["POS Unit", 3]]), [], CATALOG, {}, 50,
-      { unitCaps: { [id]: 2 }, maxBillingDelayDays: 90, showTablets: false }
+      { unitCaps: { [id]: 2 }, discountCaps: {}, maxBillingDelayDays: 90, showTablets: false }
     );
     expect(built.blockers.some(b => b.includes("over the limit of 2"))).toBe(true);
     expect(built.blockers.some(b => b.includes("Admin → Quote limits"))).toBe(true);

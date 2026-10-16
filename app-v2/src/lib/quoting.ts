@@ -30,19 +30,22 @@ import type {
 // positionally. `quoteTypeOf` above matches on the id directly, and
 // AccountsDashboard's QUOTE_TYPE_LABELS is a Map keyed by id, so both are
 // order-independent; only ProductConfigurator's `planCards` renders `types`
-// in array order. The order was swapped to lead with All-in-One on 10/6, then
-// swapped back to lead with Order & Pay Only on 10/13 at the product owner's
-// request — this is the original order.
+// in array order. It has moved three times: swapped to lead with All-in-One
+// on 10/6, back to lead with Order & Pay Only on 10/13, and back to leading
+// with All-in-One again on 10/15 (product owner: "aio, order n pay, marketing
+// should be the order of the packages") — this is that order: All-in-One,
+// Order & Pay Only, then the two marketing entries (marketing_only before
+// marketing_term, unchanged).
 export const QUOTE_TYPES: Array<{ id: QuoteType; label: string; note: string }> = [
-  {
-    id: "order_pay_only",
-    label: "Order & Pay Only",
-    note: "Hardware, software and a processing rate.",
-  },
   {
     id: "all_in_one",
     label: "All-in-One",
     note: "The full platform. Hardware, software and a processing rate.",
+  },
+  {
+    id: "order_pay_only",
+    label: "Order & Pay Only",
+    note: "Hardware, software and a processing rate.",
   },
   {
     id: "marketing_only",
@@ -1933,6 +1936,12 @@ export function describeDelayDeviation(days: number, expected: number): string {
  */
 export type QuoteLimits = {
   unitCaps: Record<string, number>;
+  /**
+   * productId → the most that line may be discounted, as a whole percent. A
+   * product absent from the map falls back to the global
+   * `maxDiscountPercent` — see `discountCapFor`. Added 2026-10-15.
+   */
+  discountCaps: Record<string, number>;
   maxBillingDelayDays: number;
   /** Whether the picker offers the two tablets at all. See TABLET_PRODUCT_IDS. */
   showTablets: boolean;
@@ -1940,6 +1949,7 @@ export type QuoteLimits = {
 
 export const DEFAULT_QUOTE_LIMITS: QuoteLimits = {
   unitCaps: DEFAULT_UNIT_CAPS,
+  discountCaps: {},
   maxBillingDelayDays: DEFAULT_MAX_APPROVED_DELAY_DAYS,
   showTablets: DEFAULT_SHOW_TABLETS,
 };
@@ -1986,6 +1996,30 @@ export function applyLineAdjustment(line: QuoteLine, adjustment: LineAdjustment 
 }
 
 /**
+ * The discount ceiling for ONE line: a PRODUCT-SPECIFIC cap when an admin set
+ * one, the global cap otherwise.
+ *
+ * Added 2026-10-15 (product owner: "make max discounts per line item instead
+ * of a global"). The global (`margin_policy.maxDiscountPercent`) did NOT go
+ * away — it is the FALLBACK here, and stays the standing approval lever
+ * ("raising it is how a discount over 50% gets approved"): a product absent
+ * from the per-product map still has to be capped by something. Same
+ * jsonb-map-over-column reasoning as `DEFAULT_UNIT_CAPS`: the catalog is an
+ * open set maintained in HubSpot by non-engineers, so a new product must be
+ * cappable without a deploy, and an uncapped one falls through to the global.
+ */
+function discountCapFor(
+  hubspotProductId: string,
+  discountCaps: Record<string, number>,
+  globalCap: number
+): { cap: number; isSpecific: boolean } {
+  const specific = discountCaps[hubspotProductId];
+  return Number.isFinite(specific)
+    ? { cap: Math.min(100, Math.max(0, specific)), isSpecific: true }
+    : { cap: globalCap, isSpecific: false };
+}
+
+/**
  * Everything wrong with the rep's edits, in the language of the person who has
  * to fix it. Hard refusals, not warnings — these ride onto a document that
  * cannot be edited, deleted or voided once the merchant accepts it.
@@ -1997,58 +2031,101 @@ export function adjustmentBlockers(
    * The admin-set ceiling on a delayed billing start. Capped by HubSpot's own
    * limit, which no admin may raise past.
    */
-  maxBillingDelayDays: number = DEFAULT_MAX_APPROVED_DELAY_DAYS
+  maxBillingDelayDays: number = DEFAULT_MAX_APPROVED_DELAY_DAYS,
+  /** Per-product discount ceilings. See `discountCapFor`. */
+  discountCaps: Record<string, number> = {},
+  /**
+   * The quote's OWN plan/platform line, when it has one — the id
+   * `resolvePlatformLine` resolved THIS BUILD, not "any platform product
+   * including retired ones". A rep may never discount the plan line at all
+   * (product owner, 2026-10-15: "you cannot discount the plan"), but a saved
+   * quote's old, now-retired platform line is dropped and re-derived under a
+   * DIFFERENT product id on reopen (see `isDroppedOnReopen`) — so scoping to
+   * the id resolved now, rather than to `isPlatformProduct`, is what keeps a
+   * legacy row with a discounted retired platform line from becoming
+   * permanently unsavable the moment it's reopened.
+   */
+  planProductId: string | null = null
 ): string[] {
   const blockers: string[] = [];
   const cap = Math.min(100, Math.max(0, maxDiscountPercent));
   const delayCap = Math.min(MAX_BILLING_DELAY_DAYS, Math.max(1, maxBillingDelayDays));
 
   for (const line of lines) {
-    const pct = line.discountPercent;
-    if (pct !== undefined && pct !== null) {
-      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-        blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
-      } else if (pct > cap && !((isCompedService(line) || line.coveredByPackage) && pct === 100)) {
-        // A comped service or a package-covered line sitting at exactly 100%
-        // is exempt: both are AIO policy — off the price sheet, and out of the
-        // package the merchant is already paying for — and the cap exists to
-        // bound REP discretion. Without this every quote carrying either would
-        // refuse to send, since the default cap is 50%. Any other figure on
-        // those lines IS a rep's choice and is capped like anything else.
-        blockers.push(
-          `"${line.name}" is discounted ${pct}%, over the ${cap}% limit AIO allows on a quote. ` +
-          `Lower it, or ask an admin to raise the limit in Admin → Margin policy.`
-        );
-      }
-    }
+    const isPlanLine = planProductId !== null && line.hubspotProductId === planProductId;
+    const hasDiscount =
+      (line.discountPercent !== undefined && line.discountPercent !== null) ||
+      (line.discountAmount !== undefined && line.discountAmount !== null);
 
-    // A CASH discount is held to the same ceiling, converted. Without this
-    // the dollar box would be a way straight around the admin's limit: "$700
-    // off a $749 line" is 93%, and nothing above would have looked at it.
-    // Expressed against the LIST amount, which is what the percentage lever
-    // is a percentage of, so the two controls bound the same thing.
-    const amount = line.discountAmount;
-    if (amount !== undefined && amount !== null) {
-      const list = lineListAmount(line);
-      if (!Number.isFinite(amount) || amount < 0) {
-        blockers.push(`"${line.name}" has a discount of ${fmt$(amount)}, which isn't an amount of money off.`);
-      } else if (amount > list) {
-        // Refused rather than clamped, unlike `discountQty`. A quantity past
-        // the line means "all of them" and there is nothing else it could
-        // mean; a discount bigger than the line is either a typo or a line
-        // the rep shrank afterwards, and silently making it "free" is a
-        // decision worth more than $0.
-        blockers.push(
-          `"${line.name}" is discounted ${fmt$(amount)}, which is more than the line's ${fmt$(list)}. ` +
-          `A discount can't exceed the price.`
-        );
-      } else if (list > 0 && (amount / list) * 100 > cap) {
-        const asPct = Math.round((amount / list) * 1000) / 10;
-        blockers.push(
-          `"${line.name}" is discounted ${fmt$(amount)} of ${fmt$(list)} — ${asPct}%, over the ${cap}% ` +
-          `limit AIO allows on a quote. Lower it, or ask an admin to raise the limit in ` +
-          `Admin → Quote limits.`
-        );
+    // The plan's own subscription line can't be discounted AT ALL — not
+    // capped lower, refused outright, whatever lever the rep used. (A scoped
+    // `discountQty` give-away can't surface separately here: the plan line is
+    // always qty 1, so `splitPartialDiscount` can never split it, and any
+    // discount a rep set still lands on this one line.) This is NOT a
+    // derived comp: `COMPED_SERVICE_PRODUCT_IDS` and the package/plan-
+    // inclusion comps never touch the platform line, so nothing here can
+    // mistake AIO's own derivation for a rep's discount.
+    if (isPlanLine && hasDiscount) {
+      blockers.push(
+        `"${line.name}" is the plan's own subscription line, and the plan price can't be discounted. ` +
+        `Remove the discount, or discount a different line.`
+      );
+    } else {
+      const { cap: lineCap, isSpecific } = discountCapFor(line.hubspotProductId, discountCaps, cap);
+
+      const pct = line.discountPercent;
+      if (pct !== undefined && pct !== null) {
+        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+          blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
+        } else if (pct > lineCap && !((isCompedService(line) || line.coveredByPackage) && pct === 100)) {
+          // A comped service or a package-covered line sitting at exactly 100%
+          // is exempt: both are AIO policy — off the price sheet, and out of the
+          // package the merchant is already paying for — and the cap exists to
+          // bound REP discretion. Without this every quote carrying either would
+          // refuse to send, since the default cap is 50%. Any other figure on
+          // those lines IS a rep's choice and is capped like anything else.
+          blockers.push(
+            isSpecific
+              ? `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit admin set for this product. ` +
+                `Lower it, or ask an admin to raise it in Admin → Quote limits.`
+              : `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit AIO allows on a quote. ` +
+                `Lower it, or ask an admin to raise the limit in Admin → Margin policy.`
+          );
+        }
+      }
+
+      // A CASH discount is held to the same ceiling, converted. Without this
+      // the dollar box would be a way straight around the admin's limit: "$700
+      // off a $749 line" is 93%, and nothing above would have looked at it.
+      // Expressed against the LIST amount, which is what the percentage lever
+      // is a percentage of, so the two controls bound the same thing.
+      const amount = line.discountAmount;
+      if (amount !== undefined && amount !== null) {
+        const list = lineListAmount(line);
+        if (!Number.isFinite(amount) || amount < 0) {
+          blockers.push(`"${line.name}" has a discount of ${fmt$(amount)}, which isn't an amount of money off.`);
+        } else if (amount > list) {
+          // Refused rather than clamped, unlike `discountQty`. A quantity past
+          // the line means "all of them" and there is nothing else it could
+          // mean; a discount bigger than the line is either a typo or a line
+          // the rep shrank afterwards, and silently making it "free" is a
+          // decision worth more than $0.
+          blockers.push(
+            `"${line.name}" is discounted ${fmt$(amount)}, which is more than the line's ${fmt$(list)}. ` +
+            `A discount can't exceed the price.`
+          );
+        } else if (list > 0 && (amount / list) * 100 > lineCap) {
+          const asPct = Math.round((amount / list) * 1000) / 10;
+          blockers.push(
+            isSpecific
+              ? `"${line.name}" is discounted ${fmt$(amount)} of ${fmt$(list)} — ${asPct}%, over the ` +
+                `${lineCap}% limit admin set for this product. Lower it, or ask an admin to raise it in ` +
+                `Admin → Quote limits.`
+              : `"${line.name}" is discounted ${fmt$(amount)} of ${fmt$(list)} — ${asPct}%, over the ${lineCap}% ` +
+                `limit AIO allows on a quote. Lower it, or ask an admin to raise the limit in ` +
+                `Admin → Quote limits.`
+          );
+        }
       }
     }
 
@@ -2428,7 +2505,10 @@ export function buildQuote(
   const totals = quoteTotals(quoteLines);
 
   const blockers: string[] = [
-    ...adjustmentBlockers(quoteLines, maxDiscountPercent, limits.maxBillingDelayDays),
+    ...adjustmentBlockers(
+      quoteLines, maxDiscountPercent, limits.maxBillingDelayDays, limits.discountCaps,
+      platform.status === "resolved" ? platform.line.hubspotProductId : null
+    ),
     ...discountQtyBlockers(adjustments, quoteLines),
     // The real lines only: fifty cents must not rescue a quote that nets to $0.
     ...quoteSanityBlockers(chargedLines, quoteTotals(chargedLines)),

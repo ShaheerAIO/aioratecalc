@@ -968,7 +968,8 @@ HUBSPOT_BILLING_PRIVATE_APP_TOKEN  # separate "EasyOB Billing" app: products (ne
 HARDWARE_COMMISSION_WRITEBACK_ENABLED  # must be exactly "true". DEFAULT OFF — gates the
                             # rep_commission/rsm_commission deal writeback in hubspot.ts so the
                             # product owner can inspect the first computed figures before they
-                            # start landing on live deals.
+                            # start landing on live deals. ON IN PRODUCTION since 2026-10-15
+                            # (product owner). Unset in .env.local, so local syncs still omit it.
 MAIL_GRAPH_TENANT_ID        # Phase 4 — transactional email via Microsoft Graph, PREFERRED over Resend:
 MAIL_GRAPH_CLIENT_ID        #   sends from AIO's own M365 tenant, so it inherits the tenant's
 MAIL_GRAPH_CLIENT_SECRET    #   SPF/DKIM/DMARC and sending reputation instead of warming a new subdomain.

@@ -1,0 +1,30 @@
+-- The wholesale-plus-minimum card-present rate floor (2026-10-15, product
+-- owner: "add floor for rate (wholesale + minimum), editable in settings").
+-- A THIRD floor, sibling of the $10/mo minimum (monthlyRevenueFloorBlockers,
+-- pricing.ts) rather than a restatement of either existing one: same
+-- wholesale basis (lib/wholesale.ts), expressed as a RATE instead of monthly
+-- dollars, so it binds on a merchant of any size where the $10/mo floor only
+-- binds on small ones. Not padded, not secret from reps -- see
+-- minRateFloorBlockers in pricing.ts.
+--
+-- Lives on quote_limit_policy, not margin_policy or rate_matrix_policy: that
+-- table is already "limits on what a rep may put on a quote," which is
+-- exactly what a minimum quotable rate is -- see schema.ts's own comment on
+-- quote_limit_policy for why the other two tables are the wrong home.
+--
+-- Whole basis points, same convention as every other rate figure in this
+-- codebase: exact, not a float, on a document nobody can amend.
+--
+-- NULLABLE, and NULL means the floor is OFF -- product owner's decision on
+-- the day it was built. The obvious default of 0 ("never quote below AIO's
+-- own wholesale cost") is not inert: AIO's SS10.3 rate-card defaults
+-- (rateMatrix.ts's DEFAULT_CP_RATE_BPS) are built off DESIRED MARGIN OVER
+-- INTERCHANGE, a different basis, and sit below the wholesale table in 48 of
+-- their 81 cells -- every ticket from $10 to $50 once a merchant is over
+-- $75K/mo. A 0 default would therefore have refused most of the rate the
+-- card itself suggests, on merchants reps quote every day. wholesale.ts's own
+-- comment says plainly that the two bases "will not agree, and are not
+-- supposed to"; this floor is the first thing that would have made them, so
+-- it ships switched off until that is settled.
+ALTER TABLE "quote_limit_policy"
+  ADD COLUMN IF NOT EXISTS "min_rate_margin_bps" integer;

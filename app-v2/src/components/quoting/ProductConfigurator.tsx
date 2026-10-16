@@ -1028,6 +1028,12 @@ export default function ProductConfigurator({
     // decision the rep did not make, and that is what the first version of
     // this control did (type $100, watch it settle to $100.37).
     const cashDiscount = l.discountAmount ?? null;
+    // The plan's own subscription line can never be discounted (product
+    // owner, 2026-10-15: "you cannot discount the plan") — so its drawer
+    // hides the Discount block and the per-unit mode entirely. The
+    // billing-start control stays: this is exactly the line that carries the
+    // 60-day delay, and taking the whole drawer away would break that.
+    const isPlanLine = platform.line?.hubspotProductId === id;
 
     return (
       <div className={styles.adjustWrap}>
@@ -1051,7 +1057,7 @@ export default function ProductConfigurator({
 
         {open && (
           <div className={styles.adjustDrawer}>
-            {unitMode && (
+            {unitMode && !isPlanLine && (
               <div className={styles.unitList}>
                 {units.map((u, i) => {
                   const us = u.billingStart;
@@ -1123,6 +1129,7 @@ export default function ProductConfigurator({
                 after 60 days" looks like the discount is what starts in 60
                 days, which is the opposite of what a delayed start does. */}
             {!unitMode && (<>
+            {!isPlanLine && (
             <div className={styles.adjustBlock}>
               <span className={styles.adjustBlockTitle}>Discount</span>
             <label className={styles.adjustField}>
@@ -1198,6 +1205,7 @@ export default function ProductConfigurator({
               </p>
             )}
             </div>
+            )}
 
             {/* One-time charges have no billing schedule to delay. */}
             {l.billingFrequency !== "one_time" && (
@@ -1246,8 +1254,9 @@ export default function ProductConfigurator({
             {/* Several units on one line: the rep may want them treated
                 differently — one free, one started later. Offered on any line
                 with more than one unit, and always while already in the mode so
-                it can be left. */}
-            {(l.qty > 1 || unitMode) && (
+                it can be left. Never on the plan line — it carries no discount
+                to scope per unit, and it is always qty 1 regardless. */}
+            {(l.qty > 1 || unitMode) && !isPlanLine && (
               <button
                 type="button"
                 className={styles.linkBtn}
@@ -1257,11 +1266,18 @@ export default function ProductConfigurator({
               </button>
             )}
 
-            <p className={styles.adjustNote}>
-              A discount on a recurring line is permanent — {maxDiscountPercent}% off a monthly fee is
-              that much off every month, for good. To give something away temporarily, delay when
-              billing starts instead.
-            </p>
+            {isPlanLine ? (
+              <p className={styles.adjustNote}>
+                The plan price is fixed and can&apos;t be discounted — delay when billing starts
+                instead.
+              </p>
+            ) : (
+              <p className={styles.adjustNote}>
+                A discount on a recurring line is permanent — {maxDiscountPercent}% off a monthly fee is
+                that much off every month, for good. To give something away temporarily, delay when
+                billing starts instead.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -1598,9 +1614,12 @@ export default function ProductConfigurator({
     // panel of its own. Keyed off ids and `coveredByPackage`, never off object
     // identity: buildQuote rebuilds every line as it adjusts and packs them.
     const docTag = (l: QuoteLine): { tag?: string; why?: string } => {
-      if (l.coveredByPackage) {
-        return l.coveredByPackage === planName ? { tag: "In plan" } : { tag: "In package", why: l.coveredByPackage };
-      }
+      // A package-covered line (coveredByPackage set to something other than
+      // the plan name) never reaches docTag at all — see packageGroupLines
+      // below, which pulls those out and groups them under one banner
+      // instead of a per-line "In package" chip (2026-10-15, product owner).
+      // The derived plan line is a single row, so it keeps its own chip.
+      if (l.coveredByPackage === planName) return { tag: "In plan" };
       if (platform.line && l.hubspotProductId === platform.line.hubspotProductId) return { tag: "Plan" };
       if (isPreAuthProduct(l.hubspotProductId, l.name)) {
         return { tag: "Pre-auth", why: "Nothing else is due at checkout, so the card is pre-authorized. Can't be removed." };
@@ -1618,7 +1637,7 @@ export default function ProductConfigurator({
     // A split line (a scoped discount, or a package covering part of it) is
     // two lines of one product; its adjust control belongs on the first only.
     const adjustShown = new Set<string>();
-    const docLine = (l: QuoteLine, i: number) => {
+    const docLine = (l: QuoteLine, i: number, startInHead = false) => {
       const { tag, why } = docTag(l);
       const list = lineListAmount(l);
       const net = lineNetAmount(l);
@@ -1635,7 +1654,14 @@ export default function ProductConfigurator({
               {tag && <span className={styles.docTag} data-tag={tag}>{tag}</span>}
             </div>
             {why && <div className={styles.docWhy}>{why}</div>}
-            {l.billingStart && <div className={styles.docWhy}>{describeBillingStart(l.billingStart)}</div>}
+            {/* Suppressed when every line in the group starts together and the
+                group's own header says so once — it was printing the same
+                sentence under every recurring line (2026-10-15, "too
+                cluttered"). Still per-line whenever the starts differ,
+                which is the only case where a reader has to compare them. */}
+            {l.billingStart && !startInHead && (
+              <div className={styles.docWhy}>{describeBillingStart(l.billingStart)}</div>
+            )}
           </div>
           {/* The AE's own commission on this line, in its own column beside
               the price rather than stacked under the name (product owner,
@@ -1673,10 +1699,29 @@ export default function ProductConfigurator({
       );
     };
 
+    // Package-covered lines (NOT the derived plan line — that keeps its own
+    // "In plan" chip) are lifted out of the interleaved list entirely and
+    // grouped under one banner per package, in first-seen order, rather than
+    // repeating an "In package" chip on every line (2026-10-15, product
+    // owner: "group them all under one 'in package' banner"). Packages cover
+    // one-time lines only, so there's nothing to pull from the monthly group.
+    const inPackageGroup = (l: QuoteLine) => Boolean(l.coveredByPackage) && l.coveredByPackage !== planName;
+    const packageGroupOrder: string[] = [];
+    const packageGroupLines = new Map<string, QuoteLine[]>();
+    for (const l of quoteLines) {
+      if (!inPackageGroup(l)) continue;
+      const key = l.coveredByPackage as string;
+      if (!packageGroupLines.has(key)) {
+        packageGroupOrder.push(key);
+        packageGroupLines.set(key, []);
+      }
+      packageGroupLines.get(key)!.push(l);
+    }
+
     const recurringDoc = quoteLines.filter(l => l.billingFrequency !== "one_time");
     // The merchant's own picks first, then what came with them.
     const oneTimeDoc = quoteLines
-      .filter(l => l.billingFrequency === "one_time")
+      .filter(l => l.billingFrequency === "one_time" && !inPackageGroup(l))
       .map((l, i) => ({ l, i, derived: docTag(l).tag ? 1 : 0 }))
       .sort((a, b) => a.derived - b.derived || a.i - b.i)
       .map(x => x.l);
@@ -1686,6 +1731,18 @@ export default function ProductConfigurator({
     // every one of them), so the monthly group stays two columns and its
     // prices sit where they always did, rather than leaving an empty gutter
     // the width of a column that nothing in that group can ever fill.
+    // The one sentence that is true of the WHOLE monthly group, when it is:
+    // every recurring line carries a billing start and they all say the same
+    // thing. Null when they differ (or when some line has none), and then each
+    // line keeps saying it for itself.
+    const sharedRecurringStart = (() => {
+      if (recurringDoc.length === 0) return null;
+      const said = new Set(recurringDoc.map(l => (l.billingStart ? describeBillingStart(l.billingStart) : "")));
+      if (said.size !== 1) return null;
+      const [only] = [...said];
+      return only || null;
+    })();
+
     const recurringComm = recurringDoc.some(hasLineCommissionNote);
     const oneTimeComm = oneTimeDoc.some(hasLineCommissionNote);
 
@@ -1792,24 +1849,49 @@ export default function ProductConfigurator({
             {documentRate}
 
             {recurringDoc.length > 0 && (
-              <div className={styles.docGroup} data-commission={recurringComm || undefined}>
+              <div className={styles.docGroup} data-kind="recurring" data-commission={recurringComm || undefined}>
                 <div className={styles.docGroupHead}>
-                  <span>Monthly</span>
+                  <span className={styles.docGroupLabel}>
+                    Monthly
+                    <span className={styles.docGroupNote}>
+                      {sharedRecurringStart ?? "every month, on its own billing start"}
+                    </span>
+                  </span>
                   {recurringComm && <span className={styles.docCommissionHead}>Your comm.</span>}
-                  <span>{fmt$(totals.monthlyEquivalent)}/mo</span>
+                  <span className={styles.docGroupTotal}>{fmt$(totals.monthlyEquivalent)}<span>/mo</span></span>
                 </div>
-                {recurringDoc.map(docLine)}
+                {recurringDoc.map((l, i) => docLine(l, i, sharedRecurringStart != null))}
               </div>
             )}
 
-            {(oneTimeDoc.length > 0 || adjustments[WIFI_PRODUCT_ID]?.removed) && (
-              <div className={styles.docGroup} data-commission={oneTimeComm || undefined}>
+            {(oneTimeDoc.length > 0 || packageGroupOrder.length > 0 || adjustments[WIFI_PRODUCT_ID]?.removed) && (
+              <div className={styles.docGroup} data-kind="onetime" data-commission={oneTimeComm || undefined}>
                 <div className={styles.docGroupHead}>
-                  <span>One-time</span>
+                  <span className={styles.docGroupLabel}>
+                    One-time <span className={styles.docGroupNote}>charged once, at checkout</span>
+                  </span>
                   {oneTimeComm && <span className={styles.docCommissionHead}>Your comm.</span>}
-                  <span>{fmt$(totals.oneTime)}</span>
+                  <span className={styles.docGroupTotal}>{fmt$(totals.oneTime)}</span>
                 </div>
-                {oneTimeDoc.map(docLine)}
+                {oneTimeDoc.map((l, i) => docLine(l, i))}
+                {packageGroupOrder.map(name => (
+                  <div key={name} className={styles.packageBanner}>
+                    <div className={styles.packageBannerHead}>
+                      {name} <span>— already paid for, in the package</span>
+                    </div>
+                    {packageGroupLines.get(name)!.map((l, i) => (
+                      <div key={`${name}-${l.hubspotProductId}-${i}`} className={styles.packageBannerLine}>
+                        <span>
+                          {l.qty > 1 && <span className={styles.docQty}>{l.qty} ×</span>} {l.name.trim()}
+                        </span>
+                        <span className={styles.packageBannerAmount}>
+                          <span className={styles.strike}>{fmt$(lineListAmount(l))}</span>
+                          <span>{fmt$(lineNetAmount(l))}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
                 {adjustments[WIFI_PRODUCT_ID]?.removed && (
                   <div className={styles.docLine} data-pending="true">
                     <div className={styles.docLineMain}>
@@ -1837,11 +1919,11 @@ export default function ProductConfigurator({
               </div>
             )}
 
-            {packages.applied.map(a => (
-              <p key={a.packageId} className={styles.docWhy}>
-                <strong>{a.name}{a.count > 1 && ` ×${a.count}`}</strong> covers {coveredSummary}.
-              </p>
-            ))}
+            {/* What each package covers now reads off its own banner above,
+                grouped with the lines it actually covers — this used to
+                repeat the same sentence here, off the one shared
+                coveredSummary string, which named every package's covered
+                items under whichever package happened to render first. */}
 
             {channelLabels.length > 0 && (
               <p className={styles.docWhy}>Ordering channels: {channelLabels.join(", ")}.</p>
