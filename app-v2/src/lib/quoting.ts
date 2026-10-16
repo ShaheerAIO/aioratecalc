@@ -322,6 +322,7 @@ export function isPickable(product: CatalogProduct): boolean {
     !isPlatformProduct(product.name, product.hubspotProductId) &&
     !isIncludedServiceProduct(product.hubspotProductId, product.name) &&
     !isPreAuthProduct(product.hubspotProductId, product.name) &&
+    !isKitReplacementProduct(product.hubspotProductId, product.name) &&
     !isSoftwareLicenseProduct(product.hubspotProductId, product.name)
   );
 }
@@ -1083,6 +1084,56 @@ export function isPreAuthProduct(id: string, name: string): boolean {
 }
 
 /**
+ * What a merchant pays to take something other than what the kit holds.
+ *
+ * The kit's slots are a fixed list of items (quotePackages.ts), and a rep may
+ * fill a screen slot with any of the four interchangeable screens — a POS where
+ * the KDS was, a kiosk where the POS was. Every such substitution costs one of
+ * these, $400 (Shaheer, 2026-10-16). It applies to EVERY swap, not only the
+ * ones the old MSRP ceiling used to refuse: a cheaper stand-in is still a kit
+ * item AIO has to source differently, and one rule is one a rep can say out
+ * loud.
+ *
+ * DERIVED AND UNTOUCHABLE, for the same reasons as `PRE_AUTH_PRODUCT`: reps
+ * used to add it by hand from the picker, which meant it was on the quote only
+ * when somebody remembered. `buildQuote` appends it after every adjustment, so
+ * no discount, billing start or removal can reach it. A rep who could discount
+ * it has made the swap free, which is the thing this charge exists to prevent;
+ * if that discretion is ever wanted, the per-product discount cap is the way.
+ */
+export const KIT_REPLACEMENT_PRODUCT = {
+  name: "Free Kit Replacement Item",
+  hubspotProductId: "339236587251",
+} as const;
+
+export function isKitReplacementProduct(id: string, name: string): boolean {
+  return (
+    id === KIT_REPLACEMENT_PRODUCT.hubspotProductId ||
+    name.trim() === KIT_REPLACEMENT_PRODUCT.name
+  );
+}
+
+/**
+ * One replacement charge per swapped unit, or nothing when the cart took the
+ * kit as it comes.
+ *
+ * Resolved by id first and name second, like the pre-auth: a HubSpot rename
+ * must not silently drop the charge off every quote.
+ */
+export function resolveKitReplacementLine(
+  swaps: number,
+  catalog: CatalogProduct[]
+): IncludedServicesResult {
+  if (swaps <= 0) return { lines: [], missing: [] };
+  const product =
+    catalog.find(p => p.hubspotProductId === KIT_REPLACEMENT_PRODUCT.hubspotProductId) ??
+    catalog.find(p => p.name.trim() === KIT_REPLACEMENT_PRODUCT.name);
+  return product
+    ? { lines: [toQuoteLine(product, swaps)], missing: [] }
+    : { lines: [], missing: [KIT_REPLACEMENT_PRODUCT.name] };
+}
+
+/**
  * The pre-authorization line, when — and only when — the quote needs one.
  *
  * Judged on the lines AS ADJUSTED, so it appears the moment a rep delays the
@@ -1106,6 +1157,34 @@ export function resolvePreAuthLine(
   return product
     ? { lines: [toQuoteLine(product, 1)], missing: [] }
     : { lines: [], missing: [PRE_AUTH_PRODUCT.name] };
+}
+
+/**
+ * An AMS1 for every terminal a swapped-in kiosk brought that the kit has no
+ * seat for (`PackageDecomposition.extraTerminals`).
+ *
+ * The kit holds two terminals: one for the POS's loose AMS1, one for the kiosk
+ * it comes with. A second kiosk swapped into a screen slot is a third, and the
+ * terminal is welded into the kiosk SKU, so it cannot be charged as part of
+ * that line without a fractional discount on it. It is charged as its own AMS1
+ * line instead (Shaheer, 2026-10-16) — the same $350 a second POS already
+ * costs, whose loose AMS1 is charged for exactly the same reason.
+ *
+ * Marked `derived` so reopening re-derives it rather than reading it back as a
+ * pick: the AMS1 is an ordinary pickable product, so this is the one derived
+ * line that can't be recognised by its product id alone.
+ */
+export function resolveExtraTerminalLine(
+  extraTerminals: number,
+  catalog: CatalogProduct[]
+): IncludedServicesResult {
+  if (extraTerminals <= 0) return { lines: [], missing: [] };
+  const product =
+    catalog.find(p => p.hubspotProductId === AMS1_PRODUCT.hubspotProductId) ??
+    catalog.find(p => p.name.trim() === AMS1_PRODUCT.name);
+  return product
+    ? { lines: [{ ...toQuoteLine(product, extraTerminals), derived: true }], missing: [] }
+    : { lines: [], missing: [AMS1_PRODUCT.name] };
 }
 
 /**
@@ -1697,6 +1776,9 @@ export function resolvePlatformLine(
 /** Lines that are re-derived on the way back out, so they must not come back as picks. */
 function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
   return (
+    // The one derived line on a product a rep can also pick by hand, so it
+    // carries a flag instead of being known by its id. See `QuoteLine.derived`.
+    line.derived === true ||
     isPlatformProduct(line.name, line.hubspotProductId) ||
     isIncludedServiceProduct(line.hubspotProductId, line.name) ||
     // The retired $999 WiFi line isn't in INCLUDED_SERVICE_PRODUCTS any more
@@ -1705,6 +1787,11 @@ function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
     isWifiLine(line) ||
     line.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId ||
     isPreAuthProduct(line.hubspotProductId, line.name) ||
+    // Derived from the decomposition, and one-time `inventory` at a positive
+    // price — so a line that came back as a PICK would re-enter the coverage
+    // pool as off-sheet hardware and could be comped into a kit slot at 100%
+    // off, which is the swap charge paying for itself.
+    isKitReplacementProduct(line.hubspotProductId, line.name) ||
     isSoftwareLicenseProduct(line.hubspotProductId, line.name) ||
     isHardwareBundle(line.hubspotProductId, line.name) ||
     // Kits belong on the marketing plans. A processing quote that still carries
@@ -2363,6 +2450,10 @@ export type BuiltQuote = {
   processingDisclosure: IncludedServicesResult;
   /** The $0.50 checkout charge, present only when nothing else is due at checkout. Never editable. */
   preAuth: IncludedServicesResult;
+  /** $400 per kit item swapped for something else. Empty when the cart took the kit as it comes. Never editable. */
+  kitReplacement: IncludedServicesResult;
+  /** An AMS1 per terminal a swapped-in kiosk brought that the kit has no seat for. Never editable. */
+  extraTerminals: IncludedServicesResult;
   breakdown: OrderPointsBreakdown;
   /** Which pre-made packages the cart broke down into, and what they absorbed. */
   packages: PackageDecomposition;
@@ -2462,7 +2553,7 @@ export function buildQuote(
   });
 
   const unitCursor = new Map<string, number>();
-  const chargedLines = [
+  const adjustedLines = [
     ...(platform.line ? [platform.line] : []),
     ...softwareLicense.lines,
     ...packages.lines,
@@ -2485,6 +2576,18 @@ export function buildQuote(
     // Last: scoping a discount to part of the quantity splits the line in two.
     return splitPartialDiscount(adjusted, adjustment);
   });
+
+  // What the merchant owes for taking the kit apart — one $400 line per unit
+  // that landed in a slot that isn't its own. Appended AFTER the adjustment
+  // pass, which is the whole of what makes it untouchable: adjustments are
+  // keyed by product id and this line was never among the keys.
+  //
+  // Unlike the two below it this one IS a real charge, so it belongs in
+  // `chargedLines` — it counts toward the sanity floor, toward what's collected
+  // at checkout, and therefore toward whether a pre-auth line is needed at all.
+  const kitReplacement = resolveKitReplacementLine(packages.swaps, catalog);
+  const extraTerminals = resolveExtraTerminalLine(packages.extraTerminals, catalog);
+  const chargedLines = [...adjustedLines, ...extraTerminals.lines, ...kitReplacement.lines];
 
   // The rate disclosure and the pre-authorization both come LAST and past
   // every adjustment, for the same two reasons: neither is the rep's to edit,
@@ -2530,6 +2633,21 @@ export function buildQuote(
   for (const name of includedServices.missing) {
     blockers.push(
       `"${name}" is included on every quote but isn't in the HubSpot catalog, so it can't be priced.`
+    );
+  }
+  for (const name of extraTerminals.missing) {
+    blockers.push(
+      `A kiosk swapped into this quote brings a terminal the kit has no room for, which is charged as ` +
+      `"${name}" — but that product isn't in the HubSpot catalog (renamed, archived, or the catalog ` +
+      `didn't load).`
+    );
+  }
+  for (const name of kitReplacement.missing) {
+    blockers.push(
+      `This quote swaps ${packages.swaps === 1 ? "an item" : `${packages.swaps} items`} out of the ` +
+      `${packages.applied[0]?.name ?? "kit"}, which is charged as "${name}" — but that product isn't ` +
+      `in the HubSpot catalog (renamed, archived, or the catalog didn't load). The merchant would get ` +
+      `the swap for nothing.`
     );
   }
   for (const name of processingDisclosure.missing) {
@@ -2614,6 +2732,8 @@ export function buildQuote(
     softwareLicense,
     processingDisclosure,
     preAuth,
+    kitReplacement,
+    extraTerminals,
     breakdown,
     packages,
     totals,

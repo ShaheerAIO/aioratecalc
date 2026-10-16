@@ -31,6 +31,7 @@ import {
   isCompedService,
   isPosRequiringTerminal,
   isPreAuthProduct,
+  isKitReplacementProduct,
   isMarketingQuote,
   isProcessingQuote,
   isTabletProduct,
@@ -513,6 +514,14 @@ export default function ProductConfigurator({
       // — which is also what keeps the quote-wide discount and billing-start
       // sweeps from ever naming it.
       if (isPreAuthProduct(l.hubspotProductId, l.name)) continue;
+      // Nor is the kit replacement charge: it is derived from how the rep
+      // filled the kit's slots, so the way to remove it is to undo the swap.
+      // A discount control on it would be a way to make the swap free.
+      if (isKitReplacementProduct(l.hubspotProductId, l.name)) continue;
+      // Nor the AMS1 charged for a kiosk's welded-on terminal — same reason,
+      // and it is why that line carries `derived` rather than being known by
+      // its product id: the rep's own AMS1 lines DO get a control.
+      if (l.derived) continue;
       // Nor is the rate disclosure, for the same reason: it is derived, it is
       // $0, and there is nothing on it to discount or delay. It still RENDERS
       // on the document — it's tagged "Card rates" below — it just carries no
@@ -1623,6 +1632,20 @@ export default function ProductConfigurator({
       if (platform.line && l.hubspotProductId === platform.line.hubspotProductId) return { tag: "Plan" };
       if (isPreAuthProduct(l.hubspotProductId, l.name)) {
         return { tag: "Pre-auth", why: "Nothing else is due at checkout, so the card is pre-authorized. Can't be removed." };
+      }
+      if (l.derived && l.hubspotProductId === AMS1_PRODUCT.hubspotProductId) {
+        return {
+          tag: "Kit swap",
+          why: "A kiosk swapped onto this quote brings its own terminal, and the kit only covers two. Can't be removed.",
+        };
+      }
+      if (isKitReplacementProduct(l.hubspotProductId, l.name)) {
+        const n = built.packages.swaps;
+        return {
+          tag: "Kit swap",
+          why: `${n === 1 ? "One item" : `${n} items`} in the ${built.packages.applied[0]?.name ?? "kit"} ` +
+            `swapped for something else. Can't be removed — change the cart back to clear it.`,
+        };
       }
       if (l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) return { tag: "Card rates" };
       if (l.hubspotProductId === SOFTWARE_LICENSE_PRODUCT.hubspotProductId) {

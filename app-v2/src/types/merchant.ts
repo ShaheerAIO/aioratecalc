@@ -450,6 +450,24 @@ export type QuoteLine = {
    */
   coveredByPackage?: string | null;
   /**
+   * Set on a line `buildQuote` derived AFTER the adjustment pass, on a product
+   * a rep can ALSO pick by hand (2026-10-16). It exists for exactly one job:
+   * `isDroppedOnReopen` reads it, so the line is re-derived on reopen rather
+   * than returning as a pick.
+   *
+   * The other derived lines are recognised by their product id, because no rep
+   * can pick those products at all. The AMS1 charged for a terminal welded
+   * into a swapped-in kiosk (`PackageDecomposition.extraTerminals`) is the
+   * first that can't be: reps pick AMS1 terminals every day, and without this
+   * flag reopening a quote would read the derived one back as a pick, the
+   * kit's two terminal seats would fill with loose AMS1s, and the kiosk they
+   * were charged for would stop being covered at all.
+   *
+   * Never sent to HubSpot — `toLineItemProperties` names the properties it
+   * emits, and this is not one of them.
+   */
+  derived?: true;
+  /**
    * Hardware commission inputs, SNAPSHOT from `CatalogProduct` at
    * `toQuoteLine` time — same rule as `unitPrice`/`billingFrequency` above: a
    * saved quote must keep computing the same commission even after the

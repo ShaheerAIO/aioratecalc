@@ -26,9 +26,17 @@
 //      MORE than the slot's MSRP (Shaheer, 2026-10-09). A cheaper item in an
 //      open slot gives away less than the kit already promised, so there is no
 //      lower bound: a tableside device can stand in for a POS, a printer for a
-//      KDS. Never anything dearer, so a Mega Kiosk can't ride in on a POS slot.
-//      Among the slots it fits, an item takes the CHEAPEST, so it leaves the
-//      dear slots for the dear items.
+//      KDS. Among the slots it fits, an item takes the CHEAPEST, so it leaves
+//      the dear slots for the dear items.
+//   3. INTERCHANGE — the four screens in `INTERCHANGEABLE` fill each other's
+//      slots in EITHER direction, whatever they cost (Shaheer, 2026-10-16).
+//      This is the one place the MSRP ceiling is lifted, and the $400 "Free Kit
+//      Replacement Item" that quoting.ts derives per swap is what pays for it.
+//      The Mega Kiosk is deliberately not a member — $2,700 into the $735 KDS
+//      slot is $1,965 that $400 does not come close to covering.
+//
+// EVERY swap is charged, not just the ones the ceiling used to refuse. See
+// `PackageDecomposition.swaps`.
 //
 // Hardware that is NOT on the sheet (mPOS, the tablets, the label printer) can
 // swap too, priced at its HubSpot list price since there is no sheet MSRP. It
@@ -165,6 +173,26 @@ export function sheetMsrpOf(hubspotProductId: string): number | null {
 export function fitsUnder(candidate: number, slot: number): boolean {
   // The epsilon is for list prices carried in cents: 949 vs 948.9999….
   return candidate <= slot + 1e-9;
+}
+
+/**
+ * The screens that fill each other's slots in EITHER direction, whatever they
+ * cost — the one exception to `fitsUnder` (Shaheer, 2026-10-16).
+ *
+ * A set of named members rather than a group tag on `SheetItem`, because the
+ * MEGA KIOSK'S ABSENCE is the point: at $2,700 it would take the $735 KDS slot
+ * and the $400 replacement charge would cover less than a quarter of it. Adding
+ * a member here is a pricing decision, so it should read like one.
+ *
+ * All four are already `swappable: true`; this lifts the ceiling, never a lock.
+ */
+const INTERCHANGEABLE: ReadonlySet<SheetKey> = new Set<SheetKey>([
+  "pos", "kds", "kiosk27", "kiosk156",
+]);
+
+/** Whether this part may take this slot's seat regardless of what either costs. */
+function interchanges(part: SheetKey | null, slot: SheetKey): boolean {
+  return part !== null && INTERCHANGEABLE.has(part) && INTERCHANGEABLE.has(slot);
 }
 
 /**
@@ -338,6 +366,20 @@ export type PackageDecomposition = {
   applied: AppliedPackage[];
   /** Which item went in which slot — what to read to see WHY something was or wasn't covered. */
   filled: FilledSlot[];
+  /**
+   * How many UNITS landed in a slot that isn't their own — what the merchant is
+   * charged a "Free Kit Replacement Item" for, one each (`resolveKitReplacementLine`).
+   *
+   * Counted per unit and NOT as `filled.filter(f => f.swapped).length`, because
+   * one physical unit can be several sheet items: a "Kiosk 27" + AMS1" that
+   * moved would otherwise be billed as two swaps.
+   */
+  swaps: number;
+  /**
+   * Terminals welded into a swapped-in kiosk that the kit had no seat left
+   * for. quoting.ts charges the merchant one AMS1 each — see `placeUnit`.
+   */
+  extraTerminals: number;
   /** Listed price of everything the kits absorbed. */
   coveredListAmount: number;
   /** What the kits are worth to the merchant. The kit is free, so this IS `coveredListAmount`. */
@@ -345,7 +387,7 @@ export type PackageDecomposition = {
 };
 
 function none(lines: QuoteLine[]): PackageDecomposition {
-  return { lines, applied: [], filled: [], coveredListAmount: 0, savings: 0 };
+  return { lines, applied: [], filled: [], swaps: 0, extraTerminals: 0, coveredListAmount: 0, savings: 0 };
 }
 
 /** A coverable line and how much of it is still unclaimed. */
@@ -357,6 +399,16 @@ type Slot = { item: SheetKey; owner: number };
 // guard against a data-entry mistake, not a business rule.
 const MAX_PACKAGE_INSTANCES = 10;
 
+/** A placement: where each part of one unit sits, and what it couldn't seat. */
+type Placement = {
+  placed: Array<{ part: Part; slot: number }>;
+  /**
+   * Terminals this unit brought that the kit has no seat left for. Only ever
+   * non-zero on an INTERCHANGE swap — see `placeUnit`.
+   */
+  extraTerminals: number;
+};
+
 /**
  * Where one unit of this entry would go. Returns the slot index per part, or
  * null if ANY part has nowhere to go — a unit is covered whole or not at all.
@@ -364,14 +416,31 @@ const MAX_PACKAGE_INSTANCES = 10;
  * Exact beats swap, per part. Among swaps the CHEAPEST slot the part fits
  * wins (lowest slot index on a tie), so the answer never depends on the order
  * lines arrived in.
+ *
+ * ONE EXCEPTION, and it is what makes a kiosk swappable at all: the kiosk SKUs
+ * are a kiosk AND a terminal welded together, and the kit holds only two
+ * terminal seats — one for the POS's loose AMS1, one for the kiosk that comes
+ * in the kit. So a SECOND kiosk swapped into a screen slot always arrives with
+ * a terminal that has nowhere to sit, and "covered whole or not at all" would
+ * leave the entire $1,495 line charged over a $350 part of it. Instead the
+ * terminal is seated nowhere and COUNTED, and quoting.ts charges the merchant
+ * an AMS1 for each one (Shaheer, 2026-10-16) — which is the same money a
+ * second POS already costs, whose loose AMS1 is charged for the same reason.
+ *
+ * It is allowed only when another part of the same unit got its seat by
+ * INTERCHANGE, so an ordinary cart can never quietly lose a terminal: the
+ * exact pass can't produce one (nothing interchanges with `allowSwap` false),
+ * and nothing but a terminal is ever left unseated.
  */
 function placeUnit(
   entry: PoolEntry,
   slots: Slot[],
   allowSwap: boolean
-): Array<{ part: Part; slot: number }> | null {
+): Placement | null {
   const used = new Set<number>();
   const placed: Array<{ part: Part; slot: number }> = [];
+  const unseated: Part[] = [];
+  let interchanged = false;
 
   for (const part of entry.parts) {
     let pick = part.key === null
@@ -383,16 +452,23 @@ function placeUnit(
       slots.forEach((s, i) => {
         if (s.owner >= 0 || used.has(i)) return;
         const target = SHEET_ITEMS[s.item];
-        if (!target.swappable || !fitsUnder(part.msrp, target.msrp)) return;
+        if (!target.swappable) return;
+        if (!interchanges(part.key, s.item) && !fitsUnder(part.msrp, target.msrp)) return;
         if (target.msrp < best) { best = target.msrp; pick = i; }
       });
     }
 
-    if (pick < 0) return null;
+    if (pick < 0) { unseated.push(part); continue; }
+    if (interchanges(part.key, slots[pick].item) && part.key !== slots[pick].item) interchanged = true;
     used.add(pick);
     placed.push({ part, slot: pick });
   }
-  return placed;
+
+  if (unseated.length === 0) return { placed, extraTerminals: 0 };
+  // Only a welded-on terminal, and only alongside an interchange. Anything
+  // else unseated means this unit genuinely doesn't fit.
+  if (!interchanged || unseated.some(p => p.key !== "terminal")) return null;
+  return { placed, extraTerminals: unseated.length };
 }
 
 /**
@@ -406,7 +482,9 @@ function flexibility(entry: PoolEntry, slots: Slot[]): number {
     slots.forEach(s => {
       if (s.owner >= 0) return;
       const target = SHEET_ITEMS[s.item];
-      if (s.item === part.key || (part.swappable && target.swappable && fitsUnder(part.msrp, target.msrp))) n += 1;
+      const canSwap = part.swappable && target.swappable &&
+        (interchanges(part.key, s.item) || fitsUnder(part.msrp, target.msrp));
+      if (s.item === part.key || canSwap) n += 1;
     });
   }
   return n;
@@ -458,6 +536,8 @@ export function decomposePackages({
   const by = pool.map(() => new Set<string>());
   const filled: FilledSlot[] = [];
   const applied: AppliedPackage[] = [];
+  let swaps = 0;
+  let extraTerminals = 0;
 
   for (const pkg of active) {
     const cap = Math.min(pkg.maxPerQuote ?? MAX_PACKAGE_INSTANCES, MAX_PACKAGE_INSTANCES);
@@ -472,17 +552,27 @@ export function decomposePackages({
       const placements: FilledSlot[] = [];
 
       let placedOrderingDevice = false;
-      const commit = (e: number, placed: Array<{ part: Part; slot: number }>) => {
+      // Per INSTANCE, because an instance that places no ordering device is
+      // thrown away below — its swaps were never charged for anything.
+      let instanceSwaps = 0;
+      let instanceExtraTerminals = 0;
+      const commit = (e: number, { placed, extraTerminals }: Placement) => {
+        let movedThisUnit = false;
+        instanceExtraTerminals += extraTerminals;
         for (const { part, slot } of placed) {
           slots[slot].owner = e;
           if (part.orders) placedOrderingDevice = true;
+          const swapped = part.key !== slots[slot].item;
+          if (swapped) movedThisUnit = true;
           placements.push({
             hubspotProductId: pool[e].line.hubspotProductId,
             part: part.key,
             slot: slots[slot].item,
-            swapped: part.key !== slots[slot].item,
+            swapped,
           });
         }
+        // One charge per UNIT, however many of its parts moved.
+        if (movedThisUnit) instanceSwaps += 1;
         left[e] -= 1;
         placedUnits[e] += 1;
       };
@@ -499,7 +589,7 @@ export function decomposePackages({
 
       // Then swaps, one unit at a time, re-ranking after each placement.
       for (;;) {
-        let next: { e: number; flex: number; placed: Array<{ part: Part; slot: number }> } | null = null;
+        let next: { e: number; flex: number; placed: Placement } | null = null;
         for (let e = 0; e < pool.length; e++) {
           if (left[e] <= 0) continue;
           const placed = placeUnit(pool[e], slots, true);
@@ -523,6 +613,8 @@ export function decomposePackages({
         by[e].add(pkg.name);
       });
       filled.push(...placements);
+      swaps += instanceSwaps;
+      extraTerminals += instanceExtraTerminals;
       count += 1;
     }
 
@@ -551,5 +643,5 @@ export function decomposePackages({
   });
   coveredListAmount = Math.round(coveredListAmount * 100) / 100;
 
-  return { lines: out, applied, filled, coveredListAmount, savings: coveredListAmount };
+  return { lines: out, applied, filled, swaps, extraTerminals, coveredListAmount, savings: coveredListAmount };
 }

@@ -16,6 +16,7 @@ import {
   buildQuote,
   isAllowedForQuoteType,
   isPickable,
+  KIT_REPLACEMENT_PRODUCT,
   PLATFORM_PRODUCTS,
   picksFromQuoteLines,
   toQuoteLine,
@@ -44,6 +45,7 @@ const ID = {
   install:   "223452690133", // Onsite Installation — comped
   training:  "223152695032", // System Onboarding and Training — comped
   platform:  "335283119838", // All-in-One Platform, $399/mo
+  swapFee:   "339236587251", // Free Kit Replacement Item — $400 per kit item swapped out
 };
 
 const p = (
@@ -69,6 +71,7 @@ const CATALOG: CatalogProduct[] = [
   p(ID.install,   "Onsite Installation", 999, "one_time", "Service"),
   p(ID.training,  "System Onboarding and Training", 499, "one_time", "Service"),
   p(ID.platform,  "All-in-One Platform", 399, "monthly", ""),
+  p(ID.swapFee,   "Free Kit Replacement Item", 400, "one_time", "inventory"),
   // $0 rate disclosure — on every quote AIO processes for since 2026-10-14.
   p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
 ];
@@ -85,6 +88,13 @@ const covered = (lines: QuoteLine[]) => lines.filter(l => l.coveredByPackage);
 const qtyOf = (lines: QuoteLine[], id: string) =>
   lines.filter(l => l.hubspotProductId === id).reduce((n, l) => n + l.qty, 0);
 const slotsFilled = (out: ReturnType<typeof run>) => out.filled.map(f => f.slot);
+
+// One POS + its terminal, a kiosk (which carries its own terminal), and the
+// rest of the kit. This is the cart the kit was specified against.
+const FULL = () => [
+  line(ID.pos), line(ID.ams1), line(ID.cfd), line(ID.kiosk27), line(ID.kds),
+  line(ID.printer), line(ID.drawer), line(ID.menuboard), line(ID.wifi),
+];
 
 describe("the sheet", () => {
   it("prices a whole HubSpot product as the sum of what it is made of", () => {
@@ -141,13 +151,6 @@ describe("the shipped kit", () => {
 });
 
 describe("decomposePackages — what is covered", () => {
-  // One POS + its terminal, a kiosk (which carries its own terminal), and the
-  // rest of the kit. This is the cart the kit was specified against.
-  const FULL = () => [
-    line(ID.pos), line(ID.ams1), line(ID.cfd), line(ID.kiosk27), line(ID.kds),
-    line(ID.printer), line(ID.drawer), line(ID.menuboard), line(ID.wifi),
-  ];
-
   it("covers a full kit's worth of hardware at 100%, with no package line of its own", () => {
     const lines = FULL();
     const out = run(lines);
@@ -187,10 +190,11 @@ describe("decomposePackages — what is covered", () => {
   });
 
   it("splits a partly-covered line rather than blending the discount", () => {
-    // Three POS: the pos slot, then a swap into the kiosk slot, then nowhere.
-    const out = run([line(ID.pos, 3)]);
+    // Four POS: the pos slot, then the kds and kiosk27 slots by interchange,
+    // then nowhere — the kit holds three screens and no more.
+    const out = run([line(ID.pos, 4)]);
     expect(out.lines).toHaveLength(2);
-    expect(out.lines[0]).toMatchObject({ qty: 2, discountPercent: 100, coveredByPackage: "QSR Kit" });
+    expect(out.lines[0]).toMatchObject({ qty: 3, discountPercent: 100, coveredByPackage: "QSR Kit" });
     expect(out.lines[1]).toMatchObject({ qty: 1 });
     expect(out.lines[1].discountPercent).toBeUndefined();
     expect(out.lines[1].coveredByPackage).toBeUndefined();
@@ -227,15 +231,17 @@ describe("decomposePackages — what is covered", () => {
   });
 
   it("honours maxPerQuote, and a larger one covers a second kit", () => {
-    const cart = () => [line(ID.pos, 4), line(ID.ams1, 4)];
+    // One kit holds three screens (pos + kds + kiosk27, the last two by
+    // interchange) and two terminals.
+    const cart = () => [line(ID.pos, 6), line(ID.ams1, 4)];
 
     const one = run(cart());
     expect(one.applied[0].count).toBe(1);
-    expect(qtyOf(covered(one.lines), ID.pos)).toBe(2);
+    expect(qtyOf(covered(one.lines), ID.pos)).toBe(3);
 
     const two = run(cart(), { packages: [{ ...KIT, maxPerQuote: 2 }] });
     expect(two.applied[0].count).toBe(2);
-    expect(qtyOf(covered(two.lines), ID.pos)).toBe(4);
+    expect(qtyOf(covered(two.lines), ID.pos)).toBe(6);
     expect(qtyOf(covered(two.lines), ID.ams1)).toBe(4);
   });
 });
@@ -264,12 +270,24 @@ describe("decomposePackages — composite products", () => {
 });
 
 describe("decomposePackages — swaps", () => {
-  it("swaps a device into the cheapest slot it costs no more than", () => {
-    // The 15.6" kiosk part ($799) is dearer than the KDS slot ($735), so it
-    // fits the POS slot ($949) and the kiosk slot ($999). Cheapest wins.
+  it("swaps a device into the cheapest slot it may take", () => {
+    // The 15.6" kiosk ($799) is dearer than the KDS slot ($735) and reaches it
+    // anyway — both are in the interchange group, where price is not the test.
+    // Cheapest-it-may-take still decides WHICH, so the dear slots stay open.
     const out = run([line(ID.kioskMini)]);
-    expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "pos", swapped: true });
+    expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "kds", swapped: true });
     expect(qtyOf(covered(out.lines), ID.kioskMini)).toBe(1);
+  });
+
+  it("holds everything OUTSIDE the interchange group to the slot's price", () => {
+    // The tableside device ($603) is not in the group, so it reaches the KDS
+    // slot ($735) by being cheaper and the POS slot ($949) likewise — but a
+    // printer ($336) can never reach anything dearer than it is the other way.
+    const out = run([line(ID.pos), line(ID.tableside)]);
+    expect(out.filled.find(f => f.part === "tableside")).toMatchObject({ slot: "kds", swapped: true });
+    // And the one item the group is drawn to exclude stays excluded.
+    const mega = run([line(ID.pos), line(ID.mega)]);
+    expect(qtyOf(mega.lines.filter(l => !l.coveredByPackage), ID.mega)).toBe(1);
   });
 
   it("has no lower bound: a printer can stand in for a KDS", () => {
@@ -318,6 +336,20 @@ describe("decomposePackages — swaps", () => {
     expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.tableside)).toBe(1);
   });
 
+  it("counts a swap per UNIT, not per sheet part", () => {
+    // The kiosk SKU is a kiosk AND a terminal. One of them moved, so the
+    // merchant is charged once — reading `filled` would say twice.
+    const out = run([line(ID.pos), line(ID.kds), line(ID.kioskMini)]);
+    expect(out.filled.filter(f => f.swapped)).toHaveLength(1);
+    expect(out.swaps).toBe(1);
+  });
+
+  it("charges nothing for a kit taken exactly as it comes", () => {
+    const out = run(FULL());
+    expect(out.swaps).toBe(0);
+    expect(out.extraTerminals).toBe(0);
+  });
+
   it("an exact fit always beats a swap, whatever order the lines arrive in", () => {
     const a = run([line(ID.kioskMini), line(ID.pos), line(ID.kds)]);
     const b = run([line(ID.kds), line(ID.pos), line(ID.kioskMini)]);
@@ -326,6 +358,48 @@ describe("decomposePackages — swaps", () => {
       expect(out.filled.find(f => f.part === "kds")).toMatchObject({ slot: "kds", swapped: false });
       expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "kiosk27", swapped: true });
     }
+  });
+});
+
+describe("decomposePackages — the interchange group", () => {
+  it("lets a POS take the KDS seat, which costs less than the POS does", () => {
+    // The whole point: $949 into a $735 slot. `fitsUnder` refuses this and the
+    // POS went uncovered, silently, which is what the $400 charge buys back.
+    const out = run([line(ID.pos, 2), line(ID.kiosk27)]);
+    expect(qtyOf(covered(out.lines), ID.pos)).toBe(2);
+    expect(out.filled.filter(f => f.part === "pos").map(f => f.slot).sort()).toEqual(["kds", "pos"]);
+    expect(out.swaps).toBe(1);
+  });
+
+  it("covers a second kiosk WHOLE and counts the terminal it brought", () => {
+    // The kit holds two terminal seats; the POS's AMS1 and the kit's own kiosk
+    // take both. A second kiosk is a third terminal, welded into its SKU — so
+    // it is seated nowhere and charged as its own AMS1 (see resolveExtraTerminalLine),
+    // rather than leaving the whole $1,495 line uncovered over $350 of it.
+    const out = run([line(ID.pos), line(ID.ams1), line(ID.kiosk27, 2)]);
+    expect(qtyOf(covered(out.lines), ID.kiosk27)).toBe(2);
+    expect(out.swaps).toBe(1);
+    expect(out.extraTerminals).toBe(1);
+  });
+
+  it("never lets anything BUT a welded-on terminal go unseated", () => {
+    // A POS-with-display swapped into the kiosk seat whose display has nowhere
+    // to go is NOT covered — the exemption is the terminal's alone.
+    const out = run([line(ID.pos), line(ID.cfd), line(ID.posCfd)]);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.posCfd)).toBe(1);
+    expect(out.extraTerminals).toBe(0);
+  });
+
+  it("keeps the Mega Kiosk out, which is the reason the group is a list", () => {
+    const out = run([line(ID.mega)]);
+    expect(covered(out.lines)).toEqual([]);
+    expect(out.swaps).toBe(0);
+  });
+
+  it("holds the exact pass to exact fits, so no ordinary cart loses a terminal", () => {
+    const out = run(FULL());
+    expect(out.filled.every(f => !f.swapped)).toBe(true);
+    expect(out.extraTerminals).toBe(0);
   });
 });
 
@@ -499,16 +573,96 @@ describe("buildQuote with the kit on it", () => {
   });
 
   it("holds a covered line at 100% when the rep adjusts that product's other half", () => {
-    // Three POS: two covered (the pos slot and a swap), one charged. The rep
-    // discounts the product — applyLineAdjustment would clear the covered
-    // half's 100%, and only applyPackageComp puts it back.
-    const built = build([line(ID.pos, 3)], { [ID.pos]: { discountPercent: 25 } });
+    // Four POS: three covered (the pos slot, plus the kds and kiosk27 slots by
+    // interchange), one charged. The rep discounts the product —
+    // applyLineAdjustment would clear the covered half's 100%, and only
+    // applyPackageComp puts it back.
+    const built = build([line(ID.pos, 4)], { [ID.pos]: { discountPercent: 25 } });
     const pos = built.quoteLines.filter(l => l.hubspotProductId === ID.pos);
 
     expect(pos).toHaveLength(2);
-    expect(pos[0]).toMatchObject({ qty: 2, discountPercent: 100, coveredByPackage: "QSR Kit" });
+    expect(pos[0]).toMatchObject({ qty: 3, discountPercent: 100, coveredByPackage: "QSR Kit" });
     expect(pos[1]).toMatchObject({ qty: 1, discountPercent: 25 });
     expect(pos[1].coveredByPackage).toBeUndefined();
+  });
+
+  // ── The $400 a swap costs ────────────────────────────────────────────────
+
+  it("charges nothing extra for the kit as it comes", () => {
+    const built = build();
+    expect(built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)).toBeUndefined();
+    expect(built.quoteLines.filter(l => l.derived)).toEqual([]);
+  });
+
+  it("charges one Free Kit Replacement Item per swapped unit", () => {
+    // Two POS and a kiosk, no KDS: the second POS takes the KDS seat.
+    const built = build([line(ID.pos, 2), line(ID.kiosk27), line(ID.printer), line(ID.drawer), line(ID.menuboard)]);
+    const fee = built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)!;
+
+    expect(built.packages.swaps).toBe(1);
+    expect(fee).toMatchObject({ qty: 1, unitPrice: 400 });
+    expect(fee.discountPercent ?? 0).toBe(0);
+    expect(built.blockers).toEqual([]);
+  });
+
+  it("charges an AMS1 for the terminal a swapped-in kiosk brings, and marks it derived", () => {
+    const built = build([line(ID.pos), line(ID.kiosk27, 2), line(ID.printer), line(ID.drawer), line(ID.menuboard)]);
+    const extra = built.quoteLines.find(l => l.derived)!;
+
+    expect(built.packages.extraTerminals).toBe(1);
+    expect(extra).toMatchObject({ hubspotProductId: ID.ams1, qty: 1, derived: true });
+    expect(extra.coveredByPackage).toBeUndefined();
+    // $400 for the swap + $300 for the terminal (HubSpot's fixture price).
+    expect(built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)).toMatchObject({ qty: 1 });
+  });
+
+  it("reopens to the same quote — the derived lines never come back as picks", () => {
+    const cart = [line(ID.pos), line(ID.kiosk27, 2), line(ID.printer), line(ID.drawer), line(ID.menuboard)];
+    const first = build(cart);
+    // Without `QuoteLine.derived`, the charged AMS1 would reopen as a PICK, fill
+    // the kit's second terminal seat, and the kiosk it was charged for would
+    // stop being covered — growing the quote a little on every reopen.
+    const again = buildQuote(
+      "all_in_one",
+      picksFromQuoteLines(first.quoteLines, "all_in_one").map(pick => line(pick.hubspotProductId, pick.qty)),
+      [], CATALOG,
+    );
+
+    expect(again.packages.swaps).toBe(first.packages.swaps);
+    expect(again.packages.extraTerminals).toBe(first.packages.extraTerminals);
+    expect(again.totals.oneTime).toBe(first.totals.oneTime);
+  });
+
+  it("keeps the swap charges out of reach of a rep's adjustments", () => {
+    // Both are appended AFTER the adjustment pass, so an adjustment carrying
+    // their product id — left over from an older quote, or posted by hand —
+    // cannot discount, delay or remove either of them.
+    const cart = [line(ID.pos), line(ID.kiosk27, 2), line(ID.printer), line(ID.drawer), line(ID.menuboard)];
+    const built = build(cart, {
+      [ID.swapFee]: { discountPercent: 100, removed: true },
+      [ID.ams1]: { discountPercent: 100 },
+    });
+
+    expect(built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)).toMatchObject({ qty: 1 });
+    expect(built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)!.discountPercent ?? 0).toBe(0);
+    const extra = built.quoteLines.find(l => l.derived)!;
+    expect(extra.discountPercent ?? 0).toBe(0);
+  });
+
+  it("never offers the replacement fee in the picker — it is derived now", () => {
+    expect(isPickable(product(ID.swapFee))).toBe(false);
+    expect(KIT_REPLACEMENT_PRODUCT.hubspotProductId).toBe(ID.swapFee);
+  });
+
+  it("refuses the quote when the replacement product has left the catalog", () => {
+    const without = CATALOG.filter(c => c.hubspotProductId !== ID.swapFee);
+    const built = buildQuote(
+      "all_in_one",
+      [line(ID.pos, 2), line(ID.kiosk27), line(ID.printer), line(ID.drawer), line(ID.menuboard)],
+      [], without,
+    );
+    expect(built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)).toBeUndefined();
+    expect(built.blockers.join(" ")).toContain("Free Kit Replacement Item");
   });
 
   it("does not move the ordering-point count", () => {

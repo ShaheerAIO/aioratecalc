@@ -537,3 +537,49 @@ and the word "Included" rather than a $0.00 charge, which is what a package
 actually is. Only one-time lines group: package coverage never applies to a
 recurring line, so "Software" is untouched. "Total due once" is unchanged —
 it comes from the server's own charged-only total.)
+
+
+1. The chips — PLAN, IN PLAN, COMPED, CARD RATES, PRE-AUTH are five different vocabularies on one screen. COMPED in particular means nothing to a non-technical reader; "Free" or "Included" would. That's a copy decision, not a layout one, so I didn't guess.
+2. The n/a commission cells on the Processing and Pre-Auth rows — they're structural noise on lines that can never carry commission. Could be blank instead.
+
+10/16
+swappability is now gone from the qsr kit. return the swapping functionality. I
+should be able to swap KDS, POS, KIOSK interchangibly. The catch is that any
+swap costs the "free kit replacement item" line item per swap.
+remove FKRI from the line items in the picker thats not needed it should be
+automatic
+(DONE — and it was a real refusal, not a missing feature. A cart line could
+only take a kit slot that cost AT LEAST as much as the line did, so swapping
+DOWN worked and swapping UP was refused in silence: drop the KDS and add a
+second POS and the POS ($949 sheet, $735 slot) was simply charged at $749 with
+no blocker, no label and nothing saying why. A second Kiosk 27" was $1,495 the
+same way.
+Four screens — POS, KDS, Kiosk 27", Kiosk 15.6" — now fill each other's slots
+in either direction with no price test at all. The MEGA KIOSK is deliberately
+not one of them: $2,700 into a $735 slot is $1,965 that a $400 charge does not
+come close to covering, so it keeps the old ceiling along with the tableside
+device, the printer and anything off the sheet. The locked items (display,
+terminal, drawer, menu board, WiFi) are untouched.
+EVERY swap is charged, including the cheaper stand-ins that were free before —
+one rule a rep can say out loud. So a second KDS standing in for a POS went
+from free to $400; nothing already published moves, because a published quote
+carries its saved lines verbatim.
+THE KIOSK NEEDED ONE MORE THING. The kiosk SKUs are a kiosk and an AMS1 welded
+together and the kit holds only two terminal seats — one for the POS's loose
+terminal, one for the kiosk that comes in the kit. So a second kiosk always
+arrives with a third terminal, and "covered whole or not at all" would have
+left the entire $1,495 line charged over $350 of it. The terminal is now seated
+nowhere and counted, and the merchant is charged one AMS1 for it: $400 + $350 =
+$750, which is exactly what a second POS already costs, whose loose AMS1 is
+charged for the same reason. That AMS1 line carries a new `derived` flag and is
+the only derived line on a product a rep can also pick by hand — without it,
+reopening the quote would read it back as a pick, both terminal seats would
+fill with loose terminals, and the kiosk they had just been charged for would
+stop being covered. Reopen is verified stable.
+Both charges are DERIVED AND UNTOUCHABLE, the same posture as the $0.50
+pre-auth: not pickable, not discountable, not removable, no drawer on the row.
+The way to clear them is to put the cart back. If that discretion is ever
+wanted, the per-product discount cap from 10/15 is one edit away.
+"Free Kit Replacement Item" is off the picker as asked. One flag: that name
+reads oddly on the document a merchant signs, and the HubSpot product name is
+what publishes — renaming it is a portal-side change, not a code one.)
