@@ -13,7 +13,7 @@ import { analysisFromQuoteConfig, derivePricing, type FeeOverrides } from "@/lib
 import { processesCardNotPresentOnly, quoteHasProcessing, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import {
   DEFAULT_QUOTE_RATES,
-  type CustomerSafeQuote, type OrderPoints, type QuoteConfig, type QuoteLine, type QuoteRates,
+  type CustomerSafePayment, type CustomerSafeQuote, type OrderPoints, type QuoteConfig, type QuoteLine, type QuoteRates,
   type StatementAnalysis, type StoredQuoteType,
 } from "@/types/merchant";
 
@@ -41,6 +41,11 @@ export type QuoteBasis = {
   // Omitted / null on rows written before quote types existed, and a retired
   // value on rows written before 2026-10-05 — both read through quoteTypeOf.
   quoteType?: StoredQuoteType | null;
+  // The processing record, for the volume the Payment Details card shows when
+  // there is no rate basis. The rep form only saves `quoteConfig` with BOTH a
+  // volume and a ticket — pricing needs the two together — so a volume entered
+  // alone lives here and nowhere else. Display only: nothing prices off it.
+  processing?: { monthlyVolume?: string | null } | null;
 };
 
 // Customer-facing quotes carry no separate per-transaction or monthly fee —
@@ -93,6 +98,7 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
   const lines = basis.quoteLines ?? [];
 
   const analysis = quotableAnalysis(basis);
+  const payment = paymentDetails(basis, analysis);
 
   // No rate behind it: priced lines and no rate half at all. Null (not a $0
   // rate) when there are no lines either, so a quote with nothing on it reads
@@ -123,13 +129,12 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
       // has a real, non-null `orderPoints` on the row, and it was being
       // thrown away here. Same fix as the rated branch below.
       orderPoints: basis.orderPoints ?? null,
+      payment,
     };
   }
 
   const fromStatement = !!basis.analysis;
   const vol = analysis.totalVolume;
-  const rates = basis.quoteRates ?? DEFAULT_QUOTE_RATES;
-  const cardNotPresentOnly = processesCardNotPresentOnly(quoteTypeOf(basis.quoteType), basis.quoteLines);
 
   // Null falls back to DEFAULT_QUOTE_RATES — today's standard rate — so a row
   // written before rates were the input quotes the same thing a new one would.
@@ -145,9 +150,6 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
     basis: fromStatement ? "statement" : "config",
     monthlyVolume: vol,
     averageTicket: analysis.averageTicket || (analysis.totalTransactions > 0 ? vol / analysis.totalTransactions : 0),
-    cardPresentRate: cardNotPresentOnly ? null : rates.cardPresentRate,
-    cardNotPresentRate: rates.cardNotPresentRate,
-    perTransactionFee: rates.perTransactionFee,
     effectiveRate: projectedMonthlyCost / vol,
     projectedMonthlyCost,
     projectedAnnualCost: projectedMonthlyCost * 12,
@@ -159,5 +161,20 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
     lines,
     lineTotals: lines.length ? quoteTotals(lines) : null,
     orderPoints: basis.orderPoints ?? null,
+    payment,
+  };
+}
+
+/** The Payment Details card, or null when AIO processes nothing for this merchant. */
+function paymentDetails(basis: QuoteBasis, analysis: StatementAnalysis | null): CustomerSafePayment | null {
+  const quoteType = quoteTypeOf(basis.quoteType);
+  if (!quoteHasProcessing(quoteType, basis.quoteLines)) return null;
+  const rates = basis.quoteRates ?? DEFAULT_QUOTE_RATES;
+  const entered = Number.parseFloat(basis.processing?.monthlyVolume ?? "");
+  return {
+    cardPresentRate: processesCardNotPresentOnly(quoteType, basis.quoteLines) ? null : rates.cardPresentRate,
+    cardNotPresentRate: rates.cardNotPresentRate,
+    perTransactionFee: rates.perTransactionFee,
+    monthlyVolume: analysis?.totalVolume ?? (entered > 0 ? entered : null),
   };
 }

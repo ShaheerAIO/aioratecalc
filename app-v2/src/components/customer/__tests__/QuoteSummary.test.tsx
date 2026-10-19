@@ -17,9 +17,6 @@ const CONFIG_QUOTE_NO_SAVINGS: CustomerSafeQuote = {
   basis: "config",
   monthlyVolume: 100_000,
   averageTicket: 25,
-  cardPresentRate: 0.0249,
-  cardNotPresentRate: 0.033,
-  perTransactionFee: 0.15,
   effectiveRate: 0.0279,
   projectedMonthlyCost: 2790,
   projectedAnnualCost: 2790 * 12,
@@ -31,6 +28,7 @@ const CONFIG_QUOTE_NO_SAVINGS: CustomerSafeQuote = {
   lines: [],
   lineTotals: null,
   orderPoints: null,
+  payment: { cardPresentRate: 0.0249, cardNotPresentRate: 0.033, perTransactionFee: 0.15, monthlyVolume: 100_000 },
 };
 
 const STATEMENT_QUOTE_WITH_SAVINGS: CustomerSafeQuote = {
@@ -91,10 +89,23 @@ describe("QuoteSummary — payment details card", () => {
   });
 
   it("headlines card-not-present alone for a merchant with no card-present lane", () => {
-    render(<QuoteSummary quote={{ ...CONFIG_QUOTE_NO_SAVINGS, cardPresentRate: null }} />);
+    render(<QuoteSummary quote={{ ...CONFIG_QUOTE_NO_SAVINGS, payment: { ...CONFIG_QUOTE_NO_SAVINGS.payment!, cardPresentRate: null } }} />);
     const text = card().textContent ?? "";
     expect(text).not.toContain("Card present");
     expect(text).toContain("Card not present3.30%");
+  });
+
+  it("still shows the rates on a quote with no rate basis, leaving out only the volume", () => {
+    // A rep who enters a volume but no average ticket saves no rate basis, so
+    // the quote renders on the "products" basis — the card must not vanish.
+    render(<QuoteSummary quote={{
+      ...PRODUCTS_QUOTE_WITH_POINTS,
+      payment: { cardPresentRate: 0.0249, cardNotPresentRate: 0.033, perTransactionFee: 0.15, monthlyVolume: null },
+    }} />);
+    const text = card().textContent ?? "";
+    expect(text).toContain("2.49%");
+    expect(text).not.toContain("Monthly card volume");
+    expect(text).toContain("Chargeback fee");
   });
 
   it("is absent from a quote with no processing behind it", () => {
@@ -130,6 +141,7 @@ const PRODUCTS_QUOTE_WITH_POINTS: CustomerSafeQuote = {
   // COUNT, not the channel names (that's its own describe block below), so
   // `channels` stays empty and `total` is set directly.
   orderPoints: { hardware: { "POS Unit": 2 }, channels: [], total: 3 },
+  payment: null,
 };
 
 describe("QuoteSummary — ordering-point count", () => {
@@ -226,6 +238,7 @@ const DISCOUNTED_QUOTE: CustomerSafeQuote = {
   ],
   lineTotals: { oneTime: 1740, recurring: [], monthlyEquivalent: 0 },
   orderPoints: null,
+  payment: null,
 };
 
 describe("QuoteSummary — how a discount is described", () => {
@@ -261,6 +274,7 @@ const RECURRING_ONLY_QUOTE: CustomerSafeQuote = {
   ],
   lineTotals: { oneTime: 0, recurring: [{ frequency: "monthly", amount: 399 }], monthlyEquivalent: 399 },
   orderPoints: null,
+  payment: null,
 };
 
 describe("QuoteSummary — recurring section heading", () => {
@@ -287,6 +301,7 @@ const PACKAGE_QUOTE: CustomerSafeQuote = {
   ],
   lineTotals: { oneTime: 300, recurring: [], monthlyEquivalent: 0 },
   orderPoints: null,
+  payment: null,
 };
 
 describe("QuoteSummary — package-covered lines are grouped, not interleaved", () => {

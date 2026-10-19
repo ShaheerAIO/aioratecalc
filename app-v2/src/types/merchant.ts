@@ -1162,6 +1162,25 @@ type CustomerSafeLines = {
   lineTotals: QuoteTotals | null;
   // Stated on the quote as the basis for the platform-fee line.
   orderPoints: OrderPoints | null;
+  // The Payment Details card. On EVERY basis, because the rates are what the
+  // merchant signs up to whether or not a rate basis exists — a quote with no
+  // average ticket has no effective rate to compute, but its card rates are
+  // just as real. Null only when AIO processes nothing for this merchant.
+  payment: CustomerSafePayment | null;
+};
+
+// The rates the rep quoted — the same figures written onto the HubSpot
+// disclosure line — and the volume they were quoted on.
+export type CustomerSafePayment = {
+  // Null for a merchant who has nothing on site and so never takes a card in
+  // person (processesCardNotPresentOnly).
+  cardPresentRate: number | null;
+  cardNotPresentRate: number;
+  perTransactionFee: number;
+  // The merchant's monthly card volume as the rep entered it. Null when nobody
+  // has. Read off the processing record when there is no rate basis, which is
+  // the usual case for a volume entered without an average ticket.
+  monthlyVolume: number | null;
 };
 
 // The processing-rate half. A discriminated union rather than nullable fields
@@ -1174,12 +1193,6 @@ type CustomerSafeRate = {
   basis: "statement" | "config";
   monthlyVolume: number;
   averageTicket: number;
-  // The rates the rep quoted — the same figures written onto the HubSpot
-  // disclosure line. `cardPresentRate` is null for a merchant who has nothing
-  // on site and so never takes a card in person (processesCardNotPresentOnly).
-  cardPresentRate: number | null;
-  cardNotPresentRate: number;
-  perTransactionFee: number;
   effectiveRate: number;          // AIO's quoted all-in effective rate on that volume
   projectedMonthlyCost: number;
   projectedAnnualCost: number;

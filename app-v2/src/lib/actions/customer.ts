@@ -119,6 +119,7 @@ export async function getMyQuoteAction(id: string): Promise<CustomerSafeQuote | 
     pricingModel: app.pricingModel,
     quoteLines: app.quoteLines,
     orderPoints: app.orderPoints,
+    processing: app.processing,
   });
 }
 

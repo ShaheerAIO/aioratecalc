@@ -114,11 +114,11 @@ describe("buildCustomerSafeQuote — config basis", () => {
       analysis: null, quoteConfig: CONFIG, targetMargin: null, pricingModel: "2-tier",
       quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: 0.0275, cardNotPresentRate: 0.033, perTransactionFee: 0.1 },
     }));
-    expect(quoted.cardPresentRate).toBe(0.0275);
-    expect(quoted.cardNotPresentRate).toBe(0.033);
-    expect(quoted.perTransactionFee).toBe(0.1);
+    expect(quoted.payment).toEqual({
+      cardPresentRate: 0.0275, cardNotPresentRate: 0.033, perTransactionFee: 0.1, monthlyVolume: 100_000,
+    });
     // A null quoteRates states the standard rate, like the pricing does.
-    expect(quote.cardPresentRate).toBe(DEFAULT_QUOTE_RATES.cardPresentRate);
+    expect(quote.payment?.cardPresentRate).toBe(DEFAULT_QUOTE_RATES.cardPresentRate);
   });
 
   it("prices a row with NO rates at the standard rate, not at nothing", () => {
@@ -144,10 +144,9 @@ describe("buildCustomerSafeQuote — config basis", () => {
     // The customer-safe boundary is the shape itself: anything internal would
     // have to appear as a key here to leak.
     expect(Object.keys(quote).sort()).toEqual([
-      "annualSavings", "averageTicket", "basis", "cardNotPresentRate", "cardPresentRate",
-      "currentEffectiveRate", "currentMonthlyCost", "effectiveRate", "lineTotals", "lines",
-      "monthlySavings", "monthlyVolume", "orderPoints", "perTransactionFee",
-      "projectedAnnualCost", "projectedMonthlyCost", "savingsPct",
+      "annualSavings", "averageTicket", "basis", "currentEffectiveRate", "currentMonthlyCost",
+      "effectiveRate", "lineTotals", "lines", "monthlySavings", "monthlyVolume", "orderPoints",
+      "payment", "projectedAnnualCost", "projectedMonthlyCost", "savingsPct",
     ]);
     const serialized = JSON.stringify(quote);
     for (const forbidden of ["margin", "Margin", "floor", "Floor", "adyen", "Adyen", "cost", "bps", "interchange", "aioRevenue"]) {
@@ -186,6 +185,30 @@ describe("buildCustomerSafeQuote — quote lines and order points", () => {
 
   it("passes the lines through exactly as snapshotted", () => {
     expect(quote.lines).toEqual([...LINES]);
+  });
+
+  // 2026-10-18: a rep who entered a volume but no average ticket saved no rate
+  // basis, so the quote fell to the "products" basis and the Payment Details
+  // card disappeared. The rates are still the rates; the volume comes off the
+  // processing record, where the rep form always keeps it.
+  it("keeps the payment details on a quote with no rate basis, volume off the processing record", () => {
+    const noTicket = buildCustomerSafeQuote({
+      analysis: null, quoteConfig: null, quoteRates: null, targetMargin: null, pricingModel: "2-tier",
+      quoteType: "all_in_one", quoteLines: [...LINES],
+      processing: { monthlyVolume: "123456" },
+    })!;
+    expect(noTicket.basis).toBe("products");
+    expect(noTicket.payment).toEqual({
+      cardPresentRate: DEFAULT_QUOTE_RATES.cardPresentRate,
+      cardNotPresentRate: DEFAULT_QUOTE_RATES.cardNotPresentRate,
+      perTransactionFee: DEFAULT_QUOTE_RATES.perTransactionFee,
+      monthlyVolume: 123456,
+    });
+    const noVolume = buildCustomerSafeQuote({
+      analysis: null, quoteConfig: null, quoteRates: null, targetMargin: null, pricingModel: "2-tier",
+      quoteType: "all_in_one", quoteLines: [...LINES],
+    })!;
+    expect(noVolume.payment?.monthlyVolume).toBeNull();
   });
 
   it("totals them by cycle without ever merging one-time and weekly", () => {
@@ -334,6 +357,10 @@ describe("buildCustomerSafeQuote — marketing-only", () => {
       monthlyEquivalent: 49 * (52 / 12) + 99,
     });
     expect(quote.orderPoints).toBeNull();
+  });
+
+  it("carries no payment details — AIO processes nothing for this merchant", () => {
+    expect(buildCustomerSafeQuote({ ...basis, processing: { monthlyVolume: "50000" } })!.payment).toBeNull();
   });
 
   it("exposes no rate, volume or savings field — there is no processing behind it", () => {

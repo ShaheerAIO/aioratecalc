@@ -5,7 +5,7 @@ import {
   CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
 import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
-import type { CustomerSafeQuote, QuoteLine } from "@/types/merchant";
+import type { CustomerSafePayment, CustomerSafeQuote, QuoteLine } from "@/types/merchant";
 import styles from "./QuoteSummary.module.css";
 
 // The presentational half of a customer quote — the line items and their
@@ -217,7 +217,7 @@ export default function QuoteSummary({ quote }: Props) {
         </div>
       )}
 
-      {quote.basis !== "products" && <PaymentDetails quote={quote} />}
+      {quote.payment && <PaymentDetails payment={quote.payment} />}
     </>
   );
 }
@@ -226,11 +226,12 @@ export default function QuoteSummary({ quote }: Props) {
 // rate is the headline and card-not-present sits under it in smaller type
 // (product owner, 2026-10-18) — unless the merchant never takes a card in
 // person, in which case card-not-present is the only rate and takes its place.
-function PaymentDetails({ quote }: { quote: Extract<CustomerSafeQuote, { monthlyVolume: number }> }) {
-  const fee = `+ ${fmt$(quote.perTransactionFee)} per transaction`;
-  const headline = quote.cardPresentRate !== null
-    ? { label: "Card present", rate: quote.cardPresentRate }
-    : { label: "Card not present", rate: quote.cardNotPresentRate };
+// Shown on every quote AIO processes for, with or without a known volume.
+function PaymentDetails({ payment }: { payment: CustomerSafePayment }) {
+  const fee = `+ ${fmt$(payment.perTransactionFee)} per transaction`;
+  const headline = payment.cardPresentRate !== null
+    ? { label: "Card present", rate: payment.cardPresentRate }
+    : { label: "Card not present", rate: payment.cardNotPresentRate };
 
   return (
     <section className={styles.lineGroup} aria-label="Payment details">
@@ -240,16 +241,18 @@ function PaymentDetails({ quote }: { quote: Extract<CustomerSafeQuote, { monthly
         <span className={styles.rateHeroValue}>{fmtPct2(headline.rate)}</span>
         <span className={styles.rateHeroFee}>{fee}</span>
       </div>
-      {quote.cardPresentRate !== null && (
+      {payment.cardPresentRate !== null && (
         <div className={styles.lineRow}>
           <span className={styles.lineDesc}>Card not present</span>
-          <span className={styles.lineDesc}>{fmtPct2(quote.cardNotPresentRate)} {fee}</span>
+          <span className={styles.lineDesc}>{fmtPct2(payment.cardNotPresentRate)} {fee}</span>
         </div>
       )}
-      <div className={styles.lineRow}>
-        <span className={styles.lineName}>Monthly card volume</span>
-        <span className={styles.lineName}>{fmt$0(quote.monthlyVolume)}</span>
-      </div>
+      {payment.monthlyVolume !== null && (
+        <div className={styles.lineRow}>
+          <span className={styles.lineName}>Monthly card volume</span>
+          <span className={styles.lineName}>{fmt$0(payment.monthlyVolume)}</span>
+        </div>
+      )}
       <div className={styles.lineRow}>
         <span className={styles.lineName}>Chargeback fee</span>
         <span className={styles.lineName}>{fmt$(CHARGEBACK_FEE)} each</span>
