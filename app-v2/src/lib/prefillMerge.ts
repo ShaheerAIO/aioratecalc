@@ -82,6 +82,8 @@ const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => st
   { path: "processing.monthlyVolume", read: p => p.processing.monthlyVolume },
   // From `mcc_code`, which EasyOB writes back once a rep has entered one.
   { path: "processing.mcc", read: p => p.processing.mcc },
+  // From `average_ticket` (created 2026-10-18), written back the same way.
+  { path: "processing.avgTicket", read: p => p.processing.avgTicket },
 ];
 
 /**
@@ -92,7 +94,7 @@ const REVIEW_FIELD_PATHS: Array<{ path: string; read: (p: ProspectPrefill) => st
  */
 export const UNKNOWABLE_REVIEW_FIELDS: string[] = [
   "business.bizType", "business.yearsInBusiness", "business.annualRevenue",
-  "processing.avgTicket", "processing.cardPresentPct",
+  "processing.cardPresentPct",
 ];
 
 function readPath(sections: ReviewSections, path: string): string {

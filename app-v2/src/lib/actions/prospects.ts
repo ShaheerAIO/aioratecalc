@@ -160,9 +160,14 @@ async function resolveReplyToRep(ownerUserId: string): Promise<ReplyToRep | null
  */
 async function syncCompanyDetails(
   companyId: string | null | undefined,
-  app: Pick<MerchantApplication, "business" | "processing">,
+  app: Pick<MerchantApplication, "business" | "processing"> & Partial<Pick<MerchantApplication, "quoteConfig">>,
 ): Promise<{ synced: boolean }> {
   if (!companyId) return { synced: false };
+  // The quote basis's ticket first (what the rate was priced on), else the
+  // processing record's. Only a positive number reaches the number-typed
+  // property — anything else is left out, never sent, so it can't fail the
+  // whole PATCH and take the legal fields down with it.
+  const ticket = Number(app.quoteConfig?.avgTicket ?? app.processing?.avgTicket);
   try {
     await updateCompanyMerchantDetails(companyId, {
       legalName: app.business?.legalName,
@@ -170,6 +175,7 @@ async function syncCompanyDetails(
       legalCity: app.business?.city,
       previousProcessor: app.processing?.currentProcessor,
       mcc: app.processing?.mcc,
+      averageTicket: ticket > 0 ? String(ticket) : null,
     });
     return { synced: true };
   } catch (err) {
@@ -743,6 +749,14 @@ export async function createProspectAction(input: {
       ? input.quoteConfig
       : null;
   const analysis = rated ? input.analysis ?? null : null;
+  // Server mirror of the rep form's hard block (product owner, 2026-10-18):
+  // a processing quote with no basis is quoted the flat standard rate, off the
+  // rate card and past every margin floor. At CREATION only — a saved quote
+  // reopened in EditQuotePanel can't take a ticket, so enforcing it on save
+  // would freeze every older row that never had one.
+  if (rated && !analysis && !quoteConfig) {
+    throw new Error("Enter the monthly volume and average ticket — the card rate is priced off both.");
+  }
 
   // Server-side mirror of the rep form's own floor check — see the comment
   // above `assertRateAboveFloor` and the 2026-10-09 decision recorded above

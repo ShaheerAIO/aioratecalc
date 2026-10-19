@@ -127,6 +127,15 @@ export function monthlyVolumeFromCompany(processingVolume: string | null | undef
 }
 
 /**
+ * `average_ticket` — created 2026-10-18 and written back by EasyOB at prospect
+ * creation, so a second quote on the same company prefills it. Same rules as
+ * the volume and for the same reason: it prices the rate card and the floors.
+ */
+export function averageTicketFromCompany(averageTicket: string | null | undefined): string | undefined {
+  return monthlyVolumeFromCompany(averageTicket);
+}
+
+/**
  * A human business description. HubSpot's own `description` wins when it's
  * there; otherwise cuisine + restaurant type are stitched into a short phrase.
  * Deliberately prose, not a code: see the MCC note on buildProspectPrefill.
@@ -195,14 +204,14 @@ export function mccFromCompany(mccCode: string | null | undefined): string | und
  *    not a legal-entity type; nothing in HubSpot says LLC vs corp.
  *  - yearsInBusiness / annualRevenue. `founded_year` and `annualrevenue` are
  *    ~0% populated portal-wide.
- *  - Ticket and card-present split. No HubSpot property carries either; they
- *    come from the statement analysis. Checked again on 2026-10-14 when the
- *    product owner asked for average ticket to be pulled too: there is no
- *    average-ticket property on COMPANY or DEAL in this portal, and the
- *    nearest thing ("Average Orders per Day", `migrated_00nfi000009tl34uaa`)
- *    is populated on ZERO companies, so it can't stand in for one either.
- *    Deriving a ticket from volume ÷ orders was considered and dropped for
- *    that reason.
+ *  - Card-present split. No HubSpot property carries it.
+ *
+ * Average ticket IS mapped since 2026-10-18, from `average_ticket` — a property
+ * the product owner created that day, because none existed (checked live
+ * 2026-10-14 and again 2026-10-18; "Average Orders per Day" is empty on every
+ * company, so volume ÷ orders was never an option). EasyOB is what fills it:
+ * the ticket is required on every processing quote and written back at
+ * prospect creation, so this reads back the previous quote's answer.
  *
  * Monthly volume IS mapped, from `processing_volume` — RESTORED 2026-10-14
  * (product owner: "pull the monthly volume and avg ticket from hubspot. (ik i
@@ -322,6 +331,7 @@ export function buildProspectPrefill(
     mcc: mccFromCompany(company.mccCode),
     businessDescription: businessDescription(company),
     monthlyVolume: monthlyVolumeFromCompany(company.processingVolume),
+    avgTicket: averageTicketFromCompany(company.averageTicket),
   });
 
   const channels = channelsFromModules(company.modules);

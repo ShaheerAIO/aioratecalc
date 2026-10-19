@@ -118,6 +118,10 @@ export default function QuoteSummary({ quote }: Props) {
 
   return (
     <>
+      {/* First on the page (product owner, 2026-10-18): the rates are what a
+          processing merchant is signing up to, ahead of any line item. */}
+      {quote.payment && <PaymentDetails payment={quote.payment} />}
+
       {/* The ordering-point COUNT — a fact about what's being deployed, never
           the reason for any price. Order points stopped pricing anything on
           2026-10-05 (the platform fee is set by the plan now), so this is
@@ -217,7 +221,6 @@ export default function QuoteSummary({ quote }: Props) {
         </div>
       )}
 
-      {quote.payment && <PaymentDetails payment={quote.payment} />}
     </>
   );
 }

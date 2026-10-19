@@ -346,6 +346,12 @@ function NewProspectFlow() {
   if (!business.legalName.trim()) hardBlocks.push("Enter the legal business name — HubSpot doesn't have it, and it's saved back to the company.");
   if (!ownerContact.email.trim()) hardBlocks.push("Enter the customer's contact email.");
   hardBlocks.push(...malformedMessages);
+  // REQUIRED on a processing quote (product owner, 2026-10-18). Without both
+  // the rate card can't be read, so the merchant was quoted the flat standard
+  // rate whatever their size — and no margin floor was checked at all.
+  if (rated && !(volume > 0 && ticket > 0)) {
+    hardBlocks.push("Enter the monthly volume and average ticket — the card rate is priced off both.");
+  }
   hardBlocks.push(...quoteBlockers);
   if (floorCheck?.belowMarginFloor) {
     // Kept as the SAME SENTENCE as the server refusal
@@ -744,10 +750,10 @@ function NewProspectFlow() {
 
       <p className={styles.prefillNote}>
         {basisHalfSet
-          ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — until both are set, this quote has no rate on it.`
+          ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — the card rate is priced off both.`
           : hasQuote
             ? "The customer opens the link straight to this quote."
-            : "Optional. Leave both blank and this quote has no rate on it — the customer sees whatever's already priced, or that the quote is still being prepared if nothing is."}
+            : "Required. The card rate is priced off the monthly volume and average ticket."}
       </p>
     </section>
   );

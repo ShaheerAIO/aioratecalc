@@ -36,6 +36,7 @@ const FULL: HubspotCompanyProfile = {
   legalCity: null,
   previousProcessor: null,
   mccCode: null,
+  averageTicket: null,
 };
 
 const EMPTY: HubspotCompanyProfile = {
@@ -43,7 +44,7 @@ const EMPTY: HubspotCompanyProfile = {
   domain: null, website: null, address: null, city: null, state: null, zip: null, country: null,
   description: null, industryType: null, cuisineType: null, ownershipType: null, currentPos: null, modules: null,
   processingVolume: null, legalName: null, legalStreet: null, legalCity: null,
-  previousProcessor: null, mccCode: null,
+  previousProcessor: null, mccCode: null, averageTicket: null,
 };
 
 const CONTACT: HubspotContact = {
@@ -365,6 +366,12 @@ describe("buildProspectPrefill", () => {
     expect(buildProspectPrefill({ ...FULL, mccCode: "5812" }, CONTACT).processing.mcc).toBe("5812");
     expect(buildProspectPrefill({ ...FULL, mccCode: "restaurant" }, CONTACT).processing.mcc).toBeUndefined();
     expect(buildProspectPrefill({ ...FULL, mccCode: "58121" }, CONTACT).processing.mcc).toBeUndefined();
+  });
+
+  it("reads the average ticket from average_ticket, only when it's a positive number", () => {
+    expect(buildProspectPrefill({ ...FULL, averageTicket: "32.5" }, CONTACT).processing.avgTicket).toBe("32.5");
+    expect(buildProspectPrefill({ ...FULL, averageTicket: "0" }, CONTACT).processing.avgTicket).toBeUndefined();
+    expect(buildProspectPrefill({ ...FULL, averageTicket: "abc" }, CONTACT).processing.avgTicket).toBeUndefined();
   });
 
   it("never invents an MCC, a bizType, or a ticket/card-mix figure", () => {

@@ -935,6 +935,12 @@ export type HubspotCompanyProfile = TenantCompany & {
   previousProcessor: string | null;
   /** "mcc_code" — free text in HubSpot; hubspotPrefill only accepts a 4-digit code. */
   mccCode: string | null;
+  /**
+   * "average_ticket" — the merchant's average card ticket in dollars. Created
+   * by hand in the portal 2026-10-18 (number, companyinformation) because the
+   * rate card can't price without it; EasyOB writes it at prospect creation.
+   */
+  averageTicket: string | null;
 };
 
 /**
@@ -953,6 +959,9 @@ export const COMPANY_WRITE_PROPS = {
   legalCity: "legal_city_address_as_registered_with_government",
   previousProcessor: "previous_processor",
   mcc: "mcc_code",
+  // A NUMBER property: send digits only (syncCompanyDetails does), since one
+  // invalid value fails the whole PATCH and takes the legal fields with it.
+  averageTicket: "average_ticket",
 } as const;
 
 const COMPANY_PROFILE_PROPS = [
@@ -986,6 +995,7 @@ function toCompanyProfile(obj: { id: string; properties: Record<string, string |
     legalCity: clean(p[COMPANY_WRITE_PROPS.legalCity]),
     previousProcessor: clean(p[COMPANY_WRITE_PROPS.previousProcessor]),
     mccCode: clean(p[COMPANY_WRITE_PROPS.mcc]),
+    averageTicket: clean(p[COMPANY_WRITE_PROPS.averageTicket]),
   };
 }
 
@@ -995,6 +1005,7 @@ export type CompanyMerchantDetails = {
   legalCity?: string | null;
   previousProcessor?: string | null;
   mcc?: string | null;
+  averageTicket?: string | null;
 };
 
 /**

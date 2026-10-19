@@ -216,6 +216,15 @@ describe("createProspectAction — success", () => {
     }));
   });
 
+  // 2026-10-18: `average_ticket` was created so the next quote on the company
+  // prefills it. The ticket the rate was priced on is what's written.
+  it("writes the average ticket to the Company", async () => {
+    await createProspectAction(baseInput());
+    expect(updateCompanyMerchantDetails).toHaveBeenCalledWith(COMPANY_ID, expect.objectContaining({
+      averageTicket: "30",
+    }));
+  });
+
   // The rep leaving those fields for the customer is the NORMAL case, and it
   // must not erase an address HubSpot already holds — updateCompanyMerchantDetails
   // leaves blanks out, so what matters here is that we pass them through as
@@ -323,8 +332,17 @@ describe("createProspectAction — publishes NOTHING at send time", () => {
 // to confirm their details so that a quote can be built.
 describe("createProspectAction — a link needs a quote", () => {
   it("refuses a quote with no picks and no rate basis", async () => {
+    // Since 2026-10-18 the volume + ticket requirement refuses this first.
     await expect(createProspectAction(baseInput({ quoteConfig: null })))
-      .rejects.toThrow(/nothing on it yet/);
+      .rejects.toThrow(/average ticket/);
+    expect(saveApplication).not.toHaveBeenCalled();
+  });
+
+  // 2026-10-18: without a ticket the rate card can't be read, so the merchant
+  // was quoted the flat standard rate whatever their size.
+  it("refuses a processing quote with a volume but no average ticket", async () => {
+    await expect(createProspectAction(baseInput({ quoteConfig: { monthlyVolume: 100000, avgTicket: 0 } })))
+      .rejects.toThrow(/monthly volume and average ticket/);
     expect(saveApplication).not.toHaveBeenCalled();
   });
 
