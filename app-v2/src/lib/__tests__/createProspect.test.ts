@@ -218,10 +218,11 @@ describe("createProspectAction — success", () => {
 
   // 2026-10-18: `average_ticket` was created so the next quote on the company
   // prefills it. The ticket the rate was priced on is what's written.
-  it("writes the average ticket to the Company", async () => {
+  it("writes the average ticket and monthly volume to the Company", async () => {
     await createProspectAction(baseInput());
     expect(updateCompanyMerchantDetails).toHaveBeenCalledWith(COMPANY_ID, expect.objectContaining({
       averageTicket: "30",
+      processingVolume: "100000",
     }));
   });
 

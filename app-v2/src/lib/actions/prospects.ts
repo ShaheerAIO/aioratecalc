@@ -163,11 +163,12 @@ async function syncCompanyDetails(
   app: Pick<MerchantApplication, "business" | "processing"> & Partial<Pick<MerchantApplication, "quoteConfig">>,
 ): Promise<{ synced: boolean }> {
   if (!companyId) return { synced: false };
-  // The quote basis's ticket first (what the rate was priced on), else the
-  // processing record's. Only a positive number reaches the number-typed
+  // The quote basis's ticket and volume first (what the rate was priced on),
+  // else the processing record's. Only a positive number reaches the number-typed
   // property — anything else is left out, never sent, so it can't fail the
   // whole PATCH and take the legal fields down with it.
   const ticket = Number(app.quoteConfig?.avgTicket ?? app.processing?.avgTicket);
+  const volume = Number(app.quoteConfig?.monthlyVolume ?? app.processing?.monthlyVolume);
   try {
     await updateCompanyMerchantDetails(companyId, {
       legalName: app.business?.legalName,
@@ -176,6 +177,7 @@ async function syncCompanyDetails(
       previousProcessor: app.processing?.currentProcessor,
       mcc: app.processing?.mcc,
       averageTicket: ticket > 0 ? String(ticket) : null,
+      processingVolume: volume > 0 ? String(volume) : null,
     });
     return { synced: true };
   } catch (err) {

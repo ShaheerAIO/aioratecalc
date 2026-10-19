@@ -962,13 +962,15 @@ export const COMPANY_WRITE_PROPS = {
   // A NUMBER property: send digits only (syncCompanyDetails does), since one
   // invalid value fails the whole PATCH and takes the legal fields with it.
   averageTicket: "average_ticket",
+  // Also a NUMBER property, read as the volume prefill. Written back since
+  // 2026-10-18 alongside the ticket, so the pair stays together in the CRM.
+  processingVolume: "processing_volume",
 } as const;
 
 const COMPANY_PROFILE_PROPS = [
   ...TENANT_COMPANY_PROPS,
   "domain", "website", "address", "city", "state", "zip", "country", "description",
   "industrytype", "cuisine_type", "ownership_type", "current_pos", "moduels",
-  "processing_volume",
   ...Object.values(COMPANY_WRITE_PROPS),
 ];
 
@@ -1006,6 +1008,7 @@ export type CompanyMerchantDetails = {
   previousProcessor?: string | null;
   mcc?: string | null;
   averageTicket?: string | null;
+  processingVolume?: string | null;
 };
 
 /**
