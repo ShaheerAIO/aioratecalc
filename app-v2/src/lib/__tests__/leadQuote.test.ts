@@ -109,6 +109,18 @@ describe("buildCustomerSafeQuote — config basis", () => {
     expect(quote.savingsPct).toBeNull();
   });
 
+  it("carries the quoted rates themselves, for the payment details card", () => {
+    const quoted = rated(buildCustomerSafeQuote({
+      analysis: null, quoteConfig: CONFIG, targetMargin: null, pricingModel: "2-tier",
+      quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: 0.0275, cardNotPresentRate: 0.033, perTransactionFee: 0.1 },
+    }));
+    expect(quoted.cardPresentRate).toBe(0.0275);
+    expect(quoted.cardNotPresentRate).toBe(0.033);
+    expect(quoted.perTransactionFee).toBe(0.1);
+    // A null quoteRates states the standard rate, like the pricing does.
+    expect(quote.cardPresentRate).toBe(DEFAULT_QUOTE_RATES.cardPresentRate);
+  });
+
   it("prices a row with NO rates at the standard rate, not at nothing", () => {
     // Every application written before 2026-10-06 has a null quoteRates. It
     // has to quote something, and the something is what a new quote would get.
@@ -132,8 +144,9 @@ describe("buildCustomerSafeQuote — config basis", () => {
     // The customer-safe boundary is the shape itself: anything internal would
     // have to appear as a key here to leak.
     expect(Object.keys(quote).sort()).toEqual([
-      "annualSavings", "averageTicket", "basis", "currentEffectiveRate", "currentMonthlyCost",
-      "effectiveRate", "lineTotals", "lines", "monthlySavings", "monthlyVolume", "orderPoints",
+      "annualSavings", "averageTicket", "basis", "cardNotPresentRate", "cardPresentRate",
+      "currentEffectiveRate", "currentMonthlyCost", "effectiveRate", "lineTotals", "lines",
+      "monthlySavings", "monthlyVolume", "orderPoints", "perTransactionFee",
       "projectedAnnualCost", "projectedMonthlyCost", "savingsPct",
     ]);
     const serialized = JSON.stringify(quote);

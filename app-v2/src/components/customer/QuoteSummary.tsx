@@ -1,9 +1,10 @@
 "use client";
 
+import { lineDescription } from "@/lib/lineDescriptions";
 import {
-  CHANNEL_LABELS, describeBillingStart, lineListAmount, lineNetAmount,
+  CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
-import { fmt$, fmtCycle, fmtFrequency, monthlyEquivalent } from "@/lib/utils";
+import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafeQuote, QuoteLine } from "@/types/merchant";
 import styles from "./QuoteSummary.module.css";
 
@@ -18,8 +19,10 @@ import styles from "./QuoteSummary.module.css";
 //
 // The rate/savings headline (effective rate, projected cost, estimated
 // savings) was removed 2026-10-15 (product owner: "get rid of the whole rate
-// breakdown... just show the line items") — the line items below are now the
-// whole of what a merchant sees here.
+// breakdown... just show the line items"). The quoted RATES came back on
+// 2026-10-18 in a card of their own ("separate card for payment details"):
+// the two card rates, the volume they were quoted on, and the incident fees —
+// still no effective rate, projected cost or savings.
 
 type Props = {
   quote: CustomerSafeQuote;
@@ -79,8 +82,13 @@ export default function QuoteSummary({ quote }: Props) {
     const covered = Boolean(l.coveredByPackage);
     return (
       <div key={l.hubspotProductId} className={styles.lineRow}>
-        <div className={styles.lineName}>
-          {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
+        <div>
+          <div className={styles.lineName}>
+            {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
+          </div>
+          {lineDescription(l.hubspotProductId) && (
+            <div className={styles.lineDesc}>{lineDescription(l.hubspotProductId)}</div>
+          )}
         </div>
         <div className={styles.linePrice}>
           <div className={styles.linePriceMain}>
@@ -135,6 +143,9 @@ export default function QuoteSummary({ quote }: Props) {
                     <div className={styles.lineName}>
                       {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
                     </div>
+                    {lineDescription(l.hubspotProductId) && (
+                      <div className={styles.lineDesc}>{lineDescription(l.hubspotProductId)}</div>
+                    )}
                     {/* When the first charge lands. Stated on the line rather than
                         in the totals: it changes the timing, not the amount. */}
                     {l.billingStart && (
@@ -205,6 +216,48 @@ export default function QuoteSummary({ quote }: Props) {
           </p>
         </div>
       )}
+
+      {quote.basis !== "products" && <PaymentDetails quote={quote} />}
     </>
+  );
+}
+
+// The processing half of the quote, in a card of its own. The card-present
+// rate is the headline and card-not-present sits under it in smaller type
+// (product owner, 2026-10-18) — unless the merchant never takes a card in
+// person, in which case card-not-present is the only rate and takes its place.
+function PaymentDetails({ quote }: { quote: Extract<CustomerSafeQuote, { monthlyVolume: number }> }) {
+  const fee = `+ ${fmt$(quote.perTransactionFee)} per transaction`;
+  const headline = quote.cardPresentRate !== null
+    ? { label: "Card present", rate: quote.cardPresentRate }
+    : { label: "Card not present", rate: quote.cardNotPresentRate };
+
+  return (
+    <section className={styles.lineGroup} aria-label="Payment details">
+      <h2 className={styles.lineGroupTitle}>Payment Details</h2>
+      <div className={styles.rateHero}>
+        <span className={styles.rateHeroLabel}>{headline.label}</span>
+        <span className={styles.rateHeroValue}>{fmtPct2(headline.rate)}</span>
+        <span className={styles.rateHeroFee}>{fee}</span>
+      </div>
+      {quote.cardPresentRate !== null && (
+        <div className={styles.lineRow}>
+          <span className={styles.lineDesc}>Card not present</span>
+          <span className={styles.lineDesc}>{fmtPct2(quote.cardNotPresentRate)} {fee}</span>
+        </div>
+      )}
+      <div className={styles.lineRow}>
+        <span className={styles.lineName}>Monthly card volume</span>
+        <span className={styles.lineName}>{fmt$0(quote.monthlyVolume)}</span>
+      </div>
+      <div className={styles.lineRow}>
+        <span className={styles.lineName}>Chargeback fee</span>
+        <span className={styles.lineName}>{fmt$(CHARGEBACK_FEE)} each</span>
+      </div>
+      <div className={styles.lineRow}>
+        <span className={styles.lineName}>Retrieval fee</span>
+        <span className={styles.lineName}>{fmt$(RETRIEVAL_FEE)} each</span>
+      </div>
+    </section>
   );
 }

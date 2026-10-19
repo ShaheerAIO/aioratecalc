@@ -597,3 +597,33 @@ wanted, the per-product discount cap from 10/15 is one edit away.
 "Free Kit Replacement Item" is off the picker as asked. One flag: that name
 reads oddly on the document a merchant signs, and the HubSpot product name is
 what publishes — renaming it is a portal-side change, not a code one.)
+
+QUOTE BUILDER:
+instgallation is priced and training, Included but priced. treat it like a regular line item.
+menu board is not a screen, dont count it.
+you can only swap KDS Kiosk and POS with each other in the qsr kit. Everything else gets added normally
+no payroll without point of sale
+
+QUOTE PREVIEW FOR CUSTOMER:
+separate card for payment details
+show cnp cp rates on quote prev, make cp smaller, show volume
+chargeback fees 25, retrieval fee 15, 
+add descriptions for all line items
+
+CONFRIM INFO SCREEN:
+change street and operating to legal and DBA
+(DONE 10/18 —
+Install + training: charged at list, still auto-added, discountable like any
+line. COMPED_SERVICE_PRODUCT_IDS is empty; every new hardware quote is $1,498
+more than yesterday. Already-published quotes don't move.
+Menu board: no longer counts toward the four included screens.
+Kit swaps: ONLY POS / KDS / Kiosk 27" / Kiosk 15.6" swap with each other. The
+old "anything cheaper can take a dearer slot" rule is gone — a printer,
+tableside, mPOS or tablet is now just charged. Mega Kiosk still can't swap.
+Payroll: blocked unless a counter POS is on the quote (POS Unit, POS w/ CFD,
+POS Dual Screen). mPOS/tableside/kiosks don't count.
+Customer quote: new "Payment Details" card — card-present rate as the
+headline, card-not-present smaller under it, monthly volume, chargeback $25,
+retrieval $15. Every line has a one-sentence description, written in
+lib/lineDescriptions.ts (HubSpot's catalog text is untouched).
+Confirm screen: "Registered/Operating" → "Legal/DBA".)

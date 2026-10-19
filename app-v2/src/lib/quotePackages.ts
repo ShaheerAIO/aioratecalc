@@ -18,36 +18,26 @@
 //
 // ── WHAT DECIDES WHETHER A LINE FITS A SLOT ────────────────────────────────
 //
-// Each slot is a SHEET ITEM (POS, KDS, printer …) and each sheet item has an
-// MSRP. A cart line fits a slot two ways:
+// Each slot is a SHEET ITEM (POS, KDS, printer …). A cart line fits a slot two
+// ways, and only two:
 //
-//   1. EXACT — the line is made of that very item. Always fits, at any price.
-//   2. SWAP  — the line is made of a different but SWAPPABLE item that costs NO
-//      MORE than the slot's MSRP (Shaheer, 2026-10-09). A cheaper item in an
-//      open slot gives away less than the kit already promised, so there is no
-//      lower bound: a tableside device can stand in for a POS, a printer for a
-//      KDS. Among the slots it fits, an item takes the CHEAPEST, so it leaves
-//      the dear slots for the dear items.
-//   3. INTERCHANGE — the four screens in `INTERCHANGEABLE` fill each other's
-//      slots in EITHER direction, whatever they cost (Shaheer, 2026-10-16).
-//      This is the one place the MSRP ceiling is lifted, and the $400 "Free Kit
-//      Replacement Item" that quoting.ts derives per swap is what pays for it.
-//      The Mega Kiosk is deliberately not a member — $2,700 into the $735 KDS
-//      slot is $1,965 that $400 does not come close to covering.
+//   1. EXACT — the line is made of that very item.
+//   2. SWAP  — the POS, the KDS and the two kiosks in `INTERCHANGEABLE` fill
+//      each other's slots in EITHER direction, whatever they cost (Shaheer,
+//      2026-10-16), and the $400 "Free Kit Replacement Item" that quoting.ts
+//      derives per swap is what pays for it. The Mega Kiosk is deliberately
+//      not a member — $2,700 into the $735 KDS slot is $1,965 that $400 does
+//      not come close to covering.
 //
-// EVERY swap is charged, not just the ones the ceiling used to refuse. See
-// `PackageDecomposition.swaps`.
+// EVERYTHING ELSE fits only its own slot and is otherwise added to the quote
+// normally, at its price (product owner, 2026-10-18: "you can only swap KDS
+// Kiosk and POS with each other in the qsr kit. Everything else gets added
+// normally"). That retired the older MSRP rule (2026-10-09), under which any
+// item could take any dearer slot — a printer the KDS seat, a tableside device
+// the POS seat — and hardware off the sheet (mPOS, the tablets) could swap in
+// at its HubSpot price. None of that covers anything any more.
 //
-// Hardware that is NOT on the sheet (mPOS, the tablets, the label printer) can
-// swap too, priced at its HubSpot list price since there is no sheet MSRP. It
-// never fills a slot exactly, never counts as an ordering device, and only
-// one-time "inventory" lines qualify — services and software are never kit
-// hardware.
-//
-// Some items are LOCKED (`swappable: false`) and fit ONLY their own slot, in
-// both directions: a locked item can't fill another slot, and a locked slot
-// won't take another item. Without that, MSRP alone would let a $299 customer
-// facing display into the $336 printer slot and a $350 terminal into it too.
+// EVERY swap is charged. See `PackageDecomposition.swaps`.
 //
 // ── ONE HUBSPOT LINE CAN BE SEVERAL SHEET ITEMS ────────────────────────────
 //
@@ -97,44 +87,41 @@ export type SheetItem = {
    * re-checked the day the sheet is finalized.
    */
   msrp: number;
-  /** false = fits only its own slot, in both directions. See the header. */
-  swappable: boolean;
   /** A device that takes orders. Placing one is what makes a kit apply. */
   orders?: true;
 };
 
 export const SHEET_ITEMS: Record<SheetKey, SheetItem> = {
   // list $949 / HubSpot $949 — suggested MSRP is only $855, finalized $900
-  pos:       { label: "POS",                                  msrp: 949,  swappable: true, orders: true },
+  pos:       { label: "POS",                                  msrp: 949, orders: true },
   // "POS Secondary" in the sheet; finalized $299 (suggested $267, list $170)
-  cfd:       { label: "Customer Facing Display",              msrp: 299,  swappable: false },
+  cfd:       { label: "Customer Facing Display",              msrp: 299 },
   // Zia tab $350 (main tab: finalized $300, suggested $299, list $250)
-  terminal:  { label: "Payment Terminal (AMS1)",              msrp: 350,  swappable: false },
+  terminal:  { label: "Payment Terminal (AMS1)",              msrp: 350 },
   // list / HubSpot / finalized $999 (suggested $975, Zia tab $888.75)
-  kiosk27:   { label: "Kiosk 27\"",                           msrp: 999,  swappable: true, orders: true },
+  kiosk27:   { label: "Kiosk 27\"",                           msrp: 999, orders: true },
   // list / HubSpot / finalized $799 (Zia tab $720; no suggested MSRP)
-  kiosk156:  { label: "Kiosk 15.6\"",                         msrp: 799,  swappable: true, orders: true },
+  kiosk156:  { label: "Kiosk 15.6\"",                         msrp: 799, orders: true },
   // suggested MSRP $2,700 (list and HubSpot $2,459)
-  mega:      { label: "Mega Kiosk",                           msrp: 2700, swappable: true, orders: true },
+  mega:      { label: "Mega Kiosk",                           msrp: 2700, orders: true },
   // suggested MSRP $603 (finalized $399, list $330)
-  tableside: { label: "AIO Tableside POS",                    msrp: 603,  swappable: true, orders: true },
+  tableside: { label: "AIO Tableside POS",                    msrp: 603, orders: true },
   // suggested MSRP and Zia tab $735 (list $399, finalized $499)
-  kds:       { label: "KDS",                                  msrp: 735,  swappable: true },
+  kds:       { label: "KDS",                                  msrp: 735 },
   // suggested MSRP and Zia tab $336 (list $199, finalized $249)
-  printer:   { label: "Thermal Printer",                      msrp: 336,  swappable: true },
+  printer:   { label: "Thermal Printer",                      msrp: 336 },
   // Zia tab $75 only — the main tab carries no suggested MSRP (list $70)
-  drawer:    { label: "Cash Drawer",                          msrp: 75,   swappable: false },
+  drawer:    { label: "Cash Drawer",                          msrp: 75 },
   // suggested MSRP $108 (finalized $99, list $70)
-  menuboard: { label: "Menu Board Computer",                  msrp: 108,  swappable: false },
+  menuboard: { label: "Menu Board Computer",                  msrp: 108 },
   // list / HubSpot / finalized $999 (suggested $527, Zia tab $549)
-  wifi:      { label: "AIO WiFi Network Package",             msrp: 999,  swappable: false },
+  wifi:      { label: "AIO WiFi Network Package",             msrp: 999 },
 };
 
 /**
  * What each HubSpot product is made of, in sheet items. A product that is not
- * here can still SWAP into a slot at its HubSpot price if it is one-time
- * hardware (see `partsOf`), but never fills one exactly. Add the row when
- * someone adds the sheet value.
+ * here is never covered by the kit — it is added to the quote at its price.
+ * Add the row when someone adds the sheet value.
  *
  * Keyed by product id, like ORDER_POINT_RULES, so a rename in HubSpot can't
  * silently drop a product out of the kit.
@@ -169,49 +156,32 @@ export function sheetMsrpOf(hubspotProductId: string): number | null {
   return parts ? parts.reduce((sum, k) => sum + SHEET_ITEMS[k].msrp, 0) : null;
 }
 
-/** Whether an item may swap into a slot: it costs no more than the slot's MSRP. */
-export function fitsUnder(candidate: number, slot: number): boolean {
-  // The epsilon is for list prices carried in cents: 949 vs 948.9999….
-  return candidate <= slot + 1e-9;
-}
-
 /**
- * The screens that fill each other's slots in EITHER direction, whatever they
- * cost — the one exception to `fitsUnder` (Shaheer, 2026-10-16).
+ * The ONLY items that may take a seat that isn't their own: the POS, the KDS
+ * and the two kiosks, in each other's slots, in either direction, whatever
+ * they cost (Shaheer, 2026-10-16; narrowed to exactly these 2026-10-18).
  *
- * A set of named members rather than a group tag on `SheetItem`, because the
- * MEGA KIOSK'S ABSENCE is the point: at $2,700 it would take the $735 KDS slot
- * and the $400 replacement charge would cover less than a quarter of it. Adding
- * a member here is a pricing decision, so it should read like one.
- *
- * All four are already `swappable: true`; this lifts the ceiling, never a lock.
+ * A set of named members rather than a flag on `SheetItem`, because the MEGA
+ * KIOSK'S ABSENCE is the point: at $2,700 it would take the $735 KDS slot and
+ * the $400 replacement charge would cover less than a quarter of it. Adding a
+ * member here is a pricing decision, so it should read like one.
  */
 const INTERCHANGEABLE: ReadonlySet<SheetKey> = new Set<SheetKey>([
   "pos", "kds", "kiosk27", "kiosk156",
 ]);
 
-/** Whether this part may take this slot's seat regardless of what either costs. */
-function interchanges(part: SheetKey | null, slot: SheetKey): boolean {
-  return part !== null && INTERCHANGEABLE.has(part) && INTERCHANGEABLE.has(slot);
+/** Whether this part may take this slot's seat. */
+function interchanges(part: SheetKey, slot: SheetKey): boolean {
+  return INTERCHANGEABLE.has(part) && INTERCHANGEABLE.has(slot);
 }
 
-/**
- * One physical part of a cart line. `key` is null for hardware the sheet
- * doesn't carry, which can only ever swap (see the header).
- */
-type Part = { key: SheetKey | null; msrp: number; swappable: boolean; orders: boolean };
+/** One physical part of a cart line. */
+type Part = { key: SheetKey; msrp: number; orders: boolean };
 
 function partsOf(line: QuoteLine): Part[] | null {
   const keys = PRODUCT_PARTS[line.hubspotProductId];
-  if (keys) {
-    return keys.map(k => ({
-      key: k, msrp: SHEET_ITEMS[k].msrp, swappable: SHEET_ITEMS[k].swappable, orders: !!SHEET_ITEMS[k].orders,
-    }));
-  }
-  if (line.productType === "inventory" && Number.isFinite(line.unitPrice) && line.unitPrice > 0) {
-    return [{ key: null, msrp: line.unitPrice, swappable: true, orders: false }];
-  }
-  return null;
+  if (!keys) return null;
+  return keys.map(k => ({ key: k, msrp: SHEET_ITEMS[k].msrp, orders: !!SHEET_ITEMS[k].orders }));
 }
 
 // ── The kit ─────────────────────────────────────────────────────────────────
@@ -265,7 +235,7 @@ export const PACKAGES: QuotePackage[] = [
       // takes the only slot its item could, and a swap takes the cheapest slot
       // it fits, with the index only breaking a tie between two slots of the
       // SAME price. The one such pair is kiosk27 and wifi at $999, and wifi is
-      // locked (`swappable: false`), so it is never a swap target at all.
+      // outside the interchange group, so it is never a swap target at all.
       { item: "pos", qty: 1 },
       { item: "cfd", qty: 1 },
       { item: "drawer", qty: 1 },
@@ -350,8 +320,7 @@ export type AppliedPackage = {
 /** One unit of one line landing in one slot. `swapped` is the fuzzy case. */
 export type FilledSlot = {
   hubspotProductId: string;
-  /** Null for hardware the sheet doesn't carry — always a swap. */
-  part: SheetKey | null;
+  part: SheetKey;
   slot: SheetKey;
   swapped: boolean;
 };
@@ -413,9 +382,8 @@ type Placement = {
  * Where one unit of this entry would go. Returns the slot index per part, or
  * null if ANY part has nowhere to go — a unit is covered whole or not at all.
  *
- * Exact beats swap, per part. Among swaps the CHEAPEST slot the part fits
- * wins (lowest slot index on a tie), so the answer never depends on the order
- * lines arrived in.
+ * Exact beats swap, per part. Among swaps the CHEAPEST slot wins (lowest slot
+ * index on a tie), so the answer never depends on the order lines arrived in.
  *
  * ONE EXCEPTION, and it is what makes a kiosk swappable at all: the kiosk SKUs
  * are a kiosk AND a terminal welded together, and the kit holds only two
@@ -443,23 +411,19 @@ function placeUnit(
   let interchanged = false;
 
   for (const part of entry.parts) {
-    let pick = part.key === null
-      ? -1
-      : slots.findIndex((s, i) => s.owner < 0 && !used.has(i) && s.item === part.key);
+    let pick = slots.findIndex((s, i) => s.owner < 0 && !used.has(i) && s.item === part.key);
 
-    if (pick < 0 && allowSwap && part.swappable) {
+    if (pick < 0 && allowSwap) {
       let best = Infinity;
       slots.forEach((s, i) => {
-        if (s.owner >= 0 || used.has(i)) return;
-        const target = SHEET_ITEMS[s.item];
-        if (!target.swappable) return;
-        if (!interchanges(part.key, s.item) && !fitsUnder(part.msrp, target.msrp)) return;
-        if (target.msrp < best) { best = target.msrp; pick = i; }
+        if (s.owner >= 0 || used.has(i) || !interchanges(part.key, s.item)) return;
+        const msrp = SHEET_ITEMS[s.item].msrp;
+        if (msrp < best) { best = msrp; pick = i; }
       });
     }
 
     if (pick < 0) { unseated.push(part); continue; }
-    if (interchanges(part.key, slots[pick].item) && part.key !== slots[pick].item) interchanged = true;
+    if (part.key !== slots[pick].item) interchanged = true;
     used.add(pick);
     placed.push({ part, slot: pick });
   }
@@ -481,10 +445,7 @@ function flexibility(entry: PoolEntry, slots: Slot[]): number {
   for (const part of entry.parts) {
     slots.forEach(s => {
       if (s.owner >= 0) return;
-      const target = SHEET_ITEMS[s.item];
-      const canSwap = part.swappable && target.swappable &&
-        (interchanges(part.key, s.item) || fitsUnder(part.msrp, target.msrp));
-      if (s.item === part.key || canSwap) n += 1;
+      if (s.item === part.key || interchanges(part.key, s.item)) n += 1;
     });
   }
   return n;
@@ -495,9 +456,7 @@ function flexibility(entry: PoolEntry, slots: Slot[]): number {
  *
  * Per kit instance: first every unit that fits EXACTLY, then the leftovers by
  * SWAP — the MOST CONSTRAINED unit first (fewest slots it could take), dearest
- * on a tie, into the cheapest slot it fits. Cheapest-first alone strands
- * coverage: a tableside device and a printer both fit the KDS slot, and the
- * one placed first would take the seat the other needed. This is a heuristic, not a matching solver —
+ * on a tie, into the cheapest slot it fits. This is a heuristic, not a matching solver —
  * it can still leave money on the table in a contrived cart, and it never
  * covers anything the rules above don't allow. An instance that places no
  * ordering device is thrown away and no further instances are tried.

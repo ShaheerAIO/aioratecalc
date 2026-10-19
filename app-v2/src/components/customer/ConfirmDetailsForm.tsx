@@ -335,7 +335,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
       </div>
 
       <div className={styles.panel}>
-        <h2 className={styles.sectionTitle}>Registered Address</h2>
+        <h2 className={styles.sectionTitle}>Legal Address</h2>
         <p className={styles.hint}>The address your business is registered under with the government.</p>
         <div className={styles.row}>
           {input("business.address", biz.address || "", setBizF("address") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
@@ -355,7 +355,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
             checked={separateOperating}
             onChange={e => setSeparateOperating(e.target.checked)}
           />
-          <span className={styles.checkboxText}>We operate from a different address</span>
+          <span className={styles.checkboxText}>Our DBA address is different</span>
         </label>
 
         {separateOperating && (

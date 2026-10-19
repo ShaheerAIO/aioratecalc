@@ -41,9 +41,9 @@ const ID = {
   drawer:    "222497165011", // Cash Drawer
   menuboard: "223511653103", // Menu Board Computer
   wifi:      "338690209525", // AIO Wifi Network Package - Unifi
-  mpos:      "223511653101", // mPOS — in no sheet row, so it can only swap, at its HubSpot price
-  install:   "223452690133", // Onsite Installation — comped
-  training:  "223152695032", // System Onboarding and Training — comped
+  mpos:      "223511653101", // mPOS — in no sheet row, so the kit never covers it
+  install:   "223452690133", // Onsite Installation — $999, charged since 2026-10-18
+  training:  "223152695032", // System Onboarding and Training — $499, charged since 2026-10-18
   platform:  "335283119838", // All-in-One Platform, $399/mo
   swapFee:   "339236587251", // Free Kit Replacement Item — $400 per kit item swapped out
 };
@@ -105,10 +105,16 @@ describe("the sheet", () => {
     expect(sheetMsrpOf(ID.mpos)).toBeNull();
   });
 
-  it("locks the items that must never be swapped, whatever their MSRP", () => {
-    for (const k of ["cfd", "terminal", "drawer", "menuboard", "wifi"] as const) {
-      expect(SHEET_ITEMS[k].swappable).toBe(false);
+  it("lets nothing outside POS / KDS / the two kiosks take another item's slot", () => {
+    // One of each non-group item beyond what the kit holds, alongside a full
+    // kit's ordering device. Every extra stays a charged line, and nothing
+    // lands in a slot that isn't its own.
+    const extras = [ID.cfd, ID.ams1, ID.drawer, ID.menuboard, ID.wifi, ID.printer, ID.tableside, ID.mega];
+    const out = run([line(ID.pos), ...extras.map(id => line(id, 3))]);
+    for (const f of out.filled) {
+      if (f.part !== "pos") expect(f.swapped).toBe(false);
     }
+    expect(out.swaps).toBe(0);
   });
 
   it("makes every part of every mapped product a real sheet item", () => {
@@ -206,12 +212,12 @@ describe("decomposePackages — what is covered", () => {
     expect(out.applied).toEqual([]);
   });
 
-  it("swaps off-sheet hardware into an open slot at its HubSpot price", () => {
-    // mPOS ($599 in HubSpot) has no sheet row. The POS takes the POS slot;
-    // the cheapest slot the mPOS fits is the KDS ($735).
+  it("never covers off-sheet hardware — it is added at its price (2026-10-18)", () => {
+    // mPOS has no sheet row. It used to swap into the open KDS slot at its
+    // HubSpot price; only POS / KDS / kiosk swap now.
     const out = run([line(ID.pos), line(ID.mpos)]);
-    expect(covered(out.lines).map(l => l.hubspotProductId)).toEqual([ID.pos, ID.mpos]);
-    expect(out.filled.find(f => f.hubspotProductId === ID.mpos)).toMatchObject({ part: null, slot: "kds", swapped: true });
+    expect(covered(out.lines).map(l => l.hubspotProductId)).toEqual([ID.pos]);
+    expect(out.filled.some(f => f.hubspotProductId === ID.mpos)).toBe(false);
   });
 
   it("never counts off-sheet hardware as the ordering device a kit needs", () => {
@@ -279,23 +285,22 @@ describe("decomposePackages — swaps", () => {
     expect(qtyOf(covered(out.lines), ID.kioskMini)).toBe(1);
   });
 
-  it("holds everything OUTSIDE the interchange group to the slot's price", () => {
-    // The tableside device ($603) is not in the group, so it reaches the KDS
-    // slot ($735) by being cheaper and the POS slot ($949) likewise — but a
-    // printer ($336) can never reach anything dearer than it is the other way.
+  it("swaps nothing OUTSIDE the interchange group, even into a dearer open slot", () => {
+    // The tableside device ($603) used to reach the open KDS slot ($735) by
+    // being cheaper. Only POS / KDS / kiosk swap now (2026-10-18).
     const out = run([line(ID.pos), line(ID.tableside)]);
-    expect(out.filled.find(f => f.part === "tableside")).toMatchObject({ slot: "kds", swapped: true });
+    expect(out.filled.some(f => f.part === "tableside")).toBe(false);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.tableside)).toBe(1);
     // And the one item the group is drawn to exclude stays excluded.
     const mega = run([line(ID.pos), line(ID.mega)]);
     expect(qtyOf(mega.lines.filter(l => !l.coveredByPackage), ID.mega)).toBe(1);
   });
 
-  it("has no lower bound: a printer can stand in for a KDS", () => {
-    // Two printers: one in the printer slot, the second ($336) in the cheapest
-    // open swappable slot it fits — the KDS ($735).
+  it("a second printer is charged, not slipped into the KDS seat", () => {
     const out = run([line(ID.pos), line(ID.printer, 2)]);
-    expect(qtyOf(covered(out.lines), ID.printer)).toBe(2);
-    expect(out.filled.filter(f => f.part === "printer").map(f => f.slot)).toEqual(["printer", "kds"]);
+    expect(qtyOf(covered(out.lines), ID.printer)).toBe(1);
+    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.printer)).toBe(1);
+    expect(out.filled.filter(f => f.part === "printer").map(f => f.slot)).toEqual(["printer"]);
   });
 
   it("falls to the next-nearest slot when the nearest are taken", () => {
@@ -304,18 +309,14 @@ describe("decomposePackages — swaps", () => {
     expect(qtyOf(covered(out.lines), ID.kioskMini)).toBe(1);
   });
 
-  it("places the most constrained device first, so a flexible one can't take its only seat", () => {
-    // The tableside device ($603) can only go in the KDS slot. The kiosk is
-    // nearer the KDS slot too, but has other places to go — so it moves over.
-    const out = run([line(ID.kioskMini), line(ID.tableside)]);
-    expect(out.filled.find(f => f.part === "tableside")).toMatchObject({ slot: "kds" });
-    expect(out.filled.find(f => f.part === "kiosk156")).toMatchObject({ slot: "pos" });
-    expect(out.lines.every(l => l.coveredByPackage === "QSR Kit")).toBe(true);
-  });
+  // "places the most constrained device first" was deleted 2026-10-18: it was
+  // built on a tableside device that could only reach the KDS seat. Every
+  // swap candidate is now a group member that can take any group seat, so no
+  // cart left has a unit with fewer options than another.
 
-  it("swaps a tableside device into the KDS slot when there is no KDS", () => {
+  it("does not swap a tableside device into the KDS slot when there is no KDS", () => {
     const out = run([line(ID.pos), line(ID.tableside)]);
-    expect(out.filled.find(f => f.part === "tableside")).toMatchObject({ slot: "kds", swapped: true });
+    expect(slotsFilled(out)).not.toContain("kds");
   });
 
   it("never swaps in anything dearer than the slot — a Mega Kiosk is not a POS", () => {
@@ -325,9 +326,9 @@ describe("decomposePackages — swaps", () => {
   });
 
   it("takes an open dearer slot when the cheaper one is taken", () => {
-    // The KDS takes the KDS slot, so the tableside device moves up to the kiosk slot.
-    const out = run([line(ID.pos), line(ID.kds), line(ID.tableside)]);
-    expect(out.filled.find(f => f.part === "tableside")).toMatchObject({ slot: "kiosk27", swapped: true });
+    // The KDS takes the KDS slot, so a second POS moves up to the kiosk slot.
+    const out = run([line(ID.pos, 2), line(ID.kds)]);
+    expect(out.filled.filter(f => f.part === "pos").map(f => f.slot).sort()).toEqual(["kiosk27", "pos"]);
   });
 
   it("leaves a device uncovered rather than stacking it into a taken slot", () => {
@@ -363,8 +364,8 @@ describe("decomposePackages — swaps", () => {
 
 describe("decomposePackages — the interchange group", () => {
   it("lets a POS take the KDS seat, which costs less than the POS does", () => {
-    // The whole point: $949 into a $735 slot. `fitsUnder` refuses this and the
-    // POS went uncovered, silently, which is what the $400 charge buys back.
+    // The whole point: $949 into a $735 slot. The old MSRP ceiling refused
+    // this and the POS went uncovered, silently; the $400 charge buys it back.
     const out = run([line(ID.pos, 2), line(ID.kiosk27)]);
     expect(qtyOf(covered(out.lines), ID.pos)).toBe(2);
     expect(out.filled.filter(f => f.part === "pos").map(f => f.slot).sort()).toEqual(["kds", "pos"]);
@@ -431,7 +432,7 @@ describe("decomposePackages — locks", () => {
   });
 
   it("never lets a cheap device into a locked slot either", () => {
-    // A tablet-priced mPOS would fit under the WiFi slot's $999, but WiFi is locked.
+    // mPOS would fit under the WiFi slot's $999 on price, but WiFi is locked.
     const out = run([line(ID.pos), line(ID.kiosk27), line(ID.kds), line(ID.printer), line(ID.mpos)]);
     expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.mpos)).toBe(1);
   });
@@ -493,8 +494,9 @@ describe("preselecting the kit", () => {
       for (const f of built.packages.filled) filled.set(f.slot, (filled.get(f.slot) ?? 0) + 1);
       for (const s of KIT.slots) expect(filled.get(s.item) ?? 0, s.item).toBe(s.qty);
 
-      // And so there is no hardware left over to charge for.
-      expect(built.totals.oneTime).toBe(0);
+      // And so there is no hardware left over to charge for — only the
+      // install ($999) and training ($499), charged since 2026-10-18.
+      expect(built.totals.oneTime).toBe(999 + 499);
       expect(built.blockers).toEqual([]);
       const wifi = built.quoteLines.find(l => l.hubspotProductId === ID.wifi)!;
       expect(wifi.coveredByPackage).toBe("QSR Kit");
@@ -545,18 +547,18 @@ describe("buildQuote with the kit on it", () => {
     expect(built.quoteLines.some(l => l.name === "QSR Kit")).toBe(false);
   });
 
-  it("leaves the comped install and training as they were — comps, not kit coverage", () => {
+  it("never covers the install and training — they are charged, not kit hardware", () => {
     const built = build();
     for (const id of [ID.install, ID.training]) {
       const l = built.quoteLines.find(x => x.hubspotProductId === id)!;
-      expect(l.discountPercent).toBe(100);
+      expect(l.discountPercent ?? 0).toBe(0);
       expect(l.coveredByPackage).toBeUndefined();
     }
   });
 
-  it("charges only the platform fee when the kit covers all of the hardware", () => {
+  it("charges only the platform fee and the services when the kit covers all of the hardware", () => {
     const built = build();
-    expect(built.totals.oneTime).toBe(0);
+    expect(built.totals.oneTime).toBe(999 + 499);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
@@ -565,7 +567,7 @@ describe("buildQuote with the kit on it", () => {
     const mega = built.quoteLines.find(l => l.hubspotProductId === ID.mega)!;
     expect(mega.coveredByPackage).toBeUndefined();
     expect(mega.discountPercent).toBeUndefined();
-    expect(built.totals.oneTime).toBe(2459);
+    expect(built.totals.oneTime).toBe(2459 + 999 + 499);
   });
 
   it("does not refuse the quote over the 100% on a covered line", () => {
@@ -707,8 +709,8 @@ describe("buildQuote with the kit on it", () => {
     expect(reopened[ID.pos]).toBeUndefined();
     expect(reopened[ID.wifi]).toBeUndefined();
     expect(reopened[ID.ams1]).toBeUndefined();
-    // The standing comps on install and training still come back.
-    expect(reopened[ID.install]).toEqual({ discountPercent: 100 });
+    // Install is charged at list now, so there is nothing to read back on it.
+    expect(reopened[ID.install]).toBeUndefined();
   });
 });
 

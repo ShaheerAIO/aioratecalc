@@ -573,7 +573,8 @@ export const SCREEN_PRODUCT_IDS = [
   "260674226888", // Mega Kiosk
   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
-  "223511653103", // Menu Board Computer
+  // NOT the Menu Board Computer: it drives a TV, it is not a screen anyone
+  // works on, and it takes no license (product owner, 2026-10-18).
   // Both tablets run an AIO app, so each one takes a license like any other
   // screen (Shaheer, 2026-10-08). They still count 0 ordering points.
   "276751313619", // Orders Hub Tablet
@@ -689,6 +690,29 @@ export function relativeCeilingBlockers(
   return out;
 }
 
+/** "Payroll - AIO Platform (Per Person)", $8 per employee per month. */
+export const PAYROLL_PRODUCT_ID = "223152695998";
+
+/**
+ * The counter POS units — what payroll needs on the quote beside it (product
+ * owner, 2026-10-18: "no payroll without point of sale"). Counter units ONLY:
+ * an mPOS, a tableside device or a kiosk doesn't qualify on its own.
+ * "POS (Dual Screen) + Payment Terminal" is here though no other rule knows it
+ * yet — it is a counter POS, and leaving it out would refuse payroll to a
+ * merchant who bought one.
+ */
+export const COUNTER_POS_PRODUCT_IDS = [
+  ...POS_REQUIRING_TERMINAL_IDS,
+  "339229355762", // POS (Dual Screen) + Payment Terminal
+] as const;
+
+/** Payroll on a quote with no counter POS unit. Reports, like the ceilings above. */
+export function payrollBlockers(lines: Array<{ hubspotProductId: string; qty: number }>): string[] {
+  const has = (ids: readonly string[]) => lines.some(l => ids.includes(l.hubspotProductId) && l.qty > 0);
+  if (!has([PAYROLL_PRODUCT_ID]) || has(COUNTER_POS_PRODUCT_IDS)) return [];
+  return ["Payroll needs a POS unit on the quote. Add one, or take payroll off."];
+}
+
 function isSoftwareLicenseProduct(id: string, name: string): boolean {
   return id === SOFTWARE_LICENSE_PRODUCT.hubspotProductId || name.trim() === SOFTWARE_LICENSE_PRODUCT.name;
 }
@@ -722,11 +746,14 @@ export function screenCount(lines: Array<{ hubspotProductId: string; qty: number
  *
  * TO END THE PROMOTION: empty this array. The lines keep appearing, at their
  * catalog price, and nothing else has to change.
+ *
+ * ENDED 2026-10-18 (product owner: "installation is priced and training,
+ * included but priced. treat it like a regular line item"). Onsite
+ * Installation ($999) and System Onboarding and Training ($499) are still
+ * derived onto every hardware quote, but at list price, and a rep discounts or
+ * delays them like any other line. The mechanism stays for the next promotion.
  */
-export const COMPED_SERVICE_PRODUCT_IDS: string[] = [
-  "223452690133", // Onsite Installation — $999
-  "223152695032", // System Onboarding and Training — $499
-];
+export const COMPED_SERVICE_PRODUCT_IDS: string[] = [];
 
 export function isCompedService(line: Pick<QuoteLine, "hubspotProductId">): boolean {
   return COMPED_SERVICE_PRODUCT_IDS.includes(line.hubspotProductId);
@@ -1203,9 +1230,11 @@ export const PROCESSING_DISCLOSURE_PRODUCT = {
  * The incident fees AIO discloses alongside the card rates. Transcribed from
  * the HubSpot product's own description, which is the only place they have
  * ever been written down — nothing in EasyOB prices them, and no quote varies
- * them.
+ * them. Shown on the HubSpot line AND the merchant's quote preview, from here.
  */
-const DISCLOSURE_INCIDENT_FEES = "Chargeback $25 · Retrieval $15";
+export const CHARGEBACK_FEE = 25;
+export const RETRIEVAL_FEE = 15;
+const DISCLOSURE_INCIDENT_FEES = `Chargeback $${CHARGEBACK_FEE} · Retrieval $${RETRIEVAL_FEE}`;
 
 /**
  * The rate-disclosure line's text, as the merchant reads it on their quote.
@@ -2682,6 +2711,7 @@ export function buildQuote(
   }
   // …and nothing is on it in a quantity that has nothing to attach to.
   blockers.push(...relativeCeilingBlockers(quoteLines));
+  blockers.push(...payrollBlockers(quoteLines));
 
   for (const [productId, { name, qty }] of qtyByProduct) {
     const max = maxQtyFor(productId, limits.unitCaps);

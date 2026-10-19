@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 import { PACKAGES } from "@/lib/quotePackages";
 import {
+  COMPED_SERVICE_PRODUCT_IDS,
   DEFAULT_MAX_DISCOUNT_PERCENT,
   INCLUDED_SERVICE_PRODUCTS,
   MAX_BILLING_DELAY_DAYS,
@@ -268,6 +269,9 @@ describe("quoteSanityBlockers", () => {
       [PLATFORM_ID]: { discountPercent: 100 },
       [WIFI_ID]: { discountPercent: 100 },
       [AMS1_ID]: { discountPercent: 100 },
+      // Charged at list since 2026-10-18, so a $0 quote gives these away too.
+      [INSTALL_ID]: { discountPercent: 100 },
+      [TRAINING_ID]: { discountPercent: 100 },
     };
     const built = buildQuote("all_in_one", [toQuoteLine(pos, 1)], [], CATALOG, adjustments, 100);
     // Only the $0.50 pre-authorization is left to charge, and it must not hide the $0 quote.
@@ -276,8 +280,24 @@ describe("quoteSanityBlockers", () => {
   });
 });
 
+describe("buildQuote with no service comp (since 2026-10-18)", () => {
+  const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)];
+
+  it("charges the install and the training at list, untouched", () => {
+    const built = buildQuote("all_in_one", picked, [], CATALOG);
+    expect(built.quoteLines.filter(l => l.discountPercent != null)).toEqual([]);
+    // $698 wifi + $999 install + $499 training + $749 POS + $300 AMS1.
+    expect(built.totals.oneTime).toBe(3245);
+  });
+});
+
 describe("buildQuote with adjustments", () => {
   const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)];
+  // The standing service comp ended 2026-10-18 and the list is empty. The
+  // mechanism stays for the next promotion, so this block exercises it with
+  // the install and the training put back on it.
+  beforeEach(() => { COMPED_SERVICE_PRODUCT_IDS.push(INSTALL_ID, TRAINING_ID); });
+  afterEach(() => { COMPED_SERVICE_PRODUCT_IDS.length = 0; });
 
   it("comps a DERIVED install line — the discount reps actually write most", () => {
     const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 100 } };
@@ -728,12 +748,15 @@ describe("the pre-authorization charge", () => {
   const preAuthLines = (lines: QuoteLine[]) =>
     lines.filter(l => l.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId);
   // A quote that owes nothing today: the platform starts in 60 days and the
-  // only hardware is given away.
+  // hardware and services are given away (install and training are charged
+  // at list since 2026-10-18, so they have to be given away explicitly).
   const delayedAll: QuoteAdjustments = {
     [PLATFORM_ID]: { billingStart: { mode: "days", days: 60 } },
     [POS_ID]: { discountPercent: 100 },
     [WIFI_ID]: { discountPercent: 100 },
     [AMS1_ID]: { discountPercent: 100 },
+    [INSTALL_ID]: { discountPercent: 100 },
+    [TRAINING_ID]: { discountPercent: 100 },
   };
   const build = (adj: QuoteAdjustments, catalog = CATALOG) =>
     buildQuote("all_in_one", [toQuoteLine(pos, 1)], [], catalog, adj, 100);

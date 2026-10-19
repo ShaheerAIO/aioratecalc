@@ -37,6 +37,8 @@ import {
   toQuoteLine,
   processesCardNotPresentOnly,
   processingDisclosureText,
+  PAYROLL_PRODUCT_ID,
+  payrollBlockers,
 } from "@/lib/quoting";
 import type { CatalogProduct, QuoteLine, QuoteType } from "@/types/merchant";
 
@@ -220,14 +222,11 @@ describe("always-included services", () => {
         "System Onboarding and Training",
       ]);
       expect(lines.every(l => l.qty === 1)).toBe(true);
-      // Only the WiFi package is CHARGED. The install and the training are on
-      // the quote at MSRP and comped to $0 — AE price sheet, effective
-      // 2026-09-18. See COMPED_SERVICE_PRODUCT_IDS.
-      expect(quoteTotals(lines).oneTime).toBe(698);
-      const byName = new Map(lines.map(l => [l.name, l]));
-      expect(byName.get("AIO Wifi Network Package - Unifi")!.discountPercent).toBeUndefined();
-      expect(byName.get("Onsite Installation")!.discountPercent).toBe(100);
-      expect(byName.get("System Onboarding and Training")!.discountPercent).toBe(100);
+      // All three are CHARGED. The install and the training were comped to $0
+      // from 2026-09-18 until the product owner ended it on 2026-10-18:
+      // "included but priced". See COMPED_SERVICE_PRODUCT_IDS.
+      expect(quoteTotals(lines).oneTime).toBe(698 + 999 + 499);
+      for (const l of lines) expect(l.discountPercent ?? 0).toBe(0);
     }
   });
 
@@ -712,9 +711,9 @@ describe("buildQuote — the one derivation", () => {
       // Last, past every adjustment — see `resolveProcessingDisclosure`.
       RATE_LINE,
     ]);
-    // 698 + 2×749 + 69 + 2×300 = $2,865 due once. The install ($999) and the
-    // training ($499) are on the quote but comped to $0, so they add nothing.
-    expect(built.totals.oneTime).toBe(2865);
+    // 698 + 999 + 499 + 2×749 + 69 + 2×300 = $4,363 due once. The install
+    // and the training are charged at list since 2026-10-18.
+    expect(built.totals.oneTime).toBe(4363);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
@@ -1171,10 +1170,21 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     expect(built.orderPoints.total).toBe(2);
   });
 
+  it("does not count a Menu Board Computer as a screen — it drives a TV (2026-10-18)", () => {
+    const built = buildQuote(
+      "all_in_one",
+      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1], ["Menu Board Computer", 3]]),
+      [],
+      CATALOG
+    );
+    expect(built.softwareLicense.screens).toBe(4);
+    expect(built.softwareLicense.lines).toEqual([]);
+  });
+
   it("adds a software license only past four screens", () => {
     const four = buildQuote(
       "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["Menu Board Computer", 1]]),
+      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1]]),
       [],
       CATALOG
     );
@@ -1184,7 +1194,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
 
     const five = buildQuote(
       "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["Menu Board Computer", 1], ["mPOS", 1]]),
+      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1], ["Orders Hub Tablet", 1]]),
       [],
       CATALOG
     );
@@ -1199,7 +1209,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
         ["POS Unit", 2],
         ["POS Unit - With Customer Facing Display", 1],
         ["Mega Kiosk", 1],
-        ["Menu Board Computer", 1],
+        ["Orders Hub Tablet", 1],
         ["mPOS", 1],
         ["Kiosk 27\" + Payment Terminal (AMS1) and Mount", 1],
       ]),
@@ -1257,7 +1267,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     const noLicense = CATALOG.filter(c => c.name !== "Additional Software License");
     const license = buildQuote(
       "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["Menu Board Computer", 1], ["mPOS", 1]]),
+      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1], ["Orders Hub Tablet", 1]]),
       [],
       noLicense
     );
@@ -1497,5 +1507,47 @@ describe("processingDisclosureText", () => {
 
   it("names no AMEX rate — it stopped pricing apart on 2026-10-13", () => {
     expect(processingDisclosureText({ ...RATES, amexCardPresentRate: 0.0279 })).not.toContain("AMEX");
+  });
+});
+
+describe("payroll needs a counter POS (2026-10-18)", () => {
+  const payroll = { hubspotProductId: PAYROLL_PRODUCT_ID, qty: 12 };
+  const unit = (hubspotProductId: string) => ({ hubspotProductId, qty: 1 });
+
+  it("blocks payroll on its own", () => {
+    expect(payrollBlockers([payroll])).toHaveLength(1);
+  });
+
+  it.each([
+    ["POS Unit", "217445755632"],
+    ["POS Unit - With Customer Facing Display", "223452690130"],
+    ["POS (Dual Screen) + Payment Terminal", "339229355762"],
+  ])("allows payroll beside a %s", (_name, id) => {
+    expect(payrollBlockers([payroll, unit(id)])).toEqual([]);
+  });
+
+  it("does not count an mPOS, a tableside device or a kiosk as a counter POS", () => {
+    expect(payrollBlockers([
+      payroll, unit("223511653101"), unit("335279520447"), unit("222497165009"),
+    ])).toHaveLength(1);
+  });
+
+  it("says nothing when there is no payroll on the quote", () => {
+    expect(payrollBlockers([unit("223511653101")])).toEqual([]);
+  });
+
+  it("gates buildQuote", () => {
+    const catalog: CatalogProduct[] = [
+      ...CATALOG,
+      { hubspotProductId: PAYROLL_PRODUCT_ID, name: "Payroll - AIO Platform (Per Person)", price: 8, billingFrequency: "monthly", productType: "Software" },
+    ];
+    const payrollLine = toQuoteLine(catalog.find(c => c.hubspotProductId === PAYROLL_PRODUCT_ID)!, 12);
+    const mpos = toQuoteLine(catalog.find(c => c.name === "mPOS")!, 1);
+    const blocked = buildQuote("all_in_one", [payrollLine, mpos], [], catalog);
+    expect(blocked.blockers).toEqual(expect.arrayContaining(payrollBlockers([payrollLine])));
+
+    const pos = toQuoteLine(catalog.find(c => c.name === "POS Unit")!, 1);
+    const ok = buildQuote("all_in_one", [payrollLine, pos], [], catalog);
+    expect(ok.blockers.join(" ")).not.toContain("Payroll");
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   ACTIVATION_COMMISSION_BPS,
   DEFAULT_HARDWARE_COMMISSION_POLICY,
@@ -12,7 +12,7 @@ import {
   quoteHardwareCommission,
   sumArrOrNull,
 } from "@/lib/commission";
-import { PRE_AUTH_PRODUCT, PROCESSING_DISCLOSURE_PRODUCT } from "@/lib/quoting";
+import { COMPED_SERVICE_PRODUCT_IDS, PRE_AUTH_PRODUCT, PROCESSING_DISCLOSURE_PRODUCT } from "@/lib/quoting";
 import type { QuoteLine } from "@/types/merchant";
 
 const line = (over: Partial<QuoteLine> = {}): QuoteLine => ({
@@ -158,7 +158,11 @@ describe("commissionRateToBps", () => {
 });
 
 describe("isPolicyComped", () => {
-  const INSTALL = "223452690133"; // Onsite Installation, a COMPED_SERVICE_PRODUCT_ID
+  const INSTALL = "223452690133"; // Onsite Installation
+  // The service comp ended 2026-10-18 and the list is empty; the mechanism is
+  // kept for the next promotion, so it is exercised with the install on it.
+  beforeEach(() => { COMPED_SERVICE_PRODUCT_IDS.push(INSTALL); });
+  afterEach(() => { COMPED_SERVICE_PRODUCT_IDS.length = 0; });
 
   it("is true for a package/plan-covered line", () => {
     expect(isPolicyComped(hwLine({ coveredByPackage: "QSR Kit", discountPercent: 100 }))).toBe(true);

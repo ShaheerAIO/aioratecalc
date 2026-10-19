@@ -134,8 +134,9 @@ describe("getMyQuoteAction — what the customer gets back", () => {
     const quote = (await getMyQuoteAction("app-1"))!;
 
     expect(Object.keys(quote).sort()).toEqual([
-      "annualSavings", "averageTicket", "basis", "currentEffectiveRate", "currentMonthlyCost",
-      "effectiveRate", "lineTotals", "lines", "monthlySavings", "monthlyVolume", "orderPoints",
+      "annualSavings", "averageTicket", "basis", "cardNotPresentRate", "cardPresentRate",
+      "currentEffectiveRate", "currentMonthlyCost", "effectiveRate", "lineTotals", "lines",
+      "monthlySavings", "monthlyVolume", "orderPoints", "perTransactionFee",
       "projectedAnnualCost", "projectedMonthlyCost", "savingsPct",
     ]);
     const serialized = JSON.stringify(quote);

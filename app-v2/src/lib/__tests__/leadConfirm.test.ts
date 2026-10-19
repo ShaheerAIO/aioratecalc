@@ -307,7 +307,7 @@ describe("missingConfirmationFields — what a disabled button is waiting on", (
       "business.city": "", "ownerContact.firstName": "", "billingContact.lastName": "Ortiz",
     });
     const missing = missingConfirmationFields(next);
-    expect(missing).toContain("Registered address — City");
+    expect(missing).toContain("Legal address — City");
     expect(missing).toContain("Owner — First name");
     expect(missing).toContain("Billing contact — First name");
   });

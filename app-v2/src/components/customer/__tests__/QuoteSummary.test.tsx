@@ -17,6 +17,9 @@ const CONFIG_QUOTE_NO_SAVINGS: CustomerSafeQuote = {
   basis: "config",
   monthlyVolume: 100_000,
   averageTicket: 25,
+  cardPresentRate: 0.0249,
+  cardNotPresentRate: 0.033,
+  perTransactionFee: 0.15,
   effectiveRate: 0.0279,
   projectedMonthlyCost: 2790,
   projectedAnnualCost: 2790 * 12,
@@ -45,7 +48,6 @@ describe("QuoteSummary — no rate/savings breakdown, on any basis", () => {
     render(<QuoteSummary quote={CONFIG_QUOTE_NO_SAVINGS} />);
     expect(screen.queryByText("Your AIO Effective Rate")).toBeNull();
     expect(screen.queryByText("Estimated Monthly Cost")).toBeNull();
-    expect(screen.queryByText("Monthly Volume")).toBeNull();
     expect(screen.queryByText("Average Ticket")).toBeNull();
   });
 
@@ -62,6 +64,53 @@ describe("QuoteSummary — no rate/savings breakdown, on any basis", () => {
     expect(body).not.toMatch(/\$0\.00 saved/i);
     expect(body).not.toMatch(/0\.00% saved/i);
     expect(body).not.toMatch(/-\$/);
+  });
+});
+
+// The quoted rates came back on 2026-10-18 in their own card — the rates, the
+// volume they were quoted on, and the incident fees. Still no effective rate,
+// projected cost or savings (asserted above).
+describe("QuoteSummary — payment details card", () => {
+  const card = () => screen.getByRole("region", { name: "Payment details" });
+
+  it("headlines the card-present rate and lists card-not-present beneath it", () => {
+    render(<QuoteSummary quote={CONFIG_QUOTE_NO_SAVINGS} />);
+    const text = card().textContent ?? "";
+    expect(text.indexOf("Card present")).toBeLessThan(text.indexOf("Card not present"));
+    expect(text).toContain("2.49%");
+    expect(text).toContain("3.30%");
+    expect(text).toContain("+ $0.15 per transaction");
+  });
+
+  it("shows the monthly volume and the chargeback and retrieval fees", () => {
+    render(<QuoteSummary quote={CONFIG_QUOTE_NO_SAVINGS} />);
+    const text = card().textContent ?? "";
+    expect(text).toContain("$100,000");
+    expect(text).toMatch(/Chargeback fee\$25\.00 each/);
+    expect(text).toMatch(/Retrieval fee\$15\.00 each/);
+  });
+
+  it("headlines card-not-present alone for a merchant with no card-present lane", () => {
+    render(<QuoteSummary quote={{ ...CONFIG_QUOTE_NO_SAVINGS, cardPresentRate: null }} />);
+    const text = card().textContent ?? "";
+    expect(text).not.toContain("Card present");
+    expect(text).toContain("Card not present3.30%");
+  });
+
+  it("is absent from a quote with no processing behind it", () => {
+    render(<QuoteSummary quote={PRODUCTS_QUOTE_WITH_POINTS} />);
+    expect(screen.queryByRole("region", { name: "Payment details" })).toBeNull();
+  });
+});
+
+describe("QuoteSummary — line descriptions", () => {
+  it("prints the description under a line it knows", () => {
+    render(<QuoteSummary quote={{
+      ...PRODUCTS_QUOTE_WITH_POINTS,
+      lines: [{ hubspotProductId: "223452690132", name: "KDS (Kitchen Display System)", qty: 1, unitPrice: 499, billingFrequency: "one_time", productType: "inventory" }],
+      lineTotals: { oneTime: 499, recurring: [], monthlyEquivalent: 0 },
+    }} />);
+    expect(screen.getByText("A kitchen screen that shows your staff incoming orders.")).toBeTruthy();
   });
 });
 
@@ -261,7 +310,7 @@ describe("QuoteSummary — package-covered lines are grouped, not interleaved", 
   it("keeps the uncovered line priced normally, outside the package heading", () => {
     render(<QuoteSummary quote={PACKAGE_QUOTE} />);
     const name = screen.getByText("Payment Terminal - AMS1");
-    const row = name.closest("div")?.parentElement;
+    const row = name.parentElement?.parentElement; // the name sits beside its description
     expect(row?.textContent).toContain("$300.00");
   });
 

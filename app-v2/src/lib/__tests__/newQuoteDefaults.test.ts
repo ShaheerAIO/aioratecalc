@@ -67,7 +67,7 @@ describe("the quote a rep opens on, end to end", () => {
     expect(seededPicks().length).toBeGreaterThan(0);
   });
 
-  it("builds a sendable quote with the kit free and the plan delayed 60 days", () => {
+  it("builds a sendable quote with the kit free, the services charged and the plan delayed 60 days", () => {
     const picks = seededPicks();
     // One pass to find the recurring lines, as the configurator does, then the
     // real build with the start applied.
@@ -79,11 +79,13 @@ describe("the quote a rep opens on, end to end", () => {
     const platform = built.quoteLines.find(l => l.name === "All-in-One Platform")!;
     expect(platform.billingStart).toEqual({ mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS });
 
-    // The kit covers the hardware, so everything on the quote is at $0 —
-    // which is exactly the case the pre-authorization exists for.
+    // The kit covers the hardware. What is due at checkout is the install
+    // ($999) and the training ($499), charged at list since 2026-10-18 — so
+    // the quote already clears HubSpot's floor and carries no pre-auth.
     expect(built.packages.applied).toHaveLength(1);
-    expect(built.preAuth.lines).toHaveLength(1);
-    expect(built.quoteLines.at(-1)!.hubspotProductId).toBe(PRE_AUTH_PRODUCT.hubspotProductId);
+    expect(built.totals.oneTime).toBe(999 + 499);
+    expect(built.preAuth.lines).toHaveLength(0);
+    expect(built.quoteLines.some(l => l.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId)).toBe(false);
   });
 
   it("collects at least HubSpot's floor at checkout, so the quote can be published", () => {

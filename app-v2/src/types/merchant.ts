@@ -1174,6 +1174,12 @@ type CustomerSafeRate = {
   basis: "statement" | "config";
   monthlyVolume: number;
   averageTicket: number;
+  // The rates the rep quoted — the same figures written onto the HubSpot
+  // disclosure line. `cardPresentRate` is null for a merchant who has nothing
+  // on site and so never takes a card in person (processesCardNotPresentOnly).
+  cardPresentRate: number | null;
+  cardNotPresentRate: number;
+  perTransactionFee: number;
   effectiveRate: number;          // AIO's quoted all-in effective rate on that volume
   projectedMonthlyCost: number;
   projectedAnnualCost: number;

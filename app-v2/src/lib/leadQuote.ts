@@ -11,8 +11,10 @@
 // as a prop; they never import this module.
 import { analysisFromQuoteConfig, derivePricing, type FeeOverrides } from "@/lib/pricing";
 import { processesCardNotPresentOnly, quoteHasProcessing, quoteTotals, quoteTypeOf } from "@/lib/quoting";
-import type {
-  CustomerSafeQuote, OrderPoints, QuoteConfig, QuoteLine, QuoteRates, StatementAnalysis, StoredQuoteType,
+import {
+  DEFAULT_QUOTE_RATES,
+  type CustomerSafeQuote, type OrderPoints, type QuoteConfig, type QuoteLine, type QuoteRates,
+  type StatementAnalysis, type StoredQuoteType,
 } from "@/types/merchant";
 
 // What a quote can be built from. Mirrors the application columns that matter
@@ -126,6 +128,8 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
 
   const fromStatement = !!basis.analysis;
   const vol = analysis.totalVolume;
+  const rates = basis.quoteRates ?? DEFAULT_QUOTE_RATES;
+  const cardNotPresentOnly = processesCardNotPresentOnly(quoteTypeOf(basis.quoteType), basis.quoteLines);
 
   // Null falls back to DEFAULT_QUOTE_RATES — today's standard rate — so a row
   // written before rates were the input quotes the same thing a new one would.
@@ -141,6 +145,9 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
     basis: fromStatement ? "statement" : "config",
     monthlyVolume: vol,
     averageTicket: analysis.averageTicket || (analysis.totalTransactions > 0 ? vol / analysis.totalTransactions : 0),
+    cardPresentRate: cardNotPresentOnly ? null : rates.cardPresentRate,
+    cardNotPresentRate: rates.cardNotPresentRate,
+    perTransactionFee: rates.perTransactionFee,
     effectiveRate: projectedMonthlyCost / vol,
     projectedMonthlyCost,
     projectedAnnualCost: projectedMonthlyCost * 12,
