@@ -95,6 +95,13 @@ export type CanPublishInput = {
    */
   maxDiscountPercent: number;
   /**
+   * Per-product discount caps in force NOW (`quote_limit_policy.discount_caps`),
+   * re-checked for the same reason as the global above: saved lines publish
+   * verbatim, so a discount allowed under an older cap must not reach an
+   * unamendable document. A product absent from the map uses the global.
+   */
+  discountCaps?: Record<string, number>;
+  /**
    * The admin billing-delay ceiling in force NOW. Optional, defaulting to the
    * module constant, for the same reason and with the same hazard as the
    * discount cap above: saved lines publish verbatim, so a line delayed under
@@ -115,7 +122,7 @@ export type CanPublishInput = {
 export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult {
   const {
     app, catalog, sender, signerEmail, templateId, templateActive,
-    maxDiscountPercent, maxBillingDelayDays,
+    maxDiscountPercent, maxBillingDelayDays, discountCaps,
   } = input;
 
   // 1. Already published — short-circuit before anything else. This is the
@@ -203,7 +210,7 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   //     run, so a rep cannot be shown a sendable quote that refuses here — but
   //     the cap it is measured against is today's, which is what makes this a
   //     real check rather than a restatement.
-  for (const message of adjustmentBlockers(lines, maxDiscountPercent, maxBillingDelayDays)) {
+  for (const message of adjustmentBlockers(lines, maxDiscountPercent, maxBillingDelayDays, discountCaps ?? {})) {
     add("discount_over_policy", message);
   }
 

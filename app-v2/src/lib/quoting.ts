@@ -2230,7 +2230,7 @@ export function adjustmentBlockers(
               ? `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit admin set for this product. ` +
                 `Lower it, or ask an admin to raise it in Admin → Quote limits.`
               : `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit AIO allows on a quote. ` +
-                `Lower it, or ask an admin to raise the limit in Admin → Margin policy.`
+                `Lower it, or ask an admin to set a cap for this product in Admin → Quote limits.`
           );
         }
       }

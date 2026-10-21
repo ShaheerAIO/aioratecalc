@@ -309,6 +309,13 @@ describe("canPublishBillingQuote", () => {
     expect(codes(result)).toContain("discount_over_policy");
   });
 
+  it("re-checks the per-product cap at publish, not just the global one", () => {
+    const discounted = [{ ...LINES[0], discountPercent: 40 }, LINES[1]];
+    expect(codes(check({ quoteLines: discounted }))).toEqual([]); // global 50 allows it
+    const result = check({ quoteLines: discounted }, { discountCaps: { [LINES[0].hubspotProductId]: 25 } });
+    expect(codes(result)).toContain("discount_over_policy");
+  });
+
   it("nets discounts into the totals it hands back for logging", () => {
     // POS at $1,200 comped entirely; the platform line is untouched.
     // Needs a cap that permits it — the default fixture cap is 50.

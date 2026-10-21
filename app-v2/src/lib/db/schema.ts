@@ -106,24 +106,8 @@ export const quoteLimitPolicy = pgTable("quote_limit_policy", {
   // reasoning as unitCaps: the catalog is an open set maintained in HubSpot by
   // non-engineers, so a new product must be cappable without a deploy.
   discountCaps: jsonb("discount_caps").$type<Record<string, number>>().notNull().default({}),
-  // The minimum margin a quoted card-present rate must clear ABOVE
-  // wholesalePctFor(avgTicket) (lib/wholesale.ts), in whole basis points.
-  // Added migration 0026 (2026-10-15, product owner: "add floor for rate
-  // (wholesale + minimum), editable in settings") — a THIRD floor, sibling of
-  // `belowMonthlyRevenueFloor` rather than the (padded, secret) margin floor:
-  // same wholesale basis, expressed as a rate instead of monthly dollars, so
-  // it binds on a merchant of any size where the $10/mo floor only binds on
-  // small ones. See `minRateFloorBlockers` in pricing.ts. Lives here, not on
-  // margin_policy or rate_matrix_policy, for the same reason unitCaps/
-  // discountCaps do: this table is already "limits on what a rep may put on
-  // a quote," and nothing about this number is secret or printed on the
-  // merchant's own document.
-  // NULL means the floor is OFF, which is how it shipped (2026-10-15). It is
-  // not "0 bps": 0 means "never below wholesale", and AIO's own rate card sits
-  // below the wholesale table in 48 of its 81 cells, so a 0 would have refused
-  // most of what the card itself suggests. An admin types a number to turn it
-  // on, and clears the box to turn it off again.
-  minRateMarginBps: integer("min_rate_margin_bps"),
+  // `min_rate_margin_bps` (migration 0026) still exists in the database but is
+  // no longer read or written: the minimum-rate floor was removed 2026-10-21.
   // The longest billing delay a rep may set without an admin raising it.
   maxBillingDelayDays: integer("max_billing_delay_days").notNull().default(90),
   // Whether the picker offers the two tablets. A visibility switch, not a
@@ -157,6 +141,21 @@ export const rateMatrixPolicy = pgTable("rate_matrix_policy", {
   cardPresentBps: jsonb("card_present_bps").$type<number[][]>().notNull().default([]),
   cardNotPresentBps: integer("card_not_present_bps").notNull().default(330),
   perTransactionFeeCents: integer("per_transaction_fee_cents").notNull().default(15),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
+// The margin table (MARGIN_REQS' min / desired / max per volume band), made
+// admin-editable on the rate-matrix page (2026-10-21, migration 0027). Its own
+// table, not a column on rate_matrix_policy, so a database that hasn't run the
+// migration can only lose THIS (falls back to the constants in pricing.ts) and
+// never the saved rate card. `rows` is [{minBps, desiredBps, maxBps}] x 9, in
+// the same band order as RATE_MATRIX_VOLUME_BANDS. TRUE margin floors: read
+// only server-side via lib/marginReqsLoader.ts, never sent to a rep.
+export const marginReqsPolicy = pgTable("margin_reqs_policy", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  rows: jsonb("rows").$type<{ minBps: number; desiredBps: number; maxBps: number }[]>().notNull(),
   updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   isActive: boolean("is_active").notNull().default(true),

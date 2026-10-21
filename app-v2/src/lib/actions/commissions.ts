@@ -7,6 +7,7 @@
 // CommissionsPanel.tsx), following the Revenue tab's precedent rather than a
 // new nav item — CLAUDE.md caps the admin nav at 4 items.
 
+import { loadMarginReqs } from "@/lib/marginReqsLoader";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { listApplicationsAction, getSettingsAction } from "@/lib/actions/applications";
 import {
@@ -27,9 +28,10 @@ export async function getCommissionReportAction(): Promise<CommissionReport> {
   // listApplicationsAction is already role-scoped (admin -> every account);
   // getSettingsAction gives the processor tier the true cost figures are
   // computed against, same source PricingStep/EditQuotePanel already read.
-  const [apps, settings] = await Promise.all([
+  const [apps, settings, marginReqs] = await Promise.all([
     listApplicationsAction(),
     getSettingsAction(),
+    loadMarginReqs(),
   ]);
 
   const activeTier: ProcessorTier | null =
@@ -38,7 +40,7 @@ export async function getCommissionReportAction(): Promise<CommissionReport> {
     ?? null;
 
   return {
-    rows: buildCommissionReport(apps, activeTier),
+    rows: buildCommissionReport(apps, activeTier, marginReqs),
     gaps: buildCommissionDataGaps(apps),
   };
 }

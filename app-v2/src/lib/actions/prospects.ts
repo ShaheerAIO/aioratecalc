@@ -21,7 +21,7 @@ import {
   setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
 import { resolveSender } from "@/lib/billing/publishBillingQuote";
-import { analysisFromQuoteConfig, marginFloorBlockers, minRateFloorBlockers, monthlyRevenueFloorBlockers } from "@/lib/pricing";
+import { analysisFromQuoteConfig, marginFloorBlockers, monthlyRevenueFloorBlockers } from "@/lib/pricing";
 import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "@/lib/actions/pricing";
 import {
   buildQuote, describeDelayDeviation, isAllowedForQuoteType, isProcessingQuote,
@@ -536,13 +536,9 @@ async function assertRateAboveFloor(
     // cleared against the rate being quoted rather than against a 95%
     // card-present blend that can never happen.
     cardPresentPct: cardNotPresentOnly ? 0 : null,
-    // Same signal, for the wholesale-plus-minimum floor: a hidden,
-    // un-editable card-present lane has nothing to refuse (see
-    // `minimumCardPresentRate` in pricing.ts).
-    cardNotPresentOnly,
   });
   const blockers = [
-    ...marginFloorBlockers(pricing), ...monthlyRevenueFloorBlockers(pricing), ...minRateFloorBlockers(pricing),
+    ...marginFloorBlockers(pricing), ...monthlyRevenueFloorBlockers(pricing),
   ];
   if (blockers.length) throw new Error(blockers.join(" "));
 }

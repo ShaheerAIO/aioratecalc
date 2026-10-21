@@ -363,6 +363,7 @@ export async function buildAndPublishBillingQuote(
   let catalog: Awaited<ReturnType<typeof listProducts>> = [];
   let maxDiscountPercent = DEFAULT_MAX_DISCOUNT_PERCENT;
   let maxBillingDelayDays = DEFAULT_MAX_APPROVED_DELAY_DAYS;
+  let discountCaps: Record<string, number> = {};
   try {
     // listProducts() rather than listQuotableProductsAction(): that action
     // requires a rep/admin session and the trigger here is an unauthenticated
@@ -379,6 +380,7 @@ export async function buildAndPublishBillingQuote(
       getQuoteLimits(),
     ]);
     maxBillingDelayDays = limits.maxBillingDelayDays;
+    discountCaps = limits.discountCaps;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     await persistSyncError(app.id, ids, `preflight failed: could not load the catalog, sender or template policy: ${detail}`);
@@ -395,6 +397,7 @@ export async function buildAndPublishBillingQuote(
     templateActive: templateResolved.active,
     maxDiscountPercent,
     maxBillingDelayDays,
+    discountCaps,
   });
   if (!decision.ok) {
     if (decision.alreadyPublished) return { status: "skipped", reason: "already_published" };

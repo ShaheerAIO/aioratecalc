@@ -18,7 +18,14 @@ import { totalRevenue, totalTakeRate, wholesalePctFor } from "@/lib/wholesale";
 import { commissionFromTotalArr, sumArrOrNull, type CommissionFromArr } from "@/lib/commission";
 import { fmt$ } from "@/lib/utils";
 
-export const MARGIN_REQS = [
+export type MarginReq = {
+  maxVol: number; minMargin: number; desiredMargin: number; maxMargin: number; desiredArr: number;
+};
+
+// The CODE defaults. The live table is admin-edited on the rate-matrix page and
+// loaded server-side by `loadMarginReqs` (lib/marginReqsPolicy.ts), which falls
+// back to this when there is no saved row or the read fails.
+export const MARGIN_REQS: readonly MarginReq[] = [
   { maxVol: 25000,    minMargin: 0.0085, desiredMargin: 0.0100,   maxMargin: 0.0200, desiredArr: 1500 }, // Oct 2026 guide §7
   { maxVol: 50000,    minMargin: 0.0065, desiredMargin: 0.0085,   maxMargin: 0.0100, desiredArr: 3825 }, // Oct 2026 guide §7
   { maxVol: 75000,    minMargin: 0.0027, desiredMargin: 0.0053,   maxMargin: 0.0080, desiredArr: 4000 },
@@ -30,19 +37,19 @@ export const MARGIN_REQS = [
   { maxVol: Infinity, minMargin: 0.0008, desiredMargin: 0.0017,   maxMargin: 0.0025, desiredArr: 4000 },
 ];
 
-export function getMarginFloor(monthlyVolume: number) {
-  return MARGIN_REQS.find(t => monthlyVolume <= t.maxVol) || MARGIN_REQS[MARGIN_REQS.length - 1];
+export function getMarginFloor(monthlyVolume: number, reqs: readonly MarginReq[] = MARGIN_REQS): MarginReq {
+  return reqs.find(t => monthlyVolume <= t.maxVol) || reqs[reqs.length - 1];
 }
 
 // Per-tier default target margin (what the rep's slider starts at) and soft ceiling.
 // SERVER-ONLY in practice — never import these into a client component, since reading
 // them pulls the whole MARGIN_REQS array (incl. the true minMargin floor) into the bundle.
-export function getDesiredMargin(monthlyVolume: number) {
-  return getMarginFloor(monthlyVolume).desiredMargin;
+export function getDesiredMargin(monthlyVolume: number, reqs: readonly MarginReq[] = MARGIN_REQS) {
+  return getMarginFloor(monthlyVolume, reqs).desiredMargin;
 }
 
-export function getMaxMargin(monthlyVolume: number) {
-  return getMarginFloor(monthlyVolume).maxMargin;
+export function getMaxMargin(monthlyVolume: number, reqs: readonly MarginReq[] = MARGIN_REQS) {
+  return getMarginFloor(monthlyVolume, reqs).maxMargin;
 }
 
 export function calcAdyenCost(tier: ProcessorTier, volume: number, txnCount: number): number {
@@ -221,7 +228,9 @@ export function derivePricing(
    */
   rates: QuoteRates | null | undefined,
   pricingModel: string,
-  feeOverrides: FeeOverrides
+  feeOverrides: FeeOverrides,
+  /** The saved margin table; omitted means the MARGIN_REQS constants. */
+  marginReqs: readonly MarginReq[] = MARGIN_REQS
 ): DerivedPricing {
   const vol   = analysis.totalVolume || 0;
   const txns  = analysis.totalTransactions || 0;
@@ -229,7 +238,7 @@ export function derivePricing(
 
   const quoted = ratesFor(rates);
   // Only the unsellable models still work backwards from a margin.
-  const margin = getDesiredMargin(vol);
+  const margin = getDesiredMargin(vol, marginReqs);
 
   // CP/CNP split — default DEFAULT_CARD_PRESENT_PCT when the statement gives
   // neither. 0 means "unknown" (the analyzer coerces invalid pcts to 0), so a
@@ -301,7 +310,7 @@ export function derivePricing(
     projectedMonthlyFees = vol * icRate + vol * margin + txns * perTxnFee + (feeOverrides.monthlyFee || 0);
   }
 
-  const floorTier   = getMarginFloor(vol);
+  const floorTier   = getMarginFloor(vol, marginReqs);
   const marginFloor = vol * floorTier.minMargin;
   // aioRevenue = projected - what merchant would pay at IC-only
   const icOnlyCost  = vol * icRate;
@@ -405,31 +414,6 @@ export type RoleScopedPricing = DerivedPricing & {
    * still goes out with priced lines and no rate.
    */
   belowMonthlyRevenueFloor: boolean;
-  /**
-   * AIO's wholesale cost at this merchant's average ticket
-   * (`wholesalePctFor`, lib/wholesale.ts) plus the admin-set minimum margin
-   * (`quote_limit_policy.min_rate_margin_bps` — see `getMinRateMarginBps`,
-   * actions/pricing.ts) — the THIRD floor (2026-10-15, product owner: "add
-   * floor for rate (wholesale + minimum), editable in settings"). A sibling
-   * of `belowMonthlyRevenueFloor`, not a restatement of `belowMarginFloor`:
-   * same wholesale basis, but a RATE test rather than a dollar test, so it
-   * binds on a merchant of any size where the $10/mo floor only binds on
-   * small ones. See `minRateFloorBlockers`.
-   *
-   * Null with no basis to judge — no average ticket on file (no wholesale
-   * column to read), a quoted card-present rate past
-   * `MAX_PLAUSIBLE_CARD_RATE` (a typo, not a floor question), or a quote
-   * whose card-present lane is hidden and un-editable
-   * (`processesCardNotPresentOnly`, quoting.ts) — same "no basis" posture
-   * `belowMarginFloor`/`belowMonthlyRevenueFloor` take, for the identical
-   * reasons. NOT padded and NOT secret: wholesale.ts is already AIO's own,
-   * rep-safe forecasting table (see `monthlyProcessingRevenue`'s own doc
-   * comment for why that posture is safe), so admin and rep get the same
-   * number.
-   */
-  minCardPresentRate: number | null;
-  /** The quoted card-present rate is below `minCardPresentRate`. False with no basis — see its doc comment. */
-  belowMinRateFloor: boolean;
 };
 
 // Returns a pricing view scoped to who's asking. Admins get the true
@@ -454,25 +438,16 @@ export function derivePricingForRole(
    */
   recurringArr: number | null = null,
   /**
-   * `quote_limit_policy.min_rate_margin_bps` — the admin-set minimum margin
-   * above wholesale (`getMinRateMarginBps`, actions/pricing.ts). Defaults to
-   * the module constant for the one caller that doesn't pass a policy
-   * (`commissionReport.ts`'s internal admin read, which never reads
-   * `minCardPresentRate`/`belowMinRateFloor` off the result).
+   * The saved margin table (rate-matrix page). Omitted means the MARGIN_REQS
+   * constants. Server callers load it via `loadMarginReqs`; never pass one
+   * built from client input.
    */
-  minRateMarginBps: number | null = DEFAULT_MIN_RATE_MARGIN_BPS,
-  /**
-   * This quote's card-present lane is hidden and nothing on it is
-   * rep-editable (`processesCardNotPresentOnly`, quoting.ts) — see
-   * `minimumCardPresentRate`'s own doc comment for why that means no basis
-   * to refuse against, not a floor of zero.
-   */
-  cardNotPresentOnly: boolean = false
+  marginReqs: readonly MarginReq[] = MARGIN_REQS
 ): RoleScopedPricing {
-  const result = derivePricing(analysis, rates, pricingModel, feeOverrides);
+  const result = derivePricing(analysis, rates, pricingModel, feeOverrides, marginReqs);
   const appliedMargin = result.appliedTargetMargin;
   const vol = analysis.totalVolume || 0;
-  const tier = getMarginFloor(vol);
+  const tier = getMarginFloor(vol, marginReqs);
   const trueAdyenCostRate = activeTier ? adyenRateOnVolume(activeTier, analysis.totalVolume, analysis.totalTransactions) : 0;
   const belowCostFloor = !!activeTier && appliedMargin - trueAdyenCostRate < 0;
   const processing = projectedProcessingRevenue(analysis, rates);
@@ -485,13 +460,10 @@ export function derivePricingForRole(
   const projectedCommission = commissionFromTotalArr(
     sumArrOrNull(processing && processing.annual > 0 ? Math.round(processing.annual) : null, recurringArr)
   );
-  const minCardPresentRate = minimumCardPresentRate(analysis, rates, minRateMarginBps, cardNotPresentOnly);
   const revenueView = {
     monthlyProcessingRevenue: processing ? processing.monthly : null,
     processingArr: processing ? processing.annual : null,
     belowMonthlyRevenueFloor: !!processing && processing.monthly < MIN_MONTHLY_PROCESSING_REVENUE,
-    minCardPresentRate,
-    belowMinRateFloor: minCardPresentRate != null && ratesFor(rates).cardPresentRate < minCardPresentRate,
   };
 
   if (role === "admin") {
@@ -587,66 +559,6 @@ function projectedProcessingRevenue(
 }
 
 /**
- * The module default for `quote_limit_policy.min_rate_margin_bps` (see
- * `getMinRateMarginBps`, actions/pricing.ts) — NULL, meaning THE FLOOR IS OFF.
- *
- * Not 0. Zero is not the inert choice it looks like: it means "never quote
- * below AIO's own wholesale cost", and AIO's §10.3 rate card does exactly
- * that in 48 of its 81 cells. The card (rateMatrix.ts's `DEFAULT_CP_RATE_BPS`)
- * is built off desired margin over INTERCHANGE, the wholesale table
- * (wholesale.ts) is a flat ticket-indexed figure the product owner supplied
- * for commission and ARR, and wholesale.ts's own comment says plainly that
- * the two "will not agree, and are not supposed to". Nothing had ever made
- * them agree until this floor; a 0 default would have made it, silently, by
- * refusing the rate the card itself suggests for every ticket from $10 to $50
- * on any merchant over $75K/mo.
- *
- * So it ships switched off (product owner, 2026-10-15): an admin types a
- * minimum at /admin/settings/quote-limits to turn it on, and clears the box
- * to turn it off again. Exported so `getMinRateMarginBps` can fail to the same
- * value when the policy table hasn't migrated or has no row — the neighbouring
- * *_policy defaults all take that posture, and here it has the extra virtue
- * that an unreachable settings table can't start refusing quotes.
- */
-export const DEFAULT_MIN_RATE_MARGIN_BPS: number | null = null;
-
-/**
- * `wholesalePctFor(avgTicket) + minRateMarginBps / 10000` — the minimum a
- * quoted card-present rate may clear (2026-10-15, product owner: "add floor
- * for rate (wholesale + minimum), editable in settings"). See
- * `RoleScopedPricing.minCardPresentRate`'s own doc comment for the full
- * picture; this is the pure computation both role branches of
- * `derivePricingForRole` call.
- *
- * Null with no basis to judge, same posture `projectedProcessingRevenue`
- * takes for the identical reasons:
- *  - no average ticket on file — there is no wholesale column to read, so
- *    there is no floor to assert. Does NOT fall back to the dearest column.
- *  - the quoted card-present rate is past `MAX_PLAUSIBLE_CARD_RATE` — a typo,
- *    not a floor question.
- *  - `cardNotPresentOnly` (`processesCardNotPresentOnly`, quoting.ts) — the
- *    card-present lane is hidden and nothing on it is rep-editable, so there
- *    is nothing to refuse. CNP itself is flat policy (3.30%) and locked;
- *    this floor is only ever about the CP rate a rep types.
- */
-function minimumCardPresentRate(
-  analysis: Parameters<typeof derivePricing>[0] & { averageTicket?: number },
-  rates: QuoteRates | null | undefined,
-  minRateMarginBps: number | null,
-  cardNotPresentOnly: boolean
-): number | null {
-  // The floor is off unless an admin has set a minimum — see
-  // DEFAULT_MIN_RATE_MARGIN_BPS for why that, and not 0, is the shipped state.
-  if (minRateMarginBps == null) return null;
-  if (cardNotPresentOnly) return null;
-  const avgTicket = averageTicketOf({ ...analysis, averageTicket: analysis.averageTicket ?? 0 });
-  if (!(avgTicket > 0)) return null;
-  const quoted = ratesFor(rates);
-  if (quoted.cardPresentRate > MAX_PLAUSIBLE_CARD_RATE) return null;
-  return wholesalePctFor(avgTicket) + minRateMarginBps / 10000;
-}
-
-/**
  * The write-side half of the 2026-10-09 decision ("card rate minimums are
  * needed"): a rep's typed rates are refused server-side when they don't clear
  * AIO's margin floor for the volume on file, same as the rep form
@@ -714,29 +626,5 @@ export function monthlyRevenueFloorBlockers(
     `At this rate AIO earns ${fmt$(earned)} a month on this merchant's processing, under the ` +
     `${fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} minimum. Raise the card rate, or this merchant is ` +
     `too small to process for.`,
-  ];
-}
-
-/**
- * The wholesale-plus-minimum rate floor (product owner, 2026-10-15). A THIRD,
- * independent refusal alongside `marginFloorBlockers`/`monthlyRevenueFloorBlockers`
- * — a quote has to clear all three, each measured on a different margin, so
- * none of the three implies another.
- *
- * Modelled on `monthlyRevenueFloorBlockers`'s posture, not `marginFloorBlockers`'s:
- * this is NOT padded and NOT secret — wholesale.ts is already AIO's own,
- * rep-visible forecasting table (see `monthlyProcessingRevenue`'s doc comment
- * for why stating it is safe) — so the message states the actual minimum
- * rate, not just "yes" or "no". Stating it costs nothing and gives the rep
- * something to type.
- */
-export function minRateFloorBlockers(
-  pricing: Pick<RoleScopedPricing, "belowMinRateFloor" | "minCardPresentRate">
-): string[] {
-  if (!pricing.belowMinRateFloor) return [];
-  const min = pricing.minCardPresentRate ?? 0;
-  return [
-    `The card-present rate is below AIO's minimum of ${(min * 100).toFixed(2)}% for this merchant's ` +
-    `average ticket. Raise the rate to send this quote.`,
   ];
 }

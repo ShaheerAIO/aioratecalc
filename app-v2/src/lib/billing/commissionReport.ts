@@ -32,7 +32,7 @@
 // below, which is what makes that uncertainty visible instead of silently
 // reading as "$0 everywhere, nothing to see."
 
-import { derivePricingForRole, analysisFromQuoteConfig, type PaddingConfig } from "@/lib/pricing";
+import { derivePricingForRole, analysisFromQuoteConfig, type MarginReq, type PaddingConfig } from "@/lib/pricing";
 import { paymentProcessingArrBreakdown } from "@/lib/billing/processingArr";
 import {
   commissionFromTotalArr, estimatedRecurringArrFromQuoteLines, sumArrOrNull,
@@ -120,7 +120,9 @@ export type DealCommissionRow = {
  */
 export function commissionRowForApplication(
   app: MerchantApplication,
-  activeTier: ProcessorTier | null
+  activeTier: ProcessorTier | null,
+  /** The saved margin table; omitted = MARGIN_REQS. Only feeds `trueMarginFloor`. */
+  marginReqs?: readonly MarginReq[]
 ): DealCommissionRow | null {
   const analysis = app.analysis
     ?? (app.quoteConfig && app.quoteConfig.monthlyVolume > 0 && app.quoteConfig.avgTicket > 0
@@ -169,7 +171,7 @@ export function commissionRowForApplication(
   if (analysis) {
     const pricing = derivePricingForRole(
       analysis, app.quoteRates, app.pricingModel || "2-tier", ZERO_FEES,
-      "admin", activeTier, NO_PADDING
+      "admin", activeTier, NO_PADDING, null, marginReqs
     );
     aioRevenue = pricing.aioRevenue;
     processorCostRate = pricing.adyenCostRate;
@@ -195,10 +197,11 @@ export function commissionRowForApplication(
 /** Every application that has something to report, biggest total ARR first (nulls last). */
 export function buildCommissionReport(
   apps: MerchantApplication[],
-  activeTier: ProcessorTier | null
+  activeTier: ProcessorTier | null,
+  marginReqs?: readonly MarginReq[]
 ): DealCommissionRow[] {
   return apps
-    .map(a => commissionRowForApplication(a, activeTier))
+    .map(a => commissionRowForApplication(a, activeTier, marginReqs))
     .filter((r): r is DealCommissionRow => r !== null)
     .sort((a, b) => (b.totalArr ?? -1) - (a.totalArr ?? -1));
 }

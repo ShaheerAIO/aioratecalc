@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getRateMatrix, updateRateMatrixAction } from "@/lib/actions/rateMatrix";
+import {
+  getMarginReqsAdminAction, getRateMatrix, updateMarginReqsAction, updateRateMatrixAction,
+} from "@/lib/actions/rateMatrix";
+import type { MarginReqBps } from "@/lib/marginPolicy";
 import {
   DEFAULT_RATE_MATRIX, RATE_MATRIX_TICKETS, TICKET_COLUMN_LABELS, VOLUME_BAND_LABELS,
   type RateMatrixPolicy,
@@ -18,8 +21,15 @@ import styles from "./rate-matrix.module.css";
  * Cells are typed as PERCENTAGES and stored as whole basis points — the same
  * conversion `RateFields` does on the rep side, and the only one here.
  */
+const MARGIN_COLUMNS: [keyof MarginReqBps, string][] = [
+  ["minBps", "Min margin"], ["desiredBps", "Desired margin"], ["maxBps", "Max margin"],
+];
+
 export default function RateMatrixSettingsPage() {
   const [matrix, setMatrix] = useState<RateMatrixPolicy | null>(null);
+  // AIO's true min / desired / max margin per volume band (admin-only data,
+  // fetched through an admin-gated action — never bundled into this page).
+  const [margins, setMargins] = useState<MarginReqBps[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -27,6 +37,7 @@ export default function RateMatrixSettingsPage() {
 
   useEffect(() => {
     getRateMatrix().then(setMatrix).catch(() => setLoadError("Could not load the saved rate card"));
+    getMarginReqsAdminAction().then(setMargins).catch(() => setLoadError("Could not load the margin table"));
   }, []);
 
   // A half-typed cell reads as 0, which the save refuses by name rather than
@@ -42,12 +53,16 @@ export default function RateMatrixSettingsPage() {
       return { ...prev, cardPresentBps: grid };
     });
 
+  const setMargin = (row: number, key: keyof MarginReqBps, raw: string) =>
+    setMargins(prev => prev && prev.map((m, i) => (i === row ? { ...m, [key]: toBps(raw) } : m)));
+
   const save = async () => {
-    if (!matrix) return;
+    if (!matrix || !margins) return;
     setSaving(true);
     setSaveError("");
     try {
       await updateRateMatrixAction(matrix);
+      await updateMarginReqsAction(margins);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
@@ -57,7 +72,7 @@ export default function RateMatrixSettingsPage() {
     }
   };
 
-  if (!matrix) return <div className={styles.loading}>{loadError || "Loading…"}</div>;
+  if (!matrix || !margins) return <div className={styles.loading}>{loadError || "Loading…"}</div>;
 
   return (
     <div className={styles.page}>
@@ -78,12 +93,16 @@ export default function RateMatrixSettingsPage() {
         {loadError && <div className={styles.notice}>{loadError}</div>}
 
         <div className={styles.panel}>
+          <p className={styles.caption}>
+                Card-present rate · each column covers the range in its header, so a $22
+                ticket reads the $25 column ($20 – $24.99). The last three columns are AIO&apos;s
+                margin over interchange for the volume band: the minimum is the floor a quote
+                is refused below (reps only ever see a padded version), desired is the target, and
+                max is the soft ceiling. Reset restores the rates only; margins keep their saved values.
+          </p>
+          <div className={styles.split}>
           <div className={styles.scroller}>
             <table className={styles.matrix}>
-              <caption className={styles.caption}>
-                Card-present rate · each column covers the range in its header, so a $22
-                ticket reads the $25 column ($20 – $24.99)
-              </caption>
               <thead>
                 <tr>
                   <th scope="col" className={styles.corner}>Volume \ Ticket</th>
@@ -114,6 +133,40 @@ export default function RateMatrixSettingsPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+          {/* Its own card beside the grid: no band labels of its own, its rows are
+              the same fixed height as the grid's so row N sits beside row N. */}
+          <div className={styles.marginBubble}>
+            <table className={styles.matrix}>
+              <thead>
+                <tr>
+                  {MARGIN_COLUMNS.map(([key, label]) => (
+                    <th key={key} scope="col" className={styles.colHead}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {VOLUME_BAND_LABELS.map((band, r) => (
+                  <tr key={band}>
+                    {MARGIN_COLUMNS.map(([key, label]) => (
+                      <td key={key} className={styles.cell}>
+                        <span className={styles.cellBox}>
+                          <input
+                            type="number" step="0.01" min="0" max="10"
+                            className={styles.cellInput}
+                            value={(margins[r][key] / 100).toFixed(2)}
+                            onChange={e => setMargin(r, key, e.target.value)}
+                            aria-label={`${label} for ${band} a month, percent`}
+                          />
+                          <span aria-hidden="true">%</span>
+                        </span>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           </div>
         </div>
 

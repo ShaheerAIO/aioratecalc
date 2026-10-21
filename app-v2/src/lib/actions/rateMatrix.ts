@@ -2,7 +2,9 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
-import { rateMatrixPolicy } from "@/lib/db/schema";
+import { marginReqsPolicy, rateMatrixPolicy } from "@/lib/db/schema";
+import { loadMarginReqsBps } from "@/lib/marginReqsLoader";
+import { marginReqsProblems, type MarginReqBps } from "@/lib/marginPolicy";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import {
   DEFAULT_RATE_MATRIX, MATRIX_COLS, MATRIX_ROWS, RATE_MATRIX_TICKETS, VOLUME_BAND_LABELS,
@@ -147,4 +149,40 @@ export async function getSuggestedRatesAction(input: {
     volumeBand: VOLUME_BAND_LABELS[matrixVolumeIndex(input.monthlyVolume)],
     ticketColumn: RATE_MATRIX_TICKETS[matrixTicketIndex(input.avgTicket)],
   };
+}
+
+// ── The margin table (MARGIN_REQS), admin-editable beside the rate card ─────
+// ADMIN ONLY, in both directions: these are AIO's true min/desired/max
+// margins, which reps must never receive. Rep-facing code reaches them only
+// through derivePricingForRole (via getPricingPreviewAction). The loader that
+// pricing uses is lib/marginReqsLoader.ts, deliberately not exported from this
+// "use server" file, where it would become a callable endpoint.
+
+/** The effective table (saved, or the code constants) in bps, for the admin page. */
+export async function getMarginReqsAdminAction(): Promise<MarginReqBps[]> {
+  const effective = await getEffectiveRole();
+  if (!effective || effective.role !== "admin") throw new Error("Admin only");
+  return loadMarginReqsBps();
+}
+
+export async function updateMarginReqsAction(input: MarginReqBps[]): Promise<void> {
+  const effective = await getEffectiveRole();
+  if (!effective || effective.role !== "admin") throw new Error("Admin only");
+
+  const problems = marginReqsProblems(input);
+  if (problems.length) throw new Error(problems.join(" "));
+
+  // Persist only the three numbers, whatever else the caller sent.
+  const rows = input.map(r => ({ minBps: r.minBps, desiredBps: r.desiredBps, maxBps: r.maxBps }));
+  const [existing] = await db
+    .select({ id: marginReqsPolicy.id })
+    .from(marginReqsPolicy)
+    .where(eq(marginReqsPolicy.isActive, true))
+    .limit(1);
+  const values = { rows, updatedByUserId: effective.userId, updatedAt: new Date() };
+  if (existing) {
+    await db.update(marginReqsPolicy).set(values).where(eq(marginReqsPolicy.id, existing.id));
+  } else {
+    await db.insert(marginReqsPolicy).values(values);
+  }
 }

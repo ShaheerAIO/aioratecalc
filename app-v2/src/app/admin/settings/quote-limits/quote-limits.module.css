@@ -267,3 +267,33 @@
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+
+/* One table, one row per product: Product | Unit cap | Max discount %. */
+.limitsTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.limitsTable th {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-3);
+  text-align: right;
+  padding: var(--space-2xs) var(--space-sm);
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+.limitsTable th:first-child,
+.limitsTable td:first-child { text-align: left; }
+
+.limitsTable td {
+  padding: var(--space-2xs) var(--space-sm);
+  border-bottom: 1px solid var(--rule);
+  text-align: right;
+}
+
+.limitsTable td:first-child {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}

@@ -161,7 +161,26 @@ describe("adjustmentBlockers", () => {
     const [msg] = adjustmentBlockers([line({ discountPercent: 75 })], 50);
     expect(msg).toContain("75%");
     expect(msg).toContain("50% limit");
-    expect(msg).toContain("Admin → Margin policy");
+    expect(msg).toContain("Admin → Quote limits");
+  });
+
+  it("uses the product's own cap over the fallback, in both directions", () => {
+    const id = line().hubspotProductId;
+    // Raised for this product: 75% passes although the fallback is 50.
+    expect(adjustmentBlockers([line({ discountPercent: 75 })], 50, undefined, { [id]: 80 })).toEqual([]);
+    // Lowered for this product: 30% is refused although the fallback is 50.
+    const [msg] = adjustmentBlockers([line({ discountPercent: 30 })], 50, undefined, { [id]: 20 });
+    expect(msg).toContain("20% limit");
+    expect(msg).toContain("this product");
+    // Another product still follows the fallback.
+    expect(adjustmentBlockers([line({ hubspotProductId: "other", discountPercent: 50 })], 50, undefined, { [id]: 20 })).toEqual([]);
+  });
+
+  it("holds a dollar discount to the per-product cap too", () => {
+    const id = line().hubspotProductId;
+    const l = line({ discountAmount: 300 }); // 40.05% of the $749 line
+    expect(adjustmentBlockers([l], 100, undefined, { [id]: 40 })).toHaveLength(1);
+    expect(adjustmentBlockers([l], 100, undefined, { [id]: 41 })).toEqual([]);
   });
 
   it("refuses a percentage that isn't one", () => {

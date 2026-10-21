@@ -2,10 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import {
-  getMaxDiscountPercent, getMinRateMarginBps, getQuoteLimits,
-  updateMaxDiscountPercentAction, updateMinRateMarginBpsAction, updateQuoteLimitsAction,
-} from "@/lib/actions/pricing";
+import { getMaxDiscountPercent, getQuoteLimits, updateQuoteLimitsAction } from "@/lib/actions/pricing";
 import { listQuotableProductsAction } from "@/lib/actions/catalog";
 import {
   DEFAULT_MAX_DISCOUNT_PERCENT, DEFAULT_UNIT_CAPS, MAX_BILLING_DELAY_DAYS, type QuoteLimits,
@@ -15,15 +12,13 @@ import styles from "./quote-limits.module.css";
 
 /**
  * Everything an admin sets about what a rep may put on a quote without
- * asking: how many of each product, how long billing may be delayed, how far
- * they may discount, and whether the tablets are offered at all.
+ * asking: how many of each product, how far they may discount each one, how
+ * long billing may be delayed, and whether the tablets are offered at all.
  *
- * The DISCOUNT CAP moved here on 2026-10-12 from /admin/settings/pillow, which
- * was deleted. It never belonged there — that page was about what a rep may
- * LEARN of AIO's margin, and this is about what they may GIVE AWAY of it,
- * which is the same question as the delay ceiling beside it. It is still
- * stored on `margin_policy` (one row, one accessor each); only its editor
- * moved.
+ * Unit caps and discount caps are ONE table (2026-10-21): Product | Unit cap |
+ * Max discount %. A blank discount box means "the fallback" — the stored
+ * `margin_policy.maxDiscountPercent` (default 50), which no longer has an
+ * editor of its own and is shown as the box's placeholder.
  *
  * The product list comes from the live catalog, so a cap is always set against
  * a product that exists and is named the way HubSpot names it today. A cap
@@ -34,16 +29,8 @@ import styles from "./quote-limits.module.css";
  */
 export default function QuoteLimitsSettingsPage() {
   const [limits, setLimits]   = useState<QuoteLimits | null>(null);
+  // Read-only now: the fallback shown as the discount box's placeholder.
   const [maxDiscount, setMaxDiscount] = useState<number>(DEFAULT_MAX_DISCOUNT_PERCENT);
-  // The wholesale-plus-minimum rate floor (2026-10-15, product owner: "add
-  // floor for rate (wholesale + minimum), editable in settings"). NULL means
-  // the floor is OFF, which is the state it shipped in and the state a blank
-  // box saves — see DEFAULT_MIN_RATE_MARGIN_BPS in pricing.ts for why off and
-  // not 0 bps. Null here is also the pre-load placeholder; it mirrors that
-  // default without importing pricing.ts (and the true MARGIN_REQS table it
-  // carries) into this client bundle, and getMinRateMarginBps() overwrites it
-  // the moment the real policy loads, same as maxDiscount above.
-  const [minRateMarginBps, setMinRateMarginBps] = useState<number | null>(null);
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [loadError, setLoadError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -53,7 +40,6 @@ export default function QuoteLimitsSettingsPage() {
   useEffect(() => {
     getQuoteLimits().then(setLimits).catch(() => setLoadError("Could not load the saved limits"));
     getMaxDiscountPercent().then(setMaxDiscount).catch(() => setLoadError("Could not load the discount cap"));
-    getMinRateMarginBps().then(setMinRateMarginBps).catch(() => setLoadError("Could not load the minimum rate margin"));
     listQuotableProductsAction()
       .then(res => {
         setCatalog(res.all);
@@ -68,7 +54,7 @@ export default function QuoteLimitsSettingsPage() {
       .sort((a, b) => a.name.trim().localeCompare(b.name.trim()))
       .map(p => ({ id: p.hubspotProductId, name: p.name.trim() }));
     const known = new Set(named.map(r => r.id));
-    const orphans = Object.keys(limits?.unitCaps ?? {})
+    const orphans = [...new Set([...Object.keys(limits?.unitCaps ?? {}), ...Object.keys(limits?.discountCaps ?? {})])]
       .filter(id => !known.has(id))
       .map(id => ({ id, name: `Not in the catalog · ${id}` }));
     return [...named, ...orphans];
@@ -88,11 +74,9 @@ export default function QuoteLimitsSettingsPage() {
     });
   };
 
-  // Per-product discount caps (2026-10-15, product owner: "make max discounts
-  // per line item instead of a global"). Same interaction as setCap above —
-  // blank REMOVES the entry, which is how a product falls back to the global
-  // "Default discount cap" field rather than being capped at 0%, the one
-  // discount a rep could never give even with the global at 50%.
+  // Same interaction as setCap above — blank REMOVES the entry, which is how a
+  // product falls back to the standing fallback cap rather than being capped
+  // at 0%, the one discount a rep could never give.
   const setDiscountCap = (productId: string, raw: string) => {
     setLimits(prev => {
       if (!prev) return prev;
@@ -109,11 +93,6 @@ export default function QuoteLimitsSettingsPage() {
     setSaving(true);
     setSaveError("");
     try {
-      // Three rows, three writes. The discount cap goes first: it is the one a
-      // rep is most likely waiting on, and if a later write fails the admin
-      // has at least granted the thing they came here for.
-      await updateMaxDiscountPercentAction(maxDiscount);
-      await updateMinRateMarginBpsAction(minRateMarginBps);
       await updateQuoteLimitsAction(limits);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -143,9 +122,8 @@ export default function QuoteLimitsSettingsPage() {
           </p>
         </div>
 
-        {/* The three policy numbers, side by side. Raising either ceiling IS
-            the approval for going past it — deliberately not a request queue
-            — so they belong together and above the long list. */}
+        {/* Raising a ceiling IS the approval for going past it — deliberately
+            not a request queue — so the delay ceiling sits above the long list. */}
         <div className={styles.panel}>
           <div className={styles.pair}>
             <div className={styles.field}>
@@ -168,57 +146,6 @@ export default function QuoteLimitsSettingsPage() {
                 than {MAX_BILLING_DELAY_DAYS} days out.
               </p>
             </div>
-
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="discount">Default discount cap</label>
-              <span className={styles.affix}>
-                <input
-                  id="discount"
-                  type="number" step="1" min="0" max="100"
-                  className={styles.numInput}
-                  value={maxDiscount}
-                  onChange={e => setMaxDiscount(Math.floor(Number(e.target.value) || 0))}
-                />
-                <span className={styles.unit}>%</span>
-              </span>
-              <p className={styles.hint}>
-                The most a rep may take off any line that has no cap of its own below (2026-10-15:
-                discount caps moved per-product; this is now the FALLBACK, not the only limit).
-                Raising this is how a bigger discount — giving a unit away, say — gets approved. The
-                two comped services, anything a package already covers, and the plan line (which can
-                never be discounted at all) are exempt and unaffected.
-              </p>
-            </div>
-
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="minRateMargin">Minimum rate margin</label>
-              <span className={styles.affix}>
-                <input
-                  id="minRateMargin"
-                  type="number" step="1" min="0" max="10000"
-                  className={styles.numInput}
-                  placeholder="Off"
-                  value={minRateMarginBps ?? ""}
-                  onChange={e => {
-                    // Blank is how the floor is switched OFF — the same way a
-                    // blank unit cap removes a cap, rather than meaning zero.
-                    const raw = e.target.value.trim();
-                    setMinRateMarginBps(raw === "" ? null : Math.max(0, Math.floor(Number(raw) || 0)));
-                  }}
-                />
-                <span className={styles.unit}>bps</span>
-              </span>
-              <p className={styles.hint}>
-                The least a quoted card-present rate may clear above AIO&apos;s wholesale cost for
-                this merchant&apos;s average ticket (2026-10-15). Below it the quote refuses to save
-                and refuses to send — not padded and not secret, so the refusal names the minimum
-                rate itself. 100 basis points = 1.00%.
-                {" "}<strong>Leave it blank and the floor is off</strong>, which is how it ships:
-                the rate card is built on margin over interchange and the wholesale table is a
-                different basis, and at 0 bps this would refuse 48 of the rate card&apos;s own 81
-                cells — every ticket from $10 to $50 above $75K a month.
-              </p>
-            </div>
           </div>
 
           <label className={styles.toggleRow}>
@@ -238,79 +165,64 @@ export default function QuoteLimitsSettingsPage() {
         </div>
 
         <div className={styles.header}>
-          <h2 className={styles.sectionHead}>Unit caps</h2>
+          <h2 className={styles.sectionHead}>Unit caps and discount limits</h2>
           <p className={styles.headerSubtitle}>
-            The most of each product one quote may carry, counted across every line of it.
-            Leave a box blank to leave that product uncapped — the default for anything not listed
-            here, and for any product added to HubSpot later. {capped} of {rows.length} are capped
-            today.
+            Per product. The unit cap is the most one quote may carry, counted across every line
+            of it; leave it blank for no cap. The max discount is the most a rep may take off
+            that product&apos;s line; leave it blank to use the standing {maxDiscount}%. Raising a
+            limit here is how a bigger discount gets approved. The two comped services, anything a
+            package already covers, and the plan line (which can never be discounted) are exempt.
+            {" "}{capped} of {rows.length} have a unit cap and {discountCapped} have their own discount
+            limit today.
           </p>
         </div>
 
         {loadError && <div className={styles.notice}>{loadError}</div>}
 
         <div className={styles.panel}>
-          <div className={styles.capGrid}>
-            {rows.map(row => (
-              <div key={row.id} className={styles.capRow}>
-                <span className={styles.capName}>{row.name}</span>
-                <input
-                  type="number" step="1" min="1"
-                  className={styles.capInput}
-                  value={limits.unitCaps[row.id] ?? ""}
-                  placeholder="∞"
-                  onChange={e => setCap(row.id, e.target.value)}
-                  aria-label={`Maximum quantity of ${row.name} on one quote`}
-                />
-              </div>
-            ))}
-          </div>
+          <table className={styles.limitsTable}>
+            <thead>
+              <tr>
+                <th scope="col">Product</th>
+                <th scope="col">Unit cap</th>
+                <th scope="col">Max discount %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={row.id}>
+                  <td>{row.name}</td>
+                  <td>
+                    <input
+                      type="number" step="1" min="1"
+                      className={styles.capInput}
+                      value={limits.unitCaps[row.id] ?? ""}
+                      placeholder="∞"
+                      onChange={e => setCap(row.id, e.target.value)}
+                      aria-label={`Maximum quantity of ${row.name} on one quote`}
+                    />
+                  </td>
+                  <td>
+                    <span className={styles.affix}>
+                      <input
+                        type="number" step="1" min="0" max="100"
+                        className={styles.capInput}
+                        value={limits.discountCaps[row.id] ?? ""}
+                        placeholder={`${maxDiscount}`}
+                        onChange={e => setDiscountCap(row.id, e.target.value)}
+                        aria-label={`Maximum discount percent for ${row.name}`}
+                      />
+                      <span className={styles.unit}>%</span>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           {rows.length === 0 && (
             <p className={styles.headerSubtitle}>
-              The catalog didn&apos;t load, so there are no products to cap. Any caps already saved
-              are still in force.
-            </p>
-          )}
-        </div>
-
-        {/* Per-product discount caps (2026-10-15, product owner: "make max
-            discounts per line item instead of a global"). Same editor pattern
-            as unit caps just above, placed directly beside it: a product
-            absent here falls back to "Default discount cap" above, and the
-            plan/platform line is never listed — it can't be discounted at
-            all, whatever an admin sets here (see adjustmentBlockers). */}
-        <div className={styles.header}>
-          <h2 className={styles.sectionHead}>Discount caps</h2>
-          <p className={styles.headerSubtitle}>
-            The most a rep may discount a specific product, overriding the default cap above for
-            that product only. Leave a box blank to use the default. {discountCapped} of {rows.length}{" "}
-            have their own cap today.
-          </p>
-        </div>
-
-        <div className={styles.panel}>
-          <div className={styles.capGrid}>
-            {rows.map(row => (
-              <div key={row.id} className={styles.capRow}>
-                <span className={styles.capName}>{row.name}</span>
-                <span className={styles.affix}>
-                  <input
-                    type="number" step="1" min="0" max="100"
-                    className={styles.capInput}
-                    value={limits.discountCaps[row.id] ?? ""}
-                    placeholder={`${maxDiscount}`}
-                    onChange={e => setDiscountCap(row.id, e.target.value)}
-                    aria-label={`Maximum discount percent for ${row.name}`}
-                  />
-                  <span className={styles.unit}>%</span>
-                </span>
-              </div>
-            ))}
-          </div>
-          {rows.length === 0 && (
-            <p className={styles.headerSubtitle}>
-              The catalog didn&apos;t load, so there are no products to cap. Any caps already saved
-              are still in force.
+              The catalog didn&apos;t load, so there are no products to list. Any limits already
+              saved are still in force.
             </p>
           )}
         </div>

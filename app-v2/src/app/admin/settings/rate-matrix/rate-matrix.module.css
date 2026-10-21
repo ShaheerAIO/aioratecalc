@@ -11,8 +11,7 @@
 /* Wider than the other settings pages: the grid is ten columns and a rate
    card is read across its whole row. */
 .wrap {
-  max-width: 58rem;
-  margin-inline: auto;
+  max-width: none;
 }
 
 .back {
@@ -81,12 +80,43 @@
 }
 
 .matrix {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
 }
 
+/* Grid and margin card side by side. Both tables use the same fixed row
+   height below, so row N of one sits beside row N of the other. */
+.split {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-lg);
+}
+.split > .scroller {
+  flex: 1 1 0;
+  min-width: 0;
+  /* Same top offset as the margin card (1px border + vertical padding), so
+     row tops coincide exactly. */
+  border-top: 1px solid transparent;
+  padding-top: var(--space-xs);
+}
+.marginBubble {
+  flex: none;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xs) var(--space-sm);
+}
+.marginBubble .matrix { width: auto; }
+.matrix th, .matrix td {
+  height: 2.25rem;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .caption {
-  caption-side: top;
+  margin: 0;
   text-align: left;
   font-size: 0.78rem;
   color: var(--ink-3);
@@ -240,3 +270,4 @@
 @media (prefers-reduced-motion: reduce) {
   .saveButton { transition-duration: 1ms; }
 }
+
