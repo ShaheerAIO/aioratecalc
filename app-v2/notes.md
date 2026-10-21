@@ -627,3 +627,24 @@ headline, card-not-present smaller under it, monthly volume, chargeback $25,
 retrieval $15. Every line has a one-sentence description, written in
 lib/lineDescriptions.ts (HubSpot's catalog text is untouched).
 Confirm screen: "Registered/Operating" → "Legal/DBA".)
+
+
+
+10/21
+remove wifi packages - remove all the individual unifi items. The package line item name "aio wifi package" is supposed to just represent all the individual items. also make sure that shows up on the builder side as well so that they can remove it if need be
+
+no 0-9.99
+
+add basis point adjustment
+
+DBA and operating addy are the same hting
+
+Entity type, state, zip are required
+Llc needs to be all caps 
+Remove hard language when user is accepting quote after the verifying info stage. it makes it seem like they can negotiate. Plain and simple "continue" button. Make sure to keep the diologue box about it taking a while to generate the quote
+
+we need to add the foodbuy form to hubspot. When someone fills it out it should put it in the files for that company in hubspot
+
+make the buckets match with the new doc
+
+/Users/shaheerhasnain/Downloads/10.2026_AIO-Restaurant-Payment-Pricing-Guide.pdf
