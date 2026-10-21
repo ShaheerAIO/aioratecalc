@@ -310,6 +310,29 @@ export const PICKER_EXCLUDED_PRODUCT_NAMES = [
 ] as const;
 
 /**
+ * The individual network components (2026-10-21, product owner: "remove all
+ * the individual unifi items — the package line item is supposed to just
+ * represent all the individual items"). The single WiFi package line stands for
+ * the whole network, so selling the pieces on top bills it twice. Matched by id
+ * (the names are HubSpot's and drift). Includes the Pronto package, which is
+ * deliberately not offered as a second network line beside the derived one.
+ * Not derived and not pickable; a saved line carrying one is dropped on reopen.
+ */
+const NETWORK_COMPONENT_PRODUCT_IDS: readonly string[] = [
+  "338693809894", // Unifi Router
+  "338690930367", // Pronto Router + LTE Backup
+  "338693090009", // Unifi 8 Port Switch
+  "338690209526", // Pronto 8 Port Switch
+  "338616220368", // Unifi Access Point
+  "338615500489", // Unifi U-LTE Backup Pro
+  "338691650250", // AIO Wifi Network Package - Pronto
+];
+
+function isNetworkComponent(id: string): boolean {
+  return NETWORK_COMPONENT_PRODUCT_IDS.includes(id);
+}
+
+/**
  * Everything a rep can never pick by hand. Two reasons land here:
  *   - the exclusions above — things nobody sells as a line
  *   - DERIVED lines: all three platform products, the three install services,
@@ -319,6 +342,7 @@ export const PICKER_EXCLUDED_PRODUCT_NAMES = [
 export function isPickable(product: CatalogProduct): boolean {
   return (
     !PICKER_EXCLUDED_PRODUCT_NAMES.includes(product.name as (typeof PICKER_EXCLUDED_PRODUCT_NAMES)[number]) &&
+    !isNetworkComponent(product.hubspotProductId) &&
     !isPlatformProduct(product.name, product.hubspotProductId) &&
     !isIncludedServiceProduct(product.hubspotProductId, product.name) &&
     !isPreAuthProduct(product.hubspotProductId, product.name) &&
@@ -1814,6 +1838,7 @@ function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
     // (it points at the Unifi replacement now), so it needs its own check
     // here or a pre-10/13 quote would reopen offering it back as a pick.
     isWifiLine(line) ||
+    isNetworkComponent(line.hubspotProductId) ||
     line.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId ||
     isPreAuthProduct(line.hubspotProductId, line.name) ||
     // Derived from the decomposition, and one-time `inventory` at a positive

@@ -3,6 +3,7 @@
 import { isFromHubspotField, UNKNOWABLE_REVIEW_FIELDS, type AppliedReviewFields } from "@/lib/prefillMerge";
 import { contactOptionLabel } from "@/lib/hubspotPrefill";
 import type { HubspotContact } from "@/lib/adapters/hubspot";
+import { bizTypeLabel } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
 import styles from "./ReviewSection.module.css";
 
@@ -94,7 +95,7 @@ export default function ReviewSection({
             className={styles.input}
           >
             {(["llc", "corp", "s-corp", "sole-prop", "partnership", "non-profit"] as const).map(t => (
-              <option key={t} value={t}>{t.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
+              <option key={t} value={t}>{bizTypeLabel(t)}</option>
             ))}
           </select>
         </div>

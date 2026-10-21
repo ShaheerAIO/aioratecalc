@@ -71,6 +71,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   const [quoteNote, setQuoteNote] = useState(app.quoteNote ?? "");
 
   const [quoteRates, setQuoteRates] = useState<QuoteRates>(app.quoteRates ?? DEFAULT_QUOTE_RATES);
+  const [cpAdjustBps, setCpAdjustBps] = useState(0);
   const [pricingModel, setPricingModel] = useState<PricingModel>(app.pricingModel ?? "2-tier");
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -303,7 +304,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
           )}
 
           <div>
-            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} />
+            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} />
             {/* Used to deliberately skip auto-apply here ("these rates were
                 already chosen and saved"). OVERRIDDEN 2026-10-13 ("get rid of
                 the 'use it' and make it always override") — RateSuggestion no
@@ -319,6 +320,9 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
               avgTicket={previewAnalysis ? averageTicketOf(previewAnalysis) : 0}
               value={quoteRates}
               onChange={setQuoteRates}
+              adjustmentBps={cpAdjustBps}
+              onAdjustmentChange={setCpAdjustBps}
+              adoptSaved={!!app.quoteRates}
             />
             {!canPreview && hasVolumeBasis && (
               <p style={{ opacity: 0.7, fontSize: 13, marginTop: 6 }}>

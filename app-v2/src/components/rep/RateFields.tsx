@@ -99,6 +99,15 @@ export type RateFieldsProps = {
    * kiosk, and a kiosk takes cards in person.
    */
   cardNotPresentOnly?: boolean;
+  /**
+   * The rep's ± basis-point adjustment to the card-present rate (2026-10-21).
+   * Passing `onAdjustBps` turns the card-present box read-only — the rate is
+   * the card's figure plus this adjustment — and shows the adjustment box.
+   * Hosts that don't pass it keep the typed box. Refusal stays server-side
+   * (marginFloorBlockers, monthlyRevenueFloorBlockers).
+   */
+  adjustBps?: number;
+  onAdjustBps?: (bps: number) => void;
 };
 
 /**
@@ -110,7 +119,7 @@ export type RateFieldsProps = {
 const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
 export default function RateFields({
-  value, onChange, hideNote, freshQuote, cardNotPresentOnly,
+  value, onChange, hideNote, freshQuote, cardNotPresentOnly, adjustBps = 0, onAdjustBps,
 }: RateFieldsProps) {
   const setCardPresent = (pct: number) => onChange({ ...value, cardPresentRate: pct / 100 });
   const setCardNotPresent = (pct: number) => {
@@ -167,6 +176,7 @@ export default function RateFields({
                   value={Number(pctText(value.cardPresentRate))}
                   max={MAX_PLAUSIBLE_CARD_RATE * 100}
                   onChange={setCardPresent}
+                  disabled={!!onAdjustBps}
                   aria-label="Card present rate, percent"
                 />
                 <span className={styles.unit}>%</span>
@@ -183,6 +193,21 @@ export default function RateFields({
               </span>
               <span className={styles.suffix}>per transaction</span>
             </div>
+            {onAdjustBps && (
+              <label className={styles.suffix} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                Adjust rate (bps)
+                <input
+                  type="number" step={1} min={-500} max={500}
+                  value={adjustBps}
+                  onChange={e => {
+                    const n = Math.round(Number(e.target.value));
+                    onAdjustBps(Number.isFinite(n) ? Math.max(-500, Math.min(500, n)) : 0);
+                  }}
+                  style={{ width: 72 }}
+                  aria-label="Card present rate adjustment, basis points, positive or negative"
+                />
+              </label>
+            )}
           </div>
         )}
         <div className={styles.field}>

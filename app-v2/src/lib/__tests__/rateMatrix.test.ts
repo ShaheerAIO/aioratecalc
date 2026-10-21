@@ -30,58 +30,56 @@ describe("the shipped card", () => {
     expect(rateMatrixProblems(DEFAULT_RATE_MATRIX)).toEqual([]);
   });
 
-  // Both directions of the guide's own formula: the rate falls as volume
-  // rises (bigger merchants need less margin) and as the ticket rises (the
-  // per-transaction shortfall is spread over more dollars).
-  it("falls along both axes", () => {
+  // Volume: bigger merchants need less margin, so the rate falls down every
+  // column. Ticket: the Oct 2026 wholesale table is NOT monotone ($10 is dear,
+  // $20 the cheapest, then the rate climbs again as the $0.15 fee is netted out
+  // of a larger ticket), so only the dip at $20 is asserted.
+  it("falls with volume and bottoms out at the $20 ticket", () => {
     const grid = DEFAULT_RATE_MATRIX.cardPresentBps;
     for (let r = 1; r < MATRIX_ROWS; r++) {
       for (let c = 0; c < MATRIX_COLS; c++) expect(grid[r][c]).toBeLessThan(grid[r - 1][c]);
     }
     for (let r = 0; r < MATRIX_ROWS; r++) {
-      for (let c = 1; c < MATRIX_COLS; c++) expect(grid[r][c]).toBeLessThan(grid[r][c - 1]);
+      expect(grid[r].indexOf(Math.min(...grid[r]))).toBe(2);
     }
   });
 
-  // §10.5: at $0.15/txn exactly one cell exceeds the 3.30% card-not-present
-  // rate — $0–25K at a $10 ticket. If an edit ever breaks that, the card is
-  // telling a merchant that taking the card in person costs more than online.
-  it("crosses the CNP rate in exactly the one cell the guide names", () => {
+  // §10.5 (Oct 2026): at $0.15/txn NO cell exceeds the 3.30% card-not-present
+  // rate (verified against the numbers, not just the guide's claim). If an edit
+  // breaks that, the card says taking the card in person costs more than online.
+  it("never crosses the CNP rate", () => {
     const over = DEFAULT_RATE_MATRIX.cardPresentBps
       .flatMap((row, r) => row.map((bps, c) => ({ r, c, bps })))
       .filter(cell => cell.bps > DEFAULT_RATE_MATRIX.cardNotPresentBps);
-    expect(over).toEqual([{ r: 0, c: 0, bps: 333 }]);
+    expect(over).toEqual([]);
   });
 });
 
-// The admin page used to print bare point headers ("$20") with only a prose
-// caption explaining that a ticket reads the column it's at or above — so the
-// bucket a cell actually covers was never on the header itself. 2026-10-13,
-// "make matrix bucketing explicit": the header prints the real range, derived
-// from RATE_MATRIX_TICKETS rather than a second hardcoded list that could
-// drift from it.
+// The admin page prints the real range each column covers in its header,
+// derived from RATE_MATRIX_TICKETS rather than a second hardcoded list that
+// could drift from it. Each column value is its bucket's max + $0.01.
 describe("TICKET_COLUMN_LABELS", () => {
   it("has one label per column", () => {
     expect(TICKET_COLUMN_LABELS).toHaveLength(MATRIX_COLS);
   });
 
-  it("labels each column with the range it covers, one cent short of the next point", () => {
-    expect(TICKET_COLUMN_LABELS[0]).toBe("$10 – $14.99");
-    expect(TICKET_COLUMN_LABELS[1]).toBe("$15 – $19.99");
-    expect(TICKET_COLUMN_LABELS[2]).toBe("$20 – $24.99");
-    expect(TICKET_COLUMN_LABELS[6]).toBe("$50 – $74.99");
+  it("labels each column with the range it covers, one cent short of its own value", () => {
+    expect(TICKET_COLUMN_LABELS).toEqual([
+      "$0 – $9.99", "$10 – $14.99", "$15 – $19.99", "$20 – $24.99", "$25 – $29.99",
+      "$30 – $39.99", "$40 – $49.99", "$50 – $74.99", "$75+",
+    ]);
   });
 
-  it("leaves the last column open-ended — there's no point above it to stop at", () => {
-    expect(TICKET_COLUMN_LABELS[MATRIX_COLS - 1]).toBe("$100+");
+  it("leaves the last column open-ended — everything $75 and up", () => {
+    expect(TICKET_COLUMN_LABELS[MATRIX_COLS - 1]).toBe("$75+");
   });
 
   it("stays derived from RATE_MATRIX_TICKETS rather than a second hardcoded copy", () => {
     // If someone ever widens the grid, the labels have to follow without a
-    // second edit — this fails the moment the two disagree in length or in
-    // the point each column starts at.
-    RATE_MATRIX_TICKETS.forEach((t, i) => {
-      expect(TICKET_COLUMN_LABELS[i].startsWith(`$${t}`)).toBe(true);
+    // second edit — each label (bar the open-ended last) ends one cent under
+    // its column's value.
+    RATE_MATRIX_TICKETS.slice(0, -1).forEach((t, i) => {
+      expect(TICKET_COLUMN_LABELS[i].endsWith(`$${(t - 0.01).toFixed(2)}`)).toBe(true);
     });
   });
 });
@@ -102,15 +100,24 @@ describe("matrixVolumeIndex", () => {
 });
 
 describe("matrixTicketIndex", () => {
-  // A column is read as the band STARTING at it, so a real ticket lands on
-  // the dearer of its two neighbours — the direction §12 rounds.
-  it("reads the column at or below the ticket", () => {
-    expect(matrixTicketIndex(10)).toBe(0);
-    expect(matrixTicketIndex(14.99)).toBe(0);
-    expect(matrixTicketIndex(15)).toBe(1);
-    expect(matrixTicketIndex(22.4)).toBe(2);   // the $20 column
-    expect(matrixTicketIndex(74)).toBe(6);     // the $50 column
-    expect(matrixTicketIndex(75)).toBe(7);
+  // A column's value is its bucket's max + $0.01, so a ticket reads the first
+  // column whose value is strictly greater than it.
+  it("reads the first column strictly above the ticket", () => {
+    expect(matrixTicketIndex(9.99)).toBe(0);   // $0 – $9.99
+    expect(matrixTicketIndex(10)).toBe(1);     // $10 – $14.99
+    expect(matrixTicketIndex(14.99)).toBe(1);
+    expect(matrixTicketIndex(15)).toBe(2);
+    expect(matrixTicketIndex(22.4)).toBe(3);   // the $25 column ($20 – $24.99)
+    expect(matrixTicketIndex(24.99)).toBe(3);
+    expect(matrixTicketIndex(25)).toBe(4);
+    expect(matrixTicketIndex(29.99)).toBe(4);
+    expect(matrixTicketIndex(30)).toBe(5);
+    expect(matrixTicketIndex(39.99)).toBe(5);
+    expect(matrixTicketIndex(40)).toBe(6);
+    expect(matrixTicketIndex(49.99)).toBe(6);
+    expect(matrixTicketIndex(50)).toBe(7);     // the $75 column ($50 – $74.99)
+    expect(matrixTicketIndex(74.99)).toBe(7);
+    expect(matrixTicketIndex(75)).toBe(8);     // the open-ended $100 column
   });
 
   it("clamps a ticket under the cheapest column onto it", () => {
@@ -120,18 +127,19 @@ describe("matrixTicketIndex", () => {
 
   it("clamps a ticket past the dearest column onto it", () => {
     expect(matrixTicketIndex(100)).toBe(MATRIX_COLS - 1);
+    expect(matrixTicketIndex(500)).toBe(MATRIX_COLS - 1);
     expect(matrixTicketIndex(900)).toBe(MATRIX_COLS - 1);
   });
 });
 
 describe("lookupCardPresentRate", () => {
   it("reads the published cell", () => {
-    // $60K/mo at a $25 ticket -> row "$50K – $75K", column $25 -> 2.29%.
-    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 60000, 25)).toBeCloseTo(0.0229, 6);
-    // The dearest corner.
-    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 10000, 10)).toBeCloseTo(0.0333, 6);
-    // The cheapest.
-    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 500000, 120)).toBeCloseTo(0.0181, 6);
+    // $60K/mo at a $22.50 ticket -> row "$50K – $75K", column $25 ($20 – $24.99) -> 2.41%.
+    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 60000, 22.5)).toBeCloseTo(0.0241, 6);
+    // A corner of the card (the Oct 2026 grid is no longer dearest here).
+    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 10000, 5)).toBeCloseTo(0.0300, 6);
+    // The $200K+ / $100 corner.
+    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 500000, 120)).toBeCloseTo(0.0238, 6);
   });
 
   // Null rather than the dearest corner: "nobody has measured this merchant"
@@ -211,7 +219,8 @@ describe("every published cell", () => {
   it("is reachable by some (volume, ticket) pair", () => {
     const seen = new Set<string>();
     for (const vol of [1, 25000, 40000, 60000, 90000, 110000, 140000, 160000, 190000, 400000]) {
-      for (const t of RATE_MATRIX_TICKETS) seen.add(`${matrixVolumeIndex(vol)}:${matrixTicketIndex(t)}`);
+      // One cent under each column's value is inside that column's bucket.
+      for (const t of RATE_MATRIX_TICKETS) seen.add(`${matrixVolumeIndex(vol)}:${matrixTicketIndex(t - 0.01)}`);
     }
     expect(seen.size).toBe(MATRIX_ROWS * MATRIX_COLS);
   });
@@ -241,7 +250,7 @@ describe("averageTicketOf", () => {
 
   it("feeds a real cell of the card", () => {
     const ticket = averageTicketOf({ ...base, totalVolume: 100000, totalTransactions: 4000 });
-    // $100K/mo is the "$75K – $100K" band; a $25 ticket reads the $25 column.
-    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 100000, ticket)).toBeCloseTo(0.0214, 6);
+    // $100K/mo is the "$75K – $100K" band; a $25 ticket reads the $30 column ($25 – $29.99).
+    expect(lookupCardPresentRate(DEFAULT_RATE_MATRIX, 100000, ticket)).toBeCloseTo(0.0234, 6);
   });
 });

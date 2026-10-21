@@ -755,6 +755,19 @@ export function rollUpSubscriptionStatus(subs: HubspotSubscriptionSnapshot[]): s
   return worst;
 }
 
+/** Display names for `BusinessInfo.bizType`. "LLC" is an initialism: title-casing the value rendered it "Llc". */
+export const BIZ_TYPE_LABELS: Record<Exclude<BusinessInfo["bizType"], "">, string> = {
+  "llc": "LLC",
+  "corp": "Corporation",
+  "s-corp": "S-Corp",
+  "sole-prop": "Sole Prop",
+  "partnership": "Partnership",
+  "non-profit": "Non-Profit",
+};
+
+export const bizTypeLabel = (t: BusinessInfo["bizType"] | string | null | undefined): string =>
+  (t && BIZ_TYPE_LABELS[t as keyof typeof BIZ_TYPE_LABELS]) || (t ?? "");
+
 export type BusinessInfo = {
   legalName: string;
   dba: string;
@@ -970,6 +983,15 @@ export type CheckIds = {
 // copy of the form (see lib/foodbuyForm.ts) to sign and hand off themselves.
 export type FoodbuyIds = {
   generatedAt: string;
+  // The customer's exported PDF, filed on their HubSpot Company (Files API
+  // upload + a note carrying it as an attachment). All optional: the upload is
+  // best-effort and a row that never got one is normal. `hubspotFileSha256`
+  // is what makes a re-export of the SAME content a no-op; a corrected export
+  // hashes differently and is filed as a new version.
+  hubspotFileId?: string;
+  hubspotNoteId?: string;
+  hubspotFileSha256?: string;
+  hubspotUploadedAt?: string;
 };
 
 // The HubSpot deal an application is currently backed by, captured at the

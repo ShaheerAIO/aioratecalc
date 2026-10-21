@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { bizTypeLabel } from "@/types/merchant";
 import type { MerchantApplication } from "@/types/merchant";
 import { fmt$0 } from "@/lib/utils";
 import styles from "./MyDataSection.module.css";
@@ -18,10 +19,6 @@ export function pickProfileApp(apps: MerchantApplication[]): MerchantApplication
   return [...withData].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
 }
 
-function titleCase(s: string) {
-  return s.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-}
-
 // Exported so other views (e.g. the per-application "My Data" tab) can
 // render the same fields without duplicating the field list.
 export function buildGroups(app: MerchantApplication): Group[] {
@@ -35,7 +32,7 @@ export function buildGroups(app: MerchantApplication): Group[] {
       rows: [
         b?.legalName && { label: "Legal Name", value: b.legalName },
         b?.dba && { label: "DBA", value: b.dba },
-        b?.bizType && { label: "Business Type", value: titleCase(b.bizType) },
+        b?.bizType && { label: "Business Type", value: bizTypeLabel(b.bizType) },
         b?.address && { label: "Legal Address", value: [b.address, b.city, b.state, b.zip].filter(Boolean).join(", ") },
         b?.dbaAddress && { label: "DBA Address", value: [b.dbaAddress, b.dbaCity, b.dbaState, b.dbaZip].filter(Boolean).join(", ") },
         b?.phone && { label: "Phone", value: b.phone },

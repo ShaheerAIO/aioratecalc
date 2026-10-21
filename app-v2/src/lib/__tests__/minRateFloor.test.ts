@@ -42,23 +42,23 @@ const preview = (
 
 describe("the wholesale-plus-minimum card-present rate floor", () => {
   it("computes the minimum as wholesale-at-this-ticket plus the admin margin", () => {
-    // $40 ticket -> 2.08% wholesale; +25bps admin minimum -> 2.33%.
-    const p = preview(at(100_000), cp(0.0249), 25);
-    expect(p.minCardPresentRate).toBeCloseTo(0.0233, 6);
-    expect(p.belowMinRateFloor).toBe(false); // 2.49% clears 2.33%
+    // $40 ticket -> the $50 column ($40 – $49.99), 2.43% wholesale (Oct 2026 Table B); +25bps admin minimum -> 2.68%.
+    const p = preview(at(100_000), cp(0.0275), 25);
+    expect(p.minCardPresentRate).toBeCloseTo(0.0268, 6);
+    expect(p.belowMinRateFloor).toBe(false); // 2.75% clears 2.68%
     expect(minRateFloorBlockers(p)).toEqual([]);
   });
 
   it("refuses a rate below the floor and names the minimum rate", () => {
-    const p = preview(at(100_000), cp(0.02), 25); // 2.00% < 2.33%
+    const p = preview(at(100_000), cp(0.02), 25); // 2.00% < 2.68%
     expect(p.belowMinRateFloor).toBe(true);
     const [msg] = minRateFloorBlockers(p);
-    expect(msg).toContain("2.33%");
+    expect(msg).toContain("2.68%");
     expect(msg).toMatch(/Raise the rate/);
   });
 
   it("clears exactly at the floor, never above it by construction", () => {
-    const p = preview(at(100_000), cp(0.0233), 25);
+    const p = preview(at(100_000), cp(0.0270), 25);
     expect(p.belowMinRateFloor).toBe(false);
   });
 
@@ -77,8 +77,8 @@ describe("the wholesale-plus-minimum card-present rate floor", () => {
 
   it("switches on the moment an admin sets a minimum", () => {
     const p = preview(at(100_000), cp(0.02), 0);
-    // 0bps minimum = wholesale itself (2.08%); 2.00% is below it.
-    expect(p.minCardPresentRate).toBeCloseTo(0.0208, 6);
+    // 0bps minimum = wholesale itself (2.43%); 2.00% is below it.
+    expect(p.minCardPresentRate).toBeCloseTo(0.0243, 6);
     expect(p.belowMinRateFloor).toBe(true);
   });
 

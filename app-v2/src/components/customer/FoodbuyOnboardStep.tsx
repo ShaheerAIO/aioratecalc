@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { markFoodbuyFormGeneratedAction } from "@/lib/actions/customer";
 import { buildFoodbuyFormHtml } from "@/lib/foodbuyForm";
 import type { MerchantApplication } from "@/types/merchant";
@@ -21,6 +21,23 @@ export default function FoodbuyOnboardStep({ app }: Props) {
   const [generating, setGenerating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const alreadyGenerated = !!app.foodbuyIds?.generatedAt;
+  const popupRef = useRef<Window | null>(null);
+
+  // The form tab posts the exported PDF back here; file it on the merchant's
+  // HubSpot Company. Best-effort and silent: the download already happened,
+  // and a filing failure is nothing the customer can act on.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin || e.source !== popupRef.current) return;
+      const data = e.data as { type?: string; blob?: unknown } | null;
+      if (data?.type !== "aio-foodbuy-pdf" || !(data.blob instanceof Blob)) return;
+      const body = new FormData();
+      body.append("file", data.blob, "foodbuy.pdf");
+      fetch(`/api/customer/applications/${encodeURIComponent(app.id)}/foodbuy`, { method: "POST", body }).catch(() => {});
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [app.id]);
 
   const handleGenerate = async () => {
     if (!app.business || !app.ownerContact) return;
@@ -30,7 +47,7 @@ export default function FoodbuyOnboardStep({ app }: Props) {
       const html = buildFoodbuyFormHtml(app.business, app.ownerContact);
       const blob = new Blob([html], { type: "text/html" });
       const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
+      popupRef.current = window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       await markFoodbuyFormGeneratedAction(app.id);
     } catch (e) {

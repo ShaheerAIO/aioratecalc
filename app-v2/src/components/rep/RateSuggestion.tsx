@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getSuggestedRatesAction, type RateSuggestion as Suggestion } from "@/lib/actions/rateMatrix";
 import type { QuoteRates } from "@/types/merchant";
 
@@ -42,6 +42,21 @@ export type RateSuggestionProps = {
   avgTicket: number;
   value: QuoteRates;
   onChange: (next: QuoteRates) => void;
+  /**
+   * A rep's ± adjustment to the card-present rate, in whole basis points,
+   * stacked on the card's figure (2026-10-21). The card still decides
+   * everything else; only the card-present rate moves, and the server's
+   * margin and $10 floors judge the result like any other rate.
+   */
+  adjustmentBps?: number;
+  onAdjustmentChange?: (bps: number) => void;
+  /**
+   * Reopening a SAVED quote: the first suggestion to arrive does not
+   * overwrite the stored card-present rate. The gap between what was saved
+   * and what the card says today becomes the adjustment, so the quote shows
+   * the rate it was saved with and the rep can see it as card ± N bps.
+   */
+  adoptSaved?: boolean;
 };
 
 const sameRates = (a: QuoteRates, b: QuoteRates) =>
@@ -52,9 +67,10 @@ const sameRates = (a: QuoteRates, b: QuoteRates) =>
   a.perTransactionFee === b.perTransactionFee;
 
 export default function RateSuggestion({
-  monthlyVolume, avgTicket, value, onChange,
+  monthlyVolume, avgTicket, value, onChange, adjustmentBps = 0, onAdjustmentChange, adoptSaved,
 }: RateSuggestionProps) {
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const adopted = useRef(!adoptSaved);
 
   useEffect(() => {
     if (!(monthlyVolume > 0) || !(avgTicket > 0)) { setSuggestion(null); return; }
@@ -72,13 +88,22 @@ export default function RateSuggestion({
 
   useEffect(() => {
     if (!suggestion) return;
-    if (sameRates(value, suggestion.rates)) return;
-    onChange(suggestion.rates);
+    const cardBps = Math.round(suggestion.rates.cardPresentRate * 10000);
+    let adj = adjustmentBps;
+    if (!adopted.current) {
+      adopted.current = true;
+      adj = Math.round(value.cardPresentRate * 10000) - cardBps;
+      onAdjustmentChange?.(adj);
+    }
+    const cp = (cardBps + adj) / 10000;
+    const target = { ...suggestion.rates, cardPresentRate: cp, amexCardPresentRate: cp };
+    if (sameRates(value, target)) return;
+    onChange(target);
     // `value` is read, not depended on: this fires when a SUGGESTION arrives
     // (a new volume/ticket basis, or the admin's rate card changing under a
     // reopened quote), not on every keystroke in a rate box.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [suggestion]);
+  }, [suggestion, adjustmentBps]);
 
   return null;
 }

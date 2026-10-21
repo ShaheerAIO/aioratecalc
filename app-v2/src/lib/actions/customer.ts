@@ -367,7 +367,9 @@ export async function markFoodbuyFormGeneratedAction(id: string): Promise<Mercha
   }
 
   return postgresStorage.updateApplicationAsCustomer(userId, id, {
-    foodbuyIds: { generatedAt: new Date().toISOString() },
+    // Spread, so reopening the form keeps the HubSpot filing record (and the
+    // duplicate guard that rides on it).
+    foodbuyIds: { ...app.foodbuyIds, generatedAt: new Date().toISOString() },
   });
 }
 

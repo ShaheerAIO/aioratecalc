@@ -248,13 +248,12 @@ export default function LeadQuoteView({
             <>
               <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
-                First, have a quick look at the details we hold for you — your business, your
-                address and who we should bill. They go on your final quote exactly as they read,
-                so it&apos;s worth thirty seconds now.
+                First, take a quick look at the details we hold for you — your business, your
+                address and who we should bill. It only takes a minute.
               </p>
               <div className={styles.acceptRow}>
                 <a href={`/lead/${token}/confirm`} className={styles.acceptBtn}>
-                  Review &amp; Confirm Details →
+                  Continue
                 </a>
               </div>
             </>
@@ -265,8 +264,8 @@ export default function LeadQuoteView({
             <>
               <h2 className={styles.panelTitle}>Ready to move forward?</h2>
               <p className={styles.panelText}>
-                Accept this quote and we&apos;ll create your account so you can finish onboarding
-                yourself — no need to wait on a rep.
+                We&apos;ll create your account so you can finish onboarding yourself — no need to
+                wait on a rep.
               </p>
               <div className={styles.acceptRow}>
                 <input
@@ -279,7 +278,7 @@ export default function LeadQuoteView({
                   disabled={!email || accepting}
                   className={styles.acceptBtn}
                 >
-                  {accepting ? "Accepting…" : "Accept & Create Account →"}
+                  {accepting ? "Continuing…" : "Continue"}
                 </button>
               </div>
               {error && <div className={styles.acceptError}>{error}</div>}
@@ -302,7 +301,7 @@ export default function LeadQuoteView({
               </p>
               <div className={styles.acceptRow}>
                 <button onClick={continueToBilling} disabled={going} className={styles.acceptBtn}>
-                  {going ? "Opening…" : "Continue to Billing →"}
+                  {going ? "Opening…" : "Continue"}
                 </button>
               </div>
               {goError && <div className={styles.acceptError}>{goError}</div>}

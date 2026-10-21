@@ -94,7 +94,13 @@ export function buildFoodbuyFormHtml(business: BusinessInfo, ownerContact: Owner
     + "image:{type:'jpeg',quality:0.98},"
     + "html2canvas:{scale:2,useCORS:true,logging:false,backgroundColor:'#ffffff'},"
     + "jsPDF:{unit:'mm',format:'letter',orientation:'portrait'}})"
-    + ".from(document.body).save().then(function(){wrap.style.visibility='visible';});}"
+    + ".from(document.body).toPdf().get('pdf').then(function(pdf){"
+    + "pdf.save('" + fileName + "');"
+    // Hand the same PDF back to the tab that opened this one, which files it on
+    // the customer's HubSpot Company. Same-origin only (a blob: page shares its
+    // opener's origin) and best-effort: the download above already happened.
+    + "try{if(window.opener)window.opener.postMessage({type:'aio-foodbuy-pdf',blob:pdf.output('blob')},window.location.origin);}catch(e){}"
+    + "wrap.style.visibility='visible';});}"
     + "<\/" + "scr" + "ipt>";
 
   const row = (label: string, value: string) =>

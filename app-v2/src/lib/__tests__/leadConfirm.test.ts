@@ -329,3 +329,27 @@ describe("every error the merchant can be shown has a box to fix it in", () => {
     expect(unreachableErrorPaths()).toEqual([]);
   });
 });
+
+describe("entity type, state and ZIP are required on the confirmation", () => {
+  const input = { business: BUSINESS, ownerContact: OWNER, billingContact: null, processing: PROCESSING };
+  const without = (k: keyof BusinessInfo) => ({ ...input, business: { ...BUSINESS, [k]: "" } });
+
+  it.each([
+    ["bizType", "business.bizType"],
+    ["state", "business.state"],
+    ["zip", "business.zip"],
+  ] as const)("refuses a blank %s", (k, path) => {
+    expect(confirmationErrors(without(k))[path]).toBeTruthy();
+    expect(missingConfirmationFields(without(k)).length).toBeGreaterThan(0);
+  });
+
+  it("requires state and ZIP on a DBA address once its street is given", () => {
+    const errs = confirmationErrors({ ...input, business: { ...BUSINESS, dbaAddress: "5 Main St", dbaCity: "LA" } });
+    expect(errs["business.dbaState"]).toBeTruthy();
+    expect(errs["business.dbaZip"]).toBeTruthy();
+  });
+
+  it("keeps the entity-type rule out of validateOnboardingFields (provisioning gate)", () => {
+    expect(validateOnboardingFields(without("bizType"))["business.bizType"]).toBeUndefined();
+  });
+});

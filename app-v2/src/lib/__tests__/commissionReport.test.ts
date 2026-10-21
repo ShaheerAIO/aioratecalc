@@ -127,11 +127,11 @@ describe("commissionRowForApplication", () => {
     const row = commissionRowForApplication(app({
       quoteConfig: { monthlyVolume: 100_000, avgTicket: 30 },
     }), null)!;
-    // cardPresentRate 0.0249, perTransactionFee 0.15 (DEFAULT_QUOTE_RATES), $30 ticket -> $30 column (223 bps wholesale)
+    // cardPresentRate 0.0249, perTransactionFee 0.15 (DEFAULT_QUOTE_RATES), $30 ticket -> $40 column (245 bps wholesale)
     // revenue = 0.0249*100000 + (100000/30)*0.15 = 2490 + 500 = 2990
     expect(row.totalRevenue).toBeCloseTo(2990, 0);
     expect(row.totalTakeRate).toBeCloseTo(0.0299, 4);
-    expect(row.wholesaleMargin).toBeCloseTo(0.0299 - 0.0223, 4);
+    expect(row.wholesaleMargin).toBeCloseTo(0.0299 - 0.0245, 4);
     // Separate field from the floor-enforcement-basis margin — never overwrites it.
     expect(row.wholesaleMargin).not.toBe(row.netMarginRate);
   });

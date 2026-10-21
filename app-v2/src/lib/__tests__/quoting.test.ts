@@ -155,6 +155,22 @@ describe("picker exclusions", () => {
     expect(isPickable(find("Menu Board Computer"))).toBe(true);
   });
 
+  it("never offers the individual network components; the WiFi package line stands for them", () => {
+    const ids: Array<[string, string]> = [
+      ["338693809894", "Unifi Router"], ["338693090009", "Unifi 8 Port Switch"],
+      ["338616220368", "Unifi Access Point"], ["338615500489", "Unifi U-LTE Backup Pro"],
+      ["338690930367", "Pronto Router + LTE Backup"], ["338690209526", "Pronto 8 Port Switch"],
+      ["338691650250", "AIO Wifi Network Package - Pronto"],
+    ];
+    for (const [id, name] of ids) {
+      const prod = p(id, name, 100, "one_time", "inventory");
+      expect(isPickable(prod), name).toBe(false);
+      expect(isAllowedForQuoteType(prod, "all_in_one"), name).toBe(false);
+      // A saved quote that carried one must not hand it back as a pick.
+      expect(picksFromQuoteLines([toQuoteLine(prod, 1)], "all_in_one"), name).toEqual([]);
+    }
+  });
+
   it("names the exclusions rather than inlining them", () => {
     expect([...PICKER_EXCLUDED_PRODUCT_NAMES]).toContain("CAMP Invoice");
   });

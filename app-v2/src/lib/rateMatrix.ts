@@ -34,25 +34,26 @@ export const RATE_MATRIX_VOLUME_BANDS = [
 ] as const;
 
 /**
- * The ticket columns, as the guide prints them. These are POINTS, not ranges
- * — see `matrixTicketIndex` for how a real $22 ticket lands on one.
+ * The ticket columns, as the guide prints them. Each value is its bucket's
+ * MAXIMUM plus one cent — see `matrixTicketIndex` for how a real $22 ticket
+ * lands on one. The last column ($100) is open-ended: it takes everything $75
+ * and up.
  */
 export const RATE_MATRIX_TICKETS = [10, 15, 20, 25, 30, 40, 50, 75, 100] as const;
 
 /**
  * The bucket each column ACTUALLY covers, derived from `RATE_MATRIX_TICKETS`
  * rather than a second hardcoded list (2026-10-13, "make matrix bucketing
- * explicit"). The admin page used to print bare point headers ("$20") with
- * only a prose caption explaining that a ticket reads the column it's at or
- * above — which means the $20 column silently covers $20–$24.99, and nothing
- * on the header itself said so. A column's upper bound is one cent under the
- * NEXT point (`matrixTicketIndex` reads "at or above", so $24.99 is the last
- * ticket still in the $20 column); the last column is open-ended, because
- * there is no point above $100 to stop at.
+ * explicit"). A column's value is its bucket's max + $0.01, so its range runs
+ * from the previous column's value (0 for the first) to one cent under its own
+ * ($0 – $9.99, $10 – $14.99 … $50 – $74.99). The last column is open-ended:
+ * "$75+", because it takes every ticket from the second-to-last value upward.
  */
 export const TICKET_COLUMN_LABELS: string[] = RATE_MATRIX_TICKETS.map((t, i) => {
-  const next = RATE_MATRIX_TICKETS[i + 1];
-  return next === undefined ? `$${t}+` : `$${t} – $${(next - 0.01).toFixed(2)}`;
+  const lower = i === 0 ? 0 : RATE_MATRIX_TICKETS[i - 1];
+  return i === RATE_MATRIX_TICKETS.length - 1
+    ? `$${lower}+`
+    : `$${lower} – $${(t - 0.01).toFixed(2)}`;
 });
 
 export const VOLUME_BAND_LABELS = [
@@ -61,7 +62,7 @@ export const VOLUME_BAND_LABELS = [
 ] as const;
 
 /**
- * §10.3, verbatim, in basis points. Row = volume band, column = ticket.
+ * §10.3 (October 2026 revision), verbatim, in basis points. Row = volume band, column = ticket.
  *
  * The guide's own formula is
  *   CP Rate = 1.60% + Desired Margin (by volume) + ($0.04 ÷ average ticket)
@@ -72,15 +73,15 @@ export const VOLUME_BAND_LABELS = [
  * not fighting an arithmetic model.
  */
 export const DEFAULT_CP_RATE_BPS: number[][] = [
-  [333, 320, 313, 309, 306, 303, 301, 298, 297],
-  [285, 272, 265, 261, 258, 255, 253, 250, 249],
-  [253, 240, 233, 229, 226, 223, 221, 218, 217],
-  [238, 225, 218, 214, 211, 208, 206, 203, 202],
-  [230, 217, 210, 206, 203, 200, 198, 195, 194],
-  [224, 211, 204, 200, 197, 194, 192, 189, 188],
-  [221, 208, 201, 197, 194, 191, 189, 186, 185],
-  [218, 205, 198, 194, 191, 188, 186, 183, 182],
-  [217, 204, 197, 193, 190, 187, 185, 182, 181],
+  [300, 288, 280, 288, 296, 308, 313, 319, 321],
+  [285, 273, 265, 273, 281, 293, 298, 304, 306],
+  [253, 241, 233, 241, 249, 261, 266, 272, 274],
+  [238, 226, 218, 226, 234, 246, 251, 257, 259],
+  [230, 218, 210, 218, 226, 238, 243, 249, 251],
+  [224, 212, 204, 212, 220, 232, 237, 243, 245],
+  [221, 209, 201, 209, 217, 229, 234, 240, 242],
+  [218, 206, 198, 206, 214, 226, 231, 237, 239],
+  [217, 205, 197, 205, 213, 225, 230, 236, 238],
 ];
 
 /**
@@ -123,25 +124,25 @@ export function matrixVolumeIndex(monthlyVolume: number): number {
 /**
  * The column an average ticket reads off.
  *
- * The guide's columns are points ($10, $15, $20 …) but a real ticket is
- * $22.40, so each column is read as the band STARTING at it: $22.40 reads the
- * $20 column. That is the LARGER of the two neighbouring rates (the rate falls
- * as the ticket rises), which is the same direction §12 rounds — "every rate
- * is rounded up, never down, so margin is preserved or slightly padded versus
- * the raw calculated rate".
+ * Each column's value is its bucket's max + $0.01 ($10 = $0–$9.99, $15 =
+ * $10–$14.99 … $75 = $50–$74.99), so a ticket reads the FIRST column whose
+ * value is strictly greater than it: $22.40 reads the $25 column, exactly
+ * $10.00 reads the $15 column, $9.99 the $10 column. The last column ($100)
+ * is open-ended — $75 and up, $500 included.
+ *
+ * Why that is safe: the guide computes each cell with the column value as the
+ * ticket, so every real ticket in the bucket is at or under that value and the
+ * per-transaction fee recovers at least what the cell assumed.
  *
  * Interpolating between columns would be more precise and is deliberately not
  * done: the table an admin edits is then no longer the rate card, and a cell
- * they typed would never be the rate anyone is quoted. A ticket under $10
- * reads the $10 column — the cheapest ticket the card prices, and the dearest
- * rate on it.
+ * they typed would never be the rate anyone is quoted. A non-positive or NaN
+ * ticket reads the first column, as it always has.
  */
 export function matrixTicketIndex(avgTicket: number): number {
-  let idx = 0;
-  for (let i = 0; i < MATRIX_COLS; i++) {
-    if (avgTicket >= RATE_MATRIX_TICKETS[i]) idx = i;
-  }
-  return idx;
+  if (!(avgTicket > 0)) return 0;
+  const i = RATE_MATRIX_TICKETS.findIndex(t => avgTicket < t);
+  return i === -1 ? MATRIX_COLS - 1 : i;
 }
 
 /**

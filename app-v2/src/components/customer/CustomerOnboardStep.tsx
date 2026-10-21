@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { saveMyApplicationOnboardingAction, updateMyApplicationDetailsAction } from "@/lib/actions/customer";
 import { agreementToSubmit, customerOnboardInitial, flattenSections, recordedConsent } from "@/lib/prefillMerge";
 import { validateOnboardingSubmission, type OnboardingFieldErrors } from "@/lib/onboardingValidation";
+import { bizTypeLabel } from "@/types/merchant";
 import type { MerchantApplication, BusinessInfo, OwnerContact, ProcessingInfo, AgreementInfo } from "@/types/merchant";
 import styles from "./CustomerOnboardStep.module.css";
 
@@ -245,7 +246,7 @@ export default function CustomerOnboardStep({ app }: Props) {
           {fieldLabel("Business Type", "business.bizType", biz.bizType || "llc")}
           <select value={biz.bizType || "llc"} onChange={setBizF("bizType") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={styles.input}>
             {(["llc", "corp", "s-corp", "sole-prop", "partnership", "non-profit"] as const).map(t => (
-              <option key={t} value={t}>{t.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
+              <option key={t} value={t}>{bizTypeLabel(t)}</option>
             ))}
           </select>
         </div>

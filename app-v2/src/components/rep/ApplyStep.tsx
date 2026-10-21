@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { bizTypeLabel } from "@/types/merchant";
 import type { MerchantApplication, BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
 import styles from "./ApplyStep.module.css";
 
@@ -111,7 +112,7 @@ export default function ApplyStep({ app, onSaved, onBack, onSkip }: Props) {
               <label className={styles.label}>Business Type</label>
               <select value={biz.bizType || "llc"} onChange={setBizF("bizType") as (e: React.ChangeEvent<HTMLSelectElement>) => void} className={styles.input}>
                 {(["llc", "corp", "s-corp", "sole-prop", "partnership", "non-profit"] as const).map(t => (
-                  <option key={t} value={t}>{t.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
+                  <option key={t} value={t}>{bizTypeLabel(t)}</option>
                 ))}
               </select>
             </div>

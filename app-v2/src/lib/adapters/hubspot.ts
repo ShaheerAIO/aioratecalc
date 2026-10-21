@@ -2575,3 +2575,69 @@ export async function listQuotesModifiedSince(sinceIso: string): Promise<QuoteSn
 
   return snapshots;
 }
+
+// ── Company file attachments (Foodbuy form) ─────────────────────────────────
+// A file shows on a Company record's attachments only when a NOTE carries it in
+// `hs_attachment_ids` and is associated to the company — a bare Files API upload
+// is just an orphan in the file manager. So filing a document is TWO calls, and
+// they are exported separately so a caller can persist the file id before the
+// note is attempted (a failed note then retries WITHOUT re-uploading).
+//
+// Uses the general CRM token. NEEDS the `files` scope (upload) and
+// `crm.objects.notes.write` on that private app; as of 2026-10-21 neither
+// private app held `files` (files/v3 answered 403 on a read).
+// Note → Company default association type id is 190 (read from
+// /crm/v4/associations/notes/companies/labels, 2026-10-21).
+const NOTE_TO_COMPANY_ASSOCIATION_TYPE_ID = 190;
+const COMPANY_FILES_FOLDER = "/EasyOB/Foodbuy";
+
+export async function uploadHubspotFile(input: {
+  fileName: string;
+  bytes: Uint8Array;
+  contentType: string;
+  folderPath?: string;
+}): Promise<string> {
+  const form = new FormData();
+  form.append("file", new Blob([input.bytes as BlobPart], { type: input.contentType }), input.fileName);
+  form.append("fileName", input.fileName);
+  form.append("folderPath", input.folderPath ?? COMPANY_FILES_FOLDER);
+  form.append("options", JSON.stringify({ access: "PRIVATE", overwrite: false, duplicateValidationStrategy: "NONE", duplicateValidationScope: "EXACT_FOLDER" }));
+
+  // Not fetchWithRetry: a multipart body is not safely replayable. And no
+  // Content-Type header: fetch must set the multipart boundary itself.
+  const res = await fetch(`${BASE}/files/v3/files`, {
+    method: "POST",
+    headers: { Authorization: headers().Authorization },
+    body: form,
+  });
+  if (!res.ok) throw hubspotErr("HubSpot file upload failed", res.status, await res.text());
+  const json = (await res.json()) as { id?: string };
+  if (!json.id) throw new Error("HubSpot file upload returned no id");
+  return String(json.id);
+}
+
+export async function attachFileToCompanyNote(input: {
+  companyId: string;
+  fileId: string;
+  body: string;
+}): Promise<string> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/notes`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      properties: {
+        hs_timestamp: new Date().toISOString(),
+        hs_note_body: input.body,
+        hs_attachment_ids: input.fileId,
+      },
+      associations: [{
+        to: { id: input.companyId },
+        types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: NOTE_TO_COMPANY_ASSOCIATION_TYPE_ID }],
+      }],
+    }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot attachment note failed (company ${input.companyId})`, res.status, await res.text());
+  const json = (await res.json()) as { id?: string };
+  if (!json.id) throw new Error("HubSpot note create returned no id");
+  return String(json.id);
+}

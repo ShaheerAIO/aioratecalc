@@ -29,7 +29,7 @@ describe("paymentProcessingArr", () => {
     expect(arr).not.toBeNull();
 
     // 2.49% CP rate + $0.15/txn on a $30 avg ticket (100000/30 txns) against
-    // the $30 wholesale column (2.23%) — whatever that comes to, the identity
+    // the $30 wholesale column (2.46%) — whatever that comes to, the identity
     // that matters is that ARR is twelve times one month of it.
     const monthly = arr! / 12;
     expect(monthly).toBeGreaterThan(0);
@@ -144,9 +144,9 @@ describe("paymentProcessingArrBreakdown — the implausible-rate guard", () => {
   });
 
   it("reports both halves of the margin: take rate and the wholesale % the ticket read", () => {
-    // $30 avg ticket reads the $30 wholesale column exactly: 2.23%.
+    // $30 avg ticket reads the $40 wholesale column ($30 – $39.99): 2.45%.
     const b = paymentProcessingArrBreakdown(app());
-    expect(b.wholesalePct).toBeCloseTo(0.0223, 4);
+    expect(b.wholesalePct).toBeCloseTo(0.0245, 4);
     expect(b.takeRate).not.toBeNull();
     expect(b.commissionMargin).toBeCloseTo(b.takeRate! - b.wholesalePct!, 10);
   });

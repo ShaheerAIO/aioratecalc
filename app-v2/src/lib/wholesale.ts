@@ -30,7 +30,7 @@
 // `RATE_MATRIX_TICKETS` in rateMatrix.ts (§10.3's rate card) — $10/$15/$20/
 // $25/$30/$40/$50/$75/$100 — so this is a sibling of that module rather than
 // a parallel reimplementation. `matrixTicketIndex` (how a real $22.40 ticket
-// reads DOWN to the $20 column, never interpolated) is reused rather than
+// reads the $25 column, i.e. the first column strictly above it, never interpolated) is reused rather than
 // duplicated, for the same reason that file gives: an admin editing a cell
 // here would otherwise not be editing the table anyone reads from.
 //
@@ -43,18 +43,18 @@ import { matrixTicketIndex, RATE_MATRIX_TICKETS } from "@/lib/rateMatrix";
 /**
  * Wholesale % by average ticket, in bps, row-aligned with
  * `RATE_MATRIX_TICKETS` ($10, $15, $20, $25, $30, $40, $50, $75, $100).
- * Verbatim from the product owner's 10/13 notes.
+ * Pricing guide Oct 2026 §10.2 Table B (supersedes the 10/13 notes table).
  */
 export const WHOLESALE_PCT_BPS: readonly number[] = [
   350, // $10
-  287, // $15
+  288, // $15
   255, // $20
-  236, // $25
-  223, // $30
-  208, // $40
-  198, // $50
-  185, // $75
-  179, // $100
+  248, // $25
+  246, // $30
+  245, // $40
+  243, // $50
+  239, // $75
+  236, // $100
 ];
 
 if (WHOLESALE_PCT_BPS.length !== RATE_MATRIX_TICKETS.length) {
@@ -65,11 +65,10 @@ if (WHOLESALE_PCT_BPS.length !== RATE_MATRIX_TICKETS.length) {
 
 /**
  * The wholesale % for a real average ticket, as a FRACTION (0.0223), not bps —
- * same convention as `lookupCardPresentRate` in rateMatrix.ts. Reads DOWN to
- * the column at or below the ticket (matrixTicketIndex), so a $22.40 ticket
- * reads the $20 column and a ticket under $10 reads the $10 column — the
- * cheapest ticket the table prices, same rule rateMatrix.ts's own comment
- * gives for the identical shape of problem.
+ * same convention as `lookupCardPresentRate` in rateMatrix.ts. Reads the first
+ * column strictly above the ticket (matrixTicketIndex), so a $22.40 ticket
+ * reads the $25 column, a ticket under $10 reads the $10 column, and $75 and
+ * up reads the open-ended $100 column — same rule as rateMatrix.ts.
  */
 export function wholesalePctFor(avgTicket: number): number {
   return WHOLESALE_PCT_BPS[matrixTicketIndex(avgTicket)] / 10000;

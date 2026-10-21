@@ -19,8 +19,8 @@ import { commissionFromTotalArr, sumArrOrNull, type CommissionFromArr } from "@/
 import { fmt$ } from "@/lib/utils";
 
 export const MARGIN_REQS = [
-  { maxVol: 25000,    minMargin: 0.0067, desiredMargin: 0.0133,   maxMargin: 0.0200, desiredArr: 2000 },
-  { maxVol: 50000,    minMargin: 0.0022, desiredMargin: 0.004467, maxMargin: 0.0067, desiredArr: 2000 }, // maxMargin filled per max=desired×1.5 (Steve left it blank)
+  { maxVol: 25000,    minMargin: 0.0085, desiredMargin: 0.0100,   maxMargin: 0.0200, desiredArr: 1500 }, // Oct 2026 guide §7
+  { maxVol: 50000,    minMargin: 0.0065, desiredMargin: 0.0085,   maxMargin: 0.0100, desiredArr: 3825 }, // Oct 2026 guide §7
   { maxVol: 75000,    minMargin: 0.0027, desiredMargin: 0.0053,   maxMargin: 0.0080, desiredArr: 4000 },
   { maxVol: 100000,   minMargin: 0.0019, desiredMargin: 0.0038,   maxMargin: 0.0057, desiredArr: 4000 },
   { maxVol: 125000,   minMargin: 0.0015, desiredMargin: 0.0030,   maxMargin: 0.0044, desiredArr: 4000 },

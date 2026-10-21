@@ -100,4 +100,22 @@ describe("RateSuggestion", () => {
     await new Promise(r => setTimeout(r, 300));
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("stacks a ± bps adjustment on the card's card-present rate", async () => {
+    const onChange = vi.fn();
+    render(<RateSuggestion monthlyVolume={110_000} avgTicket={22} value={ALREADY_CHOSEN} onChange={onChange} adjustmentBps={-12} />);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange.mock.calls[0][0].cardPresentRate).toBeCloseTo(0.0205, 10);
+    expect(onChange.mock.calls[0][0].cardNotPresentRate).toBe(SUGGESTED.cardNotPresentRate);
+  });
+
+  it("adoptSaved keeps a reopened quote's saved rate and reports the gap as the adjustment", async () => {
+    const onChange = vi.fn();
+    const onAdj = vi.fn();
+    // Saved at 2.29% where the card says 2.17% -> +12 bps.
+    const saved = { ...SUGGESTED, cardPresentRate: 0.0229, amexCardPresentRate: 0.0229 };
+    render(<RateSuggestion monthlyVolume={110_000} avgTicket={22} value={saved} onChange={onChange} onAdjustmentChange={onAdj} adoptSaved />);
+    await waitFor(() => expect(onAdj).toHaveBeenCalledWith(12));
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

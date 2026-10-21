@@ -81,8 +81,8 @@ export default function RateMatrixSettingsPage() {
           <div className={styles.scroller}>
             <table className={styles.matrix}>
               <caption className={styles.caption}>
-                Card-present rate · a ticket reads the column it is at or above, so a $22 ticket
-                reads the $20 column
+                Card-present rate · each column covers the range in its header, so a $22
+                ticket reads the $25 column ($20 – $24.99)
               </caption>
               <thead>
                 <tr>

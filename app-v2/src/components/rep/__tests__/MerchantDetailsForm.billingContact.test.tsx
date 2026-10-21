@@ -17,7 +17,7 @@
 // test that it copies on check, plus the dropdown/independent-edit behavior.
 //
 // A SEPARATE file from MerchantDetailsForm.test.tsx (which covers the
-// "Same as operating address" address-sync behavior) rather than appended to
+// "Same as DBA address" address-sync behavior) rather than appended to
 // it, so this doesn't collide with concurrent edits to that file for an
 // unrelated 10/13 item.
 import { describe, it, expect, afterEach } from "vitest";

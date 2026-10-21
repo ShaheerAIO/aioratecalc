@@ -3,7 +3,7 @@
 // The Billing section's "Same as owner contact" control, reversed from a
 // one-time copy BUTTON to a CHECKBOX (2026-10-13, product owner — see the
 // comment on `sameAsOwner` in MerchantDetailsForm.tsx, mirroring the earlier
-// "Same as operating address" reversal covered by MerchantDetailsForm.test.tsx).
+// "Same as DBA address" reversal covered by MerchantDetailsForm.test.tsx).
 // Pinned down with real renders: the initial state is computed from whatever
 // the form was handed (never defaults a blank form to checked), checking
 // copies and disables, further owner edits keep mirroring while checked, and

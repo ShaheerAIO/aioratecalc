@@ -5,6 +5,7 @@ import { confirmLeadDetailsAction } from "@/lib/actions/leadConfirm";
 import { confirmationErrors, missingConfirmationFields, FIELD_LABELS } from "@/lib/leadConfirm";
 import { fmt$0 } from "@/lib/utils";
 import type { OnboardingFieldErrors } from "@/lib/onboardingValidation";
+import { bizTypeLabel } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
 import styles from "./CustomerOnboardStep.module.css";
 import confirmStyles from "./ConfirmDetailsForm.module.css";
@@ -60,7 +61,6 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
   // disabled state in the meantime.
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [serverErrors, setServerErrors] = useState<OnboardingFieldErrors>({});
-  const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -102,7 +102,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
     ([path]) => path === "business.bizType" || !hasVisibleBox(path)
   );
   const bannerText = unseenServerErrors.length > 0 && unseenServerErrors.length === Object.keys(serverErrors).length
-    ? "Please fix the following, then confirm:"
+    ? "Please fix the following, then continue:"
     : err;
 
   const b = <T extends Record<string, unknown>>(setter: (fn: (prev: T) => T) => void) =>
@@ -230,8 +230,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
     if (Object.keys(liveErrors).length) {
       setTouched(Object.fromEntries(Object.keys(liveErrors).map(k => [k, true])));
       setServerErrors({});
-      setConfirming(false);
-      setErr("Please correct the highlighted fields above, then confirm.");
+      setErr("Please correct the highlighted fields above, then continue.");
       return;
     }
     setSaving(true);
@@ -239,10 +238,9 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
     try {
       const result = await confirmLeadDetailsAction(token, buildValues());
       if (!result.ok) {
-        setConfirming(false);
-        if ("errors" in result) {
+          if ("errors" in result) {
           setServerErrors(result.errors);
-          setErr("Please correct the highlighted fields above, then confirm.");
+          setErr("Please correct the highlighted fields above, then continue.");
         } else {
           setErr(result.formError);
         }
@@ -267,13 +265,11 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         return;
       }
 
-      setConfirming(false);
       setSaving(false);
       setErr(
         "Your details are saved, but we couldn't open your quote just now. Please try again in a moment — your AIO representative has been notified."
       );
     } catch {
-      setConfirming(false);
       setSaving(false);
       setErr("Something went wrong saving your details. Please try again.");
     }
@@ -301,8 +297,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         {businessName ? `${businessName}, please check your details` : "Please check your details"}
       </h1>
       <p className={styles.pageSubtitle}>
-        This is what we have on file. Correct anything that&apos;s wrong — it goes on your quote and
-        your account exactly as it reads here. SSN and bank details are never collected on this page;
+        This is what we have on file. Please correct anything that&apos;s wrong. SSN and bank details are never collected on this page;
         your payment processor asks for those separately on their own secure site.
       </p>
 
@@ -322,7 +317,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
             >
               <option value="">Select…</option>
               {(["llc", "corp", "s-corp", "sole-prop", "partnership", "non-profit"] as const).map(t => (
-                <option key={t} value={t}>{t.replace("-", " ").replace(/\b\w/g, c => c.toUpperCase())}</option>
+                <option key={t} value={t}>{bizTypeLabel(t)}</option>
               ))}
             </select>
           </div>
@@ -355,7 +350,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
             checked={separateOperating}
             onChange={e => setSeparateOperating(e.target.checked)}
           />
-          <span className={styles.checkboxText}>Our DBA address is different</span>
+          <span className={styles.checkboxText}>Our DBA address (where we operate) is different from the legal address</span>
         </label>
 
         {separateOperating && (
@@ -429,8 +424,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
             </div>
             <p className={`${styles.hint} ${styles.row}`}>
               Your rates were worked out from these figures, so they can&apos;t be changed here. If
-              they don&apos;t look right, contact your AIO representative before confirming — they can
-              still update your quote.
+              they don&apos;t look right, let your AIO representative know before you continue.
             </p>
           </>
         )}
@@ -475,30 +469,9 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         </div>
       )}
 
-      {/* The lock, stated before it happens. Phrased around what the MERCHANT
-          loses — the chance to have any of this changed — rather than around
-          our inability to call an endpoint, which is not their problem. */}
-      {confirming ? (
-        <div className={confirmStyles.confirmPanel}>
-          <h2 className={confirmStyles.confirmTitle}>Ready to lock this in?</h2>
-          <p className={confirmStyles.confirmBody}>
-            Confirming creates your final quote from the details above. After this, your details and
-            your pricing can&apos;t be changed on this quote — we&apos;d have to start a new one.
-          </p>
-          <p className={confirmStyles.confirmBody}>
-            Need something different? Contact your AIO representative first — until you confirm, they
-            can still change anything on your quote.
-          </p>
-          <div className={styles.actions}>
-            <button onClick={handleConfirm} disabled={saving} className={styles.btnPrimary}>
-              {saving ? "Creating your quote…" : "Yes, confirm and continue"}
-            </button>
-            <button onClick={() => setConfirming(false)} disabled={saving} className={styles.btnSecondary}>
-              Go back
-            </button>
-          </div>
-        </div>
-      ) : (
+      {/* A plain Continue. The details are saved and the quote is built in
+          one go; the overlay above carries the "this takes a while" notice. */}
+      {(
         <>
           {/* EVERYTHING ON THIS FORM IS REQUIRED (2026-10-15, product owner),
               so the button is dead until it is. A dead button with no reason
@@ -519,11 +492,11 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
           )}
           <div className={styles.actions}>
             <button
-              onClick={() => setConfirming(true)}
+              onClick={handleConfirm}
               disabled={saving || !complete}
               className={styles.btnPrimary}
             >
-              Confirm &amp; Continue →
+              {saving ? "Creating your quote…" : "Continue"}
             </button>
           </div>
         </>

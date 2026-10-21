@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// The "Same as operating address" control, reversed back from a one-time copy
+// The "Same as DBA address" control, reversed back from a one-time copy
 // BUTTON to a CHECKBOX (2026-10-13, product owner — see the comment on
 // `sameAsOperating` in MerchantDetailsForm.tsx). Three things worth pinning
 // down with a real render rather than just reading the source: the initial
@@ -46,9 +46,9 @@ function Harness({ initialBusiness }: { initialBusiness: BusinessInfo }) {
   );
 }
 
-const checkbox = () => screen.getByRole("checkbox", { name: "Same as operating address" }) as HTMLInputElement;
+const checkbox = () => screen.getByRole("checkbox", { name: "Same as DBA address" }) as HTMLInputElement;
 
-describe("MerchantDetailsForm — Same as operating address", () => {
+describe("MerchantDetailsForm — Same as DBA address", () => {
   afterEach(cleanup);
 
   it("starts UNCHECKED on a blank form — a blank legal address is never asserted as matching", () => {
@@ -101,7 +101,7 @@ describe("MerchantDetailsForm — Same as operating address", () => {
     }} />);
     expect(checkbox().checked).toBe(true); // already in sync on mount
 
-    const operatingStreet = screen.getByLabelText("Operating street address") as HTMLInputElement;
+    const operatingStreet = screen.getByLabelText("DBA street address") as HTMLInputElement;
     fireEvent.change(operatingStreet, { target: { value: "2 Elm St" } });
 
     expect(screen.getByText("2 Elm St, Springfield, CA 90210")).toBeTruthy();
@@ -123,7 +123,7 @@ describe("MerchantDetailsForm — Same as operating address", () => {
     expect(legalStreetInput.value).toBe("1 Main St"); // held, not cleared
 
     // Now editing the operating address must NOT reach the legal field.
-    const operatingStreet = screen.getByLabelText("Operating street address") as HTMLInputElement;
+    const operatingStreet = screen.getByLabelText("DBA street address") as HTMLInputElement;
     fireEvent.change(operatingStreet, { target: { value: "9 Pine Rd" } });
     expect((screen.getByPlaceholderText("The customer fills this in") as HTMLInputElement).value).toBe("1 Main St");
 

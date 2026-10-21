@@ -286,10 +286,10 @@ export default function MerchantDetailsForm({
           the HubSpot Company IS the restaurant. Shown FIRST, and the legal
           address below it is the one that comes back blank, which is the
           right way round (product owner, 2026-10-12). */}
-      <section className={styles.group} aria-label="Operating">
-        <h3 className={styles.groupLabel} aria-hidden="true">Operating</h3>
+      <section className={styles.group} aria-label="DBA address">
+        <h3 className={styles.groupLabel} aria-hidden="true">DBA address</h3>
         <div className={styles.grid}>
-          {field("business.dbaAddress", "Operating street address", 4, business.dbaAddress ?? "", v => setOperatingAddress({ dbaAddress: v }))}
+          {field("business.dbaAddress", "DBA street address", 4, business.dbaAddress ?? "", v => setOperatingAddress({ dbaAddress: v }))}
           {field("business.dbaCity", "City", 3, business.dbaCity ?? "", v => setOperatingAddress({ dbaCity: v }))}
           {field("business.dbaState", "State", 2, business.dbaState ?? "", v => setOperatingAddress({ dbaState: v }), { placeholder: "CA" })}
           {field("business.dbaZip", "ZIP", 3, business.dbaZip ?? "", v => setOperatingAddress({ dbaZip: v }), { inputMode: "numeric", placeholder: "90210" })}
@@ -332,14 +332,14 @@ export default function MerchantDetailsForm({
               checked={sameAsOperating}
               onChange={e => toggleSameAsOperating(e.target.checked)}
             />
-            Same as operating address
+            Same as DBA address
           </label>
           <span className={styles.tip}>
             <button type="button" className={styles.tipButton} aria-describedby="operating-address-tip" aria-label="What's the difference?">
               i
             </button>
             <span id="operating-address-tip" role="tooltip" className={styles.tipText}>
-              The operating address is where the business actually trades — the restaurant
+              The DBA address (also called the operating address) is where the business actually trades — the restaurant
               itself, and what HubSpot holds. The legal address is where it is registered
               with the state. They often differ when the owner registered at home or
               through an accountant — check this box only when you know they&apos;re the

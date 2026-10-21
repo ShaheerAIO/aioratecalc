@@ -38,26 +38,26 @@ const preview = (analysis: StatementAnalysis, rates: QuoteRates = DEFAULT_QUOTE_
 
 describe("the $10 monthly processing-revenue floor", () => {
   it("reports both horizons off one computation, so they can't disagree", () => {
-    // $100k at 2.49% + $0.15 on a $40 ticket: 2.865% take rate, 2.08%
-    // wholesale, 0.785% margin -> $785 a month.
+    // $100k at 2.49% + $0.15 on a $40 ticket: 2.865% take rate, 2.43%
+    // wholesale (the $50 column, $40 – $49.99; Oct 2026 Table B), 0.435% margin -> $435 a month.
     const p = preview(at(100_000));
-    expect(p.monthlyProcessingRevenue).toBeCloseTo(785, 6);
-    expect(p.processingArr).toBe(9_420);
+    expect(p.monthlyProcessingRevenue).toBeCloseTo(435, 6);
+    expect(p.processingArr).toBe(5_220);
     expect(p.belowMonthlyRevenueFloor).toBe(false);
     expect(monthlyRevenueFloorBlockers(p)).toEqual([]);
   });
 
   it("refuses a merchant too small to clear $10 at the quoted rate", () => {
-    // The same margin on $1,000 a month is $7.85.
+    // The same margin on $1,000 a month is $4.35.
     const p = preview(at(1_000));
-    expect(p.monthlyProcessingRevenue).toBeCloseTo(7.85, 6);
+    expect(p.monthlyProcessingRevenue).toBeCloseTo(4.35, 6);
     expect(p.belowMonthlyRevenueFloor).toBe(true);
 
     const [msg] = monthlyRevenueFloorBlockers(p);
     // Unlike the margin floor, this refusal names both sides — the figure is
     // shown to the rep live, so withholding it from the message would be
     // withholding it from nobody.
-    expect(msg).toContain("$7.85");
+    expect(msg).toContain("$4.35");
     expect(msg).toContain("$10.00");
     expect(msg).toMatch(/too small to process for/);
   });
@@ -66,7 +66,7 @@ describe("the $10 monthly processing-revenue floor", () => {
   // moves, so refusing the quote IS refusing the rate.
   it("clears once the rep raises the card-present rate far enough", () => {
     expect(preview(at(1_000), cp(0.0249)).belowMonthlyRevenueFloor).toBe(true);
-    const raised = preview(at(1_000), cp(0.0275));
+    const raised = preview(at(1_000), cp(0.0325));
     expect(raised.monthlyProcessingRevenue!).toBeGreaterThanOrEqual(MIN_MONTHLY_PROCESSING_REVENUE);
     expect(raised.belowMonthlyRevenueFloor).toBe(false);
   });
@@ -87,22 +87,22 @@ describe("the $10 monthly processing-revenue floor", () => {
   // $3,600.00, which neither multiplies nor matches the margin the typed
   // figures imply.
   describe("the figures a rep reads off a quote with no statement behind it", () => {
-    // $100,002 at a $25 ticket, quoted 2.06% + $0.15. Take rate 2.66%,
-    // wholesale 2.36% at that ticket, so the margin is exactly 0.30%.
+    // $100,002 at a $25 ticket, quoted 2.18% + $0.15. Take rate 2.78%,
+    // wholesale 2.46% at that ticket (the $30 column, $25 – $29.99), so the margin is exactly 0.32%.
     const config = analysisFromQuoteConfig({ monthlyVolume: 100_002, avgTicket: 25 });
-    const p = preview(config, cp(0.0206));
+    const p = preview(config, cp(0.0218));
 
     it("reads the ticket the rep TYPED, not one divided back out of a rounded count", () => {
       // analysisFromQuoteConfig rounds 4000.08 transactions to 4000; dividing
       // back out gives a $25.0005 ticket, which moved the margin enough to
-      // print $299.99 instead of $300.01.
+      // print $319.99 instead of $320.01.
       expect(config.totalTransactions).toBe(4_000);
       expect(config.totalVolume / config.totalTransactions).not.toBe(25);
-      expect(p.monthlyProcessingRevenue).toBe(300.01);
+      expect(p.monthlyProcessingRevenue).toBe(320.01);
     });
 
     it("annualises the figure it PRINTS, so the two multiply", () => {
-      expect(p.processingArr).toBe(3_600.12);
+      expect(p.processingArr).toBe(3_840.12);
       expect(p.processingArr).toBe(p.monthlyProcessingRevenue! * 12);
     });
   });

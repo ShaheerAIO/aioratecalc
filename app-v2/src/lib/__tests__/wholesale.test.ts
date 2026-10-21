@@ -17,8 +17,8 @@ describe("the wholesale table", () => {
     expect(WHOLESALE_PCT_BPS).toHaveLength(RATE_MATRIX_TICKETS.length);
   });
 
-  it("is the product owner's 10/13 figures, verbatim, in bps", () => {
-    expect([...WHOLESALE_PCT_BPS]).toEqual([350, 287, 255, 236, 223, 208, 198, 185, 179]);
+  it("is the Oct 2026 pricing guide's Table B, verbatim, in bps", () => {
+    expect([...WHOLESALE_PCT_BPS]).toEqual([350, 288, 255, 248, 246, 245, 243, 239, 236]);
   });
 
   it("falls as the ticket rises", () => {
@@ -29,17 +29,21 @@ describe("the wholesale table", () => {
 });
 
 describe("wholesalePctFor", () => {
-  it("reads the exact column for a ticket that lands exactly on one", () => {
-    expect(wholesalePctFor(10)).toBeCloseTo(0.0350, 6);
-    expect(wholesalePctFor(30)).toBeCloseTo(0.0223, 6);
-    expect(wholesalePctFor(100)).toBeCloseTo(0.0179, 6);
+  it("reads the column whose bucket the ticket falls in, at both ends", () => {
+    expect(wholesalePctFor(9.99)).toBeCloseTo(0.0350, 6);  // $10 column
+    expect(wholesalePctFor(10)).toBeCloseTo(0.0288, 6);    // $15 column
+    expect(wholesalePctFor(29.99)).toBeCloseTo(0.0246, 6); // $30 column
+    expect(wholesalePctFor(30)).toBeCloseTo(0.0245, 6);    // $40 column
+    expect(wholesalePctFor(74.99)).toBeCloseTo(0.0239, 6); // $75 column
+    expect(wholesalePctFor(75)).toBeCloseTo(0.0236, 6);    // $100 column
+    expect(wholesalePctFor(100)).toBeCloseTo(0.0236, 6);
   });
 
-  // Same rule as matrixTicketIndex: a ticket BETWEEN two columns reads the
-  // one at or below it — $22.40 reads the $20 column, never interpolated.
-  it("reads a ticket between two columns as the column at or below it", () => {
-    expect(wholesalePctFor(22.4)).toBeCloseTo(0.0255, 6); // the $20 column
-    expect(wholesalePctFor(37)).toBeCloseTo(0.0223, 6);   // the $30 column
+  // Same rule as matrixTicketIndex: a ticket reads the first column strictly
+  // above it — $22.40 reads the $25 column, never interpolated.
+  it("reads a ticket between two columns as the first column above it", () => {
+    expect(wholesalePctFor(22.4)).toBeCloseTo(0.0248, 6); // the $25 column
+    expect(wholesalePctFor(37)).toBeCloseTo(0.0245, 6);   // the $40 column
   });
 
   it("reads a ticket under the cheapest column as the $10 column", () => {
@@ -48,8 +52,8 @@ describe("wholesalePctFor", () => {
   });
 
   it("reads a ticket over the dearest column as the $100 column", () => {
-    expect(wholesalePctFor(150)).toBeCloseTo(0.0179, 6);
-    expect(wholesalePctFor(1_000_000)).toBeCloseTo(0.0179, 6);
+    expect(wholesalePctFor(150)).toBeCloseTo(0.0236, 6);
+    expect(wholesalePctFor(1_000_000)).toBeCloseTo(0.0236, 6);
   });
 });
 
@@ -81,8 +85,8 @@ describe("totalTakeRate", () => {
 
 describe("commissionMargin", () => {
   it("is take rate minus the wholesale % at that ticket", () => {
-    // 2.99% take rate against the $30 column's 2.23% wholesale.
-    expect(commissionMargin(0.0299, 30)).toBeCloseTo(0.0299 - 0.0223, 6);
+    // 2.99% take rate against the $40 column's (a $30 ticket's) 2.45% wholesale.
+    expect(commissionMargin(0.0299, 30)).toBeCloseTo(0.0299 - 0.0245, 6);
   });
 
   it("can go negative — a take rate thinner than wholesale is reported, not clamped", () => {
@@ -107,7 +111,7 @@ describe("commissionMarginBreakdown", () => {
   // cite, because that identity doesn't hold for this formula.
   it("the $150.86-ticket example reads the $100 wholesale column", () => {
     const b = commissionMarginBreakdown(0.0249, 500_000, 150.86, 0.15);
-    expect(b.wholesalePct).toBeCloseTo(0.0179, 6);
+    expect(b.wholesalePct).toBeCloseTo(0.0236, 6);
     expect(b.margin).toBeGreaterThan(0);
     expect(b.margin).toBeLessThan(0.01);
   });
