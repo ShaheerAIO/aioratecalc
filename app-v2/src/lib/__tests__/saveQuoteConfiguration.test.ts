@@ -105,6 +105,9 @@ const FULL_CATALOG: CatalogProduct[] = [
   p("223511653103", "Menu Board Computer", 99, "one_time", "inventory"),
   // $0 rate disclosure — on every quote AIO processes for since 2026-10-14.
   p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
+  // One-time lines are invoiced, so a delayed plan collects $0 at checkout and
+  // every such quote carries the $0.50 pre-auth.
+  p("281354281678", "AIO Pre Auth", 0.5, "one_time", "Service"),
 ];
 // The POS a rep picks on a processing quote, and the Menu Board Computer the
 // marketing plans preselect three of — both are ordinary picks now.
@@ -226,6 +229,9 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       // $0, derived, and on every quote AIO processes for (2026-10-14) — it
       // is how the rates reach the document the merchant signs.
       "AIO Processing Two Tiered Rate",
+      // The plan is delayed 60 days and the hardware is invoiced, so nothing
+      // else is due at checkout.
+      "AIO Pre Auth",
       "AIO Wifi Network Package - Unifi",
       "All-in-One Platform",
       "Onsite Installation",
@@ -374,8 +380,9 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     expect(updated.quoteLines!.filter(l => l.name === "AIO WiFi Network Package")).toHaveLength(0);
     expect(trainingLines).toHaveLength(1);
     // 6 charged lines + the $0 rate disclosure, which is derived onto every
-    // quote AIO processes for (2026-10-14) and so must not duplicate either.
-    expect(updated.quoteLines).toHaveLength(7);
+    // quote AIO processes for (2026-10-14) and so must not duplicate either,
+    // + the $0.50 pre-auth the delayed plan needs.
+    expect(updated.quoteLines).toHaveLength(8);
     expect(
       updated.quoteLines!.filter(l => l.name === "AIO Processing Two Tiered Rate")
     ).toHaveLength(1);

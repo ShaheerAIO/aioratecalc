@@ -28,6 +28,7 @@ export function rowToApp(row: ApplicationRow): MerchantApplication {
     checkIds: row.checkIds,
     foodbuyIds: row.foodbuyIds,
     hubspotIds: row.hubspotIds,
+    hubspotInvoice: row.hubspotInvoice,
     quoteType: row.quoteType,
     quoteConfig: row.quoteConfig,
     quoteLines: row.quoteLines,
@@ -67,6 +68,7 @@ export function appToRow(app: MerchantApplication) {
     checkIds: app.checkIds,
     foodbuyIds: app.foodbuyIds,
     hubspotIds: app.hubspotIds,
+    // hubspotInvoice deliberately absent: only oneTimeInvoice.ts writes it.
     quoteType: app.quoteType,
     quoteConfig: app.quoteConfig,
     quoteLines: app.quoteLines,

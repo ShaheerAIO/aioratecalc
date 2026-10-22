@@ -52,6 +52,7 @@ import {
   processesCardNotPresentOnly,
   processingDisclosureText,
   quoteTypeOf,
+  splitQuoteLines,
 } from "@/lib/quoting";
 import { canPublishBillingQuote, type PublishRefusal, type SenderResolution } from "@/lib/billing/preconditions";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds, type MerchantApplication } from "@/types/merchant";
@@ -325,11 +326,11 @@ export async function buildAndPublishBillingQuote(
   const claimedAt = new Date();
   const [claimed] = await db
     .update(merchantApplications)
-    .set({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, syncedAt: claimedAt.toISOString() }, updatedAt: claimedAt })
+    .set({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, splitBilling: true, syncedAt: claimedAt.toISOString() }, updatedAt: claimedAt })
     .where(and(eq(merchantApplications.id, app.id), isNull(merchantApplications.hubspotIds)))
     .returning();
 
-  let ids: HubspotIds = { ...EMPTY_HUBSPOT_IDS, syncedAt: claimedAt.toISOString() };
+  let ids: HubspotIds = { ...EMPTY_HUBSPOT_IDS, splitBilling: true, syncedAt: claimedAt.toISOString() };
   if (!claimed) {
     // Losing the claim means the row already carries a hubspotIds — either a
     // build running right now, or the wreckage of one that failed. Re-read
@@ -416,7 +417,7 @@ export async function buildAndPublishBillingQuote(
 
   console.log(
     `[billing] publishing quote for ${app.id} from ${sender.email} (HubSpot owner ${sender.ownerId}): ` +
-    `${decision.lineCount} line(s), ` +
+    `${decision.lineCount} line(s) on the quote, ${decision.invoiceLineCount} held for the one-time invoice, ` +
     `one-time $${decision.totals.oneTime.toFixed(2)}, ` +
     `recurring ${decision.totals.recurring.map(r => `$${r.amount.toFixed(2)}/${r.frequency}`).join(" + ") || "none"}, ` +
     `~$${decision.totals.monthlyEquivalent.toFixed(2)}/mo equivalent`
@@ -446,13 +447,18 @@ export async function buildAndPublishBillingQuote(
       await persist(app.id, ids);
     }
 
-    // 2. Line items. Reconciled rather than recreated, so a rerun after a
-    //    partial create tops up the missing tail instead of duplicating a $999
-    //    install. `previousLines` is the same set as `nextLines` here: nothing
-    //    edits the quote between acceptance and publish, so the only difference
-    //    reconciliation ever sees is a short id list.
+    // 2. Line items — the QUOTE portion only; one-time lines are billed on
+    //    the invoice after acceptance (oneTimeInvoice.ts). Reconciled rather
+    //    than recreated, so a rerun after a partial create tops up the missing
+    //    tail instead of duplicating a line. Nothing edits the quote between
+    //    acceptance and publish, so the only difference reconciliation
+    //    normally sees is a short id list — EXCEPT a build left half-done
+    //    before split billing shipped: its ids were made from every line, and
+    //    reconciling against those deletes its one-time line items off the
+    //    draft. The marker is set from here on either way.
     step = "line_items";
-    const plan = planLineItemReconciliation(ids.lineItemIds, lines, lines);
+    const { quoteLines } = splitQuoteLines(lines);
+    const plan = planLineItemReconciliation(ids.lineItemIds, ids.splitBilling ? quoteLines : lines, quoteLines);
     if (plan.create.length > 0 || plan.delete.length > 0) {
       for (const staleId of plan.delete) await deleteQuoteLineItem(staleId);
       const createdIds = await createQuoteLineItems(
@@ -461,7 +467,10 @@ export async function buildAndPublishBillingQuote(
       );
       const byIndex = new Map<number, string>(plan.keep.map(k => [k.nextIndex, k.lineItemId]));
       plan.create.forEach((c, i) => byIndex.set(c.nextIndex, createdIds[i]));
-      ids = { ...ids, lineItemIds: lines.map((_, i) => byIndex.get(i)!) };
+      ids = { ...ids, lineItemIds: quoteLines.map((_, i) => byIndex.get(i)!), splitBilling: true };
+      await persist(app.id, ids);
+    } else if (!ids.splitBilling) {
+      ids = { ...ids, splitBilling: true };
       await persist(app.id, ids);
     }
 

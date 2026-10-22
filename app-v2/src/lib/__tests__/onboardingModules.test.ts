@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { checklistNotice, getOnboardingModules, hasSignedWithoutPaying, payrollModule } from "@/lib/onboardingModules";
+import { EMPTY_HUBSPOT_INVOICE } from "@/types/merchant";
 import type { HubspotIds, HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/merchant";
 
 // Minimal, fully-populated application fixture. Every module under test reads
@@ -296,6 +297,44 @@ describe("getOnboardingModules — order and composition", () => {
       },
     };
     expect(getOnboardingModules(fullyPaid).find(m => m.key === "payroll")).toBeUndefined();
+  });
+});
+
+describe("the one-time invoice row", () => {
+  const OPEN = {
+    ...EMPTY_HUBSPOT_INVOICE,
+    invoiceId: "inv-1", status: "open", paymentStatus: "unpaid", balanceDue: 1948,
+    invoiceLink: "https://customers.aioapp.com/inv-1", openedAt: "2026-10-22T00:00:00.000Z",
+    emailedAt: "2026-10-22T00:00:01.000Z",
+  };
+  const accepted = (hubspotInvoice: MerchantApplication["hubspotInvoice"]): MerchantApplication =>
+    ({ ...BASE_APP, quoteAcceptedAt: "2026-10-22T00:00:00.000Z", hubspotInvoice });
+
+  it("is absent until an invoice has been opened", () => {
+    expect(getOnboardingModules(accepted(null)).find(m => m.key === "invoice")).toBeUndefined();
+    expect(getOnboardingModules(accepted({ ...OPEN, openedAt: null })).find(m => m.key === "invoice")).toBeUndefined();
+  });
+
+  it("sits right after the quote and links to HubSpot's pay page, account or not", () => {
+    const modules = getOnboardingModules(accepted(OPEN));
+    expect(modules.map(m => m.key)).toEqual(["quote", "invoice", "adyen", "foodbuy"]);
+    const row = modules[1];
+    expect(row).toMatchObject({ status: "in_progress", href: OPEN.invoiceLink, ctaLabel: "Pay Invoice", publicCta: true });
+    expect(row.description).toContain("$1,948.00");
+    expect(row.locked).toBeUndefined();
+  });
+
+  it("completes when HubSpot reports it paid", () => {
+    const row = getOnboardingModules(accepted({ ...OPEN, paymentStatus: "paid", balanceDue: 0 })).find(m => m.key === "invoice")!;
+    expect(row.status).toBe("complete");
+    expect(row.href).toBeUndefined();
+  });
+
+  // Subscription-only gating (product owner, 2026-10-22): an unpaid invoice
+  // never holds the rest of the checklist.
+  it("never locks the rows after it", () => {
+    const adyen = getOnboardingModules(accepted(OPEN)).find(m => m.key === "adyen")!;
+    expect(adyen.locked).toBeUndefined();
   });
 });
 

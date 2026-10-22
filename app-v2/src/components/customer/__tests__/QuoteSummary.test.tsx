@@ -329,10 +329,33 @@ describe("QuoteSummary — package-covered lines are grouped, not interleaved", 
     expect(row?.textContent).toContain("$300.00");
   });
 
-  it("totals due once still reflects only what's actually charged", () => {
+  it("the invoice total still reflects only what's actually charged", () => {
     render(<QuoteSummary quote={PACKAGE_QUOTE} />);
-    const total = screen.getByText("Total due once").closest("div");
+    const total = screen.getByText("Invoice total").closest("div");
     expect(total?.textContent).toContain("$300.00");
+  });
+});
+
+describe("QuoteSummary — one-time lines are invoiced separately", () => {
+  const PRE_AUTH = {
+    hubspotProductId: "281354281678", name: "AIO Pre Auth", qty: 1, unitPrice: 0.5,
+    billingFrequency: "one_time" as const, productType: "Service",
+  };
+
+  it("labels the one-time section as a separate invoice, due on receipt", () => {
+    render(<QuoteSummary quote={PACKAGE_QUOTE} />);
+    expect(screen.getByText("One-Time — invoiced separately")).toBeTruthy();
+    expect(screen.getByText(/due on receipt/)).toBeTruthy();
+  });
+
+  // The pre-auth is the one one-time charge the quote's own checkout takes, so
+  // it sits apart from the invoice and out of its total.
+  it("shows the pre-auth as due at checkout, not on the invoice", () => {
+    const quote = { ...PACKAGE_QUOTE, lines: [...PACKAGE_QUOTE.lines, PRE_AUTH] };
+    render(<QuoteSummary quote={quote} />);
+    const checkout = screen.getByText("Due at checkout").closest("section");
+    expect(checkout?.textContent).toContain("AIO Pre Auth");
+    expect(screen.getByText("Invoice total").closest("div")?.textContent).toContain("$300.00");
   });
 
   it("renders no package heading when nothing is package-covered", () => {

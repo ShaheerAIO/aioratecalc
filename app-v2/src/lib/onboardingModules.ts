@@ -147,6 +147,7 @@ export function getOnboardingModules(
 
   const modules = [
     quoteBillingModule(app, { hasQuote: opts?.hasQuote ?? false, quoteHref, billingHref }),
+    invoiceModule(app),
     adyenModule(app, basePath, detailsHref),
     SHOW_PAYROLL_MODULE ? payrollModule(app, basePath) : null,
     foodbuyModule(app, basePath),
@@ -657,5 +658,37 @@ function foodbuyModule(app: MerchantApplication, basePath: string): OnboardingMo
     description: "Download your pre-filled Foodbuy enrollment form, sign it, and send it to your AIO representative or Foodbuy account executive.",
     href,
     ctaLabel: "Get Started",
+  };
+}
+
+// The one-time invoice (2026-10-22): hardware, install and training, billed
+// after acceptance on a HubSpot invoice. Shown only once the invoice is open —
+// before that there is nothing to pay. NEVER A GATE: nothing else waits on it,
+// and it is only ever built after acceptance, so the lock pass has nothing to
+// lock. The pay link is HubSpot's hosted page, which needs no EasyOB account,
+// hence `publicCta`.
+function invoiceModule(app: MerchantApplication): OnboardingModule | null {
+  const inv = app.hubspotInvoice;
+  if (!inv?.openedAt) return null;
+  const label = "Hardware & Setup Invoice";
+
+  if (inv.paymentStatus === "paid" || inv.status === "paid") {
+    return {
+      key: "invoice",
+      label,
+      status: "complete",
+      description: "Your hardware and setup invoice is paid.",
+    };
+  }
+
+  const amount = inv.balanceDue != null && inv.balanceDue > 0
+    ? ` of $${inv.balanceDue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : "";
+  return {
+    key: "invoice",
+    label,
+    status: "in_progress",
+    description: `Your one-time invoice${amount} for hardware, installation and training is due on receipt. We've emailed it to your billing contact.`,
+    ...(inv.invoiceLink ? { href: inv.invoiceLink, ctaLabel: "Pay Invoice", publicCta: true } : {}),
   };
 }

@@ -133,7 +133,10 @@ describe("canPublishBillingQuote", () => {
     const result = check();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.lineCount).toBe(2);
+    // The platform publishes on the quote; the POS is held for the one-time
+    // invoice. The totals still cover both — that is what was sold.
+    expect(result.lineCount).toBe(1);
+    expect(result.invoiceLineCount).toBe(1);
     expect(result.totals.oneTime).toBe(1200);
     expect(result.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
     // The figure that reaches the log line, not a summed-together single number.

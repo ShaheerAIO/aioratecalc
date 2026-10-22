@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import {
   findSubscriptionsForQuote,
+  getInvoiceSnapshot,
   listQuotesModifiedSince,
   type QuoteSnapshot,
 } from "@/lib/adapters/hubspot";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
+import { buildAndSendOneTimeInvoice } from "@/lib/billing/oneTimeInvoice";
 import { rowToApp, type ApplicationRow as FullApplicationRow } from "@/lib/storage/applicationRow";
 import { rollUpSubscriptionStatus, type HubspotIds, type HubspotSubscriptionSnapshot } from "@/types/merchant";
 
@@ -73,10 +75,15 @@ export async function GET(req: NextRequest) {
     applicationsUpdated: 0,
     accepted: 0,
     subscriptionsMatched: 0,
+    invoicesSent: 0,
+    invoicesRefreshed: 0,
     unmatched: [] as string[],
     failed: [] as { applicationId: string; error: string }[],
   };
-  if (byQuoteId.size === 0) return NextResponse.json(summary);
+  if (byQuoteId.size === 0) {
+    await syncOneTimeInvoices(summary);
+    return NextResponse.json(summary, { status: summary.failed.length > 0 ? 500 : 200 });
+  }
 
   // Join back on the quote id inside the jsonb blob. Most changed quotes in the
   // portal belong to deals EasyOB never built, so unmatched is the normal case,
@@ -162,7 +169,81 @@ export async function GET(req: NextRequest) {
     if (!matchedQuoteIds.has(quoteId)) summary.unmatched.push(quoteId);
   }
 
+  await syncOneTimeInvoices(summary);
+
   return NextResponse.json(summary, { status: summary.failed.length > 0 ? 500 : 200 });
+}
+
+type InvoiceSummary = {
+  invoicesSent: number;
+  invoicesRefreshed: number;
+  failed: { applicationId: string; error: string }[];
+};
+
+// The one-time invoice's two nightly jobs (2026-10-22). Keyed on our own rows,
+// not on the quote-modified window above: an invoice owes nothing to when its
+// quote last changed, and ACH `paid` lags by days.
+//
+//  1. RETRY: accepted, split-billed, and not yet emailed — acceptance detection
+//     sends it the moment it sees the subscription, and this catches whatever
+//     that attempt left unfinished. `buildAndSendOneTimeInvoice` is idempotent
+//     and cheap for a row with nothing to invoice (no HubSpot call at all).
+//  2. REFRESH: emailed and not yet paid — reads status/balance back. Only rows
+//     already emailed, so this can never race a build that is still writing.
+async function syncOneTimeInvoices(summary: InvoiceSummary): Promise<void> {
+  const pending: ApplicationRow[] = await db
+    .select()
+    .from(merchantApplications)
+    .where(and(
+      isNotNull(merchantApplications.quoteAcceptedAt),
+      sql`${merchantApplications.hubspotIds}->>'splitBilling' = 'true'`,
+      sql`(${merchantApplications.hubspotInvoice} IS NULL OR ${merchantApplications.hubspotInvoice}->>'emailedAt' IS NULL)`,
+    ));
+  for (const row of pending) {
+    try {
+      const result = await buildAndSendOneTimeInvoice(rowToApp(row));
+      if (result.status === "sent") summary.invoicesSent++;
+      if (result.status === "failed") summary.failed.push({ applicationId: row.id, error: `invoice ${result.step}: ${result.error}` });
+    } catch (err) {
+      summary.failed.push({ applicationId: row.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  const unpaid: ApplicationRow[] = await db
+    .select()
+    .from(merchantApplications)
+    .where(and(
+      sql`${merchantApplications.hubspotInvoice}->>'emailedAt' IS NOT NULL`,
+      sql`COALESCE(${merchantApplications.hubspotInvoice}->>'paymentStatus', '') <> 'paid'`,
+    ));
+  for (const row of unpaid) {
+    const inv = row.hubspotInvoice;
+    if (!inv?.invoiceId) continue;
+    try {
+      const snap = await getInvoiceSnapshot(inv.invoiceId);
+      if (!snap) throw new Error(`invoice ${inv.invoiceId} no longer exists in HubSpot`);
+      const moved =
+        snap.status !== inv.status || snap.paymentStatus !== inv.paymentStatus || snap.balanceDue !== inv.balanceDue;
+      if (!moved) continue;
+      await db
+        .update(merchantApplications)
+        .set({
+          hubspotInvoice: {
+            ...inv,
+            status: snap.status,
+            paymentStatus: snap.paymentStatus,
+            balanceDue: snap.balanceDue,
+            invoiceLink: snap.invoiceLink ?? inv.invoiceLink,
+            syncedAt: new Date().toISOString(),
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(merchantApplications.id, row.id));
+      summary.invoicesRefreshed++;
+    } catch (err) {
+      summary.failed.push({ applicationId: row.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
 }
 
 // Compares only the snapshot fields, never syncedAt (which always differs).

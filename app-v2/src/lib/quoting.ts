@@ -1521,11 +1521,37 @@ export function quoteTotals(lines: QuoteLine[]): QuoteTotals {
 export const MIN_CHECKOUT_AMOUNT = 0.5;
 
 /**
- * What the merchant is charged at the moment they check out: every one-time
- * line, plus the FIRST payment of each recurring line that has no delayed
- * start. A recurring line with a `billingStart` takes nothing at checkout —
- * HubSpot reported `totalAmount: 0.00` for a quote whose only charge was a
- * $299/mo plan delayed 60 days, with its hardware comped by the plan.
+ * Whether a line is billed on the one-time INVOICE rather than the quote
+ * (2026-10-22, product owner). Every one-time line moves to the invoice
+ * except the two the quote itself needs: the pre-auth, which exists to make
+ * the quote's own checkout reach $0.50, and the processing disclosure, which
+ * is the rate the merchant signs for. `app.quoteLines` still holds every line
+ * — only where each one publishes changes.
+ */
+export function isInvoicedLine(line: QuoteLine): boolean {
+  return (
+    line.billingFrequency === "one_time" &&
+    line.hubspotProductId !== PRE_AUTH_PRODUCT.hubspotProductId &&
+    line.hubspotProductId !== PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId
+  );
+}
+
+/** The saved lines split by where they publish, each side in its original order. */
+export function splitQuoteLines(lines: QuoteLine[]): { quoteLines: QuoteLine[]; invoiceLines: QuoteLine[] } {
+  const quoteLines: QuoteLine[] = [];
+  const invoiceLines: QuoteLine[] = [];
+  for (const line of lines) (isInvoicedLine(line) ? invoiceLines : quoteLines).push(line);
+  return { quoteLines, invoiceLines };
+}
+
+/**
+ * What the merchant is charged at the moment they check out: the FIRST payment
+ * of each recurring line that has no delayed start, plus the one-time lines
+ * that stay on the quote (the pre-auth). A recurring line with a
+ * `billingStart` takes nothing at checkout — HubSpot reported
+ * `totalAmount: 0.00` for a quote whose only charge was a $299/mo plan delayed
+ * 60 days, with its hardware comped by the plan. Invoiced lines
+ * (`isInvoicedLine`) are billed after acceptance and take nothing here either.
  *
  * Distinct from `quoteTotals`, which is what the quote is WORTH. A quote can be
  * worth $299/mo and still owe $0 today.
@@ -1533,6 +1559,7 @@ export const MIN_CHECKOUT_AMOUNT = 0.5;
 export function amountDueAtCheckout(lines: QuoteLine[]): number {
   let due = 0;
   for (const line of lines) {
+    if (isInvoicedLine(line)) continue;
     if (line.billingFrequency !== "one_time" && line.billingStart) continue;
     due += lineNetAmount(line);
   }

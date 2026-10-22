@@ -227,9 +227,13 @@ export const merchantApplications = pgTable("merchant_applications", {
   foodbuyIds: jsonb("foodbuy_ids").$type<MerchantApplication["foodbuyIds"]>(),
   // HubSpot billing. No stored checkout URL beyond hs_quote_link inside the blob,
   // and that one is re-readable from HubSpot rather than authoritative here.
-  // We never write the subscription or its invoices — HubSpot creates both when
-  // the customer pays the quote (see E2E-PLAN.md).
+  // We never write the subscription or its recurring invoices — HubSpot creates
+  // both when the customer pays the quote (see E2E-PLAN.md). The ONE invoice
+  // EasyOB writes is the one-time invoice, in `hubspotInvoice` below.
   hubspotIds: jsonb("hubspot_ids").$type<MerchantApplication["hubspotIds"]>(),
+  // The one-time invoice (migration 0028). Written ONLY by
+  // lib/billing/oneTimeInvoice.ts, never by appToRow — see HubspotInvoice.
+  hubspotInvoice: jsonb("hubspot_invoice").$type<MerchantApplication["hubspotInvoice"]>(),
   // What kind of quote this is — it decides which products may be on it, which
   // platform line was derived, and whether there's a processing rate at all.
   // Nullable because rows predate quote types. "full_pos"/"food_truck" are the

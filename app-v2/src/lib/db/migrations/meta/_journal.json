@@ -197,6 +197,13 @@
       "when": 1792300000000,
       "tag": "0027_margin_reqs_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792400000000,
+      "tag": "0028_hubspot_invoice",
+      "breakpoints": true
     }
   ]
 }

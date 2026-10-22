@@ -2442,6 +2442,128 @@ export async function publishQuote(
   };
 }
 
+// ── One-time invoices ───────────────────────────────────────────────────────
+// Hardware, install and training are billed on an invoice created right after
+// acceptance, not on the quote (2026-10-22). Association type ids read from
+// /crm/v4/associations/invoices/{to}/labels on 2026-10-22 (HUBSPOT_DEFINED,
+// unlabeled) — see scripts/probe-invoice.ts.
+export const INVOICE_TO_CONTACT = 177;
+export const INVOICE_TO_COMPANY = 179;
+export const INVOICE_TO_DEAL = 175;
+export const INVOICE_TO_LINE_ITEM = 409;
+
+/**
+ * A draft invoice's properties. Due on receipt (product owner, 2026-10-22), so
+ * the due date IS the invoice date. ACH only, like the quote: a bare create
+ * gets HubSpot's default of ACH + card (observed on draft 878578016996).
+ */
+export function draftInvoiceProperties(invoiceDate: string): Record<string, string> {
+  return {
+    hs_currency: "USD",
+    hs_invoice_date: invoiceDate,
+    hs_due_date: invoiceDate,
+    hs_allowed_payment_methods: "ach",
+    hs_allowed_commerce_payment_methods: "ACH",
+  };
+}
+
+export async function createDraftInvoice(props: Record<string, string>): Promise<string> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/invoices`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: props }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot draft invoice create failed", res.status, await res.text());
+  const data = await res.json() as { id: string };
+  return data.id;
+}
+
+export type InvoiceAssociation = {
+  toObjectType: "contacts" | "companies" | "deals" | "line_items";
+  toObjectId: string;
+  associationTypeId: number;
+};
+
+/** v4 association PUT, one per pair — idempotent, like `associateQuote`. */
+export async function associateInvoice(invoiceId: string, assocs: InvoiceAssociation[]): Promise<void> {
+  for (let i = 0; i < assocs.length; i++) {
+    const assoc = assocs[i];
+    const res = await fetchWithRetry(
+      `${BASE}/crm/v4/objects/invoices/${invoiceId}/associations/${assoc.toObjectType}/${assoc.toObjectId}`,
+      {
+        method: "PUT",
+        headers: billingHeaders(),
+        body: JSON.stringify([
+          { associationCategory: "HUBSPOT_DEFINED", associationTypeId: assoc.associationTypeId },
+        ]),
+      }
+    );
+    if (!res.ok) {
+      throw hubspotErr(
+        `HubSpot invoice ${invoiceId} → ${assoc.toObjectType} ${assoc.toObjectId} (type ${assoc.associationTypeId}) association failed`,
+        res.status, await res.text()
+      );
+    }
+    if (i + 1 < assocs.length) await sleep(REQUEST_SPACING_MS);
+  }
+}
+
+export type InvoiceSnapshot = {
+  invoiceId: string;
+  /** hs_invoice_status: draft | open | paid | voided. */
+  status: string | null;
+  paymentStatus: string | null;
+  balanceDue: number | null;
+  invoiceLink: string | null;
+};
+
+const INVOICE_SNAPSHOT_PROPS = ["hs_invoice_status", "hs_payment_status", "hs_balance_due", "hs_invoice_link"];
+
+export async function getInvoiceSnapshot(invoiceId: string): Promise<InvoiceSnapshot | null> {
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v3/objects/invoices/${invoiceId}?properties=${INVOICE_SNAPSHOT_PROPS.join(",")}`,
+    { headers: billingHeaders() }
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw hubspotErr(`HubSpot invoice ${invoiceId} read failed`, res.status, await res.text());
+  const data = await res.json() as { properties?: Record<string, string | null> };
+  const props = data.properties;
+  return {
+    invoiceId,
+    status: clean(props?.hs_invoice_status),
+    paymentStatus: clean(props?.hs_payment_status),
+    balanceDue: num(props?.hs_balance_due),
+    invoiceLink: clean(props?.hs_invoice_link),
+  };
+}
+
+/**
+ * Opens a draft invoice — treated as a ONE-WAY DOOR until the live probe says
+ * an open invoice can be voided through the API. READS FIRST, so a rerun after
+ * a crash between HubSpot's ack and our DB write finds it already open and
+ * does nothing, and like `publishQuote` the PATCH is deliberately not retried.
+ */
+export async function openInvoice(invoiceId: string): Promise<InvoiceSnapshot> {
+  const before = await getInvoiceSnapshot(invoiceId);
+  if (!before) throw new Error(`HubSpot invoice ${invoiceId} does not exist`);
+  if (before.status !== "draft") return before;
+
+  const res = await fetch(`${BASE}/crm/v3/objects/invoices/${invoiceId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: { hs_invoice_status: "open" } }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot invoice ${invoiceId} open failed`, res.status, await res.text());
+
+  const after = await getInvoiceSnapshot(invoiceId);
+  if (!after) {
+    throw new Error(
+      `HubSpot invoice ${invoiceId} was opened but could not be read back — its state is UNKNOWN. Re-check it; do NOT open another.`
+    );
+  }
+  return after;
+}
+
 // ── Subscriptions ───────────────────────────────────────────────────────────
 // Quote → subscription is v4 association typeId 304 (reverse 303), verified
 // against 45 of the 46 paid quotes in the live portal. Keyed on the QUOTE, not

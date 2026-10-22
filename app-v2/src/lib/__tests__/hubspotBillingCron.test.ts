@@ -10,6 +10,9 @@ const listQuotesModifiedSince = vi.fn();
 const findSubscriptionsForQuote = vi.fn();
 const syncDealFromApplication = vi.fn();
 const sendMagicLinkEmail = vi.fn();
+const getInvoiceSnapshot = vi.fn();
+const buildAndSendOneTimeInvoice = vi.fn();
+const issueOneTimeInvoiceSafely = vi.fn();
 
 type Row = { id: string; hubspotIds: HubspotIds | null } & Record<string, unknown>;
 
@@ -61,8 +64,11 @@ const db = {
 
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/hubspot", () => ({
-  listQuotesModifiedSince, findSubscriptionsForQuote, syncDealFromApplication,
+  listQuotesModifiedSince, findSubscriptionsForQuote, syncDealFromApplication, getInvoiceSnapshot,
 }));
+// The invoice build is tested on its own (oneTimeInvoice.test.ts); here only
+// that the cron calls it, and with what.
+vi.mock("@/lib/billing/oneTimeInvoice", () => ({ buildAndSendOneTimeInvoice, issueOneTimeInvoiceSafely }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 
 const { GET } = await import("@/app/api/cron/hubspot-billing-sync/route");
@@ -120,6 +126,10 @@ beforeEach(() => {
   findSubscriptionsForQuote.mockReset();
   syncDealFromApplication.mockReset();
   sendMagicLinkEmail.mockReset();
+  getInvoiceSnapshot.mockReset();
+  buildAndSendOneTimeInvoice.mockReset();
+  issueOneTimeInvoiceSafely.mockReset();
+  buildAndSendOneTimeInvoice.mockResolvedValue({ status: "skipped", reason: "not_split" });
   syncDealFromApplication.mockResolvedValue("deal-1");
   sendMagicLinkEmail.mockResolvedValue({ sent: true });
   updates.length = 0;
@@ -170,7 +180,8 @@ describe("the billing cron's window", () => {
     const res = await get();
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      quotesChecked: 0, applicationsUpdated: 0, accepted: 0, subscriptionsMatched: 0, unmatched: [], failed: [],
+      quotesChecked: 0, applicationsUpdated: 0, accepted: 0, subscriptionsMatched: 0,
+      invoicesSent: 0, invoicesRefreshed: 0, unmatched: [], failed: [],
     });
     expect(updates).toHaveLength(0);
   });
@@ -305,6 +316,10 @@ describe("the billing cron detects acceptance", () => {
     expect(acceptWrite.stage).toBe("quote_accepted");
     expect(sendMagicLinkEmail).toHaveBeenCalledWith("ana@tortapalace.com", expect.stringContaining("/api/customer/verify?token="));
     expect(syncDealFromApplication).toHaveBeenCalledTimes(1);
+    // The one-time invoice goes out the moment acceptance is recorded.
+    expect(issueOneTimeInvoiceSafely).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "app-1", quoteAcceptedAt: expect.any(String) })
+    );
   });
 
   it("does NOT accept a published quote nobody has paid yet", async () => {
@@ -316,6 +331,7 @@ describe("the billing cron detects acceptance", () => {
     expect(body.accepted).toBe(0);
     expect(updates.some(u => "quoteAcceptedAt" in u)).toBe(false);
     expect(sendMagicLinkEmail).not.toHaveBeenCalled();
+    expect(issueOneTimeInvoiceSafely).not.toHaveBeenCalled();
   });
 
   // A canceled subscription can still carry the paymentMethod it was
@@ -403,5 +419,53 @@ describe("the billing cron on a partial failure", () => {
     const res = await get();
     expect(res.status).toBe(500);
     expect((await res.json()).failed).toHaveLength(1);
+  });
+});
+
+describe("the billing cron's one-time invoices", () => {
+  const INVOICE = {
+    invoiceId: "inv-1", lineItemIds: ["li-9"], status: "open", paymentStatus: "unpaid", balanceDue: 1498,
+    invoiceLink: "https://customers.aioapp.com/inv", openedAt: "2026-10-22T00:00:00.000Z",
+    emailedAt: "2026-10-22T00:00:01.000Z", syncedAt: null, lastSyncError: null, lastSyncErrorAt: null,
+  };
+
+  it("retries an unsent invoice even when no quote changed", async () => {
+    listQuotesModifiedSince.mockResolvedValue([]);
+    selectRows = [{ id: "app-1", hubspotIds: { ...HUBSPOT_IDS, splitBilling: true }, hubspotInvoice: null }];
+    buildAndSendOneTimeInvoice.mockResolvedValue({ status: "sent", invoiceId: "inv-1", invoiceLink: "x" });
+    const res = await get();
+    expect(buildAndSendOneTimeInvoice).toHaveBeenCalledWith(expect.objectContaining({ id: "app-1" }));
+    expect((await res.json()).invoicesSent).toBe(1);
+  });
+
+  it("reports a failed invoice build as a failed run", async () => {
+    listQuotesModifiedSince.mockResolvedValue([]);
+    selectRows = [{ id: "app-1", hubspotIds: { ...HUBSPOT_IDS, splitBilling: true }, hubspotInvoice: null }];
+    buildAndSendOneTimeInvoice.mockResolvedValue({ status: "failed", step: "open", error: "HubSpot 500" });
+    const res = await get();
+    expect(res.status).toBe(500);
+    expect((await res.json()).failed).toEqual([{ applicationId: "app-1", error: "invoice open: HubSpot 500" }]);
+  });
+
+  it("writes back a status change on an emailed invoice", async () => {
+    listQuotesModifiedSince.mockResolvedValue([]);
+    selectRows = [{ id: "app-1", hubspotIds: HUBSPOT_IDS, hubspotInvoice: INVOICE }];
+    getInvoiceSnapshot.mockResolvedValue({
+      invoiceId: "inv-1", status: "paid", paymentStatus: "paid", balanceDue: 0, invoiceLink: INVOICE.invoiceLink,
+    });
+    const res = await get();
+    expect((await res.json()).invoicesRefreshed).toBe(1);
+    const written = updates.find(u => "hubspotInvoice" in u)!.hubspotInvoice as typeof INVOICE;
+    expect(written).toMatchObject({ status: "paid", paymentStatus: "paid", balanceDue: 0, emailedAt: INVOICE.emailedAt });
+  });
+
+  it("leaves an unchanged invoice alone", async () => {
+    listQuotesModifiedSince.mockResolvedValue([]);
+    selectRows = [{ id: "app-1", hubspotIds: HUBSPOT_IDS, hubspotInvoice: INVOICE }];
+    getInvoiceSnapshot.mockResolvedValue({
+      invoiceId: "inv-1", status: "open", paymentStatus: "unpaid", balanceDue: 1498, invoiceLink: INVOICE.invoiceLink,
+    });
+    await get();
+    expect(updates).toHaveLength(0);
   });
 });

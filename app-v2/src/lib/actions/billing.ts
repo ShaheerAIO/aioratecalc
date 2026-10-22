@@ -49,6 +49,7 @@ import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
+import { buildAndSendOneTimeInvoice } from "@/lib/billing/oneTimeInvoice";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
 
 export type SendQuoteResult = {
@@ -119,5 +120,45 @@ export async function sendQuoteAction(applicationId: string): Promise<SendQuoteR
             // before this gate existed) but still no company link.
             ? { ok: false, error: "This account isn't linked to a HubSpot company yet. Link the tenant company and billing builds itself." }
             : { ok: false, error: "A billing quote is already being built for this account. Try again in a minute." };
+  }
+}
+
+export type RetryInvoiceResult = { ok: boolean; error?: string };
+
+/**
+ * Staff retry for the one-time invoice (2026-10-22). The invoice normally goes
+ * out by itself the moment acceptance is detected, and the nightly cron
+ * retries whatever that left unfinished — this is for a rep who has just fixed
+ * the cause (a missing billing email, say) and doesn't want to wait for the
+ * night. Same idempotent build, so pressing it twice cannot bill twice.
+ */
+export async function retryOneTimeInvoiceAction(applicationId: string): Promise<RetryInvoiceResult> {
+  const effective = await getEffectiveRole();
+  if (!effective) throw new Error("Not authenticated");
+
+  const app = await postgresStorage.getApplication(
+    { userId: effective.userId, role: effective.role === "admin" ? "admin" : "rep" },
+    applicationId
+  );
+  if (!app) return { ok: false, error: "Application not found" };
+
+  const outcome = await buildAndSendOneTimeInvoice(app);
+  switch (outcome.status) {
+    case "sent":
+      return { ok: true };
+    case "failed":
+      return { ok: false, error: `${outcome.step}: ${outcome.error}` };
+    case "skipped":
+      return outcome.reason === "already_sent"
+        ? { ok: true }
+        : {
+            ok: false,
+            error: {
+              not_accepted: "The merchant hasn't accepted the quote yet — the invoice goes out after they do.",
+              not_split: "This quote was published before one-time invoices existed; its one-time charges were collected at checkout.",
+              nothing_to_invoice: "There's nothing to invoice — every one-time line on this quote is included.",
+              build_in_progress: "The invoice is being built right now. Try again in a minute.",
+            }[outcome.reason],
+          };
   }
 }
