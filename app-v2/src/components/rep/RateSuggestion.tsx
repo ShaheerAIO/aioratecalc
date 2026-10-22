@@ -51,6 +51,14 @@ export type RateSuggestionProps = {
   adjustmentBps?: number;
   onAdjustmentChange?: (bps: number) => void;
   /**
+   * The whole-bps range the rep may adjust within, from the server (the tier's
+   * min/max margin; 2026-10-21, product owner: "It should cap based on the min
+   * and max margin"). Reported whenever a suggestion arrives. A new range
+   * clamps the current adjustment into it, except on the `adoptSaved` pass:
+   * a reopened quote's saved rate is not silently changed on open.
+   */
+  onAdjustRangeChange?: (range: { min: number; max: number } | null) => void;
+  /**
    * Reopening a SAVED quote: the first suggestion to arrive does not
    * overwrite the stored card-present rate. The gap between what was saved
    * and what the card says today becomes the adjustment, so the quote shows
@@ -67,13 +75,14 @@ const sameRates = (a: QuoteRates, b: QuoteRates) =>
   a.perTransactionFee === b.perTransactionFee;
 
 export default function RateSuggestion({
-  monthlyVolume, avgTicket, value, onChange, adjustmentBps = 0, onAdjustmentChange, adoptSaved,
+  monthlyVolume, avgTicket, value, onChange, adjustmentBps = 0, onAdjustmentChange, onAdjustRangeChange, adoptSaved,
 }: RateSuggestionProps) {
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const adopted = useRef(!adoptSaved);
+  const lastRanged = useRef<Suggestion | null>(null);
 
   useEffect(() => {
-    if (!(monthlyVolume > 0) || !(avgTicket > 0)) { setSuggestion(null); return; }
+    if (!(monthlyVolume > 0) || !(avgTicket > 0)) { setSuggestion(null); onAdjustRangeChange?.(null); return; }
     let cancelled = false;
     const handle = setTimeout(() => {
       getSuggestedRatesAction({ monthlyVolume, avgTicket })
@@ -81,7 +90,7 @@ export default function RateSuggestion({
         // A card that can't be fetched leaves the rep on whatever rates are
         // already in the boxes. Never a blocker: nothing here is a
         // precondition for quoting.
-        .catch(() => { if (!cancelled) setSuggestion(null); });
+        .catch(() => { if (!cancelled) { setSuggestion(null); onAdjustRangeChange?.(null); } });
     }, 250);
     return () => { cancelled = true; clearTimeout(handle); };
   }, [monthlyVolume, avgTicket]);
@@ -94,6 +103,14 @@ export default function RateSuggestion({
       adopted.current = true;
       adj = Math.round(value.cardPresentRate * 10000) - cardBps;
       onAdjustmentChange?.(adj);
+    } else if (lastRanged.current !== suggestion && suggestion.adjustBpsRange) {
+      const { min, max } = suggestion.adjustBpsRange;
+      const clamped = Math.max(min, Math.min(max, adj));
+      if (clamped !== adj) { adj = clamped; onAdjustmentChange?.(adj); }
+    }
+    if (lastRanged.current !== suggestion) {
+      lastRanged.current = suggestion;
+      onAdjustRangeChange?.(suggestion.adjustBpsRange ?? null);
     }
     const cp = (cardBps + adj) / 10000;
     const target = { ...suggestion.rates, cardPresentRate: cp, amexCardPresentRate: cp };

@@ -3,7 +3,11 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { marginReqsPolicy, rateMatrixPolicy } from "@/lib/db/schema";
-import { loadMarginReqsBps } from "@/lib/marginReqsLoader";
+import { loadMarginReqs, loadMarginReqsBps } from "@/lib/marginReqsLoader";
+import { getActivePaddingPolicy } from "@/lib/actions/pricing";
+import {
+  analysisFromQuoteConfig, derivePricing, getMarginFloor, getPaddedFloorRate,
+} from "@/lib/pricing";
 import { marginReqsProblems, type MarginReqBps } from "@/lib/marginPolicy";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import {
@@ -11,7 +15,7 @@ import {
   lookupCardPresentRate, matrixTicketIndex, matrixVolumeIndex, rateMatrixProblems,
   type RateMatrixPolicy,
 } from "@/lib/rateMatrix";
-import { DEFAULT_QUOTE_RATES, type QuoteRates } from "@/types/merchant";
+import { DEFAULT_QUOTE_RATES, type QuoteConfig, type QuoteRates } from "@/types/merchant";
 
 /**
  * The live rate card, or the pricing guide's own numbers when nothing has
@@ -107,6 +111,12 @@ export type RateSuggestion = {
   /** The cell the card-present rate was read off, for the line that says where it came from. */
   volumeBand: string;
   ticketColumn: number;
+  /**
+   * How far a rep may move the card-present rate off the card's cell, in whole
+   * bps (2026-10-21, product owner: "It should cap based on the min and max
+   * margin"). Only this range leaves the server, never the margins behind it.
+   */
+  adjustBpsRange: { min: number; max: number };
 };
 
 /**
@@ -137,7 +147,43 @@ export async function getSuggestedRatesAction(input: {
 
   const cnp = matrix.cardNotPresentBps / 10000;
 
+  const rates: QuoteRates = {
+    ...DEFAULT_QUOTE_RATES,
+    cardPresentRate: cp,
+    cardNotPresentRate: cnp,
+    amexCardPresentRate: cp,
+    amexCardNotPresentRate: cnp,
+    perTransactionFee: matrix.perTransactionFeeCents / 100,
+  };
+
+  // The adjustment range. Margin does NOT move 1:1 with the card-present
+  // rate: derivePricing's 2-tier margin is aioRev / vol, so one bp on the CP
+  // rate moves it by the card-present SHARE of volume (95% by default). The
+  // cell's own margin comes from derivePricing on the same statement-less
+  // analysis the pricing preview uses, so this agrees with `belowMarginFloor`.
+  const marginReqs = await loadMarginReqs();
+  const analysis = analysisFromQuoteConfig(
+    { monthlyVolume: input.monthlyVolume, avgTicket: input.avgTicket } as QuoteConfig
+  );
+  const cellMargin = derivePricing(
+    analysis, rates, "2-tier", { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 }, marginReqs
+  ).appliedTargetMargin;
+  const tier = getMarginFloor(input.monthlyVolume, marginReqs);
+  // TRUST BOUNDARY: a rep's lower bound is the PADDED floor (what
+  // derivePricingForRole judges them against), never the true minMargin.
+  const floor = effective.role === "admin"
+    ? tier.minMargin
+    : getPaddedFloorRate(tier.minMargin, await getActivePaddingPolicy());
+  const cpShare = analysis.cardPresentPct || 1;
+  const EPS = 1e-6; // float slack so an exact-bps boundary isn't lost to rounding
+  const lo = Math.ceil(((floor - cellMargin) / cpShare) * 10000 - EPS);
+  const hi = Math.floor(((tier.maxMargin - cellMargin) / cpShare) * 10000 + EPS);
+  // Padding can push the floor past the max margin (an admin pad of 100%+ on a
+  // narrow tier); collapse to the upper bound rather than return an empty range.
+  const adjustBpsRange = lo <= hi ? { min: lo, max: hi } : { min: hi, max: hi };
+
   return {
+    adjustBpsRange,
     rates: {
       ...DEFAULT_QUOTE_RATES,
       cardPresentRate: cp,

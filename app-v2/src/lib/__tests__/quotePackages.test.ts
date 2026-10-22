@@ -471,14 +471,14 @@ describe("preselecting the kit", () => {
     try { expect(kitFor("all_in_one")).toBeNull(); } finally { KIT.active = was; }
   });
 
-  it("never picks a derived product by hand — a terminal or WiFi would bill twice", () => {
+  it("never picks the derived terminal by hand, but DOES preselect the WiFi package (a pick since 2026-10-21)", () => {
     const ids = kitPicks(KIT).map(k => k.hubspotProductId);
     expect(ids).not.toContain(ID.ams1);
-    expect(ids).not.toContain(ID.wifi);
+    expect(ids).toContain(ID.wifi);
   });
 
   it.each(["order_pay_only", "all_in_one"] as const)(
-    "fills EVERY slot of the kit on %s, derived terminals and WiFi included",
+    "fills EVERY slot of the kit on %s, derived terminal and WiFi pick included",
     quoteType => {
       // The fixture only carries the All-in-One platform product; each plan
       // needs its own, or the quote (rightly) refuses to price.
@@ -524,13 +524,13 @@ describe("buildQuote with the kit on it", () => {
   };
 
   const picks = () => [
-    line(ID.pos), line(ID.kiosk27), line(ID.kds), line(ID.printer), line(ID.drawer), line(ID.menuboard),
+    line(ID.pos), line(ID.kiosk27), line(ID.kds), line(ID.printer), line(ID.drawer), line(ID.menuboard), line(ID.wifi),
   ];
 
   const build = (over: QuoteLine[] = picks(), adjustments = {}, quoteType: QuoteType = "all_in_one") =>
     buildQuote(quoteType, over, [], CATALOG, adjustments);
 
-  it("covers the derived AMS1 and WiFi package along with the picks", () => {
+  it("covers the derived AMS1 and the picked WiFi package along with the picks", () => {
     const built = build();
 
     for (const id of [ID.pos, ID.kiosk27, ID.kds, ID.printer, ID.drawer, ID.menuboard, ID.ams1, ID.wifi]) {
@@ -696,7 +696,8 @@ describe("buildQuote with the kit on it", () => {
     for (const id of [ID.pos, ID.kiosk27, ID.kds, ID.printer, ID.drawer, ID.menuboard, ID.ams1]) {
       expect(back).toContainEqual({ hubspotProductId: id, qty: 1 });
     }
-    expect(back.find(x => x.hubspotProductId === ID.wifi)).toBeUndefined();
+    // WiFi is a pick since 2026-10-21, so it comes back with the rest.
+    expect(back).toContainEqual({ hubspotProductId: ID.wifi, qty: 1 });
   });
 
   it("round-trips a partly-covered line with its quantity summed back together", () => {

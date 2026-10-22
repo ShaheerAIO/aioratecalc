@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_DISCOUNT_PERCENT,
   INCLUDED_SERVICE_PRODUCTS,
   MAX_BILLING_DELAY_DAYS,
+  WIFI_PRODUCT_ID,
   adjustmentBlockers,
   applyPackageComp,
   adjustmentsFromQuoteLines,
@@ -51,7 +52,7 @@ const p = (
 const PLATFORM_ID = "335283119838";
 const INSTALL_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "Onsite Installation")!.hubspotProductId;
 const TRAINING_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "System Onboarding and Training")!.hubspotProductId;
-const WIFI_ID = INCLUDED_SERVICE_PRODUCTS.find(s => s.name === "AIO Wifi Network Package - Unifi")!.hubspotProductId;
+const WIFI_ID = WIFI_PRODUCT_ID;
 const POS_ID = "217445755632";
 const AMS1_ID = "223511653105";
 
@@ -305,8 +306,9 @@ describe("buildQuote with no service comp (since 2026-10-18)", () => {
   it("charges the install and the training at list, untouched", () => {
     const built = buildQuote("all_in_one", picked, [], CATALOG);
     expect(built.quoteLines.filter(l => l.discountPercent != null)).toEqual([]);
-    // $698 wifi + $999 install + $499 training + $749 POS + $300 AMS1.
-    expect(built.totals.oneTime).toBe(3245);
+    // $999 install + $499 training + $749 POS + $300 AMS1. The WiFi package is
+    // a pick since 2026-10-21, so a POS-only cart carries none.
+    expect(built.totals.oneTime).toBe(2547);
   });
 });
 
@@ -325,10 +327,10 @@ describe("buildQuote with adjustments", () => {
     const install = built.quoteLines.find(l => l.hubspotProductId === INSTALL_ID)!;
     expect(install.discountPercent).toBe(100);
     expect(lineNetAmount(install)).toBe(0);
-    // $698 wifi + $749 POS + $300 AMS1 (one per POS). The install AND the
+    // $749 POS + $300 AMS1 (one per POS). The install AND the
     // training are both comped — the install by this adjustment, the training
     // by standing AIO policy (see COMPED_SERVICE_PRODUCT_IDS).
-    expect(built.totals.oneTime).toBe(1747);
+    expect(built.totals.oneTime).toBe(1049);
     expect(built.blockers).toEqual([]);
   });
 

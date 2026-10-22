@@ -1163,12 +1163,9 @@
 }
 
 .docLine[data-pending="true"] { opacity: 0.55; }
-/* The controls a line can grow (the adjust drawer, the WiFi confirmation,
-   the Remove/Add-back button) are rows of their own under the table row,
-   never a fourth column. */
-.docLine > .adjustWrap,
-.docLine > .confirmBox { grid-column: 1 / -1; }
-.docLine > .linkBtn { grid-column: 1 / -1; justify-self: start; }
+/* The control a line can grow (the adjust drawer) is a row of its own under
+   the table row, never a fourth column. */
+.docLine > .adjustWrap { grid-column: 1 / -1; }
 .docLine > .adjustWrap { margin-top: var(--space-3xs); }
 
 .docLineMain { grid-column: 1; min-width: 0; }

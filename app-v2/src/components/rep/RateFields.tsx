@@ -108,6 +108,12 @@ export type RateFieldsProps = {
    */
   adjustBps?: number;
   onAdjustBps?: (bps: number) => void;
+  /**
+   * The allowed adjustment, whole bps, from `getSuggestedRatesAction`
+   * (2026-10-21, product owner: "It should cap based on the min and max
+   * margin"). Null/omitted — no volume or ticket yet — falls back to ±500.
+   */
+  adjustRange?: { min: number; max: number } | null;
 };
 
 /**
@@ -116,11 +122,14 @@ export type RateFieldsProps = {
  * 2.50% read "2.5" and 3.00% read "3" — three different shapes for the same
  * kind of number, in the field where a tenfold typo is hardest to see.
  */
+const fmtBps = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `\u2212${-n}` : "0");
 const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
 export default function RateFields({
-  value, onChange, hideNote, freshQuote, cardNotPresentOnly, adjustBps = 0, onAdjustBps,
+  value, onChange, hideNote, freshQuote, cardNotPresentOnly, adjustBps = 0, onAdjustBps, adjustRange,
 }: RateFieldsProps) {
+  const lo = adjustRange?.min ?? -500;
+  const hi = adjustRange?.max ?? 500;
   const setCardPresent = (pct: number) => onChange({ ...value, cardPresentRate: pct / 100 });
   const setCardNotPresent = (pct: number) => {
     const next = pct / 100;
@@ -197,15 +206,18 @@ export default function RateFields({
               <label className={styles.suffix} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
                 Adjust rate (bps)
                 <input
-                  type="number" step={1} min={-500} max={500}
+                  type="number" step={1} min={lo} max={hi}
                   value={adjustBps}
                   onChange={e => {
                     const n = Math.round(Number(e.target.value));
-                    onAdjustBps(Number.isFinite(n) ? Math.max(-500, Math.min(500, n)) : 0);
+                    onAdjustBps(Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : 0);
                   }}
                   style={{ width: 72 }}
                   aria-label="Card present rate adjustment, basis points, positive or negative"
                 />
+                {adjustRange && (
+                  <span data-testid="adjust-range-hint">{fmtBps(lo)} to {fmtBps(hi)} bps</span>
+                )}
               </label>
             )}
           </div>

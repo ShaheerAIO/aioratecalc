@@ -27,6 +27,7 @@ vi.mock("@/lib/actions/pricing", () => ({
 }));
 
 import ProductConfigurator, { type ProductPick } from "@/components/quoting/ProductConfigurator";
+import { WIFI_PRODUCT_ID } from "@/lib/quoting";
 
 // The live HubSpot records this path touches, at their real prices.
 const P: Array<[string, string, number, CatalogProduct["billingFrequency"], string]> = [
@@ -42,6 +43,7 @@ const P: Array<[string, string, number, CatalogProduct["billingFrequency"], stri
   ["222497165011", "Cash Drawer", 70, "one_time", "inventory"],
   ["223511653103", "Menu Board Computer", 99, "one_time", "inventory"],
   ["281351401209", "AIO WiFi Network Package", 999, "one_time", "inventory"],
+  ["338690209525", "AIO Wifi Network Package - Unifi", 698, "one_time", "inventory"],
   ["223452690133", "Onsite Installation", 999, "one_time", "Service"],
   ["223152695032", "System Onboarding and Training", 499, "one_time", "Service"],
   ["335280960199", "Additional Software License", 19, "monthly", "Software"],
@@ -96,7 +98,7 @@ describe("a new quote opens on no plan at all", () => {
     render(<Host />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
 
-    for (const label of [/Order & Pay Only/, /All-in-One/, /Marketing Only/, /Marketing — 2-Year/]) {
+    for (const label of [/Order & Pay Only/, /All-in-One/, /Marketing Only/, /Marketing — Kiosk Loan/]) {
       expect(planCard(label).dataset.active).not.toBe("true");
     }
     expect(picksText()).toBe("");
@@ -116,6 +118,19 @@ describe("a new quote opens on no plan at all", () => {
     expect(picksText()).toContain(`${WEBSITE}:1`);
     expect(picksText()).toContain("223511653105:");
     expect(planCard(/All-in-One/).dataset.active).toBe("true");
+  });
+
+  it("lists the WiFi package as an ordinary hardware row for All-in-One, preselected by the kit", async () => {
+    render(<Host />);
+    await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
+    fireEvent.click(planCard(/All-in-One/));
+
+    // 2026-10-21: the network package is a picker row like the KDS, not a derived line.
+    await waitFor(() => expect(picksText()).toContain(`${WIFI_PRODUCT_ID}:1`));
+    expect(screen.getAllByText(/Wifi Network Package - Unifi/i).length).toBeGreaterThan(0);
+    // No remove / add-back machinery any more.
+    expect(screen.queryByText(/Remove the WiFi package\?/)).toBeNull();
+    expect(screen.queryByText(/Not on this quote/)).toBeNull();
   });
 
   it("still seeds when the plan is clicked before the catalog lands", async () => {

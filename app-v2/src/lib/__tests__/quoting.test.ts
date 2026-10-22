@@ -40,7 +40,7 @@ import {
   PAYROLL_PRODUCT_ID,
   payrollBlockers,
 } from "@/lib/quoting";
-import type { CatalogProduct, QuoteLine, QuoteType } from "@/types/merchant";
+import type { CatalogProduct, QuoteAdjustments, QuoteLine, QuoteType } from "@/types/merchant";
 
 // The free hardware kit is switched off for this file: these tests assert what
 // a plain quote derives, and left on the kit would zero its hardware lines. It
@@ -119,7 +119,6 @@ describe("picker exclusions", () => {
       "AIO Marketing Platform (2-year term)",
       "AIO Pre Auth",
       "AIO Processing Two Tiered Rate",
-      "AIO Wifi Network Package - Unifi",
       "Additional Software License",
       "All-in-One (Order & Pay only)",
       "All-in-One Platform",
@@ -153,6 +152,12 @@ describe("picker exclusions", () => {
     // POS quote — `isPickable` is about the product, and only the quote type
     // knows whether a line of it was derived or chosen.
     expect(isPickable(find("Menu Board Computer"))).toBe(true);
+  });
+
+  it("offers the Unifi WiFi package (2026-10-21, like a KDS)", () => {
+    const wifi = find("AIO Wifi Network Package - Unifi");
+    expect(isPickable(wifi)).toBe(true);
+    expect(isAllowedForQuoteType(wifi, "all_in_one")).toBe(true);
   });
 
   it("never offers the individual network components; the WiFi package line stands for them", () => {
@@ -228,20 +233,19 @@ describe("quote types", () => {
 describe("always-included services", () => {
   const SOMETHING = [line("POS Unit", 1)];
 
-  it("puts a network, an install and a training on any quote with products, one each", () => {
+  it("puts an install and a training on any quote with products, one each", () => {
     for (const quoteType of ["order_pay_only", "all_in_one"] as const) {
       const { lines, missing } = resolveIncludedServices(quoteType, SOMETHING, CATALOG);
       expect(missing).toEqual([]);
       expect(lines.map(l => l.name)).toEqual([
-        "AIO Wifi Network Package - Unifi",
         "Onsite Installation",
         "System Onboarding and Training",
       ]);
       expect(lines.every(l => l.qty === 1)).toBe(true);
-      // All three are CHARGED. The install and the training were comped to $0
+      // Both are CHARGED. The install and the training were comped to $0
       // from 2026-09-18 until the product owner ended it on 2026-10-18:
       // "included but priced". See COMPED_SERVICE_PRODUCT_IDS.
-      expect(quoteTotals(lines).oneTime).toBe(698 + 999 + 499);
+      expect(quoteTotals(lines).oneTime).toBe(999 + 499);
       for (const l of lines) expect(l.discountPercent ?? 0).toBe(0);
     }
   });
@@ -261,12 +265,11 @@ describe("always-included services", () => {
     expect(resolveIncludedServices("all_in_one", websiteOnly, CATALOG)).toEqual({ lines: [], missing: [] });
   });
 
-  it("still attaches all three when hardware is picked ALONGSIDE a website — one physical pick is enough", () => {
+  it("still attaches both when hardware is picked ALONGSIDE a website — one physical pick is enough", () => {
     const mixed = [line("POS Unit", 1), line("Website", 1)];
     const { lines, missing } = resolveIncludedServices("all_in_one", mixed, CATALOG);
     expect(missing).toEqual([]);
     expect(lines.map(l => l.name)).toEqual([
-      "AIO Wifi Network Package - Unifi",
       "Onsite Installation",
       "System Onboarding and Training",
     ]);
@@ -274,7 +277,7 @@ describe("always-included services", () => {
 
   it("attaches to products, not to declared channels", () => {
     // A QR-ordering merchant has no on-site anything for a $999 install or
-    // a $999 WiFi package to cover, even though the channel does carry a
+    // a $999 install to cover, even though the channel does carry a
     // platform fee.
     const built = buildQuote("all_in_one", [], ["qr"], CATALOG);
     expect(built.orderPoints.total).toBe(1);
@@ -326,44 +329,46 @@ describe("always-included services", () => {
       1
     );
 
-    it("a fresh quote derives the current Unifi package, not the retired one", () => {
-      const { lines, missing } = resolveIncludedServices("all_in_one", SOMETHING, CATALOG);
-      expect(missing).toEqual([]);
-      const wifi = lines.find(l => l.hubspotProductId === WIFI_PRODUCT_ID)!;
-      expect(wifi.name).toBe("AIO Wifi Network Package - Unifi");
-      expect(wifi.unitPrice).toBe(698);
+    it("a fresh quote with hardware but no WiFi pick has no WiFi line", () => {
+      const built = buildQuote("all_in_one", SOMETHING, [], CATALOG);
+      expect(built.quoteLines.map(l => l.hubspotProductId)).not.toContain(WIFI_PRODUCT_ID);
+      expect(built.includedServices.missing).toEqual([]);
     });
 
-    it("a saved quote carrying the retired $999 line is still recognised as the WiFi line and is not offered back as a pick", () => {
+    it("a picked WiFi package is one line at the catalog price", () => {
+      const built = buildQuote("all_in_one", [...SOMETHING, line("AIO Wifi Network Package - Unifi", 1)], [], CATALOG);
+      const wifi = built.quoteLines.filter(l => l.hubspotProductId === WIFI_PRODUCT_ID);
+      expect(wifi).toHaveLength(1);
+      expect(wifi[0].unitPrice).toBe(698);
+      expect(wifi[0].qty).toBe(1);
+    });
+
+    it("a saved quote carrying the retired $999 line reopens as a pick of the Unifi package", () => {
       const saved = [RETIRED_WIFI, line("POS Unit", 1), line("Onsite Installation", 1), line("System Onboarding and Training", 1)];
       const picks = picksFromQuoteLines(saved, "all_in_one");
       expect(picks).not.toContainEqual(expect.objectContaining({ hubspotProductId: "281351401209" }));
-      expect(picks).toEqual([{ hubspotProductId: find("POS Unit").hubspotProductId, qty: 1 }]);
+      expect(picks).toHaveLength(2);
+      expect(picks).toContainEqual({ hubspotProductId: find("POS Unit").hubspotProductId, qty: 1 });
+      expect(picks).toContainEqual({ hubspotProductId: WIFI_PRODUCT_ID, qty: 1 });
     });
 
-    it("re-saving that quote re-derives the current Unifi line and raises no blocker", () => {
+    it("a saved quote carrying the CURRENT Unifi line reopens as a pick, not dropped", () => {
+      const saved = [line("POS Unit", 1), line("AIO Wifi Network Package - Unifi", 1)];
+      expect(picksFromQuoteLines(saved, "all_in_one")).toContainEqual({ hubspotProductId: WIFI_PRODUCT_ID, qty: 1 });
+    });
+
+    it("re-saving the retired-line quote re-derives the current Unifi line and raises no blocker", () => {
       const picks = picksFromQuoteLines([RETIRED_WIFI, line("POS Unit", 1)], "all_in_one");
       const built = buildQuote("all_in_one", picks.map(({ hubspotProductId, qty }) => toQuoteLine(CATALOG.find(c => c.hubspotProductId === hubspotProductId)!, qty)), [], CATALOG);
       expect(built.blockers).toEqual([]);
       expect(built.quoteLines.map(l => l.name)).not.toContain("AIO WiFi Network Package");
-      expect(built.quoteLines.map(l => l.name)).toContain("AIO Wifi Network Package - Unifi");
+      expect(built.quoteLines.filter(l => l.name === "AIO Wifi Network Package - Unifi")).toHaveLength(1);
     });
 
-    it("a retired WiFi line reopens as PRESENT, not as removed", () => {
-      const reopened = adjustmentsFromQuoteLines(
-        [line("All-in-One Platform", 1), RETIRED_WIFI, line("Onsite Installation", 1), line("System Onboarding and Training", 1), line("POS Unit", 1)],
-        "all_in_one"
-      );
-      expect(reopened[WIFI_PRODUCT_ID]).toBeUndefined();
-    });
-
-    it("the rep's remove-toggle still works once the retired line is gone", () => {
-      const reopened = adjustmentsFromQuoteLines(
-        [line("All-in-One Platform", 1), line("Onsite Installation", 1), line("System Onboarding and Training", 1), line("POS Unit", 1)],
-        "all_in_one"
-      );
-      // No WiFi line at all (rep removed it) still reads as removed.
-      expect(reopened[WIFI_PRODUCT_ID]).toEqual({ removed: true });
+    it("saved adjustments that still carry the retired `removed: true` are ignored, not a crash", () => {
+      const legacy = { [WIFI_PRODUCT_ID]: { removed: true } } as unknown as QuoteAdjustments;
+      const built = buildQuote("all_in_one", [...SOMETHING, line("AIO Wifi Network Package - Unifi", 1)], [], CATALOG, legacy);
+      expect(built.quoteLines.map(l => l.hubspotProductId)).toContain(WIFI_PRODUCT_ID);
     });
   });
 });
@@ -710,14 +715,13 @@ describe("platform line selection", () => {
 describe("buildQuote — the one derivation", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
 
-  it("assembles an All-in-One quote: platform line, the three services, then the picks", () => {
+  it("assembles an All-in-One quote: platform line, the two services, then the picks", () => {
     const built = buildQuote("all_in_one", picked([["POS Unit", 2], ["Cash Drawer", 1]]), ["qr"], CATALOG);
 
     expect(built.blockers).toEqual([]);
     expect(built.orderPoints.total).toBe(3); // 2 POS + the QR channel
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "All-in-One Platform",
-      "AIO Wifi Network Package - Unifi",
       "Onsite Installation",
       "System Onboarding and Training",
       "POS Unit",
@@ -727,9 +731,9 @@ describe("buildQuote — the one derivation", () => {
       // Last, past every adjustment — see `resolveProcessingDisclosure`.
       RATE_LINE,
     ]);
-    // 698 + 999 + 499 + 2×749 + 69 + 2×300 = $4,363 due once. The install
+    // 999 + 499 + 2×749 + 69 + 2×300 = $3,665 due once. The install
     // and the training are charged at list since 2026-10-18.
-    expect(built.totals.oneTime).toBe(4363);
+    expect(built.totals.oneTime).toBe(3665);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
@@ -1181,7 +1185,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
       CATALOG
     );
     expect(built.softwareLicense.screens).toBe(5);
-    expect(built.softwareLicense.lines.map(l => [l.name, l.qty])).toEqual([["Additional Software License", 1]]);
+    expect(built.softwareLicense.lines.map(l => [l.name, l.qty])).toEqual([["Additional Software License", 2]]);
     // Still not ordering points.
     expect(built.orderPoints.total).toBe(2);
   });
@@ -1194,30 +1198,30 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
       CATALOG
     );
     expect(built.softwareLicense.screens).toBe(4);
-    expect(built.softwareLicense.lines).toEqual([]);
+    expect(built.softwareLicense.lines.map(l => [l.name, l.qty])).toEqual([["Additional Software License", 1]]);
   });
 
-  it("adds a software license only past four screens", () => {
+  it("adds a software license only past three screens", () => {
+    const three = buildQuote(
+      "all_in_one",
+      picked([["POS Unit", 2], ["Mega Kiosk", 1]]),
+      [],
+      CATALOG
+    );
+    expect(three.softwareLicense.screens).toBe(INCLUDED_SCREEN_COUNT);
+    expect(three.softwareLicense.lines).toEqual([]);
+    expect(three.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
+
     const four = buildQuote(
       "all_in_one",
       picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1]]),
       [],
       CATALOG
     );
-    expect(four.softwareLicense.screens).toBe(INCLUDED_SCREEN_COUNT);
-    expect(four.softwareLicense.lines).toEqual([]);
-    expect(four.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
-
-    const five = buildQuote(
-      "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1], ["Orders Hub Tablet", 1]]),
-      [],
-      CATALOG
-    );
-    expect(five.softwareLicense.lines.map(l => [l.name, l.qty, l.unitPrice])).toEqual([
+    expect(four.softwareLicense.lines.map(l => [l.name, l.qty, l.unitPrice])).toEqual([
       ["Additional Software License", 1, 19],
     ]);
-    expect(five.totals.recurring).toEqual([{ frequency: "monthly", amount: 418 }]);
+    expect(four.totals.recurring).toEqual([{ frequency: "monthly", amount: 418 }]);
 
     const seven = buildQuote(
       "order_pay_only",
@@ -1233,9 +1237,9 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
       CATALOG
     );
     expect(seven.softwareLicense.screens).toBe(7);
-    expect(seven.softwareLicense.lines[0].qty).toBe(3);
-    // 299 platform + 3 × 19.
-    expect(seven.totals.recurring).toEqual([{ frequency: "monthly", amount: 356 }]);
+    expect(seven.softwareLicense.lines[0].qty).toBe(4);
+    // 299 platform + 4 × 19.
+    expect(seven.totals.recurring).toEqual([{ frequency: "monthly", amount: 375 }]);
   });
 
   it("leaves a rate-only quote without a terminal, a license, or WiFi", () => {
@@ -1245,32 +1249,20 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     expect(built.softwareLicense).toEqual({ lines: [], missing: [], screens: 0 });
   });
 
-  it("does not treat a channel-only quote as having removed WiFi", () => {
-    const built = buildQuote("all_in_one", [], ["website"], CATALOG);
-    expect(adjustmentsFromQuoteLines(built.quoteLines, "all_in_one")[WIFI_PRODUCT_ID]).toBeUndefined();
-  });
+  it("keeps a picked WiFi package through a reopen, and nothing is read back as an adjustment", () => {
+    const first = buildQuote("all_in_one", picked([["POS Unit", 1], ["AIO Wifi Network Package - Unifi", 1]]), [], CATALOG);
+    expect(first.quoteLines.map(l => l.name)).toContain("AIO Wifi Network Package - Unifi");
 
-  it("keeps a removed WiFi package off through a reopen", () => {
-    const adjustments = { [WIFI_PRODUCT_ID]: { removed: true as const } };
-    const first = buildQuote("all_in_one", picked([["POS Unit", 1]]), [], CATALOG, adjustments);
-    expect(first.quoteLines.map(l => l.name)).not.toContain("AIO Wifi Network Package - Unifi");
-    expect(first.includedServices.missing).toEqual([]);
-    expect(first.quoteLines.map(l => l.name)).toContain("Onsite Installation");
-
-    const reopened = adjustmentsFromQuoteLines(first.quoteLines, "all_in_one");
-    expect(reopened[WIFI_PRODUCT_ID]).toEqual({ removed: true });
+    expect(adjustmentsFromQuoteLines(first.quoteLines, "all_in_one")[WIFI_PRODUCT_ID]).toBeUndefined();
     const picks = picksFromQuoteLines(first.quoteLines, "all_in_one");
-    expect(picks).toEqual([
-      { hubspotProductId: find("POS Unit").hubspotProductId, qty: 1 },
-      { hubspotProductId: AMS1_PRODUCT.hubspotProductId, qty: 1 },
-    ]);
+    expect(picks).toContainEqual({ hubspotProductId: WIFI_PRODUCT_ID, qty: 1 });
 
     const second = buildQuote(
       "all_in_one",
       picks.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
       [],
       CATALOG,
-      reopened
+      adjustmentsFromQuoteLines(first.quoteLines, "all_in_one")
     );
     expect(second.quoteLines).toEqual(first.quoteLines);
   });

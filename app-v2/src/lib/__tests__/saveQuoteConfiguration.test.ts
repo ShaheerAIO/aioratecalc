@@ -107,10 +107,11 @@ const FULL_CATALOG: CatalogProduct[] = [
   p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
 ];
 // The POS a rep picks on a processing quote, and the Menu Board Computer the
-// marketing plans preselect three of — both are ordinary picks now.
+// marketing plans preselect three of — both are ordinary picks now. So is the
+// Unifi WiFi package (2026-10-21), which a reopened quote's WiFi line becomes.
 const MENU_BOARD_ID = "223511653103";
 const PICKABLE = FULL_CATALOG.filter(
-  c => c.hubspotProductId === "217445755632" || c.hubspotProductId === MENU_BOARD_ID
+  c => ["217445755632", MENU_BOARD_ID, "338690209525"].includes(c.hubspotProductId)
 );
 
 // The 60-day billing start the two POS plans seed onto their recurring lines
@@ -226,7 +227,6 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       // $0, derived, and on every quote AIO processes for (2026-10-14) — it
       // is how the rates reach the document the merchant signs.
       "AIO Processing Two Tiered Rate",
-      "AIO Wifi Network Package - Unifi",
       "All-in-One Platform",
       "Onsite Installation",
       "POS Unit",
@@ -332,10 +332,10 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 
   it("reopening a saved quote and re-saving it unchanged does not duplicate the platform line or the included services", async () => {
     // Simulate a quote that was already saved once: derived lines (platform +
-    // the three included services) plus one picked POS unit. The WiFi line is
+    // the two included services) plus one picked POS unit. The WiFi line is
     // the RETIRED $999 product (281351401209) — pre-2026-10-13 quotes carry
-    // it, and the catalog no longer does, so re-derivation must replace it
-    // with the current Unifi line rather than fail to recognise it.
+    // it, and the catalog no longer does. Since 2026-10-21 WiFi is a pick, so
+    // it reopens as a pick of the current Unifi package and re-saves as that.
     const savedLines: QuoteLine[] = [
       toQuoteLine(FULL_CATALOG.find(c => c.name === "All-in-One Platform")!, 1),
       toQuoteLine(
@@ -349,9 +349,11 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     getApplication.mockResolvedValue(app({ quoteLines: savedLines, orderPoints: { hardware: { "POS Unit": 1 }, channels: [], total: 1 } }));
 
     // The UI rehydrates the configurator with picksFromQuoteLines — derived
-    // lines are stripped back out, leaving just what the rep actually picked.
+    // lines are stripped back out, leaving what the rep actually picked.
     const rehydratedPicks = picksFromQuoteLines(savedLines, "all_in_one");
-    expect(rehydratedPicks).toEqual([{ hubspotProductId: "217445755632", qty: 1 }]);
+    expect(rehydratedPicks).toHaveLength(2);
+    expect(rehydratedPicks).toContainEqual({ hubspotProductId: "217445755632", qty: 1 });
+    expect(rehydratedPicks).toContainEqual({ hubspotProductId: "338690209525", qty: 1 });
 
     const updated = await saveQuoteConfigurationAction({
       applicationId: "app-1",

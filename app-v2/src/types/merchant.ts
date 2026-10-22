@@ -546,13 +546,9 @@ export type LineAdjustment = {
    * representation, and `adjustmentsFromQuoteLines` reads it back off them.
    */
   units?: UnitAdjustment[] | null;
-  /**
-   * Take a derived line off the quote. Only the WiFi package honors this —
-   * `buildQuote` skips that line when it is set, and does not report the
-   * product as missing. Install and training ignore it; they are not optional.
-   * Absent means the line stays, which is the default.
-   */
-  removed?: boolean | null;
+  // `removed` (2026-10-21, gone): it took the derived WiFi package off a quote.
+  // The package is an ordinary pick now, so a rep un-picks it instead. Saved
+  // adjustments may still carry `removed: true`; nothing reads it any more.
   /**
    * The Website takes online orders, so AIO processes the card payments it
    * takes. Only the Website line on a marketing quote honors this. Absent
