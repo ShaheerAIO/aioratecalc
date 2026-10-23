@@ -49,7 +49,7 @@ import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
-import { buildAndSendOneTimeInvoice } from "@/lib/billing/oneTimeInvoice";
+import { buildOneTimeInvoice } from "@/lib/billing/oneTimeInvoice";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
 
 export type SendQuoteResult = {
@@ -126,11 +126,12 @@ export async function sendQuoteAction(applicationId: string): Promise<SendQuoteR
 export type RetryInvoiceResult = { ok: boolean; error?: string };
 
 /**
- * Staff retry for the one-time invoice (2026-10-22). The invoice normally goes
- * out by itself the moment acceptance is detected, and the nightly cron
- * retries whatever that left unfinished — this is for a rep who has just fixed
- * the cause (a missing billing email, say) and doesn't want to wait for the
- * night. Same idempotent build, so pressing it twice cannot bill twice.
+ * Staff retry for the one-time invoice draft (2026-10-22). The draft is
+ * normally built by itself the moment acceptance is detected, and the nightly
+ * cron retries whatever that left unfinished — this is for a rep who has just
+ * fixed the cause and doesn't want to wait for the night. Same idempotent
+ * build, so pressing it twice cannot build two invoices. Charging it is done
+ * in HubSpot, never from here.
  */
 export async function retryOneTimeInvoiceAction(applicationId: string): Promise<RetryInvoiceResult> {
   const effective = await getEffectiveRole();
@@ -142,19 +143,19 @@ export async function retryOneTimeInvoiceAction(applicationId: string): Promise<
   );
   if (!app) return { ok: false, error: "Application not found" };
 
-  const outcome = await buildAndSendOneTimeInvoice(app);
+  const outcome = await buildOneTimeInvoice(app);
   switch (outcome.status) {
-    case "sent":
+    case "built":
       return { ok: true };
     case "failed":
       return { ok: false, error: `${outcome.step}: ${outcome.error}` };
     case "skipped":
-      return outcome.reason === "already_sent"
+      return outcome.reason === "already_built"
         ? { ok: true }
         : {
             ok: false,
             error: {
-              not_accepted: "The merchant hasn't accepted the quote yet — the invoice goes out after they do.",
+              not_accepted: "The merchant hasn't accepted the quote yet — the invoice is drafted after they do.",
               not_split: "This quote was published before one-time invoices existed; its one-time charges were collected at checkout.",
               nothing_to_invoice: "There's nothing to invoice — every one-time line on this quote is included.",
               build_in_progress: "The invoice is being built right now. Try again in a minute.",

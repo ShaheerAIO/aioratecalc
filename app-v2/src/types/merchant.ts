@@ -725,32 +725,30 @@ export const EMPTY_HUBSPOT_IDS: HubspotIds = {
 
 /**
  * The one-time invoice (2026-10-22, product owner): hardware, install and
- * training, billed on a HubSpot invoice right after acceptance instead of on
- * the quote. Built by lib/billing/oneTimeInvoice.ts, and ONLY written there —
- * its own column (`hubspot_invoice`), deliberately left out of `appToRow`, so
- * a full-row `saveApplication` holding a stale copy can never erase the
- * invoice id and let a retry bill the merchant twice.
- *
- * An OPEN invoice is treated as a one-way door, like a published quote, until
- * the live probe (scripts/probe-invoice.ts --open) says otherwise.
+ * training, billed on a HubSpot invoice instead of the quote. Built as a DRAFT
+ * by lib/billing/oneTimeInvoice.ts right after acceptance; AIO staff open and
+ * charge it in HubSpot against the payment method stored at checkout. ONLY
+ * written by that file and the billing cron — its own column
+ * (`hubspot_invoice`), deliberately left out of `appToRow`, so a full-row
+ * `saveApplication` holding a stale copy can never erase the invoice id and
+ * let a retry build a second invoice.
  */
 export type HubspotInvoice = {
   invoiceId: string | null;
   /** Invoice-side line items, in `splitQuoteLines(...).invoiceLines` order.
    *  Separate HubSpot objects from the quote's: a line item has one parent. */
   lineItemIds: string[] | null;
+  /** Net total of the invoiced lines, computed by EasyOB. A draft's own
+   *  `hs_balance_due` reads $0.00 (observed on draft 878578016996), so the
+   *  customer's "upcoming invoice" is shown from this, not from HubSpot. */
+  amount: number | null;
   /** hs_invoice_status: draft | open | paid | voided. */
   status: string | null;
   /** hs_payment_status: unpaid | partially_paid | paid | refunded | partially_refunded. */
   paymentStatus: string | null;
   balanceDue: number | null;
-  /** hs_invoice_link — the merchant's pay page. */
-  invoiceLink: string | null;
-  /** When the invoice was opened. The one-way-door marker for the invoice. */
-  openedAt: string | null;
-  /** When the pay link was emailed. Set only after the send succeeds, so a
-   *  failed email is retried and a delivered one never is. */
-  emailedAt: string | null;
+  /** When the draft was fully built and associated. Nothing is built again after this. */
+  builtAt: string | null;
   /** Doubles as the build lease, like `HubspotIds.syncedAt`. */
   syncedAt: string | null;
   lastSyncError: string | null;
@@ -760,12 +758,11 @@ export type HubspotInvoice = {
 export const EMPTY_HUBSPOT_INVOICE: HubspotInvoice = {
   invoiceId: null,
   lineItemIds: null,
+  amount: null,
   status: null,
   paymentStatus: null,
   balanceDue: null,
-  invoiceLink: null,
-  openedAt: null,
-  emailedAt: null,
+  builtAt: null,
   syncedAt: null,
   lastSyncError: null,
   lastSyncErrorAt: null,

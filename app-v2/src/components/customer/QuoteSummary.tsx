@@ -228,7 +228,8 @@ export default function QuoteSummary({ quote }: Props) {
                 <span className={styles.lineTotalValue}>{fmt$(invoiceTotal)}</span>
               </div>
               <p className={styles.lineFootnote}>
-                Sent to your billing contact after you sign up; due on receipt.
+                Charged separately after you sign up, to the bank account you set up at checkout — you
+                won&apos;t need to enter anything again.
               </p>
             </section>
           )}

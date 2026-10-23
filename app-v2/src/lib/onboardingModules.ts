@@ -661,34 +661,35 @@ function foodbuyModule(app: MerchantApplication, basePath: string): OnboardingMo
   };
 }
 
-// The one-time invoice (2026-10-22): hardware, install and training, billed
-// after acceptance on a HubSpot invoice. Shown only once the invoice is open —
-// before that there is nothing to pay. NEVER A GATE: nothing else waits on it,
-// and it is only ever built after acceptance, so the lock pass has nothing to
-// lock. The pay link is HubSpot's hosted page, which needs no EasyOB account,
-// hence `publicCta`.
+// The one-time invoice (2026-10-22): hardware, install and training, drafted in
+// HubSpot right after acceptance and charged by AIO later, against the payment
+// method stored at checkout (product owner, 2026-10-23). So the merchant has
+// nothing to DO here — the row tells them it's coming ("upcoming invoice") and
+// completes when HubSpot reports it paid. NEVER A GATE: nothing else waits on
+// it, and it only exists after acceptance, so the lock pass has nothing to lock.
 function invoiceModule(app: MerchantApplication): OnboardingModule | null {
   const inv = app.hubspotInvoice;
-  if (!inv?.openedAt) return null;
-  const label = "Hardware & Setup Invoice";
+  if (!inv?.builtAt) return null;
+  const label = "Upcoming Invoice";
 
   if (inv.paymentStatus === "paid" || inv.status === "paid") {
     return {
       key: "invoice",
-      label,
+      label: "Hardware & Setup Invoice",
       status: "complete",
       description: "Your hardware and setup invoice is paid.",
     };
   }
 
-  const amount = inv.balanceDue != null && inv.balanceDue > 0
-    ? ` of $${inv.balanceDue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const amount = inv.amount != null && inv.amount > 0
+    ? ` of $${inv.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     : "";
   return {
     key: "invoice",
     label,
     status: "in_progress",
-    description: `Your one-time invoice${amount} for hardware, installation and training is due on receipt. We've emailed it to your billing contact.`,
-    ...(inv.invoiceLink ? { href: inv.invoiceLink, ctaLabel: "Pay Invoice", publicCta: true } : {}),
+    description:
+      `Your one-time invoice${amount} for hardware, installation and training will be charged to the ` +
+      "bank account you set up at checkout. There's nothing you need to do.",
   };
 }

@@ -9,7 +9,7 @@ import {
   type QuoteSnapshot,
 } from "@/lib/adapters/hubspot";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
-import { buildAndSendOneTimeInvoice } from "@/lib/billing/oneTimeInvoice";
+import { buildOneTimeInvoice } from "@/lib/billing/oneTimeInvoice";
 import { rowToApp, type ApplicationRow as FullApplicationRow } from "@/lib/storage/applicationRow";
 import { rollUpSubscriptionStatus, type HubspotIds, type HubspotSubscriptionSnapshot } from "@/types/merchant";
 
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
     applicationsUpdated: 0,
     accepted: 0,
     subscriptionsMatched: 0,
-    invoicesSent: 0,
+    invoicesBuilt: 0,
     invoicesRefreshed: 0,
     unmatched: [] as string[],
     failed: [] as { applicationId: string; error: string }[],
@@ -175,7 +175,7 @@ export async function GET(req: NextRequest) {
 }
 
 type InvoiceSummary = {
-  invoicesSent: number;
+  invoicesBuilt: number;
   invoicesRefreshed: number;
   failed: { applicationId: string; error: string }[];
 };
@@ -184,12 +184,13 @@ type InvoiceSummary = {
 // not on the quote-modified window above: an invoice owes nothing to when its
 // quote last changed, and ACH `paid` lags by days.
 //
-//  1. RETRY: accepted, split-billed, and not yet emailed — acceptance detection
-//     sends it the moment it sees the subscription, and this catches whatever
-//     that attempt left unfinished. `buildAndSendOneTimeInvoice` is idempotent
-//     and cheap for a row with nothing to invoice (no HubSpot call at all).
-//  2. REFRESH: emailed and not yet paid — reads status/balance back. Only rows
-//     already emailed, so this can never race a build that is still writing.
+//  1. RETRY: accepted, split-billed, and no draft built yet — acceptance
+//     detection drafts it the moment it sees the subscription, and this catches
+//     whatever that attempt left unfinished. `buildOneTimeInvoice` is
+//     idempotent and cheap for a row with nothing to invoice (no HubSpot call).
+//  2. REFRESH: built and not yet paid — reads back what staff have done to it
+//     in HubSpot (opened, charged, paid). Only rows already built, so this can
+//     never race a build that is still writing.
 async function syncOneTimeInvoices(summary: InvoiceSummary): Promise<void> {
   const pending: ApplicationRow[] = await db
     .select()
@@ -197,12 +198,12 @@ async function syncOneTimeInvoices(summary: InvoiceSummary): Promise<void> {
     .where(and(
       isNotNull(merchantApplications.quoteAcceptedAt),
       sql`${merchantApplications.hubspotIds}->>'splitBilling' = 'true'`,
-      sql`(${merchantApplications.hubspotInvoice} IS NULL OR ${merchantApplications.hubspotInvoice}->>'emailedAt' IS NULL)`,
+      sql`(${merchantApplications.hubspotInvoice} IS NULL OR ${merchantApplications.hubspotInvoice}->>'builtAt' IS NULL)`,
     ));
   for (const row of pending) {
     try {
-      const result = await buildAndSendOneTimeInvoice(rowToApp(row));
-      if (result.status === "sent") summary.invoicesSent++;
+      const result = await buildOneTimeInvoice(rowToApp(row));
+      if (result.status === "built") summary.invoicesBuilt++;
       if (result.status === "failed") summary.failed.push({ applicationId: row.id, error: `invoice ${result.step}: ${result.error}` });
     } catch (err) {
       summary.failed.push({ applicationId: row.id, error: err instanceof Error ? err.message : String(err) });
@@ -213,7 +214,7 @@ async function syncOneTimeInvoices(summary: InvoiceSummary): Promise<void> {
     .select()
     .from(merchantApplications)
     .where(and(
-      sql`${merchantApplications.hubspotInvoice}->>'emailedAt' IS NOT NULL`,
+      sql`${merchantApplications.hubspotInvoice}->>'builtAt' IS NOT NULL`,
       sql`COALESCE(${merchantApplications.hubspotInvoice}->>'paymentStatus', '') <> 'paid'`,
     ));
   for (const row of unpaid) {
@@ -233,7 +234,6 @@ async function syncOneTimeInvoices(summary: InvoiceSummary): Promise<void> {
             status: snap.status,
             paymentStatus: snap.paymentStatus,
             balanceDue: snap.balanceDue,
-            invoiceLink: snap.invoiceLink ?? inv.invoiceLink,
             syncedAt: new Date().toISOString(),
           },
           updatedAt: new Date(),

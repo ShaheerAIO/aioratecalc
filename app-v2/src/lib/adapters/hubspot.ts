@@ -2443,8 +2443,8 @@ export async function publishQuote(
 }
 
 // ── One-time invoices ───────────────────────────────────────────────────────
-// Hardware, install and training are billed on an invoice created right after
-// acceptance, not on the quote (2026-10-22). Association type ids read from
+// Hardware, install and training are billed on an invoice EasyOB builds as a
+// DRAFT right after acceptance; staff charge it in HubSpot (2026-10-23). Association type ids read from
 // /crm/v4/associations/invoices/{to}/labels on 2026-10-22 (HUBSPOT_DEFINED,
 // unlabeled) — see scripts/probe-invoice.ts.
 export const INVOICE_TO_CONTACT = 177;
@@ -2453,17 +2453,15 @@ export const INVOICE_TO_DEAL = 175;
 export const INVOICE_TO_LINE_ITEM = 409;
 
 /**
- * A draft invoice's properties. Due on receipt (product owner, 2026-10-22), so
- * the due date IS the invoice date. ACH only, like the quote: a bare create
- * gets HubSpot's default of ACH + card (observed on draft 878578016996).
+ * A draft invoice's properties. Staff open and charge it in HubSpot when AIO
+ * chooses (product owner, 2026-10-23), so nothing about how it is paid is set
+ * here. Dated today; HubSpot requires a due date, and it is moot on a draft.
  */
 export function draftInvoiceProperties(invoiceDate: string): Record<string, string> {
   return {
     hs_currency: "USD",
     hs_invoice_date: invoiceDate,
     hs_due_date: invoiceDate,
-    hs_allowed_payment_methods: "ach",
-    hs_allowed_commerce_payment_methods: "ACH",
   };
 }
 
@@ -2535,33 +2533,6 @@ export async function getInvoiceSnapshot(invoiceId: string): Promise<InvoiceSnap
     balanceDue: num(props?.hs_balance_due),
     invoiceLink: clean(props?.hs_invoice_link),
   };
-}
-
-/**
- * Opens a draft invoice — treated as a ONE-WAY DOOR until the live probe says
- * an open invoice can be voided through the API. READS FIRST, so a rerun after
- * a crash between HubSpot's ack and our DB write finds it already open and
- * does nothing, and like `publishQuote` the PATCH is deliberately not retried.
- */
-export async function openInvoice(invoiceId: string): Promise<InvoiceSnapshot> {
-  const before = await getInvoiceSnapshot(invoiceId);
-  if (!before) throw new Error(`HubSpot invoice ${invoiceId} does not exist`);
-  if (before.status !== "draft") return before;
-
-  const res = await fetch(`${BASE}/crm/v3/objects/invoices/${invoiceId}`, {
-    method: "PATCH",
-    headers: billingHeaders(),
-    body: JSON.stringify({ properties: { hs_invoice_status: "open" } }),
-  });
-  if (!res.ok) throw hubspotErr(`HubSpot invoice ${invoiceId} open failed`, res.status, await res.text());
-
-  const after = await getInvoiceSnapshot(invoiceId);
-  if (!after) {
-    throw new Error(
-      `HubSpot invoice ${invoiceId} was opened but could not be read back — its state is UNKNOWN. Re-check it; do NOT open another.`
-    );
-  }
-  return after;
 }
 
 // ── Subscriptions ───────────────────────────────────────────────────────────

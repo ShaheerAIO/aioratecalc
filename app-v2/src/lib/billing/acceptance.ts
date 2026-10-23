@@ -26,7 +26,7 @@ import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { syncDealFromApplication } from "@/lib/adapters/hubspot";
 import { writeCommissionToDeal } from "@/lib/billing/commissionWriteback";
-import { issueOneTimeInvoiceSafely } from "@/lib/billing/oneTimeInvoice";
+import { buildOneTimeInvoiceSafely } from "@/lib/billing/oneTimeInvoice";
 import { hasBillingCompleted } from "@/lib/onboardingModules";
 import { shouldAdvance } from "@/lib/stages";
 import type { MerchantApplication } from "@/types/merchant";
@@ -66,11 +66,12 @@ export async function applyDetectedAcceptance(app: MerchantApplication): Promise
   if (app.quoteAcceptedAt) return app;
   if (!isAcceptedInHubspot(app)) return app;
   const accepted = await recordAcceptance(app, { syncDeal: true });
-  // The one-time invoice goes out the moment acceptance is seen (2026-10-22).
-  // Here and not inside recordAcceptance, so the DEBUG billing bypass — which
-  // calls recordAcceptance directly — never bills anyone. Its own claim makes
+  // The one-time invoice is drafted the moment acceptance is seen, beside the
+  // subscription checkout just produced (2026-10-22). Here and not inside
+  // recordAcceptance, so the DEBUG billing bypass — which calls
+  // recordAcceptance directly — never writes to HubSpot. Its own claim makes
   // the race between observers harmless, and it never throws.
-  if (accepted.quoteAcceptedAt) await issueOneTimeInvoiceSafely(accepted);
+  if (accepted.quoteAcceptedAt) await buildOneTimeInvoiceSafely(accepted);
   return accepted;
 }
 

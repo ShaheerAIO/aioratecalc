@@ -387,30 +387,3 @@ export async function sendLeadLinkEmail(
     rep
   );
 }
-
-// The one-time invoice (2026-10-22): hardware, install and training, billed
-// after acceptance on a HubSpot invoice. HubSpot's API has no "send this
-// invoice" call EasyOB relies on, so the pay link goes out through the same
-// transport as everything else, to the billing contact the confirm form names
-// ("This is where your invoices will be emailed to").
-export async function sendOneTimeInvoiceEmail(
-  to: string, url: string, amount: string, merchantName?: string
-): Promise<SendMagicLinkResult> {
-  const name = merchantName?.trim();
-  return send(
-    to,
-    "Your AIO hardware & setup invoice",
-    render({
-      preheader: `${amount} for your hardware, installation and training — due on receipt.`,
-      heading: name ? `${name}, your hardware & setup invoice` : "Your hardware & setup invoice",
-      body: [
-        `Thanks for signing up with AIO. This invoice covers your one-time charges — hardware, installation and training — for ${amount}.`,
-        "It's due on receipt and is paid by bank transfer (ACH). Your monthly plan is billed separately, as set out in your quote.",
-      ],
-      cta: "View and pay your invoice",
-      url,
-      footnote: "This link opens your invoice on AIO's secure payment page.",
-    }),
-    url
-  );
-}
