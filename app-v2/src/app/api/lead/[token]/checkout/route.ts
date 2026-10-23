@@ -124,11 +124,13 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ to
 
     const outcome = await buildAndPublishBillingQuote(dealResult.app);
 
-    // The one-time invoice is built and opened beside the quote (2026-10-23),
-    // AFTER the response: the merchant is not kept waiting on a handful of
-    // HubSpot calls for the document they did not come here for. Never
-    // throws; the lead page and the nightly cron retry an unfinished one.
-    if (outcome.status === "published") after(() => buildOneTimeInvoiceForId(app.id));
+    // The one-time invoice is built and opened beside the quote (2026-10-23)
+    // BEFORE answering: the confirm form keeps its loading prompt up and then
+    // lands the merchant on the quote's two documents, so the invoice link
+    // should already be there. A few more HubSpot calls inside a wait the
+    // merchant is already in. Never throws; the lead page and the nightly
+    // cron retry an unfinished one.
+    if (outcome.status === "published") await buildOneTimeInvoiceForId(app.id);
 
     switch (outcome.status) {
       case "published":

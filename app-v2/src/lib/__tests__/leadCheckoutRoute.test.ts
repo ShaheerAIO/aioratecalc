@@ -119,9 +119,8 @@ describe("the merchant's checkout door", () => {
     expect(await res.json()).toEqual({ url: QUOTE_LINK });
     expect(buildAndPublishBillingQuote).toHaveBeenCalledTimes(1);
 
-    // The one-time invoice is built beside it, after the response.
-    expect(buildOneTimeInvoiceForId).not.toHaveBeenCalled();
-    for (const fn of afterCallbacks) await fn();
+    // The one-time invoice is built beside it, before the answer, so the
+    // quote page the merchant lands on already links it.
     expect(buildOneTimeInvoiceForId).toHaveBeenCalledWith("app-1");
   });
 

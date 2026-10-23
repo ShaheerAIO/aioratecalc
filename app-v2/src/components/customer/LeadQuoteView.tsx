@@ -5,7 +5,6 @@ import { amountInvoiced } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
 import type { CustomerSafeQuote } from "@/types/merchant";
 import QuoteSummary from "./QuoteSummary";
-import { openPendingTab } from "./pendingTab";
 import styles from "./LeadQuoteView.module.css";
 
 // The customer's view of a quote, always one the rep prepared. (Until
@@ -108,8 +107,10 @@ export default function LeadQuoteView({
   // merchant to it. Idempotent server-side, so a double click can't produce a
   // second document.
   //
-  // In a NEW tab (2026-10-23), so this page — with the invoice link beside the
-  // subscription — stays where the merchant can come back to it.
+  // Once it exists, the subscription opens in a new tab like the card's own
+  // link, so this page — with the invoice beside it — stays put. A publish
+  // that only just happened reloads this page onto the two documents instead
+  // (2026-10-23).
   const continueToBilling = async () => {
     if (checkoutUrl) {
       if (!window.open(checkoutUrl, "_blank", "noopener")) window.location.href = checkoutUrl;
@@ -117,28 +118,20 @@ export default function LeadQuoteView({
     }
     setGoing(true);
     setGoError(null);
-    const tab = openPendingTab();
     try {
       const res = await fetch(`/api/lead/${token}/checkout`, { method: "POST" });
       const data = await res.json();
       if (!res.ok || !data.url) {
-        tab?.close();
         setGoError(CHECKOUT_ERRORS[data.error] ?? CHECKOUT_ERRORS.not_ready);
         setGoing(false);
         return;
       }
       // Deliberately not resetting `going` — the navigation is the end of this
       // component's life, and flipping the button back to idle mid-redirect
-      // invites a second click on a door that only opens once. With a tab,
-      // this page reloads to pick up both links.
-      if (tab) {
-        tab.go(data.url);
-        window.location.reload();
-      } else {
-        window.location.href = data.url;
-      }
+      // invites a second click on a door that only opens once.
+      window.location.hash = "documents";
+      window.location.reload();
     } catch {
-      tab?.close();
       setGoError(CHECKOUT_ERRORS.not_ready);
       setGoing(false);
     }
@@ -178,6 +171,11 @@ export default function LeadQuoteView({
   // quote with nothing invoiced show the subscription alone.
   const invoiceTotal = amountInvoiced(quote.lines);
   const hasInvoice = quote.oneTimeInvoiced && invoiceTotal > 0;
+  // Confirmed and published, nothing signed yet: "View Subscription" above IS
+  // the next step, so the panel's own Continue would be the same button twice.
+  // The panel stays for the retry case — confirmed but no link yet.
+  const panelRedundant =
+    !accepted && !signedWithoutPaying && detailsConfirmed && !canAcceptHere && !!checkoutUrl;
 
   return (
     <div className={styles.page}>
@@ -192,7 +190,7 @@ export default function LeadQuoteView({
         </div>
 
         {checkoutUrl && (
-          <div className={`${styles.wide} ${styles.docLinks}`} data-split={hasInvoice || undefined}>
+          <div id="documents" className={`${styles.wide} ${styles.docLinks}`} data-split={hasInvoice || undefined}>
             <div className={styles.docLink}>
               <div className={styles.docLinkLabel}>Subscription</div>
               <p className={styles.docLinkText}>
@@ -222,7 +220,7 @@ export default function LeadQuoteView({
           </div>
         )}
 
-        <div className={styles.panel}>
+        {!panelRedundant && <div className={styles.panel}>
           {accepted ? (
             // Two quite different "done" states share this branch. A rate-only
             // merchant accepted with the form below and needs their login link
@@ -366,7 +364,7 @@ export default function LeadQuoteView({
               {goError && <div className={styles.acceptError}>{goError}</div>}
             </>
           )}
-        </div>
+        </div>}
 
         <p className={styles.footnote}>
           Prefer to talk it through? Your AIO representative will follow up shortly too.

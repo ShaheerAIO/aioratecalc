@@ -146,9 +146,9 @@ How it works:
   whole row, and several paths rewrite `hubspot_ids` from a copy read earlier. If either could erase
   an invoice id, a retry would build a second invoice.
 - **Triggers.**
-  - `/api/lead/[token]/checkout` runs `buildOneTimeInvoiceForId` in `after()` once the publish
-    succeeds, so the merchant's redirect never waits on it (and again on the idempotent
-    already-published return, a no-op once built).
+  - `/api/lead/[token]/checkout` **awaits** `buildOneTimeInvoiceForId` once the publish succeeds,
+    inside the confirm form's loading prompt, so the invoice link is there when the merchant lands.
+    The idempotent already-published return retries an unfinished one in `after()`.
   - The lead pages (`refreshLeadInvoice` in `leadRefresh.ts`) build an unfinished one after the
     response, and re-read a built, unpaid one on a 60s TTL — so a staff charge clears the
     checklist without waiting for the cron.
@@ -164,10 +164,10 @@ How it works:
   - Under the quote, once published, `LeadQuoteView` shows two cards — "View Subscription →" (left)
     and "View Invoice →" (right) — each opening in a new tab. `CustomerSafeQuote.invoice` carries
     only `{ link, paid }`.
-  - The subscription opens in a **new tab** from the confirm form and from "Continue"
-    (`components/customer/pendingTab.ts` opens the tab inside the click, because the URL only
-    exists 10–30s later and a late `window.open` is blocked); the original tab returns to the
-    quote. A blocked popup falls back to the old same-tab redirect.
+  - **After confirm, the merchant lands on the quote's two documents** (`/lead/[token]/quote#documents`)
+    in the same tab, with the loading prompt up until then. Nothing opens a tab on its own
+    (product owner, 2026-10-23: a surprise second tab was confusing). The redundant "Ready to move
+    forward? / Continue" panel is hidden once those cards show.
   - The checklist's **Quote & Billing row stays "In Progress"** after the subscription is in, with
     the invoice in its description and a "View Invoice" CTA, and only completes when HubSpot reports
     the invoice paid (`withOpenInvoice` in `onboardingModules.ts`). Display only — the lock pass and
