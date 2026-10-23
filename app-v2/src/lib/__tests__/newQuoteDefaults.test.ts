@@ -6,6 +6,7 @@ import {
   PLAN_DEFAULT_BILLING_DELAY_DAYS,
   PRE_AUTH_PRODUCT,
   WEBSITE_PRODUCT_ID,
+  amountDueAtCheckout,
   buildQuote,
   isMarketingQuote,
   minimumTerminalsFor,
@@ -79,23 +80,21 @@ describe("the quote a rep opens on, end to end", () => {
     const platform = built.quoteLines.find(l => l.name === "All-in-One Platform")!;
     expect(platform.billingStart).toEqual({ mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS });
 
-    // The kit covers the hardware. What is due at checkout is the install
-    // ($999) and the training ($499), charged at list since 2026-10-18 — so
-    // the quote already clears HubSpot's floor and carries no pre-auth.
+    // The kit covers the hardware; the install ($999) and the training ($499)
+    // are charged at list since 2026-10-18. Both are invoiced after
+    // acceptance (2026-10-22), so the quote's own checkout owes nothing and
+    // carries the $0.50 pre-auth.
     expect(built.packages.applied).toHaveLength(1);
-    expect(built.totals.oneTime).toBe(999 + 499);
-    expect(built.preAuth.lines).toHaveLength(0);
-    expect(built.quoteLines.some(l => l.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId)).toBe(false);
+    expect(built.totals.oneTime).toBe(999 + 499 + 0.5);
+    expect(built.preAuth.lines).toHaveLength(1);
+    expect(built.quoteLines.some(l => l.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId)).toBe(true);
   });
 
   it("collects at least HubSpot's floor at checkout, so the quote can be published", () => {
     const picks = seededPicks();
     const first = buildQuote("all_in_one", picks, [], CATALOG);
     const built = buildQuote("all_in_one", picks, [], CATALOG, seededAdjustments(first.quoteLines));
-    const due = built.quoteLines
-      .filter(l => l.billingFrequency === "one_time" || !l.billingStart)
-      .reduce((n, l) => n + l.unitPrice * l.qty * (1 - (l.discountPercent ?? 0) / 100), 0);
-    expect(due).toBeGreaterThanOrEqual(0.5);
+    expect(amountDueAtCheckout(built.quoteLines)).toBeGreaterThanOrEqual(0.5);
   });
 
   it("is still sendable once the rep clears the delay again", () => {

@@ -2,7 +2,7 @@
 
 import { lineDescription } from "@/lib/lineDescriptions";
 import {
-  CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, lineListAmount, lineNetAmount,
+  CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, isInvoicedLine, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
 import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafePayment, CustomerSafeQuote, QuoteLine } from "@/types/merchant";
@@ -29,8 +29,17 @@ type Props = {
 };
 
 export default function QuoteSummary({ quote }: Props) {
-  const oneTimeLines  = quote.lines.filter(l => l.billingFrequency === "one_time");
+  // One-time lines are billed on a separate invoice after sign-up
+  // (2026-10-22). The only one-time charges left on the quote itself are the
+  // ones its own checkout collects — the $0.50 pre-authorization — shown on
+  // their own so the merchant can see what is taken today. A $0 line (the rate
+  // disclosure) has nothing to show there.
+  const oneTimeLines  = quote.lines.filter(isInvoicedLine);
+  const checkoutLines = quote.lines.filter(
+    l => l.billingFrequency === "one_time" && !isInvoicedLine(l) && lineNetAmount(l) > 0
+  );
   const recurringLines = quote.lines.filter(l => l.billingFrequency !== "one_time");
+  const invoiceTotal = oneTimeLines.reduce((n, l) => n + lineNetAmount(l), 0);
 
   // Packages (and plan-included items) cover one-time lines only — never a
   // recurring one — so grouping by `coveredByPackage` only ever splits the
@@ -194,9 +203,16 @@ export default function QuoteSummary({ quote }: Props) {
             </section>
           )}
 
+          {checkoutLines.length > 0 && (
+            <section className={styles.lineGroup}>
+              <h2 className={styles.lineGroupTitle}>Due at checkout</h2>
+              {checkoutLines.map(renderOneTimeLine)}
+            </section>
+          )}
+
           {oneTimeLines.length > 0 && (
             <section className={styles.lineGroup}>
-              <h2 className={styles.lineGroupTitle}>One-Time</h2>
+              <h2 className={styles.lineGroupTitle}>One-Time — invoiced separately</h2>
               {chargedOneTimeLines.map(renderOneTimeLine)}
               {/* Package/plan-covered items — already paid for, listed
                   separately so a merchant can see at a glance what's included
@@ -208,9 +224,13 @@ export default function QuoteSummary({ quote }: Props) {
                 </div>
               ))}
               <div className={styles.lineTotalRow} data-emphasis="true">
-                <span>Total due once</span>
-                <span className={styles.lineTotalValue}>{fmt$(quote.lineTotals.oneTime)}</span>
+                <span>Invoice total</span>
+                <span className={styles.lineTotalValue}>{fmt$(invoiceTotal)}</span>
               </div>
+              <p className={styles.lineFootnote}>
+                Charged separately after you sign up, to the bank account you set up at checkout — you
+                won&apos;t need to enter anything again.
+              </p>
             </section>
           )}
 

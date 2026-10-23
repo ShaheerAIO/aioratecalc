@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { getApplicationAction } from "@/lib/actions/applications";
-import { sendQuoteAction, type SendQuoteResult } from "@/lib/actions/billing";
+import {
+  retryOneTimeInvoiceAction, sendQuoteAction, type RetryInvoiceResult, type SendQuoteResult,
+} from "@/lib/actions/billing";
 import { bypassBillingAction } from "@/lib/actions/debugBilling";
 import type { PublishRefusal } from "@/lib/billing/preconditions";
 import {
@@ -300,6 +302,8 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
         )}
       </div>
 
+      {hubspotIds?.splitBilling && <OneTimeInvoice app={app} canManage={canManage} onUpdated={onUpdated} />}
+
       {showSend && (
         <div className={styles.retryRow}>
           {/* NOT the normal path any more. The merchant publishes this
@@ -342,5 +346,77 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
 
       {showBypass && <DebugBillingBypass app={app} onUpdated={onUpdated} />}
     </Section>
+  );
+}
+
+// The one-time invoice (2026-10-22): hardware, install and training, drafted in
+// HubSpot right after acceptance. Staff open and CHARGE it in HubSpot, against
+// the payment method stored at checkout — nothing here charges anyone. Only on
+// quotes published under split billing; an older quote collected those lines
+// at checkout. The one write is a retry of the same idempotent draft build the
+// acceptance and the nightly cron run.
+function OneTimeInvoice({ app, canManage, onUpdated }: Pick<Props, "app" | "canManage" | "onUpdated">) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<RetryInvoiceResult | null>(null);
+  const inv = app.hubspotInvoice;
+  const invoiceUrl = inv?.invoiceId && HUBSPOT_PORTAL_ID
+    ? `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-53/${inv.invoiceId}`
+    : null;
+
+  const retry = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await retryOneTimeInvoiceAction(app.id));
+      const refreshed = await getApplicationAction(app.id);
+      if (refreshed) onUpdated(refreshed);
+    } catch (e) {
+      setResult({ ok: false, error: e instanceof Error ? e.message : "Could not build the invoice" });
+    }
+    setBusy(false);
+  };
+
+  const status = inv?.builtAt
+    ? inv.paymentStatus === "paid" ? "Paid" : inv.status === "draft" || !inv.status ? "Draft — ready to charge" : inv.paymentStatus ?? inv.status
+    : app.quoteAcceptedAt
+      ? "Not built yet"
+      : "Drafted after the merchant accepts";
+
+  return (
+    <div>
+      <div className={shared.subLabel}>One-time invoice</div>
+      {inv?.lastSyncError && (
+        <div className={styles.errorBanner}>
+          <div className={styles.errorBannerTitle}>Invoice not built</div>
+          <div className={styles.errorBannerMessage}>{inv.lastSyncError}</div>
+          {inv.lastSyncErrorAt && (
+            <div className={styles.errorBannerMeta}>{new Date(inv.lastSyncErrorAt).toLocaleString()}</div>
+          )}
+        </div>
+      )}
+      <div className={shared.detailGrid}>
+        <Field
+          label="Invoice"
+          value={inv?.invoiceId ? invoiceUrl ? <a href={invoiceUrl} target="_blank" rel="noreferrer">{inv.invoiceId}</a> : inv.invoiceId : "—"}
+        />
+        <Field label="Status" value={status} />
+        <Field label="Amount" value={inv?.amount != null ? fmt$(inv.amount) : "—"} />
+      </div>
+      {inv?.builtAt && inv.paymentStatus !== "paid" && (
+        <div className={styles.emptyNote}>
+          Open and charge this invoice in HubSpot when AIO is ready to bill it — it uses the payment
+          method the merchant stored at checkout. The merchant sees it as an upcoming invoice.
+        </div>
+      )}
+      {canManage && app.quoteAcceptedAt && !inv?.builtAt && (
+        <div className={styles.retryRow}>
+          <button className={shared.btnPrimary} disabled={busy} onClick={retry}>
+            {busy ? "Building…" : "Retry Invoice"}
+          </button>
+          {result && !result.ok && result.error && <div className={styles.errorBannerMessage}>{result.error}</div>}
+          {result?.ok && <div className={styles.emptyNote}>Draft invoice built in HubSpot.</div>}
+        </div>
+      )}
+    </div>
   );
 }

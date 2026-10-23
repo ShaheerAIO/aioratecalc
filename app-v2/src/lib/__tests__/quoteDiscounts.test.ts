@@ -13,6 +13,7 @@ import {
   applyLineAdjustment,
   PRE_AUTH_PRODUCT,
   PROCESSING_DISCLOSURE_PRODUCT,
+  splitQuoteLines,
   checkoutAmountBlockers,
   buildQuote,
   isAllowedForQuoteType,
@@ -254,10 +255,20 @@ describe("quoteSanityBlockers", () => {
       line({ name: "Plan", unitPrice: 299, billingFrequency: "monthly", ...over });
     const comped = line({ discountPercent: 100, coveredByPackage: "Plan" });
     const delayed = { mode: "days" as const, days: 60 };
+    const preAuth = line({
+      hubspotProductId: PRE_AUTH_PRODUCT.hubspotProductId, name: PRE_AUTH_PRODUCT.name,
+      unitPrice: 0.5, productType: "Service",
+    });
 
-    it("counts one-time lines and the first payment of an undelayed recurring line", () => {
+    it("counts the first payment of an undelayed recurring line, and the pre-auth", () => {
       expect(amountDueAtCheckout([plan(), comped])).toBe(299);
-      expect(amountDueAtCheckout([plan({ billingStart: delayed }), line()])).toBe(749);
+      expect(amountDueAtCheckout([plan({ billingStart: delayed }), preAuth])).toBe(0.5);
+    });
+
+    // Hardware and services are billed on the one-time invoice after
+    // acceptance (2026-10-22), so they take nothing at checkout.
+    it("counts nothing for an invoiced one-time line", () => {
+      expect(amountDueAtCheckout([plan({ billingStart: delayed }), line()])).toBe(0);
     });
 
     it("counts nothing for a delayed recurring line", () => {
@@ -272,13 +283,13 @@ describe("quoteSanityBlockers", () => {
 
     it("lets it through once the delay comes off, or something is charged up front", () => {
       expect(checkoutAmountBlockers([plan(), comped])).toEqual([]);
-      expect(checkoutAmountBlockers([plan({ billingStart: delayed }), line()])).toEqual([]);
+      expect(checkoutAmountBlockers([plan({ billingStart: delayed }), preAuth])).toEqual([]);
       expect(checkoutAmountBlockers([])).toEqual([]);
     });
 
     it("sits at HubSpot's threshold: $0.50 is enough, $0.49 is not", () => {
-      expect(checkoutAmountBlockers([line({ unitPrice: 0.5 })])).toEqual([]);
-      expect(checkoutAmountBlockers([line({ unitPrice: 0.49 })])).toHaveLength(1);
+      expect(checkoutAmountBlockers([plan({ unitPrice: 0.5 })])).toEqual([]);
+      expect(checkoutAmountBlockers([plan({ unitPrice: 0.49 })])).toHaveLength(1);
     });
   });
 
@@ -790,8 +801,15 @@ describe("the pre-authorization charge", () => {
   });
 
   it("is left off a quote that already collects something at checkout", () => {
-    expect(preAuthLines(build({ [PLATFORM_ID]: { billingStart: { mode: "days", days: 60 } } }).quoteLines)).toHaveLength(0);
     expect(preAuthLines(build({}).quoteLines)).toHaveLength(0);
+  });
+
+  // The hardware is charged, but on the invoice after acceptance — the quote's
+  // own checkout still owes nothing.
+  it("is added to a delayed plan even when the hardware is charged", () => {
+    const built = build({ [PLATFORM_ID]: { billingStart: { mode: "days", days: 60 } } });
+    expect(preAuthLines(built.quoteLines)).toHaveLength(1);
+    expect(built.blockers).toEqual([]);
   });
 
   it("goes away again when the rep undoes the delay", () => {
@@ -904,5 +922,25 @@ describe("a cash discount through the engine", () => {
     expect(comped.discountPercent).toBe(100);
     expect(comped.discountAmount).toBeUndefined();
     expect(lineNetAmount(comped)).toBe(0);
+  });
+});
+
+describe("splitQuoteLines", () => {
+  const plan = line({ name: "Plan", unitPrice: 299, billingFrequency: "monthly" });
+  const preAuth = line({ hubspotProductId: PRE_AUTH_PRODUCT.hubspotProductId, name: PRE_AUTH_PRODUCT.name, unitPrice: 0.5 });
+  const disclosure = line({
+    hubspotProductId: PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId, name: PROCESSING_DISCLOSURE_PRODUCT.name, unitPrice: 0,
+  });
+  const comped = line({ name: "Kiosk", discountPercent: 100, coveredByPackage: "QSR Kit" });
+
+  it("invoices every one-time line except the pre-auth and the rate disclosure", () => {
+    const pos = line();
+    const { quoteLines, invoiceLines } = splitQuoteLines([pos, plan, preAuth, comped, disclosure]);
+    expect(quoteLines).toEqual([plan, preAuth, disclosure]);
+    expect(invoiceLines).toEqual([pos, comped]);
+  });
+
+  it("leaves a rate-only quote empty on both sides", () => {
+    expect(splitQuoteLines([])).toEqual({ quoteLines: [], invoiceLines: [] });
   });
 });

@@ -82,7 +82,7 @@ export default function QuoteReceipt({
       </div>
 
       {oneTime.length > 0 && (
-        <ReceiptGroup title="Due once" subtotal={fmt$(totals.oneTime)} lines={oneTime} />
+        <ReceiptGroup title="Due once — invoiced after acceptance" subtotal={fmt$(totals.oneTime)} lines={oneTime} />
       )}
 
       {totals.recurring.map(r => (

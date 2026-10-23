@@ -637,7 +637,8 @@ export type HubspotSubscriptionSnapshot = {
 
 // HubSpot billing linkage. The quote is BOTH the rep-visible CRM artifact and
 // the customer's checkout — see E2E-PLAN.md. We never create the subscription
-// or its invoices; HubSpot does that when the customer pays the quote.
+// or its recurring invoices; HubSpot does that when the customer pays the
+// quote. The one-time invoice is EasyOB's own — see HubspotInvoice.
 export type HubspotIds = {
   // dealId intentionally absent — the canonical home is the flat hubspotDealId
   // column (schema.ts), which is the one actually populated, read by five call
@@ -690,6 +691,12 @@ export type HubspotIds = {
    *  because a console.error was the only record. Cleared on the next success. */
   lastSyncError: string | null;
   lastSyncErrorAt: string | null;
+  /** Set when this quote was built under the split-billing rule (2026-10-22):
+   *  `lineItemIds` cover only the quote portion of `splitQuoteLines`, and the
+   *  invoiced lines go on the one-time invoice after acceptance. Absent on
+   *  every quote built before it — those carry their one-time lines on the
+   *  quote itself and must never get an invoice as well. */
+  splitBilling?: boolean;
 };
 
 // The starting value for the conditional-claim lock that guards quote creation
@@ -707,6 +714,51 @@ export const EMPTY_HUBSPOT_IDS: HubspotIds = {
   esignStatus: null,
   subscriptions: null,
   subscriptionStatus: null,
+  syncedAt: null,
+  lastSyncError: null,
+  lastSyncErrorAt: null,
+};
+
+/**
+ * The one-time invoice (2026-10-22, product owner): hardware, install and
+ * training, billed on a HubSpot invoice instead of the quote. Built as a DRAFT
+ * by lib/billing/oneTimeInvoice.ts right after acceptance; AIO staff open and
+ * charge it in HubSpot against the payment method stored at checkout. ONLY
+ * written by that file and the billing cron — its own column
+ * (`hubspot_invoice`), deliberately left out of `appToRow`, so a full-row
+ * `saveApplication` holding a stale copy can never erase the invoice id and
+ * let a retry build a second invoice.
+ */
+export type HubspotInvoice = {
+  invoiceId: string | null;
+  /** Invoice-side line items, in `splitQuoteLines(...).invoiceLines` order.
+   *  Separate HubSpot objects from the quote's: a line item has one parent. */
+  lineItemIds: string[] | null;
+  /** Net total of the invoiced lines, computed by EasyOB. A draft's own
+   *  `hs_balance_due` reads $0.00 (observed on draft 878578016996), so the
+   *  customer's "upcoming invoice" is shown from this, not from HubSpot. */
+  amount: number | null;
+  /** hs_invoice_status: draft | open | paid | voided. */
+  status: string | null;
+  /** hs_payment_status: unpaid | partially_paid | paid | refunded | partially_refunded. */
+  paymentStatus: string | null;
+  balanceDue: number | null;
+  /** When the draft was fully built and associated. Nothing is built again after this. */
+  builtAt: string | null;
+  /** Doubles as the build lease, like `HubspotIds.syncedAt`. */
+  syncedAt: string | null;
+  lastSyncError: string | null;
+  lastSyncErrorAt: string | null;
+};
+
+export const EMPTY_HUBSPOT_INVOICE: HubspotInvoice = {
+  invoiceId: null,
+  lineItemIds: null,
+  amount: null,
+  status: null,
+  paymentStatus: null,
+  balanceDue: null,
+  builtAt: null,
   syncedAt: null,
   lastSyncError: null,
   lastSyncErrorAt: null,
@@ -1047,6 +1099,9 @@ export type MerchantApplication = {
   checkIds: CheckIds | null; // Check payroll onboarding — null until the customer opts in
   foodbuyIds: FoodbuyIds | null; // Foodbuy enrollment — null until the customer opts in
   hubspotIds: HubspotIds | null; // HubSpot deal/quote/subscription — null until a quote is built
+  // The one-time invoice — null until one is built after acceptance. Optional
+  // because only rowToApp populates it; see HubspotInvoice.
+  hubspotInvoice?: HubspotInvoice | null;
   // Which plan this quote is on. Frozen with the rest of the quote, because
   // it's what the lines were derived UNDER: re-reading a marketing-only quote
   // as an All-in-One one would imply a platform fee that was never quoted.

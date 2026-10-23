@@ -297,7 +297,9 @@ describe("publishing the billing quote", () => {
     // The second argument is the per-product description map. This row
     // carries no quoteRates, so there is nothing to state and it's empty —
     // see the rate-disclosure test below for the populated case.
-    expect(createQuoteLineItems).toHaveBeenCalledWith(LINES, {});
+    // Only the quote portion: the POS is one-time, so it waits for the
+    // invoice after acceptance.
+    expect(createQuoteLineItems).toHaveBeenCalledWith([line(PLATFORM)], {});
     expect(createDraftQuote.mock.calls[0][0]).toMatchObject({
       hs_title: "Torta Palace — AIO Platform Quote",
       hs_billing_enabled: true,
@@ -308,7 +310,6 @@ describe("publishing the billing quote", () => {
     // 67 per line item, then deal 64, contact 69, signer 702, template 286.
     expect(associateQuote).toHaveBeenCalledWith("quote-5", [
       { toObjectType: "line_items", toObjectId: "li-1", associationTypeId: 67 },
-      { toObjectType: "line_items", toObjectId: "li-2", associationTypeId: 67 },
       { toObjectType: "deals", toObjectId: "deal-99", associationTypeId: 64 },
       { toObjectType: "contacts", toObjectId: "contact-7", associationTypeId: 69 },
       { toObjectType: "contacts", toObjectId: "contact-7", associationTypeId: 702 },
@@ -325,7 +326,8 @@ describe("publishing the billing quote", () => {
 
     const ids = storedIds()!;
     expect(ids.contactId).toBe("contact-7");
-    expect(ids.lineItemIds).toEqual(["li-1", "li-2"]);
+    expect(ids.lineItemIds).toEqual(["li-1"]);
+    expect(ids.splitBilling).toBe(true);
     expect(ids.quoteId).toBe("quote-5");
     expect(ids.quoteTemplateId).toBe("854670598854");
     expect(ids.quoteLink).toBe("https://customers.aioapp.com/abc123");
@@ -397,7 +399,9 @@ describe("publishing the billing quote", () => {
   });
 
   it("tops up a partial line-item create instead of duplicating the whole set", async () => {
-    // Only the first of two line items landed before the failure.
+    const website = line({ ...PLATFORM, hubspotProductId: "333275576048", name: "Website", price: 50 });
+    row = baseRow({ quoteLines: [line(PLATFORM), website, line(POS)] });
+    // Only the first of the two quote line items landed before the failure.
     createQuoteLineItems.mockRejectedValueOnce(new Error("HubSpot 500"));
     await send();
     row = { ...row!, hubspotIds: { ...storedIds()!, lineItemIds: ["li-1"] } };
@@ -405,9 +409,25 @@ describe("publishing the billing quote", () => {
     createQuoteLineItems.mockImplementation(async (lines: QuoteLine[]) => lines.map(() => "li-2"));
     await resume();
     // Reconciliation kept li-1 and created only the missing tail — a re-create
-    // of both would have double-billed a $1,200 POS unit.
-    expect(createQuoteLineItems).toHaveBeenLastCalledWith([line(POS)], {});
+    // of both would have double-billed the platform.
+    expect(createQuoteLineItems).toHaveBeenLastCalledWith([website], {});
     expect(storedIds()!.lineItemIds).toEqual(["li-1", "li-2"]);
+  });
+
+  // A build left half-done before split billing shipped: its line items were
+  // made from EVERY line, the POS included. Resuming must take the one-time
+  // line item back off the draft rather than publish it on the quote and then
+  // invoice it as well.
+  it("drops the one-time line items off a draft built before split billing", async () => {
+    row = {
+      ...row!,
+      hubspotIds: { ...EMPTY_HUBSPOT_IDS, contactId: "contact-7", lineItemIds: ["li-old-1", "li-old-2"], syncedAt: "2026-10-01T00:00:00.000Z" },
+    };
+    await resume();
+    expect(deleteQuoteLineItem).toHaveBeenCalledWith("li-old-2");
+    expect(deleteQuoteLineItem).not.toHaveBeenCalledWith("li-old-1");
+    expect(storedIds()!.lineItemIds).toEqual(["li-old-1"]);
+    expect(storedIds()!.splitBilling).toBe(true);
   });
 
   it("treats HubSpot's LOCKED (already published) as success, not failure", async () => {

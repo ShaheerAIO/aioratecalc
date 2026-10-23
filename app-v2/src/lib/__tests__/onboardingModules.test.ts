@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { checklistNotice, getOnboardingModules, hasSignedWithoutPaying, payrollModule } from "@/lib/onboardingModules";
+import { EMPTY_HUBSPOT_INVOICE } from "@/types/merchant";
 import type { HubspotIds, HubspotSubscriptionSnapshot, MerchantApplication } from "@/types/merchant";
 
 // Minimal, fully-populated application fixture. Every module under test reads
@@ -296,6 +297,45 @@ describe("getOnboardingModules — order and composition", () => {
       },
     };
     expect(getOnboardingModules(fullyPaid).find(m => m.key === "payroll")).toBeUndefined();
+  });
+});
+
+describe("the one-time invoice row", () => {
+  const BUILT = {
+    ...EMPTY_HUBSPOT_INVOICE,
+    invoiceId: "inv-1", amount: 1948, status: "draft", builtAt: "2026-10-22T00:00:00.000Z",
+  };
+  const accepted = (hubspotInvoice: MerchantApplication["hubspotInvoice"]): MerchantApplication =>
+    ({ ...BASE_APP, quoteAcceptedAt: "2026-10-22T00:00:00.000Z", hubspotInvoice });
+
+  it("is absent until the draft has been built", () => {
+    expect(getOnboardingModules(accepted(null)).find(m => m.key === "invoice")).toBeUndefined();
+    expect(getOnboardingModules(accepted({ ...BUILT, builtAt: null })).find(m => m.key === "invoice")).toBeUndefined();
+  });
+
+  // AIO charges it from HubSpot against the account stored at checkout, so
+  // the merchant has nothing to click — no CTA at all.
+  it("sits right after the quote as an upcoming invoice, with nothing to pay", () => {
+    const modules = getOnboardingModules(accepted(BUILT));
+    expect(modules.map(m => m.key)).toEqual(["quote", "invoice", "adyen", "foodbuy"]);
+    const row = modules[1];
+    expect(row).toMatchObject({ label: "Upcoming Invoice", status: "in_progress" });
+    expect(row.description).toContain("$1,948.00");
+    expect(row.description).toContain("nothing you need to do");
+    expect(row.href).toBeUndefined();
+    expect(row.locked).toBeUndefined();
+  });
+
+  it("completes when HubSpot reports it paid", () => {
+    const row = getOnboardingModules(accepted({ ...BUILT, status: "paid", paymentStatus: "paid" })).find(m => m.key === "invoice")!;
+    expect(row.status).toBe("complete");
+  });
+
+  // Subscription-only gating (product owner, 2026-10-22): an unpaid invoice
+  // never holds the rest of the checklist.
+  it("never locks the rows after it", () => {
+    const adyen = getOnboardingModules(accepted(BUILT)).find(m => m.key === "adyen")!;
+    expect(adyen.locked).toBeUndefined();
   });
 });
 

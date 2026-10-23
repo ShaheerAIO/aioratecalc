@@ -100,3 +100,79 @@ verbatim-`quoteLines` hazard, both constraints above.
     filling in their onboarding form has no legal address yet and
     `isEligibleForAioProvisioning` does not require one — so that would have created an AIO tenant
     with a blank address, on an alias that is globally unique and never freed.
+
+## The one-time invoice
+
+Product owner, 2026-10-22/23: **one-time lines (hardware, install, training, packages, kit swaps) go
+on a HubSpot INVOICE, not on the quote.** EasyOB builds it as a **DRAFT** right after acceptance,
+alongside the subscription the checkout produced. **AIO staff open and charge it in HubSpot whenever
+they choose**, against the payment method stored at the quote's checkout ("their payment info gets
+saved and we can use it whenever we want"). The merchant is never emailed a pay link and never
+re-enters bank details; they see it as an "Upcoming Invoice". **Onboarding still gates on the
+subscription alone.**
+
+**UNVERIFIED: that HubSpot will charge an invoice against the ACH method stored at quote checkout.**
+The quote stores it (`hs_store_payment_method_at_checkout`), and the invoice schema has
+`hs_invoice_payment_collection_method: automatic` and `hs_payment_collection_option: pmof`. But
+nobody has charged one yet. The first real charge is the test.
+
+How it works:
+- **The split.** `splitQuoteLines` in `quoting.ts`. Every one-time line is invoiced EXCEPT the
+  $0.50 pre-auth and the $0 rate disclosure, which stay on the quote. `app.quoteLines` still holds
+  every line, so totals, commission and ARR are unchanged.
+- **Publish.** `buildAndPublishBillingQuote` creates line items for the quote portion only. It
+  writes `hubspotIds.splitBilling: true` at the build claim. A draft left half-built before split
+  billing shipped is reconciled against ALL its lines, which deletes its one-time line items off
+  the draft.
+- **The `splitBilling` marker is the double-billing guard.** A quote published without it carries
+  its one-time lines on the quote, so the merchant paid them at checkout. `buildOneTimeInvoice`
+  skips those rows (`not_split`), and must keep skipping them.
+- **Build** (`lib/billing/oneTimeInvoice.ts`).
+  - It uses a conditional claim, a 2-minute lease, a persist after every id, and resume from
+    persisted ids.
+  - It creates its own line items (a line item has one parent), then a draft invoice, then the
+    associations: contact 177 (the quote's signer), company 179, deal 175, line items 409.
+  - It never opens, sends or charges. A draft is deletable, so this path opens no one-way door.
+  - `amount` is computed by EasyOB, because a draft's own `hs_balance_due` reads $0.00.
+- **Storage.** The invoice lives in its own column, `merchant_applications.hubspot_invoice`
+  (migration **0028**). It is deliberately absent from `appToRow`: `saveApplication` writes the
+  whole row, and several paths rewrite `hubspot_ids` from a copy read earlier. If either could erase
+  an invoice id, a retry would build a second invoice.
+- **Triggers.**
+  - `applyDetectedAcceptance` calls `buildOneTimeInvoiceSafely`, which never throws. The DEBUG
+    billing bypass calls `recordAcceptance` directly, so it never writes to HubSpot.
+  - `/api/cron/hubspot-billing-sync` retries rows that are accepted, split, and have no draft built
+    yet. It also reads back the status of built, unpaid invoices, which is how a staff charge in
+    HubSpot shows up as paid.
+  - Staff can press "Retry Invoice" on the billing panel.
+- **Display.**
+  - The customer `QuoteSummary` shows "One-Time — invoiced separately" with its own "Invoice
+    total", plus a "Due at checkout" section for the pre-auth.
+  - The checklist has a non-gating "Upcoming Invoice" row with no CTA, which completes when paid.
+  - Rep copy reads "invoiced after acceptance".
+
+### Probe evidence `scripts/probe-invoice.ts`, **draft run 2026-10-22**, on Shaheer's
+Second test company / Deal - 8 — draft invoice `878578016996`, line items `352679875300`
+(printer $249) and `352631196408` (printer, 100% off), contact `549681496822`. Not yet deleted.
+
+- **The `EasyOB Billing` app can already write invoices.** The create succeeded, so
+  `crm.objects.invoices.write` is granted (E2E-PLAN.md's scope list is out of date).
+- **Association type ids, read from the labels endpoint (HUBSPOT_DEFINED):** invoice → contact
+  **177**, → company **179**, → deal **175**, → line item **409**.
+- **A bare create gets HubSpot's defaults, and they are wrong for AIO:**
+  - `hs_allowed_payment_methods` defaults to `ach;credit_or_debit_card` (and
+    `hs_allowed_commerce_payment_methods` to `ACH;CARD`). The quote is ACH-only, so the invoice
+    must set these explicitly.
+  - `hs_invoice_payment_collection_method` defaults to `manual`.
+  - `hs_store_payment_method_at_checkout` defaults to `false`.
+- **`hs_invoice_link` already exists on the DRAFT** (`customers.aioapp.com/...`), the same host as
+  `hs_quote_link`. Whether it can be paid before the invoice is opened is not tested.
+- **The draft reads `hs_balance_due: 0.00`** with a $249 line on it. Like the quote draft's
+  `hs_quote_amount`, don't trust a draft's totals; read them after it is opened.
+- **Auto-charge looks possible.** `hs_invoice_payment_collection_method` has an `automatic` value
+  and `hs_payment_collection_option` has a `pmof` value (payment method on file). Together they may
+  debit the ACH mandate from the quote checkout without the merchant clicking anything. This is
+  untested, and the current decision is the emailed pay link.
+- **Still open, needs the `--open` run:** whether opening is accepted, the opened totals with the
+  100% line, whether an open invoice is locked or can be voided, and whether $0 or under-$0.50
+  invoices are refused.

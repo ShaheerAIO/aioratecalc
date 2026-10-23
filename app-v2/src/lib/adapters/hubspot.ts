@@ -2442,6 +2442,99 @@ export async function publishQuote(
   };
 }
 
+// ── One-time invoices ───────────────────────────────────────────────────────
+// Hardware, install and training are billed on an invoice EasyOB builds as a
+// DRAFT right after acceptance; staff charge it in HubSpot (2026-10-23). Association type ids read from
+// /crm/v4/associations/invoices/{to}/labels on 2026-10-22 (HUBSPOT_DEFINED,
+// unlabeled) — see scripts/probe-invoice.ts.
+export const INVOICE_TO_CONTACT = 177;
+export const INVOICE_TO_COMPANY = 179;
+export const INVOICE_TO_DEAL = 175;
+export const INVOICE_TO_LINE_ITEM = 409;
+
+/**
+ * A draft invoice's properties. Staff open and charge it in HubSpot when AIO
+ * chooses (product owner, 2026-10-23), so nothing about how it is paid is set
+ * here. Dated today; HubSpot requires a due date, and it is moot on a draft.
+ */
+export function draftInvoiceProperties(invoiceDate: string): Record<string, string> {
+  return {
+    hs_currency: "USD",
+    hs_invoice_date: invoiceDate,
+    hs_due_date: invoiceDate,
+  };
+}
+
+export async function createDraftInvoice(props: Record<string, string>): Promise<string> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/invoices`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: props }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot draft invoice create failed", res.status, await res.text());
+  const data = await res.json() as { id: string };
+  return data.id;
+}
+
+export type InvoiceAssociation = {
+  toObjectType: "contacts" | "companies" | "deals" | "line_items";
+  toObjectId: string;
+  associationTypeId: number;
+};
+
+/** v4 association PUT, one per pair — idempotent, like `associateQuote`. */
+export async function associateInvoice(invoiceId: string, assocs: InvoiceAssociation[]): Promise<void> {
+  for (let i = 0; i < assocs.length; i++) {
+    const assoc = assocs[i];
+    const res = await fetchWithRetry(
+      `${BASE}/crm/v4/objects/invoices/${invoiceId}/associations/${assoc.toObjectType}/${assoc.toObjectId}`,
+      {
+        method: "PUT",
+        headers: billingHeaders(),
+        body: JSON.stringify([
+          { associationCategory: "HUBSPOT_DEFINED", associationTypeId: assoc.associationTypeId },
+        ]),
+      }
+    );
+    if (!res.ok) {
+      throw hubspotErr(
+        `HubSpot invoice ${invoiceId} → ${assoc.toObjectType} ${assoc.toObjectId} (type ${assoc.associationTypeId}) association failed`,
+        res.status, await res.text()
+      );
+    }
+    if (i + 1 < assocs.length) await sleep(REQUEST_SPACING_MS);
+  }
+}
+
+export type InvoiceSnapshot = {
+  invoiceId: string;
+  /** hs_invoice_status: draft | open | paid | voided. */
+  status: string | null;
+  paymentStatus: string | null;
+  balanceDue: number | null;
+  invoiceLink: string | null;
+};
+
+const INVOICE_SNAPSHOT_PROPS = ["hs_invoice_status", "hs_payment_status", "hs_balance_due", "hs_invoice_link"];
+
+export async function getInvoiceSnapshot(invoiceId: string): Promise<InvoiceSnapshot | null> {
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v3/objects/invoices/${invoiceId}?properties=${INVOICE_SNAPSHOT_PROPS.join(",")}`,
+    { headers: billingHeaders() }
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw hubspotErr(`HubSpot invoice ${invoiceId} read failed`, res.status, await res.text());
+  const data = await res.json() as { properties?: Record<string, string | null> };
+  const props = data.properties;
+  return {
+    invoiceId,
+    status: clean(props?.hs_invoice_status),
+    paymentStatus: clean(props?.hs_payment_status),
+    balanceDue: num(props?.hs_balance_due),
+    invoiceLink: clean(props?.hs_invoice_link),
+  };
+}
+
 // ── Subscriptions ───────────────────────────────────────────────────────────
 // Quote → subscription is v4 association typeId 304 (reverse 303), verified
 // against 45 of the 46 paid quotes in the live portal. Keyed on the QUOTE, not

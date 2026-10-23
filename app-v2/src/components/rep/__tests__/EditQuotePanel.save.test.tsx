@@ -44,6 +44,7 @@ const CATALOG = [
   P("217445755632", "POS Unit", 949, "one_time", "inventory"),
   P("223511653105", "Payment Terminal - AMS1", 350, "one_time", "inventory"),
   P("260559288040", "AIO Processing Two Tiered Rate", 0, "monthly", "AIO Payment Processing"),
+  P("281354281678", "AIO Pre Auth", 0.5, "one_time", "Service"),
 ];
 
 const SIXTY = { mode: "days", days: 60 } as const;

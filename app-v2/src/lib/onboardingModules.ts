@@ -147,6 +147,7 @@ export function getOnboardingModules(
 
   const modules = [
     quoteBillingModule(app, { hasQuote: opts?.hasQuote ?? false, quoteHref, billingHref }),
+    invoiceModule(app),
     adyenModule(app, basePath, detailsHref),
     SHOW_PAYROLL_MODULE ? payrollModule(app, basePath) : null,
     foodbuyModule(app, basePath),
@@ -657,5 +658,38 @@ function foodbuyModule(app: MerchantApplication, basePath: string): OnboardingMo
     description: "Download your pre-filled Foodbuy enrollment form, sign it, and send it to your AIO representative or Foodbuy account executive.",
     href,
     ctaLabel: "Get Started",
+  };
+}
+
+// The one-time invoice (2026-10-22): hardware, install and training, drafted in
+// HubSpot right after acceptance and charged by AIO later, against the payment
+// method stored at checkout (product owner, 2026-10-23). So the merchant has
+// nothing to DO here — the row tells them it's coming ("upcoming invoice") and
+// completes when HubSpot reports it paid. NEVER A GATE: nothing else waits on
+// it, and it only exists after acceptance, so the lock pass has nothing to lock.
+function invoiceModule(app: MerchantApplication): OnboardingModule | null {
+  const inv = app.hubspotInvoice;
+  if (!inv?.builtAt) return null;
+  const label = "Upcoming Invoice";
+
+  if (inv.paymentStatus === "paid" || inv.status === "paid") {
+    return {
+      key: "invoice",
+      label: "Hardware & Setup Invoice",
+      status: "complete",
+      description: "Your hardware and setup invoice is paid.",
+    };
+  }
+
+  const amount = inv.amount != null && inv.amount > 0
+    ? ` of $${inv.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : "";
+  return {
+    key: "invoice",
+    label,
+    status: "in_progress",
+    description:
+      `Your one-time invoice${amount} for hardware, installation and training will be charged to the ` +
+      "bank account you set up at checkout. There's nothing you need to do.",
   };
 }

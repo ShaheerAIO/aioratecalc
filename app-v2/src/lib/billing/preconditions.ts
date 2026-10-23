@@ -20,7 +20,7 @@
 import { toLineItemProperties } from "@/lib/adapters/hubspot";
 import {
   adjustmentBlockers, checkoutAmountBlockers, deriveOrderPoints,
-  quoteTotals, resolvePlatformLine, quoteTypeOf,
+  quoteTotals, resolvePlatformLine, quoteTypeOf, splitQuoteLines,
 } from "@/lib/quoting";
 import type { CatalogProduct, MerchantApplication, QuoteTotals } from "@/types/merchant";
 
@@ -30,9 +30,13 @@ export type PublishRefusal = { code: string; message: string };
 export type CanPublishResult =
   | {
       ok: true;
-      /** Recomputed from app.quoteLines — what will actually publish. */
+      /** Recomputed from app.quoteLines — everything the merchant is buying,
+       *  quote and invoice together. */
       totals: QuoteTotals;
+      /** Lines that publish on the quote. */
       lineCount: number;
+      /** Lines held for the one-time invoice after acceptance. */
+      invoiceLineCount: number;
     }
   | {
       ok: false;
@@ -336,5 +340,9 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   //     with no client-submitted total to cross-check against. What replaces
   //     it is recomputing here and handing the figures back, so the caller
   //     logs the exact amounts that went onto the unamendable document.
-  return { ok: true, totals: quoteTotals(lines), lineCount: lines.length };
+  //     Every line was checked above — including the ones that go on the
+  //     invoice, so a line that can't be billed is refused now rather than
+  //     after the merchant has accepted.
+  const { quoteLines, invoiceLines } = splitQuoteLines(lines);
+  return { ok: true, totals: quoteTotals(lines), lineCount: quoteLines.length, invoiceLineCount: invoiceLines.length };
 }
