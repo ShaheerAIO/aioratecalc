@@ -1,9 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { parseAdminView, type AdminView } from "@/lib/adminView";
+import { usePathname } from "next/navigation";
 import { logoutAction } from "@/lib/actions/auth";
 import styles from "./AppNav.module.css";
 
@@ -58,7 +57,10 @@ export function AppNav({ role, userName }: { role: NavRole; userName?: string })
       <div className={styles.navActions}>
         {isAdmin ? (
           <>
-            <AdminViewLinks pathname={pathname} />
+            {/* The Accounts tab was removed 2026-10-23 (product owner: unused);
+                /admin?view=accounts still works by URL. Dashboard covers every
+                view of /admin. */}
+            <NavLink href="/admin" pathname={pathname}>Dashboard</NavLink>
             <NavDropdown
               id="create"
               label="New Account"
@@ -92,6 +94,7 @@ export function AppNav({ role, userName }: { role: NavRole; userName?: string })
               open={openMenu === "account"}
               onToggle={() => setOpenMenu(m => (m === "account" ? null : "account"))}
             >
+              <MenuLink href="/admin/payroll-billing" pathname={pathname}>Payroll Billing</MenuLink>
               <form action={logoutAction}>
                 <button type="submit" className={styles.menuItem}>Sign Out</button>
               </form>
@@ -126,43 +129,6 @@ export function AppNav({ role, userName }: { role: NavRole; userName?: string })
         )}
       </div>
     </nav>
-  );
-}
-
-// Dashboard and Accounts are two views of the same /admin route, so the active
-// state has to read ?view= as well as the pathname. useSearchParams needs a
-// Suspense boundary above it; the fallback renders the default view's state.
-function AdminViewLinks({ pathname }: { pathname: string }) {
-  return (
-    <Suspense fallback={<AdminViewLinksView pathname={pathname} view="reps" />}>
-      <AdminViewLinksInner pathname={pathname} />
-    </Suspense>
-  );
-}
-
-function AdminViewLinksInner({ pathname }: { pathname: string }) {
-  const view = parseAdminView(useSearchParams().get("view"));
-  return <AdminViewLinksView pathname={pathname} view={view} />;
-}
-
-function AdminViewLinksView({ pathname, view }: { pathname: string; view: AdminView }) {
-  const onAdmin = pathname === "/admin";
-  return (
-    <>
-      <NavLink href="/admin" pathname={pathname} active={onAdmin && (view === "reps" || view === "revenue")}>
-        Dashboard
-      </NavLink>
-      {/* Named explicitly rather than as "anything but reps" — Revenue is a
-          fourth view on this same surface and belongs under Dashboard, not
-          under Accounts. */}
-      <NavLink
-        href="/admin?view=accounts"
-        pathname={pathname}
-        active={onAdmin && view === "accounts"}
-      >
-        Accounts
-      </NavLink>
-    </>
   );
 }
 

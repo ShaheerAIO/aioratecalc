@@ -383,3 +383,38 @@ export const customerLoginTokens = pgTable("customer_login_tokens", {
   usedAt: timestamp("used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Check payroll billing (2026-10-23) — see docs/claude/check-payroll-billing.md.
+// Check's usage export names companies by their LEGAL name, which rarely
+// matches the HubSpot company, so an admin confirms each pairing once and it
+// is remembered here for every later month.
+export const checkCompanyLinks = pgTable("check_company_links", {
+  checkCompanyId: text("check_company_id").primaryKey(),
+  checkCompanyName: text("check_company_name").notNull(),
+  hubspotCompanyId: text("hubspot_company_id").notNull(),
+  hubspotCompanyName: text("hubspot_company_name").notNull(),
+  linkedBy: text("linked_by"),
+  linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// One row per company per billed month: the double-billing guard. Claimed
+// before the first HubSpot write and every id persisted as it is created, so a
+// rerun resumes instead of creating a second invoice. `invoicedAt` is set only
+// once the draft invoice is fully associated.
+export const checkPayrollInvoices = pgTable("check_payroll_invoices", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  checkCompanyId: text("check_company_id").notNull(),
+  periodStart: date("period_start").notNull(),
+  employeeCount: integer("employee_count").notNull(),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  hubspotCompanyId: text("hubspot_company_id").notNull(),
+  contactId: text("contact_id").notNull(),
+  dealId: text("deal_id"),
+  lineItemId: text("line_item_id"),
+  hubspotInvoiceId: text("hubspot_invoice_id"),
+  invoicedAt: timestamp("invoiced_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("check_payroll_invoices_company_period").on(t.checkCompanyId, t.periodStart)]);

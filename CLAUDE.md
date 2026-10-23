@@ -18,6 +18,7 @@ owner or learned from a live incident, and several cover irreversible actions.
 | `docs/claude/quoting.md` | `buildQuote`/`quoting.ts`, quote types/plans, derived lines, discounts, packages, pre-auth, disclosure line, billing-start notes, rate card, margin and $10/mo revenue floors, the pricing step |
 | `docs/claude/hubspot-billing.md` | Publishing quotes (one-way door), templates, sender email, subscriptions, acceptance/confirmation flow, deals/companies, ARR, company address fields, the Phase E gate-run evidence |
 | `docs/claude/provisioning.md` | AIO dashboard API (tenant/location/KYC), provisioning gate and retries, lead-link repair, Adyen/Check/Foodbuy rules, EIN/SSN/bank-field rules |
+| `docs/claude/check-payroll-billing.md` | The hidden `/admin/payroll-billing` page: Check usage CSV → draft HubSpot payroll invoices |
 | `docs/claude/email.md` | Graph/Resend transactional email and its shared app registration |
 | `docs/claude/running.md` | Local setup, dev credentials, `.env.local` hazards (`$` escaping, `vercel env pull`), the full env-var list |
 | `docs/claude/phase-status.md` | What's done, live-verified, or still pending, per phase |

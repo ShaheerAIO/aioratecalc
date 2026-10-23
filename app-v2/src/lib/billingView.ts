@@ -158,6 +158,15 @@ export function hubspotQuoteUrl(quoteId: string, portalId: string | undefined): 
   return hubspotRecordUrl(portalId, QUOTE_OBJECT_TYPE_ID, quoteId);
 }
 
+// Companies are the built-in "0-2", invoices "0-53".
+export function hubspotCompanyUrl(companyId: string, portalId: string | undefined): string | null {
+  return hubspotRecordUrl(portalId, "0-2", companyId);
+}
+
+export function hubspotInvoiceUrl(invoiceId: string, portalId: string | undefined): string | null {
+  return hubspotRecordUrl(portalId, "0-53", invoiceId);
+}
+
 // ── Subscription status colour ──────────────────────────────────────────────
 
 // `paused` / `canceled` / `unpaid` / `past_due` are the NORMAL case here (35 of

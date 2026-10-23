@@ -2753,3 +2753,161 @@ export async function attachFileToCompanyNote(input: {
   if (!json.id) throw new Error("HubSpot note create returned no id");
   return String(json.id);
 }
+
+// ── Check payroll billing ───────────────────────────────────────────────────
+// The hidden /admin/payroll-billing page (2026-10-23). Token split verified
+// live that day: company → deals reads 403 on the billing token and works on
+// the general one; deal → subscriptions and subscription → contacts need the
+// billing token.
+
+async function batchAssociationIds(
+  from: string, to: string, ids: string[], authHeaders: () => Record<string, string>
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (ids.length === 0) return out;
+  const res = await fetchWithRetry(`${BASE}/crm/v4/associations/${from}/${to}/batch/read`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ inputs: ids.map(id => ({ id })) }),
+  });
+  // 207 is HubSpot's "some inputs had no associations" — the results are still good.
+  if (!res.ok) throw hubspotErr(`HubSpot ${from} → ${to} association read failed`, res.status, await res.text());
+  const data = await res.json() as {
+    results?: Array<{ from?: { id?: string | number }; to?: Array<{ toObjectId?: string | number }> }>;
+  };
+  for (const r of data.results ?? []) {
+    if (r.from?.id === undefined) continue;
+    out.set(String(r.from.id), (r.to ?? []).map(t => String(t.toObjectId)));
+  }
+  return out;
+}
+
+/** Every deal on a company. */
+export async function listCompanyDealIds(companyId: string): Promise<string[]> {
+  const map = await batchAssociationIds("companies", "deals", [companyId], () => headers());
+  return map.get(companyId) ?? [];
+}
+
+export type PayrollBillingSubscription = {
+  subscriptionId: string;
+  dealId: string;
+  contactId: string | null;
+  status: string | null;
+  createdAt: string | null;
+};
+
+/** Every subscription on these deals, with the contact each one bills. */
+export async function listBillingSubscriptions(dealIds: string[]): Promise<PayrollBillingSubscription[]> {
+  const subsByDeal = await batchAssociationIds("deals", "subscriptions", dealIds, () => billingHeaders());
+  const dealOf = new Map<string, string>();
+  for (const [dealId, subIds] of subsByDeal) for (const s of subIds) dealOf.set(s, dealId);
+  const subIds = [...dealOf.keys()];
+  if (subIds.length === 0) return [];
+
+  const readRes = await fetchWithRetry(`${BASE}/crm/v3/objects/subscriptions/batch/read`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: ["hs_status", "hs_createdate"], inputs: subIds.map(id => ({ id })) }),
+  });
+  if (!readRes.ok) throw hubspotErr("HubSpot subscription batch read failed", readRes.status, await readRes.text());
+  const readData = await readRes.json() as { results?: Array<{ id: string; properties?: Record<string, string | null> }> };
+  const props = new Map((readData.results ?? []).map(r => [r.id, r.properties]));
+
+  const contactsBySub = await batchAssociationIds("subscriptions", "contacts", subIds, () => billingHeaders());
+  return subIds.map(id => ({
+    subscriptionId: id,
+    dealId: dealOf.get(id)!,
+    contactId: contactsBySub.get(id)?.[0] ?? null,
+    status: clean(props.get(id)?.hs_status),
+    createdAt: clean(props.get(id)?.hs_createdate),
+  }));
+}
+
+export type HubspotContactSummary = { id: string; name: string; email: string | null };
+
+/** Names and emails for display, keyed by contact id. */
+export async function getContactSummaries(contactIds: string[]): Promise<Map<string, HubspotContactSummary>> {
+  const out = new Map<string, HubspotContactSummary>();
+  if (contactIds.length === 0) return out;
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/contacts/batch/read`, {
+    method: "POST",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: ["firstname", "lastname", "email"], inputs: contactIds.map(id => ({ id })) }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot contact batch read failed", res.status, await res.text());
+  const data = await res.json() as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
+  for (const r of data.results ?? []) {
+    const p = r.properties ?? {};
+    const name = [clean(p.firstname), clean(p.lastname)].filter(Boolean).join(" ");
+    out.set(String(r.id), { id: String(r.id), name: name || clean(p.email) || `Contact ${r.id}`, email: clean(p.email) });
+  }
+  return out;
+}
+
+/** A product's current list price, so a price change in HubSpot needs no deploy. */
+export async function getProductPrice(productId: string): Promise<number> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/products/${productId}?properties=price`, { headers: billingHeaders() });
+  if (!res.ok) throw hubspotErr(`HubSpot product ${productId} read failed`, res.status, await res.text());
+  const data = await res.json() as { properties?: Record<string, string | null> };
+  const price = num(data.properties?.price);
+  if (price === null || price <= 0) throw new Error(`HubSpot product ${productId} has no price`);
+  return price;
+}
+
+/**
+ * A line item created from a recurring product inherits its
+ * `recurringbillingfrequency` (the payroll product is monthly), which has no
+ * place on a one-off invoice. Blanking it is accepted (verified 2026-10-23 on
+ * line item 353349468888); the amount is unchanged.
+ */
+export async function clearLineItemRecurrence(lineItemId: string): Promise<void> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/line_items/${lineItemId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: { recurringbillingfrequency: "" } }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot line item ${lineItemId} update failed`, res.status, await res.text());
+}
+
+/**
+ * The Company property holding Check's company id (`com_…`), filled in by
+ * hand in HubSpot (requested 2026-10-23). Internal name, not label.
+ */
+export const CHECK_COMPANY_ID_PROPERTY = "checkhq_company_id";
+
+/**
+ * HubSpot companies carrying any of these Check company ids, grouped by id.
+ * More than one company per id is possible (a typo, a duplicate record) and is
+ * returned as-is for the caller to refuse. Throws if the property doesn't
+ * exist yet — HubSpot answers 400 on a search over an unknown property.
+ */
+export async function findCompaniesByCheckId(checkCompanyIds: string[]): Promise<Map<string, Array<{ id: string; name: string }>>> {
+  const out = new Map<string, Array<{ id: string; name: string }>>();
+  for (let i = 0; i < checkCompanyIds.length; i += 100) {
+    let after: string | undefined;
+    do {
+      const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/search`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({
+          filterGroups: [{ filters: [{ propertyName: CHECK_COMPANY_ID_PROPERTY, operator: "IN", values: checkCompanyIds.slice(i, i + 100) }] }],
+          properties: ["name", CHECK_COMPANY_ID_PROPERTY],
+          limit: 100,
+          ...(after ? { after } : {}),
+        }),
+      });
+      if (!res.ok) throw hubspotErr("HubSpot company search by Check id failed", res.status, await res.text());
+      const data = await res.json() as {
+        results?: Array<{ id: string; properties: Record<string, string | null> }>;
+        paging?: { next?: { after?: string } };
+      };
+      for (const r of data.results ?? []) {
+        const checkId = clean(r.properties[CHECK_COMPANY_ID_PROPERTY]);
+        if (!checkId) continue;
+        out.set(checkId, [...(out.get(checkId) ?? []), { id: r.id, name: clean(r.properties.name) || "(unnamed company)" }]);
+      }
+      after = data.paging?.next?.after;
+    } while (after);
+  }
+  return out;
+}
