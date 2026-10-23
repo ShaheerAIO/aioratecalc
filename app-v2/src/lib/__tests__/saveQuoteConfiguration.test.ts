@@ -49,9 +49,7 @@ vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany: vi.fn() }));
 // property on 2026-10-14, so there is no note author to resolve.
 const resolveSender = vi.fn();
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote: vi.fn(), resolveSender }));
-// Default 50% pillow, matching actions/pricing.ts's DEFAULT_PADDING — the
-// true-floor-enforcement tests below rely on this exact ratio.
-const PADDING = { paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true };
+const PADDING = { paddingAdyenCostHide: true };
 vi.mock("@/lib/actions/pricing", () => ({
   getActivePaddingPolicy: vi.fn().mockResolvedValue(PADDING),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
@@ -200,8 +198,6 @@ describe("saveQuoteConfigurationAction — acceptance guard", () => {
         picks: [{ hubspotProductId: "217445755632", qty: 1 }],
         channels: [],
         adjustments: PLAN_START,
-        // Above the rep-padded floor for this volume (~0.01005) — this test is
-        // about the acceptance guard, not the margin floor.
         pricingModel: "2-tier",
       })
     ).resolves.toBeDefined();
@@ -217,8 +213,6 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       picks: [{ hubspotProductId: "217445755632", qty: 1 }],
       channels: [],
       adjustments: PLAN_START,
-      // Above the rep-padded floor for this volume (~0.01005) — this test is
-      // about re-derivation, not the margin floor.
       pricingModel: "2-tier",
     });
 
@@ -360,8 +354,6 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       picks: rehydratedPicks,
       channels: [],
       adjustments: PLAN_START,
-      // Above the rep-padded floor for this volume (~0.01005) — this test is
-      // about line-item deduplication, not the margin floor.
       pricingModel: "2-tier",
     });
 
@@ -389,18 +381,9 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 // configuration (wizard + the account-detail Edit Quote panel), and as of
 // this change it ENFORCES the margin floor again — see assertRateAboveFloor /
 // marginFloorBlockers in prospects.ts/pricing.ts and the 2026-10-09 decision
-// ("card rate minimums are needed") recorded there. The guard is enforced PER
-// ROLE, not against one shared "true" number:
-//   - admin → the true floor (getMarginFloor's minMargin) — admins already
-//     see true numbers everywhere else.
-//   - rep   → the PADDED floor (derivePricingForRole's pillow) — the same
-//     number their own client-side check already blocks at. Enforcing the
-//     true floor for reps here would make the refusal itself an oracle: a
-//     rep calling this action directly could binary-search targetMargin
-//     (refuse, refuse, succeed) and recover the true floor to arbitrary
-//     precision, exactly what the pillow exists to prevent. The padded floor
-//     is always ≥ the true floor, so this is a strictly stricter limit for
-//     reps, never a looser one.
+// ("card rate minimums are needed") recorded there. Reps and admins are held
+// to the same tier minimum (getMarginFloor's minMargin); the rep padding on
+// top of it was removed 2026-10-23.
 //
 // `app()`'s own default carries NO quoteConfig (see its definition above) —
 // deliberately, so every OTHER describe block in this file (re-derivation,
@@ -413,8 +396,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 // is broken — give those tests their own basis instead of reverting this.
 //
 // These tests supply their own basis via WITH_BASIS(): volume 10000, which
-// sits in MARGIN_REQS' first tier (maxVol 25000, true minMargin 0.0067) —
-// padded floor, with the default 50% admin pillow (mocked above), ~0.01005.
+// sits in MARGIN_REQS' first tier (maxVol 25000, minMargin 0.0085).
 describe("saveQuoteConfigurationAction — the margin floor", () => {
   const WITH_BASIS = () => app({ quoteConfig: { monthlyVolume: 10000, avgTicket: 50 } });
 
@@ -425,8 +407,7 @@ describe("saveQuoteConfigurationAction — the margin floor", () => {
       picks: [],
       channels: [],
       // 0.5% nets a NEGATIVE margin at this volume once the estimated
-      // interchange is backed out — below the true floor for every volume
-      // tier, not just this one's padded line.
+      // interchange is backed out — below the floor for every volume tier.
       quoteRates: { cardPresentRate: 0.005, cardNotPresentRate: 0.005, amexCardPresentRate: 0.005, amexCardNotPresentRate: 0.005, perTransactionFee: 0 },
       pricingModel: "2-tier",
     });
@@ -441,35 +422,33 @@ describe("saveQuoteConfigurationAction — the margin floor", () => {
     );
     expect(saveApplication).not.toHaveBeenCalled();
 
-    // CLAUDE.md: reps must never see or derive AIO's true minimum. The
-    // refusal says "no", never the number it's measured against — not the
-    // true floor (0.67%), not the padded one (~1.005%), not a raw 0.0067 or
-    // 0.01005 either, and never an admin escape hatch that doesn't exist.
+    // The refusal says "no", never the number it's measured against, and
+    // never an admin escape hatch.
     const message = await attempt.catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
-    expect(message).not.toMatch(/0\.0067|0\.67\s*%|0\.01005|1\.005\s*%/);
+    expect(message).not.toMatch(/0\.0085|0\.85\s*%/);
     expect(message).not.toMatch(/admin/i);
   });
 
-  it("refuses a rep at a rate an admin may still save — the guard is scoped per role", async () => {
-    // 3.00% nets ~0.88% margin here (3.00% − ~2.12% estimated interchange):
-    // ABOVE the true floor (0.67%) but BELOW the rep's padded one (~1.005%).
-    // Picked precisely to land in that gap, so this proves the scoping —
-    // not just that a sufficiently bad rate gets refused for everyone.
-    getApplication.mockResolvedValue(WITH_BASIS());
-    const low = {
+  it("holds a rep and an admin to the same floor — there is no rep padding", async () => {
+    // The rep padding on top of the tier minimum was removed 2026-10-23: the
+    // admin moves the floor itself on the rate-matrix page. 2.90% nets ~0.78%
+    // here (under the first tier's 0.85% minimum) and 3.00% ~0.88% (over it),
+    // so both roles must give the same answer at each.
+    const at = (rate: number) => ({
       applicationId: "app-1",
       picks: [],
       channels: [],
-      quoteRates: { cardPresentRate: 0.03, cardNotPresentRate: 0.03, amexCardPresentRate: 0.03, amexCardNotPresentRate: 0.03, perTransactionFee: 0 },
+      quoteRates: { cardPresentRate: rate, cardNotPresentRate: rate, amexCardPresentRate: rate, amexCardNotPresentRate: rate, perTransactionFee: 0 },
       pricingModel: "2-tier" as const,
-    };
+    });
 
-    getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
-    await expect(saveQuoteConfigurationAction(low)).rejects.toThrow(/below the minimum/i);
-
-    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
-    getApplication.mockResolvedValue(WITH_BASIS());
-    await expect(saveQuoteConfigurationAction(low)).resolves.toBeDefined();
+    for (const role of ["rep", "admin"] as const) {
+      getEffectiveRole.mockResolvedValue({ userId: `${role}-1`, role });
+      getApplication.mockResolvedValue(WITH_BASIS());
+      await expect(saveQuoteConfigurationAction(at(0.029))).rejects.toThrow(/below the minimum/i);
+      getApplication.mockResolvedValue(WITH_BASIS());
+      await expect(saveQuoteConfigurationAction(at(0.03))).resolves.toBeDefined();
+    }
   });
 
   it("keeps the row's existing rates when the caller sends none", async () => {

@@ -97,7 +97,7 @@ export default function RateMatrixSettingsPage() {
                 Card-present rate · each column covers the range in its header, so a $22
                 ticket reads the $25 column ($20 – $24.99). The last three columns are AIO&apos;s
                 margin over interchange for the volume band: the minimum is the floor a quote
-                is refused below (reps only ever see a padded version), desired is the target, and
+                is refused below (for reps and admins alike), desired is the target, and
                 max is the soft ceiling. Reset restores the rates only; margins keep their saved values.
           </p>
           <div className={styles.split}>

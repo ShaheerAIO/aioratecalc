@@ -23,7 +23,7 @@ import styles from "./ProductConfigurator.module.css";
 
 /**
  * The only slice of `getPricingPreviewAction`'s role-scoped result this
- * component is allowed to see — already padded/redacted for a rep caller on
+ * component is allowed to see — already redacted for a rep caller on
  * the server, never re-derived here. Exported so `ProductConfigurator` can
  * share the same shape rather than restate it.
  */

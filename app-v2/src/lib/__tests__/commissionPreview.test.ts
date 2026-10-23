@@ -10,7 +10,7 @@ import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE, type StatementAnalysis } 
 // lib/billing/processingArr.ts uses.
 
 const NO_FEES = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
-const NO_PADDING: PaddingConfig = { paddingPct: 0, paddingMinMrrAdd: 0, paddingAdyenCostHide: false };
+const NO_PADDING: PaddingConfig = { paddingAdyenCostHide: false };
 
 // $100k/mo on 2,500 transactions -> a $40 average ticket.
 const ANALYSIS = {

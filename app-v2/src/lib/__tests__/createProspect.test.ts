@@ -43,7 +43,7 @@ vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
 // defaulted to a clean refusal so every pre-existing test reads exactly as it
 // did before that feature existed — see the dedicated describe block below.
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote, resolveSender }));
-const PADDING = { paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true };
+const PADDING = { paddingAdyenCostHide: true };
 vi.mock("@/lib/actions/pricing", () => ({
   getActivePaddingPolicy: vi.fn().mockResolvedValue(PADDING),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
@@ -248,8 +248,8 @@ describe("createProspectAction — success", () => {
 // under AIO's minimum — the UI's own refusal (rep/prospects/new/page.tsx's
 // hardBlocks) was never backed up here.
 describe("createProspectAction — the margin floor", () => {
-  // $10,000/month, $50 ticket — MARGIN_REQS' first tier (true minMargin
-  // 0.0067; padded 50%, ~0.01005). Both rates below assume a 2-tier quote
+  // $10,000/month, $50 ticket — MARGIN_REQS' first tier (minMargin 0.0085).
+  // Both rates below assume a 2-tier quote
   // with no per-transaction fee, so interchange alone decides the margin.
   const BASIS = { monthlyVolume: 10000, avgTicket: 50 };
 
@@ -269,7 +269,7 @@ describe("createProspectAction — the margin floor", () => {
     expect(saveApplication).not.toHaveBeenCalled();
 
     const message = await attempt.catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
-    expect(message).not.toMatch(/0\.0067|0\.67\s*%|0\.01005|1\.005\s*%/);
+    expect(message).not.toMatch(/0\.0085|0\.85\s*%/);
     expect(message).not.toMatch(/admin/i);
   });
 

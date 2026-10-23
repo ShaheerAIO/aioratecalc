@@ -1,6 +1,6 @@
 // AIO Payments margin matrix — provenance: Steve's 2026-07-23 pricing matrix
 // (supersedes the prior "AIO Payments Margin Requirements.xlsx" take-rate/minMRR floors).
-//   minMargin     = the true floor AIO won't go below (pillowed before reps see it)
+//   minMargin     = the floor AIO won't go below (the same for reps and admins since 2026-10-23)
 //   desiredMargin = the default target we quote (per volume tier)
 //   maxMargin     = soft ceiling (above it the rep gets a non-blocking warning)
 //   desiredArr    = target annual revenue per account — reference only, not used in math
@@ -340,31 +340,19 @@ export function derivePricing(
   };
 }
 
-// Global admin-set padding applied to the true floor/cost before a rep is
-// allowed to see it — reps must never discover or undercut AIO's actual
-// rock-bottom margin. Pure function; the active policy is fetched from the
-// margin_policy table by the caller (see lib/actions/pricing.ts) and passed
-// in here, keeping this file free of DB access.
+// What a rep may see of AIO's cost. Named for the margin_policy columns it is
+// read from. It carried the margin padding (a % and a flat $ added to the
+// min-margin floor for reps) until 2026-10-23, when that was removed (product
+// owner: "there is no need for padding if the admin can just adjust the min
+// and max anyways"). The padding_bps / padding_min_mrr_add columns are left
+// in place and are neither read nor written.
 export type PaddingConfig = {
-  paddingPct: number;          // proportional pad on the true min-margin floor (0.5 = +50%, i.e. floor × 1.5)
-  paddingMinMrrAdd: number;    // flat $ padding added to the computed dollar floor
   paddingAdyenCostHide: boolean; // whether the exact Adyen cost rate is hidden from reps
 };
 
-// Padded floor RATE for reps — the true min-margin scaled up by the admin pillow.
-// Proportional (not flat bps) so it tracks each volume tier: Steve's min margins span
-// 0.08%–0.67%, and a flat pad would either swamp the small floors or exceed the desired
-// default on the large ones. With pad < 1, the padded floor always stays below the tier's
-// desired margin (desired ≈ 2× min), so the default quote is never itself below-floor.
-// The flat dollar pad (paddingMinMrrAdd) is applied to the resulting dollar floor by the
-// caller, not here, so both pillow knobs stay meaningful.
-export function getPaddedFloorRate(minMargin: number, padding: PaddingConfig): number {
-  return minMargin * (1 + padding.paddingPct);
-}
-
 export type RoleScopedPricing = DerivedPricing & {
   belowCostFloor: boolean;    // computed from the TRUE Adyen cost server-side; the cost itself is never derived from this flag
-  belowMarginFloor: boolean;  // target margin is below the (padded, for reps) min-margin floor — blocks the client-side
+  belowMarginFloor: boolean;  // target margin is below the tier's min-margin floor — blocks the client-side
                               // save button (PricingStep.tsx, EditQuotePanel.tsx); the write-path backstop against the
                               // TRUE floor lives server-side in actions/prospects.ts (assertMarginAboveTrueFloor)
   adyenCostRate: number | null; // null when hidden from this role (reps, per paddingAdyenCostHide)
@@ -403,7 +391,7 @@ export type RoleScopedPricing = DerivedPricing & {
    * Shown to reps verbatim (2026-10-15 — "show montly revenue and yearly arr
    * in the card rate box"). Rep-safe for the same reason `projectedCommission`
    * is: it is built on the wholesale table, which is AIO's own forecast of its
-   * own revenue, not the padded margin floor this type keeps secret.
+   * own revenue, not AIO's cost.
    */
   monthlyProcessingRevenue: number | null;
   processingArr: number | null;
@@ -416,10 +404,10 @@ export type RoleScopedPricing = DerivedPricing & {
   belowMonthlyRevenueFloor: boolean;
 };
 
-// Returns a pricing view scoped to who's asking. Admins get the true
-// marginFloor/adyenCostRate; everyone else gets the padded floor and
-// (per policy) a redacted cost, plus safe belowCostFloor / belowMarginFloor
-// booleans computed from the true numbers without ever exposing them.
+// Returns a pricing view scoped to who's asking. Everyone is judged against
+// the same min-margin floor (no rep padding since 2026-10-23); admins get the
+// true adyenCostRate, everyone else (per policy) a redacted one, plus a safe
+// belowCostFloor boolean computed from the true cost without exposing it.
 export function derivePricingForRole(
   analysis: Parameters<typeof derivePricing>[0],
   rates: QuoteRates | null | undefined,
@@ -466,28 +454,13 @@ export function derivePricingForRole(
     belowMonthlyRevenueFloor: !!processing && processing.monthly < MIN_MONTHLY_PROCESSING_REVENUE,
   };
 
-  if (role === "admin") {
-    return {
-      ...result,
-      belowCostFloor,
-      belowMarginFloor: appliedMargin < tier.minMargin,
-      adyenCostRate: activeTier ? trueAdyenCostRate : null,
-      desiredMargin: tier.desiredMargin,
-      maxMargin: tier.maxMargin,
-      projectedCommission,
-      ...revenueView,
-    };
-  }
-
-  const paddedRate = getPaddedFloorRate(tier.minMargin, padding);
-  const paddedMarginFloor = vol * paddedRate + padding.paddingMinMrrAdd;
-
   return {
     ...result,
-    marginFloor: paddedMarginFloor,
     belowCostFloor,
-    belowMarginFloor: appliedMargin < paddedRate,
-    adyenCostRate: padding.paddingAdyenCostHide ? null : trueAdyenCostRate,
+    belowMarginFloor: appliedMargin < tier.minMargin,
+    adyenCostRate: role === "admin"
+      ? (activeTier ? trueAdyenCostRate : null)
+      : (padding.paddingAdyenCostHide ? null : trueAdyenCostRate),
     desiredMargin: tier.desiredMargin,
     maxMargin: tier.maxMargin,
     projectedCommission,
@@ -570,27 +543,13 @@ function projectedProcessingRevenue(
  * deriving a second one — a write path computing its own copy of this check
  * is how the two drift apart again.
  *
- * The message never states the floor itself, only that the rate is under it —
- * CLAUDE.md is explicit that reps must never see or derive AIO's true
- * minimum, and `belowMarginFloor` is itself computed against the PADDED floor
- * for a rep (see `derivePricingForRole`), so even "no" is answered against the
- * pillowed number, never the true one. A rep retrying with a slightly higher
- * rate only ever hears "yes" or the same "no" — never a number to
- * binary-search against.
+ * The message doesn't state the floor, only that the rate is under it. Reps
+ * and admins are judged against the same tier minimum (the rep padding was
+ * removed 2026-10-23).
  *
- * This is a HARD refusal with exactly ONE recovery: raise the rate. There is
- * deliberately NO admin override today, and the message must not imply one.
- * `/admin/settings/pillow` — the margin-padding editor — was deleted
- * 2026-10-12 ("we are gonna work on margin stuff later"; see
- * `updatePaddingPolicyAction` in actions/pricing.ts, which has zero callers
- * and a comment saying so), and the true floor (`MARGIN_REQS` /
- * `getMarginFloor`) is a hardcoded table in this file that was never
- * admin-editable in the first place — reaching it means editing the constant
- * and redeploying, the exact failure shape CLAUDE.md already flags in the
- * 2026-10-09 quote-template incident. Before this function existed, a
- * below-floor rate could still be pushed through as a client-side courtesy;
- * this turns that into a wall with no door, so don't point a rep at an admin
- * who has nothing to click.
+ * This is a HARD refusal with exactly ONE recovery for a rep: raise the rate.
+ * There is no per-quote override; an admin moves the floor itself by editing
+ * the Min margin column on /admin/settings/rate-matrix.
  */
 export function marginFloorBlockers(pricing: Pick<RoleScopedPricing, "belowMarginFloor">): string[] {
   if (!pricing.belowMarginFloor) return [];

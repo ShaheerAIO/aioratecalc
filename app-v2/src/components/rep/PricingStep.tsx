@@ -82,8 +82,8 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
     cardNotPresentVolume: (analysis.totalVolume || 0) * (1 - cpPct),
   }), [analysis, cpPct]);
 
-  // The projection (and the margin/cost-basis view, which is role-scoped and
-  // padded for reps) is computed server-side — this component never sees or
+  // The projection (and the margin/cost-basis view, which is role-scoped)
+  // is computed server-side — this component never sees or
   // derives AIO's true floor or cost itself. Debounced because the rate fields
   // fire on every keystroke.
   useEffect(() => {
@@ -104,7 +104,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   // needed"), reversing the 2026-10-06 change that dropped floor enforcement
   // along with the margin input: between those dates a rep could quote under
   // the floor and the quote went out. Both are computed server-side from the
-  // rates the rep typed, against a floor that is padded before they see it.
+  // rates the rep typed, against a floor they never see.
   //
   // AIO Revenue, processor cost, net margin, `belowFloor` (the true-cost
   // warning) and the ceiling (`aboveMax`) all moved OFF this screen on

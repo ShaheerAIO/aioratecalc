@@ -42,7 +42,7 @@ const ZERO_FEES: FeeOverrides = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, c
  * a second $999 install alongside the ones the server re-derives.
  *
  * The margin preview goes through `getPricingPreviewAction`, never a local
- * computation: reps only ever see the server's pillowed floor/cost view, and
+ * computation: reps only ever see the server's role-scoped floor/cost view, and
  * this component must not become a second place that leaks the true numbers.
  * When there's no statement on file but the account does have a rep-entered
  * quoteConfig (volume + ticket), `analysisFromQuoteConfigAction` (server-side,
@@ -133,7 +133,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
     activeProcessor?.tiers?.find(t => t.isDefault) ?? activeProcessor?.tiers?.[0] ?? null;
 
   // Debounced re-preview, same 150ms shoulder as PricingStep — the server
-  // computes the pillowed floor/cost view; this component never derives it.
+  // computes the role-scoped floor/cost view; this component never derives it.
   // `recurringArr` comes off the configurator's own live totals (annualised),
   // so the projected commission shown below reflects this quote's platform
   // fee too, not processing margin alone — the one thing PricingStep can't

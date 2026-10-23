@@ -481,15 +481,9 @@ export type QuotePick = { hubspotProductId: string; qty: number };
 // function both rep-facing forms already call for their own (now redundant,
 // but harmless) client-side check. Nothing here derives a second number.
 //
-// Scoped PER ROLE, not against one shared "true" number, same as the deleted
-// guard was: admins are held to the true floor (they already see true numbers
-// everywhere else), reps to the PADDED one — because a refusal is an oracle.
-// A rep calling this Server Action directly, refused against the TRUE floor,
-// could binary-search the margin (refuse, refuse, succeed) and recover AIO's
-// true minimum to arbitrary precision. The padded floor is always ≥ the true
-// floor, so refusing reps against it is strictly stricter, never looser, and
-// the refusal message never states the number either way — see
-// `marginFloorBlockers`'s doc comment.
+// Reps and admins are held to the same tier minimum: the rep padding that
+// used to sit on top of it was removed 2026-10-23 (product owner: "there is no
+// need for padding if the admin can just adjust the min and max anyways").
 
 // No fee overrides are persisted on an application (they only ever lived in
 // the wizard's ephemeral PricingStep state — see EditQuotePanel's identical

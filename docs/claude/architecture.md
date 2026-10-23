@@ -11,10 +11,10 @@
 - **Check (checkhq.com):** embedded payroll. Hosted onboarding only, same posture as Adyen — AIO creates the Check *company* from details it already holds, Check collects EIN/bank/tax data on its own hosted pages. Wired & in sandbox testing (see the payroll module below).
 - **HubSpot:** Private App Token (`HUBSPOT_PRIVATE_APP_TOKEN`), no OAuth. Still Phase 3, not started.
 
-## Roles & the pillowed margin model (Phase 1.5)
+## Roles & the role-scoped margin model (Phase 1.5)
 Three roles: **Customer** (no account — tokenized links only), **Rep**, **Admin**. `middleware.ts` guards `/rep/*` (rep or admin) and `/admin/*` (admin only) using NextAuth sessions. Roles live in `users.role` and are set by an admin at `/admin/users` — **not** derived from Entra groups or app roles (see "Entra ID staff sign-in").
 
-The core trust boundary: **reps must never see or derive AIO's true minimum profitable margin.** `pricing.ts`'s `getMarginFloor()` (true volume-tiered floor) and `calcAdyenCost`/`adyenRateOnVolume` (true per-transaction processing cost) are real numbers computed correctly everywhere internally, but a rep's UI/API responses only ever see a **pillowed** (padded) floor and, by default, no exact Adyen cost at all — controlled by a global policy (`margin_policy` table). **Its editor was deleted on 2026-10-12** (`/admin/settings/pillow` — "we are gonna work on margin stuff later"); the policy itself is untouched and still applied on every rep-facing price, reading whatever row is saved or `DEFAULT_PADDING`, and `updatePaddingPolicyAction` is kept for when the editor returns. The one control on that page that was NOT margin padding — the discount cap — moved to `/admin/settings/quote-limits`. This is enforced **server-side** in `derivePricingForRole()` (`pricing.ts`) via `src/lib/actions/pricing.ts`'s `getPricingPreviewAction()` — `PricingStep.tsx` has no client-side access to the true numbers at all, it only renders whatever the server decided this role gets to see. Don't move this computation back to the client.
+The core trust boundary: **reps never see AIO's true Adyen cost, and the margin table never ships to a rep's browser.** `pricing.ts`'s `getMarginFloor()` (volume-tiered floor, admin-edited on `/admin/settings/rate-matrix`) and `calcAdyenCost`/`adyenRateOnVolume` (true per-transaction processing cost) are computed server-side; a rep gets yes/no booleans (`belowMarginFloor`, `belowCostFloor`) and, by default, no exact Adyen cost (`margin_policy.padding_adyen_cost_hide`). **The rep margin padding ("pillow") was REMOVED 2026-10-23** (product owner: "there is no need for padding if the admin can just adjust the min and max anyways"): reps and admins are judged against the same tier `minMargin`. `getPaddedFloorRate`, `updatePaddingPolicyAction` and the `paddingPct`/`paddingMinMrrAdd` fields of `PaddingConfig` are gone; `PaddingConfig` now only carries `paddingAdyenCostHide`. The DB columns `margin_policy.padding_bps` / `padding_min_mrr_add` are left in place and are neither read nor written (the live row had 20 bps, i.e. ×1.002). The one control on the old `/admin/settings/pillow` page that was NOT margin padding, the discount cap, moved to `/admin/settings/quote-limits`. This is enforced **server-side** in `derivePricingForRole()` (`pricing.ts`) via `src/lib/actions/pricing.ts`'s `getPricingPreviewAction()`. `PricingStep.tsx` has no client-side access to the true numbers at all; it only renders whatever the server decided this role gets to see. Don't move this computation back to the client.
 
 A **temporary, dev-only debug role switcher** (`src/lib/auth/debugRole.ts`, `src/components/dev/RoleSwitcher.tsx`) lets you click through Rep/Admin views without logging in/out, hard-gated on `ENABLE_DEBUG_ROLE_SWITCH` (must only ever be set in a local `.env.local`, never a Vercel project env — Preview deployments also run `NODE_ENV=production`, so that alone isn't a safe gate). It resolves to the real seeded `rep@aioapp.com`/`admin@aioapp.com` DB rows (not fake IDs) since `merchant_applications.owner_user_id` is a strict FK. Safe to delete later: that file, the component, `src/lib/actions/debugRole.ts`, and their two call sites in `middleware.ts`/`auth.config.ts` and `app/layout.tsx`.
 
@@ -23,7 +23,7 @@ A **temporary, dev-only debug role switcher** (`src/lib/auth/debugRole.ts`, `src
 app-v2/src/
   types/merchant.ts          ← canonical MerchantApplication type (no PII fields), CustomerSafeQuote
   lib/pricing.ts             ← MARGIN_REQS, getMarginFloor, derivePricing (true numbers, untouched)
-                                + getPillowedFloor/derivePricingForRole (role-scoped view, additive)
+                                + derivePricingForRole (role-scoped view, additive)
   lib/rateMatrix.ts          ← the CARD-PRESENT RATE CARD: volume × average ticket → the rate a rep
                                 is offered (pricing guide §10.3, the $0.15/txn option). Pure; the
                                 live numbers are in `rate_matrix_policy`, admin-edited at
@@ -56,7 +56,7 @@ app-v2/src/
     auth.ts                  ← entraSignInAction (staff), breakglassLoginAction (admin recovery),
                                  logoutAction. `loginAction` is GONE — there is no staff password form.
     applications.ts          ← list/get/save/delete application + settings/submissions Server Actions
-    pricing.ts                ← getActivePaddingPolicy, updatePaddingPolicyAction (admin-only), getPricingPreviewAction
+    pricing.ts                ← getActivePaddingPolicy (Adyen-cost hiding only), getPricingPreviewAction
                                  (NB: named Padding*, not Pillow* — this doc's older "pillow" wording is drift)
     prospects.ts              ← createProspectAction — rep creates a prospect + tokenized customer link.
                                  Publishes NOTHING (publishAtSend deleted 2026-10-15) and hard-blocks
@@ -203,7 +203,7 @@ scripts/
   `dealStageRank` must be able to rank — nothing writes it. `onboardingModules.ts`'s single lock
   rule is now "everything except `quote` is locked until `quoteAcceptedAt`".
 - **Three admin pages were deleted on 2026-10-12 and NONE of their policies were** — `/rep/settings`
-  (processors & tiers), `/admin/settings/pillow` (margin padding) and `/admin/settings/quote-templates`.
+  (processors & tiers), `/admin/settings/pillow` (margin padding, itself removed 2026-10-23) and `/admin/settings/quote-templates`.
   Product owner: "completely useless... we are gonna work on margin stuff later." Each policy still
   runs server-side on its saved row or its default, and each write action is kept with a comment
   saying it has no UI. Three consequences worth knowing before "cleaning up" the orphans:

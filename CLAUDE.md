@@ -1,7 +1,7 @@
 # ClearRate / EasyOB (AIO)
 
 > **Active work is on the `v2` branch, in `app-v2/`**: a Next.js app with Postgres (Drizzle/Neon),
-> NextAuth (Entra ID for staff), a role-scoped "pillowed" margin model, server-side Anthropic calls,
+> NextAuth (Entra ID for staff), a role-scoped margin model, server-side Anthropic calls,
 > AIO dashboard API provisioning (Adyen tenant + KYC link), and HubSpot quote/billing.
 > The root HTML files and `clearrate-main/` are the frozen v1 reference.
 
@@ -13,7 +13,7 @@ owner or learned from a live incident, and several cover irreversible actions.
 
 | File | Read it when you touch |
 |---|---|
-| `docs/claude/architecture.md` | Stack, roles and the pillowed margin model, **the key-files map**, storage-error handling, the removed demo gate, deleted admin pages whose policies still run |
+| `docs/claude/architecture.md` | Stack, roles and the role-scoped margin model, **the key-files map**, storage-error handling, the removed demo gate, deleted admin pages whose policies still run |
 | `docs/claude/auth.md` | Entra staff sign-in, `profile()`/`aioUserId`, the popup flow, credentials `scope`, per-request session resolution |
 | `docs/claude/quoting.md` | `buildQuote`/`quoting.ts`, quote types/plans, derived lines, discounts, packages, pre-auth, disclosure line, billing-start notes, rate card, margin and $10/mo revenue floors, the pricing step |
 | `docs/claude/hubspot-billing.md` | Publishing quotes (one-way door), templates, sender email, subscriptions, acceptance/confirmation flow, deals/companies, ARR, company address fields, the Phase E gate-run evidence |
@@ -27,7 +27,7 @@ When you learn something new, add it to the matching file, not here. Keep this f
 
 ## Always-on rules
 - All v2 work in `app-v2/` — **do not touch the root HTML files**
-- **Reps never see the true margin floor or true Adyen cost** — always go through `derivePricingForRole`/`getPricingPreviewAction`, never `derivePricing` directly from a rep-facing client component
+- **Reps never see the true Adyen cost, and the margin table never ships to a rep's browser** — always go through `derivePricingForRole`/`getPricingPreviewAction`, never `derivePricing` directly from a rep-facing client component. (Reps are judged against the same min margin as admins: the rep padding was removed 2026-10-23.)
 - Pricing math (`MARGIN_REQS`, `derivePricing`) lives in `pricing.ts`, **not** in Claude prompts
 - `generateProposal()` force-overrides any AI-returned numbers with locally computed `exactRates`/`exactProjected`
 - HubSpot uses Private App Token — **no OAuth**

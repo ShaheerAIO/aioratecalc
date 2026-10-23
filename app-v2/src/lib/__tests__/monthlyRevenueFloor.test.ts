@@ -17,7 +17,7 @@ import {
 // a rate test against a padded, undisclosed table.
 
 const NO_FEES = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
-const NO_PADDING: PaddingConfig = { paddingPct: 0, paddingMinMrrAdd: 0, paddingAdyenCostHide: false };
+const NO_PADDING: PaddingConfig = { paddingAdyenCostHide: false };
 
 /** A merchant at `volume` a month on a $40 average ticket — the 2.08% wholesale column. */
 const at = (volume: number) => ({

@@ -104,7 +104,7 @@ export type QuoteRates = {
  * anything past 5 is a decimal point in the wrong place rather than an
  * expensive deal. The LOW side is not here and must not be: a rate that is too
  * low is too low for AIO's MARGIN, which is a server-side question answered
- * against the padded floor (`belowMarginFloor`) and never a number shipped to
+ * against the tier's floor (`belowMarginFloor`) and never a number shipped to
  * a rep's browser.
  *
  * Lives beside DEFAULT_QUOTE_RATES, and in this file rather than pricing.ts,

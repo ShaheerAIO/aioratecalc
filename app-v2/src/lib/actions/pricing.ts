@@ -16,45 +16,12 @@ import {
 import { DEFAULT_HARDWARE_COMMISSION_POLICY, type HardwareCommissionPolicy } from "@/lib/commission";
 import type { StatementAnalysis, ProcessorTier, QuoteConfig, QuoteRates } from "@/types/merchant";
 
-// paddingPct is a proportion (0.5 = +50%). It is persisted in the existing integer
-// padding_bps column as basis points of proportion (5000 = 0.50) — no schema change.
-const DEFAULT_PADDING: PaddingConfig = { paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true };
+const DEFAULT_PADDING: PaddingConfig = { paddingAdyenCostHide: true };
 
 export async function getActivePaddingPolicy(): Promise<PaddingConfig> {
   const [row] = await db.select().from(marginPolicy).where(eq(marginPolicy.isActive, true)).limit(1);
   if (!row) return DEFAULT_PADDING;
-  return {
-    paddingPct: row.paddingBps / 10000,
-    paddingMinMrrAdd: Number(row.paddingMinMrrAdd),
-    paddingAdyenCostHide: row.paddingAdyenCostHide,
-  };
-}
-
-/**
- * NO UI as of 2026-10-12 — /admin/settings/pillow was deleted ("we are gonna
- * work on margin stuff later"). The policy itself is untouched and still
- * applied on every rep-facing price: `getActivePaddingPolicy` reads whatever
- * row is saved, or DEFAULT_PADDING. This is kept rather than deleted with its
- * editor because the padding is coming back, and because an admin-gated
- * action with no button is cheaper than re-deriving the write path later.
- */
-export async function updatePaddingPolicyAction(input: PaddingConfig): Promise<void> {
-  const effective = await getEffectiveRole();
-  if (!effective || effective.role !== "admin") throw new Error("Admin only");
-
-  const [existing] = await db.select({ id: marginPolicy.id }).from(marginPolicy).where(eq(marginPolicy.isActive, true)).limit(1);
-  const values = {
-    paddingBps: Math.round(input.paddingPct * 10000),
-    paddingMinMrrAdd: String(input.paddingMinMrrAdd),
-    paddingAdyenCostHide: input.paddingAdyenCostHide,
-    updatedByUserId: effective.userId,
-    updatedAt: new Date(),
-  };
-  if (existing) {
-    await db.update(marginPolicy).set(values).where(eq(marginPolicy.id, existing.id));
-  } else {
-    await db.insert(marginPolicy).values(values);
-  }
+  return { paddingAdyenCostHide: row.paddingAdyenCostHide };
 }
 
 // ── The quote discount cap ──────────────────────────────────────────────────

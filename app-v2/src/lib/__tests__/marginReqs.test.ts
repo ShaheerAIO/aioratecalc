@@ -88,7 +88,7 @@ describe("derivePricingForRole with a saved table", () => {
     averageTicket: 25, cardPresentPct: 0.95, cardNotPresentPct: 0.05,
   };
   const fees = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
-  const padding = { paddingPct: 0, paddingMinMrrAdd: 0, paddingAdyenCostHide: true };
+  const padding = { paddingAdyenCostHide: true };
   const price = (reqs?: Parameters<typeof derivePricingForRole>[8]) =>
     derivePricingForRole(analysis, null, "2-tier", fees, "admin", null, padding, null, reqs);
 

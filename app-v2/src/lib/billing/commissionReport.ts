@@ -43,7 +43,7 @@ import type { MerchantApplication, ProcessorTier } from "@/types/merchant";
 // No padding applies to an admin read, but `derivePricingForRole` still takes
 // the parameter — this is the inert value, same role `getActivePaddingPolicy`'s
 // DEFAULT_PADDING plays for a rep read that fails to load a real policy.
-const NO_PADDING: PaddingConfig = { paddingPct: 0, paddingMinMrrAdd: 0, paddingAdyenCostHide: false };
+const NO_PADDING: PaddingConfig = { paddingAdyenCostHide: false };
 const ZERO_FEES = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
 
 export type DealCommissionRow = {

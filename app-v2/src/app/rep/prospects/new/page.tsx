@@ -93,8 +93,8 @@ function NewProspectFlow() {
   const [pricingModel, setPricingModel] = useState<PricingModel>("2-tier");
   // "Yes, $1.2M a month really is their volume." Reset by any edit to it.
   const [volumeConfirmed, setVolumeConfirmed] = useState(false);
-  // The server's role-scoped view of what the typed rates earn. Reps see a
-  // PADDED floor and never the floor itself — `belowMarginFloor` is the one
+  // The server's role-scoped view of what the typed rates earn. The floor
+  // itself is never sent — `belowMarginFloor` is the one
   // boolean that refuses the send. `appliedTargetMargin`/`projectedCommission`
   // are kept too (2026-10-13 — "show the rep their margin on the quote
   // receipt"): both are already rep-safe on `RoleScopedPricing` (see its doc
@@ -413,7 +413,7 @@ function NewProspectFlow() {
   // ── The card-rate minimum ─────────────────────────────────────────────────
   // A rate is too low when it doesn't clear AIO's margin floor for THIS
   // merchant's volume, which is a server-side question: the true floor lives
-  // in pricing.ts and reps are shown a padded one, so the browser is told
+  // in pricing.ts, so the browser is told
   // "yes" or "no" and never the figure. Floor enforcement was dropped on
   // 2026-10-06 when rates replaced the margin input, leaving nothing to stop a
   // rep quoting under cost; "card rate minimums are needed" (2026-10-09) is

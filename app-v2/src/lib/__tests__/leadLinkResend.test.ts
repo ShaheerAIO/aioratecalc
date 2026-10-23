@@ -31,7 +31,7 @@ vi.mock("@/lib/adapters/hubspot", () => ({
 // exercise that guard at all (resendLeadLinkAction never calls it).
 vi.mock("@/lib/actions/pricing", () => ({
   getActivePaddingPolicy: vi.fn().mockResolvedValue({
-    paddingPct: 0.5, paddingMinMrrAdd: 0, paddingAdyenCostHide: true,
+    paddingAdyenCostHide: true,
   }),
   getMaxDiscountPercent: vi.fn().mockResolvedValue(50),
   getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90 }),
