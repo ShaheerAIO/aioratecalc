@@ -54,7 +54,7 @@ export const QUOTE_TYPES: Array<{ id: QuoteType; label: string; note: string }> 
   },
   {
     id: "marketing_term",
-    label: "Marketing — 2-Year",
+    label: "Marketing — Kiosk Loan",
     note: "2-year commitment. Mega or 27\" kiosk included.",
   },
 ];
@@ -315,7 +315,7 @@ export const PICKER_EXCLUDED_PRODUCT_NAMES = [
  * represent all the individual items"). The single WiFi package line stands for
  * the whole network, so selling the pieces on top bills it twice. Matched by id
  * (the names are HubSpot's and drift). Includes the Pronto package, which is
- * deliberately not offered as a second network line beside the derived one.
+ * deliberately not offered as a second network line beside the Unifi one.
  * Not derived and not pickable; a saved line carrying one is dropped on reopen.
  */
 const NETWORK_COMPONENT_PRODUCT_IDS: readonly string[] = [
@@ -335,9 +335,9 @@ function isNetworkComponent(id: string): boolean {
 /**
  * Everything a rep can never pick by hand. Two reasons land here:
  *   - the exclusions above — things nobody sells as a line
- *   - DERIVED lines: all three platform products, the three install services,
- *     and the additional software license (one per screen past the included
- *     four). They still land on the quote, just not by hand.
+ *   - DERIVED lines: all three platform products, the install and training
+ *     services, and the additional software license (one per screen past the included
+ *     three). They still land on the quote, just not by hand.
  */
 export function isPickable(product: CatalogProduct): boolean {
   return (
@@ -470,9 +470,13 @@ export function isAllowedForQuoteType(product: CatalogProduct, quoteType: QuoteT
 // ── Mandatory install services (derived, not chosen) ────────────────────────
 
 // Confirmed with Shaheer 2026-08-20: every quote that puts AIO's system in a
-// restaurant includes a network, an install and a training — qty 1 each.
-// Install and training stay mandatory. The WiFi package is still added by
-// default, and a rep can take it off (LineAdjustment.removed) after confirming.
+// restaurant includes an install and a training — qty 1 each.
+//
+// The WiFi package USED to be the third, derived onto every hardware quote.
+// Since 2026-10-21 it is an ordinary pick, handled like the KDS (product
+// owner: "Just add the network package as a regular item in the hardware
+// picker just like a KDS or something"): the QSR Kit preselects it and covers
+// it, and a rep who doesn't want it just un-picks it.
 //
 // Two exceptions, both meaning "nothing is being installed":
 //   - a marketing-only quote
@@ -480,17 +484,16 @@ export function isAllowedForQuoteType(product: CatalogProduct, quoteType: QuoteT
 //     The services attach to the products, so an empty picker means there's
 //     nothing to install, no network to run and nothing to train on. Declared
 //     ordering channels do NOT pull them in — a website-ordering merchant has
-//     no on-site anything for a $999 install or a $999 WiFi package to cover.
+//     no on-site anything for a $999 install to cover.
 // AIO deactivated the original "AIO WiFi Network Package" (281351401209,
 // $999) on 2026-10-13 and replaced it with two vendor-specific variants:
 // "AIO Wifi Network Package - Unifi" (338690209525, $698) and "... - Pronto"
-// (338691650250, $490). Product owner: point the always-included line at
-// Unifi; Pronto is deliberately unreachable from EasyOB for now. See
-// RETIRED_WIFI_PRODUCTS for how the old line is still recognised.
+// (338691650250, $490). Product owner: the WiFi line is the Unifi one; Pronto
+// is deliberately unreachable from EasyOB for now. See RETIRED_WIFI_PRODUCTS
+// for how the old line is still recognised.
 export const WIFI_PRODUCT_ID = "338690209525";
 
 export const INCLUDED_SERVICE_PRODUCTS = [
-  { name: "AIO Wifi Network Package - Unifi", hubspotProductId: WIFI_PRODUCT_ID },
   { name: "Onsite Installation", hubspotProductId: "223452690133" },
   { name: "System Onboarding and Training", hubspotProductId: "223152695032" },
 ] as const;
@@ -498,10 +501,9 @@ export const INCLUDED_SERVICE_PRODUCTS = [
 /**
  * The retired WiFi package id/name. Deactivated in HubSpot 2026-10-13, so it
  * can never be resolved or written again — but six already-published quotes
- * and any saved draft still carry this line at $999, and `isWifiLine` /
- * `isDroppedOnReopen` must keep recognising it so the rep's remove-toggle and
- * reopen-a-saved-quote logic keep working on those rows. Same pattern as
- * `RETIRED_PLATFORM_PRODUCTS`.
+ * and any saved draft still carry this line at $999. `picksFromQuoteLines`
+ * recognises it and reopens it as a pick of the Unifi package, the product
+ * that replaced it. Same pattern as `RETIRED_PLATFORM_PRODUCTS`.
  */
 const RETIRED_WIFI_PRODUCTS = [
   { name: "AIO WiFi Network Package", hubspotProductId: "281351401209" },
@@ -585,9 +587,10 @@ export function companionsFor(hubspotProductId: string): typeof POS_COMPANIONS[n
 
 /**
  * Screens that consume a software license: anything that runs an AIO app.
- * The first four on a processing quote are included in the platform fee.
+ * The first three on a processing quote are included in the platform fee
+ * (2026-10-21). The Hardware heading in the quote builder reads this number.
  */
-export const INCLUDED_SCREEN_COUNT = 4;
+export const INCLUDED_SCREEN_COUNT = 3;
 
 export const SCREEN_PRODUCT_IDS = [
   "217445755632", // POS Unit
@@ -763,8 +766,8 @@ export function screenCount(lines: Array<{ hubspotProductId: string; qty: number
  * is expected, not an error." Until this shipped, EasyOB put both on at full
  * price, so every quote it built was $1,498 too high.
  *
- * NOT the WiFi package. It is a third always-included service and it is not on
- * that sheet at all — the sheet prices the network as separate hardware (Unifi
+ * NOT the WiFi package (an always-included service then, an ordinary pick
+ * since 2026-10-21). It is not on that sheet at all — the sheet prices the network as separate hardware (Unifi
  * Router, 8 Port Switch, Access Point, U-LTE Backup Pro), so comping the $999
  * package would be inventing a discount nobody authorized.
  *
@@ -1000,7 +1003,7 @@ function hasPhysicalPick(pickedLines: QuoteLine[]): boolean {
  *
  * Takes the picked lines because the services follow the products — but
  * specifically the PHYSICAL ones: no physical product means nothing to
- * network, install or train on. This used to fall out for free from "no
+ * install or train on. This used to fall out for free from "no
  * products picked == rate-only quote", back when a website merchant declared
  * it with a channel chip rather than a pick. Since 2026-10-13 the Website
  * product ($50/mo) IS the pick, so a website-only quote has a non-empty
@@ -1012,20 +1015,13 @@ function hasPhysicalPick(pickedLines: QuoteLine[]): boolean {
 export function resolveIncludedServices(
   quoteType: QuoteType,
   pickedLines: QuoteLine[],
-  catalog: CatalogProduct[],
-  /**
-   * Product ids to leave off without reporting them missing. The WiFi package
-   * uses this when a rep has removed it — absence is then a decision, not a
-   * catalog hole. Install and training are never passed here.
-   */
-  omitIds: readonly string[] = []
+  catalog: CatalogProduct[]
 ): IncludedServicesResult {
   if (!isProcessingQuote(quoteType) || !hasPhysicalPick(pickedLines)) return { lines: [], missing: [] };
 
   const lines: QuoteLine[] = [];
   const missing: string[] = [];
   for (const service of INCLUDED_SERVICE_PRODUCTS) {
-    if (omitIds.includes(service.hubspotProductId)) continue;
     const product =
       catalog.find(p => p.hubspotProductId === service.hubspotProductId) ??
       catalog.find(p => p.name.trim() === service.name);
@@ -1074,7 +1070,7 @@ export function resolveRequiredAms1(
 export type SoftwareLicenseResult = IncludedServicesResult & { screens: number };
 
 /**
- * One Additional Software License per screen past the four the platform fee
+ * One Additional Software License per screen past the three the platform fee
  * includes. Marketing plans don't get one — their screens are a different offer.
  * The license is derived, never picked, so a hand-added line can't double it.
  */
@@ -1861,10 +1857,6 @@ function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
     line.derived === true ||
     isPlatformProduct(line.name, line.hubspotProductId) ||
     isIncludedServiceProduct(line.hubspotProductId, line.name) ||
-    // The retired $999 WiFi line isn't in INCLUDED_SERVICE_PRODUCTS any more
-    // (it points at the Unifi replacement now), so it needs its own check
-    // here or a pre-10/13 quote would reopen offering it back as a pick.
-    isWifiLine(line) ||
     isNetworkComponent(line.hubspotProductId) ||
     line.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId ||
     isPreAuthProduct(line.hubspotProductId, line.name) ||
@@ -1902,6 +1894,15 @@ export function picksFromQuoteLines(
   const merged = new Map<string, number>();
   for (const l of lines ?? []) {
     if (isDroppedOnReopen(l, quoteType)) continue;
+    // The WiFi package is a pick since 2026-10-21, so a saved quote's WiFi
+    // line (derived onto it before then) reopens as one. The RETIRED $999 id
+    // can't be resolved in HubSpot any more, so it comes back as one of the
+    // Unifi package that replaced it — dropping it would quietly take the
+    // network off a quote the merchant was shown with one.
+    if (isRetiredWifiLine(l)) {
+      merged.set(WIFI_PRODUCT_ID, Math.max(merged.get(WIFI_PRODUCT_ID) ?? 0, 1));
+      continue;
+    }
     merged.set(l.hubspotProductId, (merged.get(l.hubspotProductId) ?? 0) + l.qty);
   }
   return [...merged].map(([hubspotProductId, qty]) => ({ hubspotProductId, qty }));
@@ -2411,11 +2412,8 @@ export function checkoutAmountBlockers(lines: QuoteLine[]): string[] {
 export function adjustmentsFromQuoteLines(
   lines: QuoteLine[] | null | undefined,
   /**
-   * The plan, when the caller has it. A processing quote that already has its
-   * install lines but no WiFi line was saved with the package removed, and
-   * reopening has to keep it removed — otherwise the derivation puts it back.
-   * A channel-only quote has a platform line and no install lines, so it does
-   * not count: WiFi was never applicable there.
+   * The plan, when the caller has it. Only a marketing quote reads anything
+   * from it (the online-ordering toggle, below).
    */
   quoteType?: QuoteType
 ): QuoteAdjustments {
@@ -2470,16 +2468,6 @@ export function adjustmentsFromQuoteLines(
     if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
   }
 
-  if (quoteType && isProcessingQuote(quoteType)) {
-    const rows = lines ?? [];
-    const hasInstall =
-      rows.some(l => isIncludedServiceProduct(l.hubspotProductId, l.name) && !isWifiLine(l));
-    const hasWifi = rows.some(isWifiLine);
-    if (hasInstall && !hasWifi) {
-      out[WIFI_PRODUCT_ID] = { ...out[WIFI_PRODUCT_ID], removed: true };
-    }
-  }
-
   // The online-ordering toggle is saved as the disclosure line it produces.
   // Without this, reopening a website quote that takes orders turns it off.
   //
@@ -2496,10 +2484,8 @@ export function adjustmentsFromQuoteLines(
   return out;
 }
 
-function isWifiLine(line: { hubspotProductId: string; name: string }): boolean {
+function isRetiredWifiLine(line: { hubspotProductId: string; name: string }): boolean {
   const trimmed = line.name.trim();
-  const current = INCLUDED_SERVICE_PRODUCTS.find(s => s.hubspotProductId === WIFI_PRODUCT_ID)!;
-  if (line.hubspotProductId === current.hubspotProductId || trimmed === current.name) return true;
   return RETIRED_WIFI_PRODUCTS.some(p => p.hubspotProductId === line.hubspotProductId || p.name === trimmed);
 }
 
@@ -2525,7 +2511,7 @@ export type BuiltQuote = {
   includedServices: IncludedServicesResult;
   /** AMS1 terminals added to reach one per POS unit. Empty when the picks already carry enough. */
   requiredTerminals: RequiredTerminalsResult;
-  /** Additional software licenses past the four screens the plan includes. */
+  /** Additional software licenses past the three screens the plan includes. */
   softwareLicense: SoftwareLicenseResult;
   /** The $0 card-rate disclosure, on a marketing quote whose website takes online orders. */
   processingDisclosure: IncludedServicesResult;
@@ -2595,12 +2581,7 @@ export function buildQuote(
 
   const breakdown = deriveOrderPoints(picks, effectiveChannels);
   const platform = resolvePlatformLine(quoteType, picks, effectiveChannels, catalog);
-  // Removed WiFi is a decision, not a missing product. Install and training
-  // are not optional and are never omitted this way.
-  const wifiRemoved = isProcessingQuote(quoteType) && adjustments[WIFI_PRODUCT_ID]?.removed === true;
-  const includedServices = resolveIncludedServices(
-    quoteType, picks, catalog, wifiRemoved ? [WIFI_PRODUCT_ID] : []
-  );
+  const includedServices = resolveIncludedServices(quoteType, picks, catalog);
   const requiredTerminals = resolveRequiredAms1(quoteType, picks, catalog);
   const softwareLicense = resolveSoftwareLicense(quoteType, picks, catalog);
 
@@ -2619,8 +2600,9 @@ export function buildQuote(
   );
 
   // The hardware kit, resolved against the mandatory services AND the picks —
-  // it covers the WiFi package and the AMS1 each POS ships with, both derived
-  // lines, so restricting this to the picks would leave them uncovered.
+  // it covers the AMS1 each POS ships with, a derived top-up, so restricting
+  // this to the picks would leave it uncovered. (The WiFi package it also
+  // covers has been an ordinary pick since 2026-10-21.)
   //
   // The platform line is deliberately not offered: it is recurring, and a
   // package only ever absorbs one-time charges (see quotePackages.ts). The

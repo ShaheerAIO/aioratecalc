@@ -22,7 +22,6 @@ import {
   PRODUCT_GROUP_LABELS,
   QUOTE_TYPES,
   SOFTWARE_LICENSE_PRODUCT,
-  WIFI_PRODUCT_ID,
   amountDueAtCheckout,
   buildQuote,
   describeBillingStart,
@@ -554,9 +553,6 @@ export default function ProductConfigurator({
   // Which rows have their adjust drawer open. Local and deliberately not
   // persisted — it is a disclosure, not quote data.
   const [openAdjust, setOpenAdjust] = useState<Set<string>>(new Set());
-  // The WiFi remove confirmation. Local, like the adjust drawers: it is a
-  // disclosure, and the decision itself lives on the adjustment.
-  const [confirmWifi, setConfirmWifi] = useState(false);
   // The "clear the cart?" confirmation. Same kind of local disclosure state,
   // declared here with the others because `changeType` resets it.
   const [confirmClear, setConfirmClear] = useState(false);
@@ -632,7 +628,6 @@ export default function ProductConfigurator({
     const switching = next !== quoteType;
     onQuoteTypeChange(next);
     setConfirmKitRemove(null);
-    setConfirmWifi(false);
     setConfirmClear(false);
 
     // The adjustments go with the cart. They are keyed by product id, so a
@@ -762,7 +757,6 @@ export default function ProductConfigurator({
     onAdjustmentsChange?.({});
     setConfirmClear(false);
     setConfirmKitRemove(null);
-    setConfirmWifi(false);
   };
 
   // An adjustment with nothing left in it is DELETED rather than kept as an
@@ -790,7 +784,6 @@ export default function ProductConfigurator({
       if (!merged.discountAmount) delete merged.discountAmount;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
-      if (!merged.removed) delete merged.removed;
       if (!merged.onlineOrdering) delete merged.onlineOrdering;
       if (Object.keys(merged).length) next[id] = merged;
       else delete next[id];
@@ -1672,7 +1665,6 @@ export default function ProductConfigurator({
       const cycle = l.billingFrequency === "one_time" ? "" : `/${fmtCycle(l.billingFrequency)}`;
       const first = !adjustShown.has(l.hubspotProductId);
       adjustShown.add(l.hubspotProductId);
-      const isWifi = l.hubspotProductId === WIFI_PRODUCT_ID && !l.coveredByPackage;
       return (
         <div key={`${l.hubspotProductId}-${i}`} className={styles.docLine}>
           <div className={styles.docLineMain}>
@@ -1704,24 +1696,6 @@ export default function ProductConfigurator({
             {list > net && <span className={styles.strike}>{fmt$(list)}</span>}
             <span><strong>{fmt$(net)}</strong>{cycle}</span>
           </div>
-          {isWifi && first && onAdjustmentsChange && !confirmWifi && (
-            <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(true)}>Remove</button>
-          )}
-          {isWifi && first && confirmWifi && (
-            <div className={styles.confirmBox}>
-              <p>Remove the WiFi package? This merchant won&apos;t get a network quoted.</p>
-              <div className={styles.confirmActions}>
-                <button
-                  type="button"
-                  className={styles.linkBtn}
-                  onClick={() => { setAdjustment(WIFI_PRODUCT_ID, { removed: true }); setConfirmWifi(false); }}
-                >
-                  Remove
-                </button>
-                <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(false)}>Cancel</button>
-              </div>
-            </div>
-          )}
           {first && lineAdjust(l.hubspotProductId)}
         </div>
       );
@@ -1892,7 +1866,7 @@ export default function ProductConfigurator({
               </div>
             )}
 
-            {(oneTimeDoc.length > 0 || packageGroupOrder.length > 0 || adjustments[WIFI_PRODUCT_ID]?.removed) && (
+            {(oneTimeDoc.length > 0 || packageGroupOrder.length > 0) && (
               <div className={styles.docGroup} data-kind="onetime" data-commission={oneTimeComm || undefined}>
                 <div className={styles.docGroupHead}>
                   <span className={styles.docGroupLabel}>
@@ -1920,21 +1894,6 @@ export default function ProductConfigurator({
                     ))}
                   </div>
                 ))}
-                {adjustments[WIFI_PRODUCT_ID]?.removed && (
-                  <div className={styles.docLine} data-pending="true">
-                    <div className={styles.docLineMain}>
-                      <div className={styles.docLineName}>AIO WiFi Network Package</div>
-                      <div className={styles.docWhy}>Removed from this quote</div>
-                    </div>
-                    <button
-                      type="button"
-                      className={styles.linkBtn}
-                      onClick={() => setAdjustment(WIFI_PRODUCT_ID, { removed: null })}
-                    >
-                      Add back
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 
@@ -2196,15 +2155,15 @@ export default function ProductConfigurator({
           </div>
         )}
 
-        {/* Every quote that puts the system in a restaurant includes these three.
-            Shown, priced, and not a decision — hence no stepper. */}
-        {rated && (includedServices.lines.length > 0 || includedServices.missing.length > 0 || adjustments[WIFI_PRODUCT_ID]?.removed) && (
+        {/* Every quote that puts the system in a restaurant includes these two.
+            Shown, priced, and not a decision — hence no stepper. The WiFi
+            package used to be a third; it is a picker row since 2026-10-21. */}
+        {rated && (includedServices.lines.length > 0 || includedServices.missing.length > 0) && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
               <h2 className={styles.sectionTitle}>Always Included</h2>
               <p className={styles.sectionNote}>
-                On every quote that has products on it. The install and the training stay. The WiFi
-                package is added too, and can be removed. Take every product off and they come off
+                On every quote that has products on it. Take every product off and they come off
                 as well, leaving a rate-only quote.
               </p>
             </div>
@@ -2217,53 +2176,12 @@ export default function ProductConfigurator({
                 <span className={styles.includedTag}>
                   {coveredQty.has(l.hubspotProductId) ? "In the package" : "Included ×1"}
                 </span>
-                {l.hubspotProductId === WIFI_PRODUCT_ID && !confirmWifi && (
-                  <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(true)}>
-                    Remove
-                  </button>
-                )}
-                {l.hubspotProductId === WIFI_PRODUCT_ID && confirmWifi && (
-                  <div className={styles.confirmBox}>
-                    <p>Remove the WiFi package? This merchant won&apos;t get a network quoted.</p>
-                    <div className={styles.confirmActions}>
-                      <button
-                        type="button"
-                        className={styles.linkBtn}
-                        onClick={() => {
-                          setAdjustment(WIFI_PRODUCT_ID, { removed: true });
-                          setConfirmWifi(false);
-                        }}
-                      >
-                        Remove
-                      </button>
-                      <button type="button" className={styles.linkBtn} onClick={() => setConfirmWifi(false)}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
                 {/* The install and the training are the two most-discounted
                     lines in AIO's portal, and the picker hides both — so this
                     is the only place a rep can charge for a re-install. */}
                 {lineAdjust(l.hubspotProductId)}
               </div>
             ))}
-            {adjustments[WIFI_PRODUCT_ID]?.removed && (
-              <div className={styles.includedRow} data-pending="true">
-                <div className={styles.productMain}>
-                  <div className={styles.productName}>AIO WiFi Network Package</div>
-                  <div className={styles.productPrice}>Not on this quote</div>
-                </div>
-                <span className={styles.includedTag}>Removed</span>
-                <button
-                  type="button"
-                  className={styles.linkBtn}
-                  onClick={() => setAdjustment(WIFI_PRODUCT_ID, { removed: null })}
-                >
-                  Add back
-                </button>
-              </div>
-            )}
             {includedServices.missing.length > 0 && (
               <div className={styles.error}>
                 <strong>Can&apos;t price a required line.</strong>{" "}

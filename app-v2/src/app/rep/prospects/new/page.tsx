@@ -89,6 +89,7 @@ function NewProspectFlow() {
 
   const [quoteRates, setQuoteRates] = useState<QuoteRates>(DEFAULT_QUOTE_RATES);
   const [cpAdjustBps, setCpAdjustBps] = useState(0);
+  const [cpAdjustRange, setCpAdjustRange] = useState<{ min: number; max: number } | null>(null);
   const [pricingModel, setPricingModel] = useState<PricingModel>("2-tier");
   // "Yes, $1.2M a month really is their volume." Reset by any edit to it.
   const [volumeConfirmed, setVolumeConfirmed] = useState(false);
@@ -680,7 +681,7 @@ function NewProspectFlow() {
       {/* freshQuote: this page always starts a new quote at the flat
           standard rate, often before a volume/ticket basis exists — see
           RateFields.tsx's doc comment on that prop. */}
-      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} />
+      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} />
       {/* Sits under the boxes rather than above them: the rep reads the rate
           they're quoting first, and what the card would have said second. It
           now ALWAYS applies what it suggests (2026-10-13, "get rid of the
@@ -691,6 +692,7 @@ function NewProspectFlow() {
         value={quoteRates}
         onChange={setQuoteRates}
         adjustmentBps={cpAdjustBps}
+        onAdjustRangeChange={setCpAdjustRange}
       />
 
       {/* What the rate the rep just typed is worth to AIO (2026-10-15, product

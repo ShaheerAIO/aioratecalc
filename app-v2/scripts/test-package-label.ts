@@ -79,7 +79,7 @@ async function main() {
     ["223511653104", 1], // printer
     ["222497165011", 1], // cash drawer
     ["223511653103", 1], // menu board
-    ["281351401209", 1], // WiFi package
+    ["338690209525", 1], // WiFi package (Unifi)
   ];
   const lines = [];
   for (const [id, qty] of cart) {

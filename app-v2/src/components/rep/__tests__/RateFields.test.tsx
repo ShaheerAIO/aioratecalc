@@ -233,4 +233,30 @@ describe("RateFields — freshQuote (closing the no-basis CNP gap)", () => {
     // being avoided, not an unlocked placeholder.
     expect(cnp.value).toBe("2.49");
   });
+
+  // 2026-10-21, "It should cap based on the min and max margin".
+  describe("adjustRange", () => {
+    function Adj({ range }: { range?: { min: number; max: number } | null }) {
+      const [value, setValue] = useState(STORED);
+      const [bps, setBps] = useState(0);
+      return <RateFields value={value} onChange={setValue} adjustBps={bps} onAdjustBps={setBps} adjustRange={range} />;
+    }
+    const box = () => screen.getByLabelText(/rate adjustment, basis points/) as HTMLInputElement;
+
+    it("clamps typed adjustments to the passed range and shows it as a hint", () => {
+      render(<Adj range={{ min: -12, max: 40 }} />);
+      expect(screen.getByTestId("adjust-range-hint").textContent).toBe("\u221212 to +40 bps");
+      fireEvent.change(box(), { target: { value: "300" } });
+      expect(box().value).toBe("40");
+      fireEvent.change(box(), { target: { value: "-300" } });
+      expect(box().value).toBe("-12");
+    });
+
+    it("falls back to +/-500 and no hint without a range", () => {
+      render(<Adj range={null} />);
+      expect(screen.queryByTestId("adjust-range-hint")).toBeNull();
+      fireEvent.change(box(), { target: { value: "900" } });
+      expect(box().value).toBe("500");
+    });
+  });
 });

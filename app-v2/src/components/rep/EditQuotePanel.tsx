@@ -72,6 +72,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
 
   const [quoteRates, setQuoteRates] = useState<QuoteRates>(app.quoteRates ?? DEFAULT_QUOTE_RATES);
   const [cpAdjustBps, setCpAdjustBps] = useState(0);
+  const [cpAdjustRange, setCpAdjustRange] = useState<{ min: number; max: number } | null>(null);
   const [pricingModel, setPricingModel] = useState<PricingModel>(app.pricingModel ?? "2-tier");
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -297,7 +298,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
           )}
 
           <div>
-            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} />
+            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} />
             {/* Used to deliberately skip auto-apply here ("these rates were
                 already chosen and saved"). OVERRIDDEN 2026-10-13 ("get rid of
                 the 'use it' and make it always override") — RateSuggestion no
@@ -314,6 +315,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
               value={quoteRates}
               onChange={setQuoteRates}
               adjustmentBps={cpAdjustBps}
+              onAdjustRangeChange={setCpAdjustRange}
               onAdjustmentChange={setCpAdjustBps}
               adoptSaved={!!app.quoteRates}
             />

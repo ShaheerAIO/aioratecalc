@@ -57,9 +57,8 @@
 //   one line. That is the next decision to make, not a gap in this one.
 // - A kit APPLIES only when an ORDERING DEVICE (a POS, kiosk or tableside
 //   device) was placed — in whatever slot it landed. A WiFi package and a
-//   drawer on their own are not a system, and WiFi is added to any quote with
-//   hardware on it, so without this a lone printer quote would get $999 of
-//   WiFi for free.
+//   drawer on their own are not a system, so without this a quote of just a
+//   printer and the WiFi package would get the network for free.
 
 import type { QuoteLine, QuoteType } from "@/types/merchant";
 
@@ -144,7 +143,7 @@ export const PRODUCT_PARTS: Record<string, SheetKey[]> = {
   "222497165011": ["drawer"],             // Cash Drawer
   "223511653103": ["menuboard"],          // Menu Board Computer
   // AIO retired "AIO WiFi Network Package" (281351401209) 2026-10-13 and
-  // replaced it with the Unifi variant quoting.ts now derives — see
+  // replaced it with the Unifi variant, a rep pick since 2026-10-21 — see
   // WIFI_PRODUCT_ID / RETIRED_WIFI_PRODUCTS there. The sheet slot and its MSRP
   // are unchanged; only the id a cart line must carry to fill it moves.
   "338690209525": ["wifi"],               // AIO Wifi Network Package - Unifi
@@ -274,11 +273,14 @@ export function coverageLabel(covered: number, onQuote: number, where: string): 
  * The product a rep would pick for each slot, for preselecting the kit when a
  * plan is chosen.
  *
- * `terminal` and `wifi` are ABSENT on purpose. The kit's two terminals are the
- * POS's AMS1 — which the configurator adds alongside every POS it picks, kit or
- * not (`minimumTerminalsFor`) — and the one inside the kiosk SKU. Naming the
+ * `terminal` is ABSENT on purpose. The kit's two terminals are the POS's AMS1 —
+ * which the configurator adds alongside every POS it picks, kit or not
+ * (`minimumTerminalsFor`) — and the one inside the kiosk SKU. Naming the
  * terminal here would add a second AMS1 for the kiosk that already has one.
- * The WiFi package is an always-included service, never a pick. The test file
+ * `wifi` is HERE since 2026-10-21, when the WiFi package stopped being a
+ * derived always-included line and became a pick like the KDS (product owner:
+ * "Just add the network package as a regular item in the hardware picker just
+ * like a KDS or something"). A rep who doesn't want it un-picks it. The test file
  * asserts the preselect really does fill every slot, so changing the kit
  * without changing this fails loudly.
  */
@@ -290,6 +292,7 @@ export const KIT_DEFAULT_PRODUCTS: Partial<Record<SheetKey, string>> = {
   printer: "223511653104",   // Thermal Printer
   drawer: "222497165011",    // Cash Drawer
   menuboard: "223511653103", // Menu Board Computer
+  wifi: "338690209525",      // AIO Wifi Network Package - Unifi
 };
 
 /** The active kit that comes with this plan, if any. */
