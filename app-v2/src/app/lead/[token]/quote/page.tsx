@@ -71,6 +71,7 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
     quoteLines: app.quoteLines,
     orderPoints: app.orderPoints,
     processing: app.processing,
+    hubspotIds: app.hubspotIds,
   });
 
   return (

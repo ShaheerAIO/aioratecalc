@@ -46,6 +46,9 @@ export type QuoteBasis = {
   // volume and a ticket — pricing needs the two together — so a volume entered
   // alone lives here and nowhere else. Display only: nothing prices off it.
   processing?: { monthlyVolume?: string | null } | null;
+  // Whether the quote was published before split billing — see
+  // CustomerSafeLines.oneTimeInvoiced. Optional: absent reads as not published.
+  hubspotIds?: { publishedAt: string | null; splitBilling?: boolean } | null;
 };
 
 // Customer-facing quotes carry no separate per-transaction or monthly fee —
@@ -99,6 +102,7 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
 
   const analysis = quotableAnalysis(basis);
   const payment = paymentDetails(basis, analysis);
+  const oneTimeInvoiced = !(basis.hubspotIds?.publishedAt && !basis.hubspotIds.splitBilling);
 
   // No rate behind it: priced lines and no rate half at all. Null (not a $0
   // rate) when there are no lines either, so a quote with nothing on it reads
@@ -130,6 +134,7 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
       // thrown away here. Same fix as the rated branch below.
       orderPoints: basis.orderPoints ?? null,
       payment,
+      oneTimeInvoiced,
     };
   }
 
@@ -162,6 +167,7 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
     lineTotals: lines.length ? quoteTotals(lines) : null,
     orderPoints: basis.orderPoints ?? null,
     payment,
+    oneTimeInvoiced,
   };
 }
 

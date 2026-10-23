@@ -161,7 +161,9 @@ export default function LeadQuoteView({
           <h1 className={styles.quoteBusiness}>{businessName || "Your Business"}</h1>
         </div>
 
-        <QuoteSummary quote={quote} />
+        <div className={styles.wide}>
+          <QuoteSummary quote={quote} />
+        </div>
 
         <div className={styles.panel}>
           {accepted ? (

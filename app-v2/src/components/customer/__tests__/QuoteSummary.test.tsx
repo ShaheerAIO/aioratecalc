@@ -29,6 +29,7 @@ const CONFIG_QUOTE_NO_SAVINGS: CustomerSafeQuote = {
   lineTotals: null,
   orderPoints: null,
   payment: { cardPresentRate: 0.0249, cardNotPresentRate: 0.033, perTransactionFee: 0.15, monthlyVolume: 100_000 },
+  oneTimeInvoiced: true,
 };
 
 const STATEMENT_QUOTE_WITH_SAVINGS: CustomerSafeQuote = {
@@ -142,6 +143,7 @@ const PRODUCTS_QUOTE_WITH_POINTS: CustomerSafeQuote = {
   // `channels` stays empty and `total` is set directly.
   orderPoints: { hardware: { "POS Unit": 2 }, channels: [], total: 3 },
   payment: null,
+  oneTimeInvoiced: true,
 };
 
 describe("QuoteSummary — ordering-point count", () => {
@@ -239,6 +241,7 @@ const DISCOUNTED_QUOTE: CustomerSafeQuote = {
   lineTotals: { oneTime: 1740, recurring: [], monthlyEquivalent: 0 },
   orderPoints: null,
   payment: null,
+  oneTimeInvoiced: true,
 };
 
 describe("QuoteSummary — how a discount is described", () => {
@@ -275,6 +278,7 @@ const RECURRING_ONLY_QUOTE: CustomerSafeQuote = {
   lineTotals: { oneTime: 0, recurring: [{ frequency: "monthly", amount: 399 }], monthlyEquivalent: 399 },
   orderPoints: null,
   payment: null,
+  oneTimeInvoiced: true,
 };
 
 describe("QuoteSummary — recurring section heading", () => {
@@ -302,6 +306,7 @@ const PACKAGE_QUOTE: CustomerSafeQuote = {
   lineTotals: { oneTime: 300, recurring: [], monthlyEquivalent: 0 },
   orderPoints: null,
   payment: null,
+  oneTimeInvoiced: true,
 };
 
 describe("QuoteSummary — package-covered lines are grouped, not interleaved", () => {
@@ -350,6 +355,16 @@ describe("QuoteSummary — one-time lines are invoiced separately", () => {
 
   // The pre-auth is the one one-time charge the quote's own checkout takes, so
   // it sits apart from the invoice and out of its total.
+  // Published before split billing: its one-time lines are on the HubSpot
+  // quote and paid at checkout, so it keeps the old single list.
+  it("keeps a quote published before split billing as one list, due once", () => {
+    render(<QuoteSummary quote={{ ...PACKAGE_QUOTE, oneTimeInvoiced: false }} />);
+    expect(screen.queryByText("One-Time — invoiced separately")).toBeNull();
+    expect(screen.getByText("One-Time")).toBeTruthy();
+    expect(screen.getByText("Total due once").closest("div")?.textContent).toContain("$300.00");
+    expect(screen.queryByText(/bank account you set up at checkout/)).toBeNull();
+  });
+
   it("shows the pre-auth as due at checkout, not on the invoice", () => {
     const quote = { ...PACKAGE_QUOTE, lines: [...PACKAGE_QUOTE.lines, PRE_AUTH] };
     render(<QuoteSummary quote={quote} />);

@@ -10,10 +10,17 @@
   font-family: var(--font-body);
 }
 
+/* Wide enough for the quote's two columns (subscription | invoice); the
+   heading and the panel below keep the original reading width. */
 .container {
-  max-width: 40rem;
+  max-width: 56rem;
   margin-inline: auto;
   padding: var(--space-3xl) var(--space-lg);
+}
+
+.container > :not(.wide) {
+  max-width: 40rem;
+  margin-inline: auto;
 }
 
 .quoteHead {

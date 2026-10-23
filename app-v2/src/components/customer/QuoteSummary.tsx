@@ -34,10 +34,15 @@ export default function QuoteSummary({ quote }: Props) {
   // ones its own checkout collects — the $0.50 pre-authorization — shown on
   // their own so the merchant can see what is taken today. A $0 line (the rate
   // disclosure) has nothing to show there.
-  const oneTimeLines  = quote.lines.filter(isInvoicedLine);
-  const checkoutLines = quote.lines.filter(
-    l => l.billingFrequency === "one_time" && !isInvoicedLine(l) && lineNetAmount(l) > 0
-  );
+  //
+  // A quote published BEFORE split billing (`oneTimeInvoiced: false`) has its
+  // one-time lines on the HubSpot quote, paid at checkout — so it keeps the old
+  // single "One-Time" list and "Total due once", and no invoice column.
+  const invoiced = quote.oneTimeInvoiced;
+  const oneTimeLines  = quote.lines.filter(l => invoiced ? isInvoicedLine(l) : l.billingFrequency === "one_time");
+  const checkoutLines = invoiced
+    ? quote.lines.filter(l => l.billingFrequency === "one_time" && !isInvoicedLine(l) && lineNetAmount(l) > 0)
+    : [];
   const recurringLines = quote.lines.filter(l => l.billingFrequency !== "one_time");
   const invoiceTotal = oneTimeLines.reduce((n, l) => n + lineNetAmount(l), 0);
 
@@ -147,6 +152,15 @@ export default function QuoteSummary({ quote }: Props) {
 
       {quote.lines.length > 0 && quote.lineTotals && (
         <div className={styles.lines}>
+          {/* Two columns (product owner, 2026-10-23): the subscription — what
+              the quote bills, plus anything its checkout takes today — on the
+              left, the one-time invoice on the right. One column when the
+              quote only has one side, or when there isn't room. */}
+          <div
+            className={styles.columns}
+            data-split={invoiced && (recurringLines.length > 0 || checkoutLines.length > 0) && oneTimeLines.length > 0 || undefined}
+          >
+          <div className={styles.column}>
           {recurringLines.length > 0 && (
             <section className={styles.lineGroup}>
               <h2 className={styles.lineGroupTitle}>Software</h2>
@@ -209,10 +223,12 @@ export default function QuoteSummary({ quote }: Props) {
               {checkoutLines.map(renderOneTimeLine)}
             </section>
           )}
+          </div>
 
+          <div className={styles.column}>
           {oneTimeLines.length > 0 && (
             <section className={styles.lineGroup}>
-              <h2 className={styles.lineGroupTitle}>One-Time — invoiced separately</h2>
+              <h2 className={styles.lineGroupTitle}>{invoiced ? "One-Time — invoiced separately" : "One-Time"}</h2>
               {chargedOneTimeLines.map(renderOneTimeLine)}
               {/* Package/plan-covered items — already paid for, listed
                   separately so a merchant can see at a glance what's included
@@ -224,15 +240,19 @@ export default function QuoteSummary({ quote }: Props) {
                 </div>
               ))}
               <div className={styles.lineTotalRow} data-emphasis="true">
-                <span>Invoice total</span>
-                <span className={styles.lineTotalValue}>{fmt$(invoiceTotal)}</span>
+                <span>{invoiced ? "Invoice total" : "Total due once"}</span>
+                <span className={styles.lineTotalValue}>{fmt$(invoiced ? invoiceTotal : quote.lineTotals.oneTime)}</span>
               </div>
-              <p className={styles.lineFootnote}>
-                Charged separately after you sign up, to the bank account you set up at checkout — you
-                won&apos;t need to enter anything again.
-              </p>
+              {invoiced && (
+                <p className={styles.lineFootnote}>
+                  Charged separately after you sign up, to the bank account you set up at checkout — you
+                  won&apos;t need to enter anything again.
+                </p>
+              )}
             </section>
           )}
+          </div>
+          </div>
 
           <p className={styles.lineFootnote}>
             Software and one-time charges are listed separately because they bill on different

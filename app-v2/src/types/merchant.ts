@@ -1240,6 +1240,11 @@ type CustomerSafeLines = {
   // average ticket has no effective rate to compute, but its card rates are
   // just as real. Null only when AIO processes nothing for this merchant.
   payment: CustomerSafePayment | null;
+  // Whether this quote's one-time lines are billed on the separate invoice
+  // (2026-10-22). False ONLY for a quote already published without split
+  // billing: its one-time lines are on the HubSpot quote and are paid at
+  // checkout, so showing them as "invoiced separately" would be untrue.
+  oneTimeInvoiced: boolean;
 };
 
 // The rates the rep quoted — the same figures written onto the HubSpot

@@ -120,6 +120,7 @@ export async function getMyQuoteAction(id: string): Promise<CustomerSafeQuote | 
     quoteLines: app.quoteLines,
     orderPoints: app.orderPoints,
     processing: app.processing,
+    hubspotIds: app.hubspotIds,
   });
 }
 

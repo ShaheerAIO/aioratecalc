@@ -19,7 +19,23 @@
 
 /* ---------- Quote lines (hardware, platform, services) ---------- */
 
-.lines { margin-bottom: var(--space-xl); }
+.lines {
+  margin-bottom: var(--space-xl);
+  /* Sized by the space the host gives it, not the viewport: the lead page and
+     the account tab are different widths. */
+  container-type: inline-size;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: var(--space-md);
+  align-items: start;
+}
+
+@container (min-width: 40rem) {
+  .columns[data-split] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
 
 .lineGroup {
   background: var(--paper-2);

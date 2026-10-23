@@ -1870,7 +1870,7 @@ export default function ProductConfigurator({
               <div className={styles.docGroup} data-kind="onetime" data-commission={oneTimeComm || undefined}>
                 <div className={styles.docGroupHead}>
                   <span className={styles.docGroupLabel}>
-                    One-time <span className={styles.docGroupNote}>invoiced after acceptance</span>
+                    One-time <span className={styles.docGroupNote}>charged once, at checkout</span>
                   </span>
                   {oneTimeComm && <span className={styles.docCommissionHead}>Your comm.</span>}
                   <span className={styles.docGroupTotal}>{fmt$(totals.oneTime)}</span>
@@ -2019,8 +2019,8 @@ export default function ProductConfigurator({
               {globalControls}
 
               <p className={styles.adjustNote}>
-                Recurring lines only — a one-time charge has no schedule to move; it goes on the
-                invoice sent after acceptance. All-in-One and Order &amp; Pay quotes start at {PLAN_DEFAULT_BILLING_DELAY_DAYS}{" "}
+                Recurring lines only — a one-time charge has no schedule to move and always bills at
+                checkout. All-in-One and Order &amp; Pay quotes start at {PLAN_DEFAULT_BILLING_DELAY_DAYS}{" "}
                 days; past {limits.maxBillingDelayDays} an admin has to approve it. Discounts are set
                 on the individual lines below, not here.
               </p>
