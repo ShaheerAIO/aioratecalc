@@ -14,6 +14,7 @@ import {
   PRE_AUTH_PRODUCT,
   PROCESSING_DISCLOSURE_PRODUCT,
   splitQuoteLines,
+  amountInvoiced,
   checkoutAmountBlockers,
   buildQuote,
   isAllowedForQuoteType,
@@ -942,5 +943,10 @@ describe("splitQuoteLines", () => {
 
   it("leaves a rate-only quote empty on both sides", () => {
     expect(splitQuoteLines([])).toEqual({ quoteLines: [], invoiceLines: [] });
+  });
+  // The rep builder's "Invoiced separately" total and the customer's invoice card.
+  it("totals only the invoiced lines, net of comps", () => {
+    expect(amountInvoiced([line({ unitPrice: 949 }), plan, preAuth, comped, disclosure])).toBe(949);
+    expect(amountInvoiced([plan, preAuth])).toBe(0);
   });
 });

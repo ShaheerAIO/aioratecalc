@@ -7,7 +7,7 @@ import { getLeadApplicationByToken } from "@/lib/leadToken";
 import { checklistNotice, getOnboardingModules } from "@/lib/onboardingModules";
 import { canRepairFromLead, missingTenantFields } from "@/lib/leadDetails";
 import { hasQuoteBasis } from "@/lib/leadQuote";
-import { refreshLeadBilling } from "@/lib/billing/leadRefresh";
+import { refreshLeadBilling, refreshLeadInvoice } from "@/lib/billing/leadRefresh";
 import OnboardingChecklistPanel from "@/components/customer/OnboardingChecklistPanel";
 import MissingDetailsDialog from "@/components/customer/MissingDetailsDialog";
 import styles from "./lead.module.css";
@@ -39,7 +39,7 @@ export default async function LeadPage({ params, searchParams }: {
   // — so viewing this page is one of only two moments we can notice they did.
   // Records the acceptance and emails their account link when it fires; a
   // no-op otherwise. See lib/billing/leadRefresh.ts.
-  const app = await refreshLeadBilling(rowToApp(lookup.row));
+  const app = await refreshLeadInvoice(await refreshLeadBilling(rowToApp(lookup.row)));
   const businessName = app.business?.dba || app.business?.legalName || null;
 
   // basePath is THIS checklist route — every other module's href

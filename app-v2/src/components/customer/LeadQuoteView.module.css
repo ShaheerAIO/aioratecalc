@@ -188,3 +188,58 @@
     transform: none;
   }
 }
+
+/* The two documents the quote splits into, linked under it — subscription
+   left, invoice right, the same sides as the quote's own columns. */
+.docLinks {
+  display: grid;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xl);
+}
+
+@media (min-width: 44rem) {
+  .docLinks[data-split] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.docLink {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+}
+
+.docLinkLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.docLinkText {
+  margin: 0 0 var(--space-sm);
+  color: var(--ink-2);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.docLinkCta {
+  margin-top: auto;
+  align-self: flex-start;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+.docLinkCta:hover { text-decoration: underline; }
+.docLinkCta:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.docLinkPending {
+  margin-top: auto;
+  color: var(--ink-3);
+  font-size: 0.85rem;
+}

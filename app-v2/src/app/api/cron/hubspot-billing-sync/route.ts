@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import {
@@ -9,7 +9,7 @@ import {
   type QuoteSnapshot,
 } from "@/lib/adapters/hubspot";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
-import { buildOneTimeInvoice } from "@/lib/billing/oneTimeInvoice";
+import { buildOneTimeInvoice, mergeInvoiceSnapshot } from "@/lib/billing/oneTimeInvoice";
 import { rowToApp, type ApplicationRow as FullApplicationRow } from "@/lib/storage/applicationRow";
 import { rollUpSubscriptionStatus, type HubspotIds, type HubspotSubscriptionSnapshot } from "@/types/merchant";
 
@@ -184,21 +184,22 @@ type InvoiceSummary = {
 // not on the quote-modified window above: an invoice owes nothing to when its
 // quote last changed, and ACH `paid` lags by days.
 //
-//  1. RETRY: accepted, split-billed, and no draft built yet — acceptance
-//     detection drafts it the moment it sees the subscription, and this catches
-//     whatever that attempt left unfinished. `buildOneTimeInvoice` is
-//     idempotent and cheap for a row with nothing to invoice (no HubSpot call).
+//  1. RETRY: published, split-billed, and not yet built and opened — the lead
+//     checkout builds it right after the publish (2026-10-23), and this catches
+//     whatever that attempt left unfinished, plus quotes a rep published.
+//     `buildOneTimeInvoice` is idempotent and cheap for a row with nothing to
+//     invoice (no HubSpot call).
 //  2. REFRESH: built and not yet paid — reads back what staff have done to it
-//     in HubSpot (opened, charged, paid). Only rows already built, so this can
-//     never race a build that is still writing.
+//     in HubSpot (charged, paid). Only rows already built, so this can never
+//     race a build that is still writing.
 async function syncOneTimeInvoices(summary: InvoiceSummary): Promise<void> {
   const pending: ApplicationRow[] = await db
     .select()
     .from(merchantApplications)
     .where(and(
-      isNotNull(merchantApplications.quoteAcceptedAt),
+      sql`${merchantApplications.hubspotIds}->>'publishedAt' IS NOT NULL`,
       sql`${merchantApplications.hubspotIds}->>'splitBilling' = 'true'`,
-      sql`(${merchantApplications.hubspotInvoice} IS NULL OR ${merchantApplications.hubspotInvoice}->>'builtAt' IS NULL)`,
+      sql`(${merchantApplications.hubspotInvoice} IS NULL OR ${merchantApplications.hubspotInvoice}->>'builtAt' IS NULL OR ${merchantApplications.hubspotInvoice}->>'openedAt' IS NULL)`,
     ));
   for (const row of pending) {
     try {
@@ -223,21 +224,11 @@ async function syncOneTimeInvoices(summary: InvoiceSummary): Promise<void> {
     try {
       const snap = await getInvoiceSnapshot(inv.invoiceId);
       if (!snap) throw new Error(`invoice ${inv.invoiceId} no longer exists in HubSpot`);
-      const moved =
-        snap.status !== inv.status || snap.paymentStatus !== inv.paymentStatus || snap.balanceDue !== inv.balanceDue;
-      if (!moved) continue;
+      const next = mergeInvoiceSnapshot(inv, snap);
+      if (!next) continue;
       await db
         .update(merchantApplications)
-        .set({
-          hubspotInvoice: {
-            ...inv,
-            status: snap.status,
-            paymentStatus: snap.paymentStatus,
-            balanceDue: snap.balanceDue,
-            syncedAt: new Date().toISOString(),
-          },
-          updatedAt: new Date(),
-        })
+        .set({ hubspotInvoice: next, updatedAt: new Date() })
         .where(eq(merchantApplications.id, row.id));
       summary.invoicesRefreshed++;
     } catch (err) {

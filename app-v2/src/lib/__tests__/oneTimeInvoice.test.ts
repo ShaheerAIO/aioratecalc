@@ -12,6 +12,8 @@ const createQuoteLineItems = vi.fn();
 const deleteQuoteLineItem = vi.fn();
 const createDraftInvoice = vi.fn();
 const associateInvoice = vi.fn();
+const openInvoice = vi.fn();
+const getInvoiceSnapshot = vi.fn();
 
 // The one column this module owns, as the DB holds it.
 let stored: HubspotInvoice | null = null;
@@ -47,7 +49,7 @@ const db = {
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
-  createQuoteLineItems, deleteQuoteLineItem, createDraftInvoice, associateInvoice,
+  createQuoteLineItems, deleteQuoteLineItem, createDraftInvoice, associateInvoice, openInvoice, getInvoiceSnapshot,
 }));
 
 const { buildOneTimeInvoice, buildOneTimeInvoiceSafely } = await import("@/lib/billing/oneTimeInvoice");
@@ -86,28 +88,33 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 let logSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  for (const fn of [createQuoteLineItems, deleteQuoteLineItem, createDraftInvoice, associateInvoice]) fn.mockReset();
+  for (const fn of [createQuoteLineItems, deleteQuoteLineItem, createDraftInvoice, associateInvoice, openInvoice, getInvoiceSnapshot]) fn.mockReset();
   stored = null;
   writes.length = 0;
   createQuoteLineItems.mockImplementation(async (lines: QuoteLine[]) => lines.map((_, i) => `li-${i + 1}`));
   createDraftInvoice.mockResolvedValue("inv-1");
   associateInvoice.mockResolvedValue(undefined);
+  openInvoice.mockResolvedValue(undefined);
+  getInvoiceSnapshot.mockResolvedValue({
+    invoiceId: "inv-1", status: "open", paymentStatus: null, balanceDue: 1948, invoiceLink: "https://customers.aioapp.com/inv-link",
+  });
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 });
 afterEach(() => { errorSpy.mockRestore(); logSpy.mockRestore(); });
 
 describe("buildOneTimeInvoice", () => {
-  it("drafts an invoice of only the invoiced lines and associates it — and stops there", async () => {
+  it("builds an invoice of only the invoiced lines, associates it and opens it", async () => {
     const result = await run();
     expect(result).toEqual({ status: "built", invoiceId: "inv-1" });
 
     // POS, install and the comped terminal — never the plan or the pre-auth,
     // which are on the quote.
     expect(createQuoteLineItems).toHaveBeenCalledWith([POS, INSTALL, COMPED]);
-    expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({ hs_currency: "USD" });
-    // Staff charge it in HubSpot: nothing here sets a status or a payment method.
+    // ACH only, like the quote. Created as a draft; opened as its own step.
+    expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({ hs_currency: "USD", hs_allowed_payment_methods: "ach" });
     expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_invoice_status");
+    expect(openInvoice).toHaveBeenCalledWith("inv-1");
     expect(associateInvoice).toHaveBeenCalledWith("inv-1", [
       { toObjectType: "line_items", toObjectId: "li-1", associationTypeId: 409 },
       { toObjectType: "line_items", toObjectId: "li-2", associationTypeId: 409 },
@@ -116,23 +123,28 @@ describe("buildOneTimeInvoice", () => {
       { toObjectType: "companies", toObjectId: "334295287484", associationTypeId: 179 },
       { toObjectType: "deals", toObjectId: "deal-99", associationTypeId: 175 },
     ]);
-    // $949 + $999; the comped terminal nets to nothing. Stored by EasyOB,
-    // because a draft's own balance reads $0.00.
+    // $949 + $999; the comped terminal nets to nothing. The link is what the
+    // merchant's quote page and checklist point at.
     expect(stored).toMatchObject({
-      invoiceId: "inv-1", lineItemIds: ["li-1", "li-2", "li-3"], amount: 1948, status: "draft", lastSyncError: null,
+      invoiceId: "inv-1", lineItemIds: ["li-1", "li-2", "li-3"], amount: 1948, status: "open",
+      invoiceLink: "https://customers.aioapp.com/inv-link", lastSyncError: null,
     });
     expect(stored!.builtAt).not.toBeNull();
+    expect(stored!.openedAt).not.toBeNull();
   });
 
-  it("does nothing before acceptance", async () => {
-    expect(await run({ quoteAcceptedAt: null })).toEqual({ status: "skipped", reason: "not_accepted" });
+  // Built beside the quote when it is published — acceptance is not needed.
+  it("builds before acceptance, but never before the quote is published", async () => {
+    expect(await run({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, contactId: "contact-7", splitBilling: true } }))
+      .toEqual({ status: "skipped", reason: "not_published" });
     expect(writes).toHaveLength(0);
+    expect(await run({ quoteAcceptedAt: null })).toEqual({ status: "built", invoiceId: "inv-1" });
   });
 
   // A quote published before split billing carries its one-time lines on the
   // quote — the merchant paid them at checkout. Invoicing them would bill twice.
   it("never invoices a quote published before split billing", async () => {
-    const result = await run({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "quote-5", contactId: "contact-7" } });
+    const result = await run({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "quote-5", contactId: "contact-7", publishedAt: "2026-10-01T00:00:00.000Z" } });
     expect(result).toEqual({ status: "skipped", reason: "not_split" });
     expect(createDraftInvoice).not.toHaveBeenCalled();
     expect(writes).toHaveLength(0);
@@ -144,17 +156,40 @@ describe("buildOneTimeInvoice", () => {
     expect(createDraftInvoice).not.toHaveBeenCalled();
   });
 
-  it("is a no-op once the draft is built", async () => {
+  it("is a no-op once the invoice is built and open", async () => {
     await run();
     createDraftInvoice.mockClear();
     associateInvoice.mockClear();
+    openInvoice.mockClear();
     expect(await run()).toEqual({ status: "skipped", reason: "already_built" });
     expect(createDraftInvoice).not.toHaveBeenCalled();
     expect(associateInvoice).not.toHaveBeenCalled();
+    expect(openInvoice).not.toHaveBeenCalled();
+  });
+
+  // Drafts built before 2026-10-23 were never opened; a rerun opens the same one.
+  it("opens a draft built before invoices were opened, without building another", async () => {
+    stored = {
+      ...EMPTY_HUBSPOT_INVOICE, invoiceId: "inv-1", lineItemIds: ["li-1", "li-2", "li-3"], amount: 1948,
+      status: "draft", builtAt: "2026-10-22T00:00:00.000Z",
+    };
+    expect(await run()).toEqual({ status: "built", invoiceId: "inv-1" });
+    expect(createDraftInvoice).not.toHaveBeenCalled();
+    expect(createQuoteLineItems).not.toHaveBeenCalled();
+    expect(openInvoice).toHaveBeenCalledWith("inv-1");
+    expect(stored).toMatchObject({ status: "open", invoiceLink: "https://customers.aioapp.com/inv-link" });
+  });
+
+  it("resumes a failed open without opening twice", async () => {
+    getInvoiceSnapshot.mockRejectedValueOnce(new Error("HubSpot 502"));
+    expect(await run()).toMatchObject({ status: "failed", step: "open" });
+    expect(stored!.openedAt).not.toBeNull();
+    expect(await run()).toEqual({ status: "built", invoiceId: "inv-1" });
+    expect(openInvoice).toHaveBeenCalledTimes(1);
   });
 
   it("refuses before any HubSpot write when the quote's contact is missing", async () => {
-    const result = await run({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "quote-5", splitBilling: true } });
+    const result = await run({ hubspotIds: { ...EMPTY_HUBSPOT_IDS, quoteId: "quote-5", publishedAt: "2026-10-21T00:00:00.000Z", splitBilling: true } });
     expect(result).toMatchObject({ status: "failed", step: "preflight" });
     expect(createQuoteLineItems).not.toHaveBeenCalled();
     expect(stored!.lastSyncError).toContain("the quote's HubSpot contact");

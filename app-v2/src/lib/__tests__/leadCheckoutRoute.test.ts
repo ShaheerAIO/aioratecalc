@@ -18,10 +18,18 @@ const getLeadApplicationByToken = vi.fn();
 const ensureDealForPublish = vi.fn();
 const buildAndPublishBillingQuote = vi.fn();
 const update = vi.fn();
+const buildOneTimeInvoiceForId = vi.fn();
+// `after()` only works inside a real request scope; here it just records.
+const afterCallbacks: (() => unknown)[] = [];
 
 vi.mock("@/lib/leadToken", () => ({ getLeadApplicationByToken }));
 vi.mock("@/lib/billing/ensureDeal", () => ({ ensureDealForPublish }));
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
+vi.mock("@/lib/billing/oneTimeInvoice", () => ({ buildOneTimeInvoiceForId }));
+vi.mock("next/server", async importOriginal => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (fn: () => unknown) => { afterCallbacks.push(fn); },
+}));
 vi.mock("@/lib/db/schema", () => ({ merchantApplications: { id: "id" } }));
 vi.mock("@/lib/db/client", () => ({
   db: { update: () => ({ set: (v: unknown) => ({ where: async () => update(v) }) }) },
@@ -87,6 +95,8 @@ const post = () => POST({} as never, { params: Promise.resolve({ token: TOKEN })
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
+  afterCallbacks.length = 0;
+  buildOneTimeInvoiceForId.mockReset();
   getLeadApplicationByToken.mockReset();
   ensureDealForPublish.mockReset();
   buildAndPublishBillingQuote.mockReset();
@@ -108,6 +118,11 @@ describe("the merchant's checkout door", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ url: QUOTE_LINK });
     expect(buildAndPublishBillingQuote).toHaveBeenCalledTimes(1);
+
+    // The one-time invoice is built beside it, after the response.
+    expect(buildOneTimeInvoiceForId).not.toHaveBeenCalled();
+    for (const fn of afterCallbacks) await fn();
+    expect(buildOneTimeInvoiceForId).toHaveBeenCalledWith("app-1");
   });
 
   it("re-serves an already-published link WITHOUT attempting a second publish", async () => {

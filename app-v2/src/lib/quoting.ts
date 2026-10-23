@@ -1540,6 +1540,13 @@ export function splitQuoteLines(lines: QuoteLine[]): { quoteLines: QuoteLine[]; 
   return { quoteLines, invoiceLines };
 }
 
+/** The net total of the invoiced lines: what the one-time invoice bills. */
+export function amountInvoiced(lines: QuoteLine[]): number {
+  let total = 0;
+  for (const line of lines) if (isInvoicedLine(line)) total += lineNetAmount(line);
+  return Math.round(total * 100) / 100;
+}
+
 /**
  * What the merchant is charged at the moment they check out: the FIRST payment
  * of each recurring line that has no delayed start, plus the one-time lines

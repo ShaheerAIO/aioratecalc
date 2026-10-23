@@ -743,7 +743,12 @@ export type HubspotInvoice = {
   /** hs_payment_status: unpaid | partially_paid | paid | refunded | partially_refunded. */
   paymentStatus: string | null;
   balanceDue: number | null;
-  /** When the draft was fully built and associated. Nothing is built again after this. */
+  /** hs_invoice_link — the merchant's view-and-pay page. Live once the
+   *  invoice is opened (2026-10-23). Never nulled by a refresh that reads none. */
+  invoiceLink: string | null;
+  /** When EasyOB set hs_invoice_status: open. */
+  openedAt: string | null;
+  /** When the invoice was fully built, associated AND opened. Nothing is built again after this. */
   builtAt: string | null;
   /** Doubles as the build lease, like `HubspotIds.syncedAt`. */
   syncedAt: string | null;
@@ -758,6 +763,8 @@ export const EMPTY_HUBSPOT_INVOICE: HubspotInvoice = {
   status: null,
   paymentStatus: null,
   balanceDue: null,
+  invoiceLink: null,
+  openedAt: null,
   builtAt: null,
   syncedAt: null,
   lastSyncError: null,
@@ -1245,6 +1252,10 @@ type CustomerSafeLines = {
   // billing: its one-time lines are on the HubSpot quote and are paid at
   // checkout, so showing them as "invoiced separately" would be untrue.
   oneTimeInvoiced: boolean;
+  // The one-time invoice once EasyOB has opened it (2026-10-23): its HubSpot
+  // view-and-pay link, and whether it is paid. Null until then. Nothing else
+  // from `hubspotInvoice` — sync errors, ids — ever reaches the merchant.
+  invoice: { link: string | null; paid: boolean } | null;
 };
 
 // The rates the rep quoted — the same figures written onto the HubSpot

@@ -29,7 +29,7 @@ const CONFIG_QUOTE_NO_SAVINGS: CustomerSafeQuote = {
   lineTotals: null,
   orderPoints: null,
   payment: { cardPresentRate: 0.0249, cardNotPresentRate: 0.033, perTransactionFee: 0.15, monthlyVolume: 100_000 },
-  oneTimeInvoiced: true,
+  oneTimeInvoiced: true, invoice: null,
 };
 
 const STATEMENT_QUOTE_WITH_SAVINGS: CustomerSafeQuote = {
@@ -143,7 +143,7 @@ const PRODUCTS_QUOTE_WITH_POINTS: CustomerSafeQuote = {
   // `channels` stays empty and `total` is set directly.
   orderPoints: { hardware: { "POS Unit": 2 }, channels: [], total: 3 },
   payment: null,
-  oneTimeInvoiced: true,
+  oneTimeInvoiced: true, invoice: null,
 };
 
 describe("QuoteSummary — ordering-point count", () => {
@@ -241,7 +241,7 @@ const DISCOUNTED_QUOTE: CustomerSafeQuote = {
   lineTotals: { oneTime: 1740, recurring: [], monthlyEquivalent: 0 },
   orderPoints: null,
   payment: null,
-  oneTimeInvoiced: true,
+  oneTimeInvoiced: true, invoice: null,
 };
 
 describe("QuoteSummary — how a discount is described", () => {
@@ -278,7 +278,7 @@ const RECURRING_ONLY_QUOTE: CustomerSafeQuote = {
   lineTotals: { oneTime: 0, recurring: [{ frequency: "monthly", amount: 399 }], monthlyEquivalent: 399 },
   orderPoints: null,
   payment: null,
-  oneTimeInvoiced: true,
+  oneTimeInvoiced: true, invoice: null,
 };
 
 describe("QuoteSummary — recurring section heading", () => {
@@ -306,7 +306,7 @@ const PACKAGE_QUOTE: CustomerSafeQuote = {
   lineTotals: { oneTime: 300, recurring: [], monthlyEquivalent: 0 },
   orderPoints: null,
   payment: null,
-  oneTimeInvoiced: true,
+  oneTimeInvoiced: true, invoice: null,
 };
 
 describe("QuoteSummary — package-covered lines are grouped, not interleaved", () => {

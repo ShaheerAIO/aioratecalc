@@ -14,7 +14,7 @@ import { processesCardNotPresentOnly, quoteHasProcessing, quoteTotals, quoteType
 import {
   DEFAULT_QUOTE_RATES,
   type CustomerSafePayment, type CustomerSafeQuote, type OrderPoints, type QuoteConfig, type QuoteLine, type QuoteRates,
-  type StatementAnalysis, type StoredQuoteType,
+  type HubspotInvoice, type StatementAnalysis, type StoredQuoteType,
 } from "@/types/merchant";
 
 // What a quote can be built from. Mirrors the application columns that matter
@@ -49,6 +49,8 @@ export type QuoteBasis = {
   // Whether the quote was published before split billing — see
   // CustomerSafeLines.oneTimeInvoiced. Optional: absent reads as not published.
   hubspotIds?: { publishedAt: string | null; splitBilling?: boolean } | null;
+  // The one-time invoice — see CustomerSafeLines.invoice.
+  hubspotInvoice?: Pick<HubspotInvoice, "invoiceLink" | "openedAt" | "status" | "paymentStatus"> | null;
 };
 
 // Customer-facing quotes carry no separate per-transaction or monthly fee —
@@ -103,6 +105,10 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
   const analysis = quotableAnalysis(basis);
   const payment = paymentDetails(basis, analysis);
   const oneTimeInvoiced = !(basis.hubspotIds?.publishedAt && !basis.hubspotIds.splitBilling);
+  const inv = basis.hubspotInvoice;
+  const invoice = inv?.openedAt
+    ? { link: inv.invoiceLink ?? null, paid: inv.paymentStatus === "paid" || inv.status === "paid" }
+    : null;
 
   // No rate behind it: priced lines and no rate half at all. Null (not a $0
   // rate) when there are no lines either, so a quote with nothing on it reads
@@ -135,6 +141,7 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
       orderPoints: basis.orderPoints ?? null,
       payment,
       oneTimeInvoiced,
+      invoice,
     };
   }
 
@@ -168,6 +175,7 @@ export function buildCustomerSafeQuote(basis: QuoteBasis): CustomerSafeQuote | n
     orderPoints: basis.orderPoints ?? null,
     payment,
     oneTimeInvoiced,
+    invoice,
   };
 }
 

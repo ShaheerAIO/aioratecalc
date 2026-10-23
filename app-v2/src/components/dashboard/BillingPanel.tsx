@@ -376,11 +376,12 @@ function OneTimeInvoice({ app, canManage, onUpdated }: Pick<Props, "app" | "canM
     setBusy(false);
   };
 
-  const status = inv?.builtAt
-    ? inv.paymentStatus === "paid" ? "Paid" : inv.status === "draft" || !inv.status ? "Draft — ready to charge" : inv.paymentStatus ?? inv.status
-    : app.quoteAcceptedAt
+  const built = !!inv?.builtAt && !!inv.openedAt;
+  const status = built
+    ? inv!.paymentStatus === "paid" ? "Paid" : inv!.status === "open" ? "Open — ready to charge" : inv!.paymentStatus ?? inv!.status
+    : app.hubspotIds?.publishedAt
       ? "Not built yet"
-      : "Drafted after the merchant accepts";
+      : "Built when the quote is published";
 
   return (
     <div>
@@ -401,20 +402,24 @@ function OneTimeInvoice({ app, canManage, onUpdated }: Pick<Props, "app" | "canM
         />
         <Field label="Status" value={status} />
         <Field label="Amount" value={inv?.amount != null ? fmt$(inv.amount) : "—"} />
+        <Field
+          label="Merchant link"
+          value={inv?.invoiceLink ? <a href={inv.invoiceLink} target="_blank" rel="noreferrer">View invoice</a> : "—"}
+        />
       </div>
-      {inv?.builtAt && inv.paymentStatus !== "paid" && (
+      {built && inv!.paymentStatus !== "paid" && (
         <div className={styles.emptyNote}>
-          Open and charge this invoice in HubSpot when AIO is ready to bill it — it uses the payment
-          method the merchant stored at checkout. The merchant sees it as an upcoming invoice.
+          Charge this invoice in HubSpot when AIO is ready to bill it — it uses the payment method the
+          merchant stored at checkout. The merchant can see it from their quote and checklist.
         </div>
       )}
-      {canManage && app.quoteAcceptedAt && !inv?.builtAt && (
+      {canManage && app.hubspotIds?.publishedAt && !built && (
         <div className={styles.retryRow}>
           <button className={shared.btnPrimary} disabled={busy} onClick={retry}>
             {busy ? "Building…" : "Retry Invoice"}
           </button>
           {result && !result.ok && result.error && <div className={styles.errorBannerMessage}>{result.error}</div>}
-          {result?.ok && <div className={styles.emptyNote}>Draft invoice built in HubSpot.</div>}
+          {result?.ok && <div className={styles.emptyNote}>Invoice built and opened in HubSpot.</div>}
         </div>
       )}
     </div>

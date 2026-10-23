@@ -25,6 +25,7 @@
 //   npx tsx scripts/probe-invoice.ts --open <id>    # make an EXISTING draft ACH-only, then try to open it
 //
 // RUN 2026-10-22 (draft): invoice 878578016996 — see hubspot-billing.md.
+// RUN 2026-10-23 (--open 878578016996): open accepted, still editable, link live.
 //
 // Everything is created on Shaheer's Second test company. A test company is
 // not a sandbox — the objects are real.

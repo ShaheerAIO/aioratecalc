@@ -2443,8 +2443,8 @@ export async function publishQuote(
 }
 
 // ── One-time invoices ───────────────────────────────────────────────────────
-// Hardware, install and training are billed on an invoice EasyOB builds as a
-// DRAFT right after acceptance; staff charge it in HubSpot (2026-10-23). Association type ids read from
+// Hardware, install and training are billed on an invoice EasyOB builds and
+// opens when the quote is published; staff charge it in HubSpot (2026-10-23). Association type ids read from
 // /crm/v4/associations/invoices/{to}/labels on 2026-10-22 (HUBSPOT_DEFINED,
 // unlabeled) — see scripts/probe-invoice.ts.
 export const INVOICE_TO_CONTACT = 177;
@@ -2453,15 +2453,19 @@ export const INVOICE_TO_DEAL = 175;
 export const INVOICE_TO_LINE_ITEM = 409;
 
 /**
- * A draft invoice's properties. Staff open and charge it in HubSpot when AIO
- * chooses (product owner, 2026-10-23), so nothing about how it is paid is set
- * here. Dated today; HubSpot requires a due date, and it is moot on a draft.
+ * A new invoice's properties. Created as a draft, then opened by
+ * `openInvoice`; staff charge it in HubSpot when AIO chooses (product owner,
+ * 2026-10-23). ACH only, like the quote — HubSpot's default is ACH + card, and
+ * the probe on 878578016996 confirmed both properties take these values.
+ * Dated today and due on receipt.
  */
 export function draftInvoiceProperties(invoiceDate: string): Record<string, string> {
   return {
     hs_currency: "USD",
     hs_invoice_date: invoiceDate,
     hs_due_date: invoiceDate,
+    hs_allowed_payment_methods: "ach",
+    hs_allowed_commerce_payment_methods: "ACH",
   };
 }
 
@@ -2474,6 +2478,21 @@ export async function createDraftInvoice(props: Record<string, string>): Promise
   if (!res.ok) throw hubspotErr("HubSpot draft invoice create failed", res.status, await res.text());
   const data = await res.json() as { id: string };
   return data.id;
+}
+
+/**
+ * hs_invoice_status: open. Gives the invoice a working hs_invoice_link and
+ * sends nothing — HubSpot emails only from its own UI. Probe 2026-10-23: open
+ * is accepted, and an open invoice is still editable through the API, so this
+ * is not a one-way door. Re-opening an open invoice is a harmless repeat.
+ */
+export async function openInvoice(invoiceId: string): Promise<void> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/invoices/${invoiceId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: { hs_invoice_status: "open" } }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot invoice ${invoiceId} open failed`, res.status, await res.text());
 }
 
 export type InvoiceAssociation = {

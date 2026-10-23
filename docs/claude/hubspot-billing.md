@@ -104,12 +104,13 @@ verbatim-`quoteLines` hazard, both constraints above.
 ## The one-time invoice
 
 Product owner, 2026-10-22/23: **one-time lines (hardware, install, training, packages, kit swaps) go
-on a HubSpot INVOICE, not on the quote.** EasyOB builds it as a **DRAFT** right after acceptance,
-alongside the subscription the checkout produced. **AIO staff open and charge it in HubSpot whenever
-they choose**, against the payment method stored at the quote's checkout ("their payment info gets
-saved and we can use it whenever we want"). The merchant is never emailed a pay link and never
-re-enters bank details; they see it as an "Upcoming Invoice". **Onboarding still gates on the
-subscription alone.**
+on a HubSpot INVOICE, not on the quote.** Since 2026-10-23 EasyOB builds it **and opens it** the
+moment the quote is published (at the merchant's confirm), so the merchant has both links side by
+side: the subscription to sign and pay, and the invoice to look at. **AIO staff charge it in HubSpot
+whenever they choose**, against the payment method stored at the quote's checkout ("their payment
+info gets saved and we can use it whenever we want"). **Nothing is emailed** — opening through the
+API sends nothing, and EasyOB sends nothing. The link is real, so the merchant *can* pay it
+themselves; that is accepted. **Onboarding still gates on the subscription alone.**
 
 **UNVERIFIED: that HubSpot will charge an invoice against the ACH method stored at quote checkout.**
 The quote stores it (`hs_store_payment_method_at_checkout`), and the invoice schema has
@@ -130,26 +131,49 @@ How it works:
 - **Build** (`lib/billing/oneTimeInvoice.ts`).
   - It uses a conditional claim, a 2-minute lease, a persist after every id, and resume from
     persisted ids.
-  - It creates its own line items (a line item has one parent), then a draft invoice, then the
+  - Guard: the quote must be published (`not_published`) and split (`not_split`).
+  - It creates its own line items (a line item has one parent), then a draft invoice (ACH only:
+    `hs_allowed_payment_methods: ach`, `hs_allowed_commerce_payment_methods: ACH`), then the
     associations: contact 177 (the quote's signer), company 179, deal 175, line items 409.
-  - It never opens, sends or charges. A draft is deletable, so this path opens no one-way door.
+  - Then it **opens** it (`openInvoice`, `hs_invoice_status: open`), reads back `hs_invoice_link`,
+    and persists `openedAt` + `invoiceLink`. "Done" is `builtAt` AND `openedAt`; a draft built
+    before 2026-10-23 (`builtAt`, no `openedAt`) is opened by the next run, not rebuilt.
+  - It never sends or charges. An open invoice is still editable (probe below), so this path
+    opens no one-way door.
   - `amount` is computed by EasyOB, because a draft's own `hs_balance_due` reads $0.00.
 - **Storage.** The invoice lives in its own column, `merchant_applications.hubspot_invoice`
   (migration **0028**). It is deliberately absent from `appToRow`: `saveApplication` writes the
   whole row, and several paths rewrite `hubspot_ids` from a copy read earlier. If either could erase
   an invoice id, a retry would build a second invoice.
 - **Triggers.**
-  - `applyDetectedAcceptance` calls `buildOneTimeInvoiceSafely`, which never throws. The DEBUG
-    billing bypass calls `recordAcceptance` directly, so it never writes to HubSpot.
-  - `/api/cron/hubspot-billing-sync` retries rows that are accepted, split, and have no draft built
-    yet. It also reads back the status of built, unpaid invoices, which is how a staff charge in
-    HubSpot shows up as paid.
-  - Staff can press "Retry Invoice" on the billing panel.
+  - `/api/lead/[token]/checkout` runs `buildOneTimeInvoiceForId` in `after()` once the publish
+    succeeds, so the merchant's redirect never waits on it (and again on the idempotent
+    already-published return, a no-op once built).
+  - The lead pages (`refreshLeadInvoice` in `leadRefresh.ts`) build an unfinished one after the
+    response, and re-read a built, unpaid one on a 60s TTL — so a staff charge clears the
+    checklist without waiting for the cron.
+  - `applyDetectedAcceptance` calls `buildOneTimeInvoiceSafely` as a fallback. The DEBUG billing
+    bypass calls `recordAcceptance` directly, so it never writes to HubSpot.
+  - `/api/cron/hubspot-billing-sync` retries rows that are published, split, and not yet built and
+    opened (this also covers quotes a rep published). It also reads back built, unpaid invoices
+    (`mergeInvoiceSnapshot`, which never erases the link).
+  - Staff can press "Retry Invoice" on the billing panel, which also shows the merchant link.
 - **Display.**
   - The customer `QuoteSummary` shows "One-Time — invoiced separately" with its own "Invoice
     total", plus a "Due at checkout" section for the pre-auth.
-  - The checklist has a non-gating "Upcoming Invoice" row with no CTA, which completes when paid.
-  - Rep copy reads "invoiced after acceptance".
+  - Under the quote, once published, `LeadQuoteView` shows two cards — "View Subscription →" (left)
+    and "View Invoice →" (right) — each opening in a new tab. `CustomerSafeQuote.invoice` carries
+    only `{ link, paid }`.
+  - The subscription opens in a **new tab** from the confirm form and from "Continue"
+    (`components/customer/pendingTab.ts` opens the tab inside the click, because the URL only
+    exists 10–30s later and a late `window.open` is blocked); the original tab returns to the
+    quote. A blocked popup falls back to the old same-tab redirect.
+  - The checklist's **Quote & Billing row stays "In Progress"** after the subscription is in, with
+    the invoice in its description and a "View Invoice" CTA, and only completes when HubSpot reports
+    the invoice paid (`withOpenInvoice` in `onboardingModules.ts`). Display only — the lock pass and
+    provisioning are unchanged. There is no separate invoice row any more.
+  - Rep builder: the One-time group is labelled "invoiced separately", and the bottom totals grid has
+    an "Invoiced separately" figure (`amountInvoiced`) beside "Due at checkout" and "Per month".
 
 ### Probe evidence `scripts/probe-invoice.ts`, **draft run 2026-10-22**, on Shaheer's
 Second test company / Deal - 8 — draft invoice `878578016996`, line items `352679875300`
@@ -172,7 +196,21 @@ Second test company / Deal - 8 — draft invoice `878578016996`, line items `352
 - **Auto-charge looks possible.** `hs_invoice_payment_collection_method` has an `automatic` value
   and `hs_payment_collection_option` has a `pmof` value (payment method on file). Together they may
   debit the ACH mandate from the quote checkout without the merchant clicking anything. This is
-  untested, and the current decision is the emailed pay link.
-- **Still open, needs the `--open` run:** whether opening is accepted, the opened totals with the
-  100% line, whether an open invoice is locked or can be voided, and whether $0 or under-$0.50
-  invoices are refused.
+  untested. The current decision is that staff charge it manually in HubSpot.
+
+### Probe evidence, **`--open` run 2026-10-23**, same draft `878578016996`
+
+- **ACH-only took on the draft:** `hs_allowed_payment_methods: ach`,
+  `hs_allowed_commerce_payment_methods: ACH`.
+- **`hs_invoice_status: open` is accepted.** Once ACH-only was set, `hs_balance_due` and
+  `hs_amount_billed` read **249.00**, which is correct with the 100% line at $0. The link did not
+  change.
+- **An OPEN invoice is still editable through the API** (a `hs_due_date` PATCH succeeded), so
+  opening is not a one-way door.
+- **The link works signed out.** `hs_invoice_link` returned 200 and rendered the invoice, the $249
+  line and a "Pay now" button. The page also contains the strings "This is a test invoice, so it
+  can't collect real payments" and "details are updating". These may only be template text; no
+  one has checked whether they are visible.
+- No email was observed. Opening through the API sends nothing.
+- **Still untested:** whether $0 or under-$0.50 invoices are refused (EasyOB never builds one, see
+  `nothing_to_invoice`), and charging the stored ACH method.

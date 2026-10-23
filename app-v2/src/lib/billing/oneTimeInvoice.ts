@@ -1,18 +1,18 @@
 // The one-time invoice (2026-10-22, product owner).
 //
 // Hardware, installation and training used to sit on the HubSpot quote and be
-// collected at checkout. They now go on a HubSpot INVOICE, built the moment
-// acceptance is detected — i.e. alongside the subscription the quote's checkout
-// produced. The quote keeps the recurring lines plus the $0.50 pre-auth
-// (`splitQuoteLines`).
+// collected at checkout. They now go on a HubSpot INVOICE, built and OPENED
+// the moment the quote is published (product owner, 2026-10-23), so the
+// merchant has both links side by side: the subscription to sign and pay, and
+// the invoice to look at. The quote keeps the recurring lines plus the $0.50
+// pre-auth (`splitQuoteLines`).
 //
-// EasyOB builds the invoice as a DRAFT and stops there (product owner,
-// 2026-10-23: "In hubspot we will just charge them when we please. their
-// payment info gets saved and we can use it whenever we want."). AIO staff
-// open it and charge it in HubSpot, against the payment method stored at the
-// quote's checkout; the merchant is never sent a pay link and never asked to
-// enter bank details a second time. The customer side shows it as an
-// "upcoming invoice" until HubSpot reports it paid.
+// Opened, never sent: HubSpot emails an invoice only from its own UI, and
+// EasyOB sends nothing either. AIO staff charge it in HubSpot when they choose
+// ("In hubspot we will just charge them when we please"), against the payment
+// method stored at the quote's checkout. The link is real, so the merchant can
+// also pay it themselves — accepted. The checklist keeps the Quote & Billing
+// row open until HubSpot reports it paid.
 //
 // Graph:
 //   Invoice ──409──▶ line items (its own; a line item has exactly one parent)
@@ -21,8 +21,9 @@
 //      └──175──▶ Deal
 //
 // Same claim / persist-every-id / resume shape as buildAndPublishBillingQuote,
-// so two observers of one acceptance build one invoice, not two. A draft is
-// deletable, so this path opens no one-way door. State lives in its OWN
+// so two observers of one publish build one invoice, not two. An open invoice
+// is still editable and voidable (probe, 2026-10-23), so this path opens no
+// one-way door. State lives in its OWN
 // column, `hubspot_invoice`, which only this file writes — see HubspotInvoice.
 //
 // Never gates onboarding: acceptance and provisioning still gate on the
@@ -34,6 +35,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
+import { rowToApp } from "@/lib/storage/applicationRow";
 import {
   INVOICE_TO_COMPANY,
   INVOICE_TO_CONTACT,
@@ -44,8 +46,11 @@ import {
   createQuoteLineItems,
   deleteQuoteLineItem,
   draftInvoiceProperties,
+  getInvoiceSnapshot,
+  openInvoice,
   planLineItemReconciliation,
   tenantCompanyId,
+  type InvoiceSnapshot,
 } from "@/lib/adapters/hubspot";
 import { MIN_CHECKOUT_AMOUNT, lineNetAmount, splitQuoteLines } from "@/lib/quoting";
 import { EMPTY_HUBSPOT_INVOICE, type HubspotInvoice, type MerchantApplication } from "@/types/merchant";
@@ -54,21 +59,21 @@ import { EMPTY_HUBSPOT_INVOICE, type HubspotInvoice, type MerchantApplication } 
 // generous, and past it a retry resumes rather than refusing forever.
 const BUILD_LEASE_MS = 2 * 60 * 1000;
 
-export type InvoiceStep = "preflight" | "line_items" | "draft_invoice" | "associations";
+export type InvoiceStep = "preflight" | "line_items" | "draft_invoice" | "associations" | "open";
 
 export type OneTimeInvoiceResult =
   | { status: "built"; invoiceId: string }
   /**
-   *  - `not_accepted`: nothing is invoiced before acceptance.
+   *  - `not_published`: nothing is invoiced before the quote is published.
    *  - `not_split`: the quote was published before split billing, so its
    *    one-time lines are on the quote already. Invoicing them would bill twice.
    *  - `nothing_to_invoice`: no one-time lines, or every one is comped.
-   *  - `already_built`: the draft invoice exists and is fully associated.
+   *  - `already_built`: the invoice exists, is fully associated and is open.
    *  - `build_in_progress`: another request holds the lease.
    */
   | {
       status: "skipped";
-      reason: "not_accepted" | "not_split" | "nothing_to_invoice" | "already_built" | "build_in_progress";
+      reason: "not_published" | "not_split" | "nothing_to_invoice" | "already_built" | "build_in_progress";
     }
   | { status: "failed"; step: InvoiceStep; error: string };
 
@@ -91,6 +96,7 @@ function progressSummary(inv: HubspotInvoice): string {
   const done: string[] = [];
   if (inv.lineItemIds?.length) done.push(`${inv.lineItemIds.length} line item(s) created`);
   if (inv.invoiceId) done.push(`draft invoice ${inv.invoiceId} created`);
+  if (inv.openedAt) done.push("opened");
   return done.length ? done.join(", ") : "nothing created yet";
 }
 
@@ -101,12 +107,18 @@ export function invoiceLinesFor(app: Pick<MerchantApplication, "quoteLines">) {
   return { invoiceLines, total };
 }
 
+/** Fully built: associated AND opened. A draft built before 2026-10-23 has
+ *  `builtAt` but no `openedAt`, and a rerun opens it. */
+function isDone(inv: HubspotInvoice | null | undefined): boolean {
+  return !!inv?.builtAt && !!inv.openedAt;
+}
+
 /**
- * Build this application's one-time invoice as a HubSpot DRAFT. Idempotent:
- * every call after the first either resumes an unfinished build or does nothing.
+ * Build this application's one-time invoice and open it. Idempotent: every
+ * call after the first either resumes an unfinished build or does nothing.
  */
 export async function buildOneTimeInvoice(app: MerchantApplication): Promise<OneTimeInvoiceResult> {
-  if (!app.quoteAcceptedAt) return { status: "skipped", reason: "not_accepted" };
+  if (!app.hubspotIds?.publishedAt) return { status: "skipped", reason: "not_published" };
   if (!app.hubspotIds?.splitBilling) return { status: "skipped", reason: "not_split" };
 
   const { invoiceLines, total } = invoiceLinesFor(app);
@@ -115,7 +127,7 @@ export async function buildOneTimeInvoice(app: MerchantApplication): Promise<One
   if (invoiceLines.length === 0 || total < MIN_CHECKOUT_AMOUNT) {
     return { status: "skipped", reason: "nothing_to_invoice" };
   }
-  if (app.hubspotInvoice?.builtAt) return { status: "skipped", reason: "already_built" };
+  if (isDone(app.hubspotInvoice)) return { status: "skipped", reason: "already_built" };
 
   // ── Claim the build ───────────────────────────────────────────────────────
   // Same conditional claim as the quote: of two concurrent observers of the
@@ -136,7 +148,7 @@ export async function buildOneTimeInvoice(app: MerchantApplication): Promise<One
       .limit(1);
     const existing = row?.hubspotInvoice;
     if (!existing) return { status: "failed", step: "preflight", error: `Application ${app.id} no longer exists` };
-    if (existing.builtAt) return { status: "skipped", reason: "already_built" };
+    if (isDone(existing)) return { status: "skipped", reason: "already_built" };
     const claimAge = existing.syncedAt ? Date.now() - new Date(existing.syncedAt).getTime() : Infinity;
     const untouched = !existing.invoiceId && !existing.lineItemIds?.length;
     if (untouched && !existing.lastSyncError && claimAge < BUILD_LEASE_MS) {
@@ -195,17 +207,60 @@ export async function buildOneTimeInvoice(app: MerchantApplication): Promise<One
       { toObjectType: "deals", toObjectId: dealId!, associationTypeId: INVOICE_TO_DEAL },
     ]);
 
+    // 4. Open it — that is what makes hs_invoice_link a working page. Sends nothing.
+    step = "open";
+    if (!inv.openedAt) {
+      await openInvoice(invoiceId);
+      inv = { ...inv, status: "open", openedAt: new Date().toISOString() };
+      await persist(app.id, inv);
+    }
+    const snapshot = await getInvoiceSnapshot(invoiceId);
+
     inv = {
-      ...inv, amount: total, status: "draft", builtAt: new Date().toISOString(), lastSyncError: null, lastSyncErrorAt: null,
+      ...inv,
+      amount: total,
+      status: snapshot?.status ?? inv.status,
+      paymentStatus: snapshot?.paymentStatus ?? inv.paymentStatus,
+      balanceDue: snapshot?.balanceDue ?? inv.balanceDue,
+      invoiceLink: snapshot?.invoiceLink ?? inv.invoiceLink,
+      builtAt: inv.builtAt ?? new Date().toISOString(),
+      lastSyncError: null,
+      lastSyncErrorAt: null,
     };
     await persist(app.id, inv);
-    console.log(`[invoice] ${app.id}: draft invoice ${invoiceId} built for $${total.toFixed(2)} — charge it in HubSpot`);
+    console.log(`[invoice] ${app.id}: invoice ${invoiceId} built and opened for $${total.toFixed(2)} — charge it in HubSpot`);
     return { status: "built", invoiceId };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     await persistError(app.id, inv, `${progressSummary(inv)}; ${step} failed: ${detail}`);
     return { status: "failed", step, error: detail };
   }
+}
+
+/** Whether HubSpot has the invoice paid. Either property can say so first. */
+export function isInvoicePaid(inv: HubspotInvoice | null | undefined): boolean {
+  return inv?.paymentStatus === "paid" || inv?.status === "paid";
+}
+
+/**
+ * A stored invoice with a fresh HubSpot read folded in, or null when nothing
+ * the merchant could see has moved. The link is never erased by a read that
+ * came back without one.
+ */
+export function mergeInvoiceSnapshot(inv: HubspotInvoice, snap: InvoiceSnapshot): HubspotInvoice | null {
+  const invoiceLink = snap.invoiceLink ?? inv.invoiceLink ?? null;
+  const moved =
+    snap.status !== inv.status || snap.paymentStatus !== inv.paymentStatus ||
+    snap.balanceDue !== inv.balanceDue || invoiceLink !== (inv.invoiceLink ?? null);
+  if (!moved) return null;
+  return {
+    ...inv,
+    status: snap.status,
+    paymentStatus: snap.paymentStatus,
+    balanceDue: snap.balanceDue,
+    invoiceLink,
+    syncedAt: new Date().toISOString(),
+  };
 }
 
 /**
@@ -221,5 +276,18 @@ export async function buildOneTimeInvoiceSafely(app: MerchantApplication): Promi
     }
   } catch (err) {
     console.error(`[invoice] ${app.id}: invoice build threw`, err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * The same, by id, reading the row fresh — for `after()` callbacks that run
+ * once the publish that made the invoice buildable has been written.
+ */
+export async function buildOneTimeInvoiceForId(applicationId: string): Promise<void> {
+  try {
+    const [row] = await db.select().from(merchantApplications).where(eq(merchantApplications.id, applicationId)).limit(1);
+    if (row) await buildOneTimeInvoiceSafely(rowToApp(row));
+  } catch (err) {
+    console.error(`[invoice] ${applicationId}: could not load the row to build its invoice`, err instanceof Error ? err.message : err);
   }
 }

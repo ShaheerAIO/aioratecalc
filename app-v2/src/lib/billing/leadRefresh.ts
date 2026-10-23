@@ -18,8 +18,10 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
-import { findSubscriptionsForQuote, getQuoteSnapshot } from "@/lib/adapters/hubspot";
+import { after } from "next/server";
+import { findSubscriptionsForQuote, getInvoiceSnapshot, getQuoteSnapshot } from "@/lib/adapters/hubspot";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
+import { buildOneTimeInvoiceForId, isInvoicePaid, mergeInvoiceSnapshot } from "@/lib/billing/oneTimeInvoice";
 import { rollUpSubscriptionStatus, type MerchantApplication } from "@/types/merchant";
 
 // 60s, matching the authenticated refresh. A merchant refreshing while waiting
@@ -72,6 +74,42 @@ export async function refreshLeadBilling(app: MerchantApplication): Promise<Merc
     return await applyDetectedAcceptance({ ...app, hubspotIds: next });
   } catch (err) {
     console.error("Lead billing refresh failed:", err instanceof Error ? err.message : err);
+    return app;
+  }
+}
+
+/**
+ * The one-time invoice's read-back for the same lead-link views, so the
+ * Quote & Billing row clears as soon as staff charge it rather than the next
+ * morning. Same TTL and the same swallow-everything posture as above.
+ *
+ * An invoice that should exist but isn't finished is built after the
+ * response — the page shows "being prepared" meanwhile.
+ */
+export async function refreshLeadInvoice(app: MerchantApplication): Promise<MerchantApplication> {
+  if (!app.hubspotIds?.publishedAt || !app.hubspotIds.splitBilling) return app;
+  const inv = app.hubspotInvoice;
+  if (!inv?.builtAt || !inv.openedAt) {
+    after(() => buildOneTimeInvoiceForId(app.id));
+    return app;
+  }
+  if (!inv.invoiceId || isInvoicePaid(inv)) return app;
+
+  const syncedAtMs = inv.syncedAt ? Date.parse(inv.syncedAt) : NaN;
+  if (!Number.isNaN(syncedAtMs) && Date.now() - syncedAtMs < LEAD_BILLING_TTL_MS) return app;
+
+  try {
+    const snap = await getInvoiceSnapshot(inv.invoiceId);
+    if (!snap) return app;
+    // syncedAt is the TTL, so it is written even when nothing else moved.
+    const next = mergeInvoiceSnapshot(inv, snap) ?? { ...inv, syncedAt: new Date().toISOString() };
+    await db
+      .update(merchantApplications)
+      .set({ hubspotInvoice: next, updatedAt: new Date() })
+      .where(eq(merchantApplications.id, app.id));
+    return { ...app, hubspotInvoice: next };
+  } catch (err) {
+    console.error("Lead invoice refresh failed:", err instanceof Error ? err.message : err);
     return app;
   }
 }

@@ -155,7 +155,7 @@ export async function retryOneTimeInvoiceAction(applicationId: string): Promise<
         : {
             ok: false,
             error: {
-              not_accepted: "The merchant hasn't accepted the quote yet — the invoice is drafted after they do.",
+              not_published: "The quote isn't published yet — the invoice is built when it is.",
               not_split: "This quote was published before one-time invoices existed; its one-time charges were collected at checkout.",
               nothing_to_invoice: "There's nothing to invoice — every one-time line on this quote is included.",
               build_in_progress: "The invoice is being built right now. Try again in a minute.",

@@ -145,7 +145,7 @@ describe("buildCustomerSafeQuote — config basis", () => {
     // have to appear as a key here to leak.
     expect(Object.keys(quote).sort()).toEqual([
       "annualSavings", "averageTicket", "basis", "currentEffectiveRate", "currentMonthlyCost",
-      "effectiveRate", "lineTotals", "lines", "monthlySavings", "monthlyVolume", "oneTimeInvoiced", "orderPoints",
+      "effectiveRate", "invoice", "lineTotals", "lines", "monthlySavings", "monthlyVolume", "oneTimeInvoiced", "orderPoints",
       "payment", "projectedAnnualCost", "projectedMonthlyCost", "savingsPct",
     ]);
     const serialized = JSON.stringify(quote);

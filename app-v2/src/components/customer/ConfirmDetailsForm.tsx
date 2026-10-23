@@ -9,6 +9,7 @@ import { bizTypeLabel } from "@/types/merchant";
 import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
 import styles from "./CustomerOnboardStep.module.css";
 import confirmStyles from "./ConfirmDetailsForm.module.css";
+import { openPendingTab } from "./pendingTab";
 
 export type ConfirmDetailsInitial = {
   business: Partial<BusinessInfo>;
@@ -235,6 +236,8 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
     }
     setSaving(true);
     setServerErrors({});
+    // Inside the click, or the browser blocks it — see pendingTab.ts.
+    const tab = openPendingTab();
     try {
       const result = await confirmLeadDetailsAction(token, buildValues());
       if (!result.ok) {
@@ -244,6 +247,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         } else {
           setErr(result.formError);
         }
+        tab?.close();
         setSaving(false);
         return;
       }
@@ -251,11 +255,19 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
       const res = await fetch(`/api/lead/${token}/checkout`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.url) {
-        // Deliberately leaves `saving` set — the page is navigating away, and
-        // re-enabling the button would invite a second click mid-redirect.
-        window.location.href = data.url;
+        // The subscription in its own tab; this one back to the quote, where
+        // the invoice link sits beside it. Deliberately leaves `saving` set —
+        // the page is navigating away, and re-enabling the button would invite
+        // a second click mid-redirect.
+        if (tab) {
+          tab.go(data.url);
+          window.location.href = `/lead/${token}/quote`;
+        } else {
+          window.location.href = data.url;
+        }
         return;
       }
+      tab?.close();
 
       // A rate-only quote builds no HubSpot document at all, so there is
       // nothing to redirect to and the confirmation is the whole of what the
@@ -270,6 +282,7 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         "Your details are saved, but we couldn't open your quote just now. Please try again in a moment — your AIO representative has been notified."
       );
     } catch {
+      tab?.close();
       setSaving(false);
       setErr("Something went wrong saving your details. Please try again.");
     }
@@ -287,8 +300,8 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
             <span className={confirmStyles.overlaySpinner} aria-hidden="true" />
             <strong className={confirmStyles.overlayTitle}>Creating your quote…</strong>
             <p className={confirmStyles.overlayBody}>
-              This usually takes 10–30 seconds. Please keep this page open — you&apos;ll be taken to
-              your quote automatically.
+              This usually takes 10–30 seconds. Please keep this page open — your quote will open
+              in a new tab automatically.
             </p>
           </div>
         </div>

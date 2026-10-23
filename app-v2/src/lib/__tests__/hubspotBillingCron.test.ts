@@ -68,7 +68,10 @@ vi.mock("@/lib/adapters/hubspot", () => ({
 }));
 // The invoice build is tested on its own (oneTimeInvoice.test.ts); here only
 // that the cron calls it, and with what.
-vi.mock("@/lib/billing/oneTimeInvoice", () => ({ buildOneTimeInvoice, buildOneTimeInvoiceSafely }));
+vi.mock("@/lib/billing/oneTimeInvoice", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/billing/oneTimeInvoice")>()),
+  buildOneTimeInvoice, buildOneTimeInvoiceSafely,
+}));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 
 const { GET } = await import("@/app/api/cron/hubspot-billing-sync/route");

@@ -300,41 +300,49 @@ describe("getOnboardingModules — order and composition", () => {
   });
 });
 
-describe("the one-time invoice row", () => {
-  const BUILT = {
+// The one-time invoice keeps Quote & Billing open (product owner, 2026-10-23):
+// it doesn't disappear into "Complete" when the subscription goes in, but
+// carries the invoice until HubSpot reports it paid.
+describe("the quote & billing row with a one-time invoice", () => {
+  const LINK = "https://customers.aioapp.com/inv-link";
+  const OPEN = {
     ...EMPTY_HUBSPOT_INVOICE,
-    invoiceId: "inv-1", amount: 1948, status: "draft", builtAt: "2026-10-22T00:00:00.000Z",
+    invoiceId: "inv-1", amount: 1948, status: "open", invoiceLink: LINK,
+    builtAt: "2026-10-22T00:00:00.000Z", openedAt: "2026-10-22T00:00:00.000Z",
   };
-  const accepted = (hubspotInvoice: MerchantApplication["hubspotInvoice"]): MerchantApplication =>
-    ({ ...BASE_APP, quoteAcceptedAt: "2026-10-22T00:00:00.000Z", hubspotInvoice });
+  const ACTIVE: HubspotIds = {
+    ...EMPTY_HUBSPOT_IDS, quoteId: "q1", publishedAt: "2026-08-01T00:00:00.000Z", splitBilling: true,
+    subscriptions: [sub({ status: "active", paymentMethod: "ACH - 1117" })],
+    subscriptionStatus: "active",
+  };
+  const paid = (hubspotInvoice: MerchantApplication["hubspotInvoice"]): MerchantApplication =>
+    ({ ...BASE_APP, quoteAcceptedAt: "2026-10-22T00:00:00.000Z", hubspotIds: ACTIVE, hubspotInvoice });
 
-  it("is absent until the draft has been built", () => {
-    expect(getOnboardingModules(accepted(null)).find(m => m.key === "invoice")).toBeUndefined();
-    expect(getOnboardingModules(accepted({ ...BUILT, builtAt: null })).find(m => m.key === "invoice")).toBeUndefined();
-  });
-
-  // AIO charges it from HubSpot against the account stored at checkout, so
-  // the merchant has nothing to click — no CTA at all.
-  it("sits right after the quote as an upcoming invoice, with nothing to pay", () => {
-    const modules = getOnboardingModules(accepted(BUILT));
-    expect(modules.map(m => m.key)).toEqual(["quote", "invoice", "adyen", "foodbuy"]);
-    const row = modules[1];
-    expect(row).toMatchObject({ label: "Upcoming Invoice", status: "in_progress" });
+  it("stays in progress with a View Invoice link while the invoice is unpaid", () => {
+    const modules = getOnboardingModules(paid(OPEN));
+    expect(modules.map(m => m.key)).toEqual(["quote", "adyen", "foodbuy"]);
+    const row = modules[0];
+    expect(row).toMatchObject({ status: "in_progress", href: LINK, ctaLabel: "View Invoice" });
+    expect(row.description).toContain("billing is active");
     expect(row.description).toContain("$1,948.00");
     expect(row.description).toContain("nothing you need to do");
-    expect(row.href).toBeUndefined();
-    expect(row.locked).toBeUndefined();
   });
 
-  it("completes when HubSpot reports it paid", () => {
-    const row = getOnboardingModules(accepted({ ...BUILT, status: "paid", paymentStatus: "paid" })).find(m => m.key === "invoice")!;
+  it("completes when HubSpot reports the invoice paid", () => {
+    const row = billing(paid({ ...OPEN, status: "paid", paymentStatus: "paid" }));
     expect(row.status).toBe("complete");
+    expect(row.ctaLabel).toBe("View Quote");
   });
 
-  // Subscription-only gating (product owner, 2026-10-22): an unpaid invoice
-  // never holds the rest of the checklist.
+  it("is unchanged by an invoice that was never opened, or none at all", () => {
+    expect(billing(paid(null)).status).toBe("complete");
+    expect(billing(paid({ ...OPEN, openedAt: null })).status).toBe("complete");
+  });
+
+  // Display only (2026-10-22 gating decision): an unpaid invoice never holds
+  // the rest of the checklist.
   it("never locks the rows after it", () => {
-    const adyen = getOnboardingModules(accepted(BUILT)).find(m => m.key === "adyen")!;
+    const adyen = getOnboardingModules(paid(OPEN)).find(m => m.key === "adyen")!;
     expect(adyen.locked).toBeUndefined();
   });
 });

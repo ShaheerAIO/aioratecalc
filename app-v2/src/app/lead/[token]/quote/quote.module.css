@@ -10,8 +10,10 @@
   font-family: var(--font-body);
 }
 
+/* As wide as LeadQuoteView's own container, so the quote's two columns
+   (subscription | invoice) get room to sit side by side. */
 .container {
-  max-width: 40rem;
+  max-width: 56rem;
   margin-inline: auto;
   padding: var(--space-3xl) var(--space-lg);
 }

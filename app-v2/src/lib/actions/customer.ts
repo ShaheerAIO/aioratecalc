@@ -121,6 +121,7 @@ export async function getMyQuoteAction(id: string): Promise<CustomerSafeQuote | 
     orderPoints: app.orderPoints,
     processing: app.processing,
     hubspotIds: app.hubspotIds,
+    hubspotInvoice: app.hubspotInvoice,
   });
 }
 

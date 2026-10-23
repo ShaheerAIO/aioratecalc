@@ -66,8 +66,8 @@ export async function applyDetectedAcceptance(app: MerchantApplication): Promise
   if (app.quoteAcceptedAt) return app;
   if (!isAcceptedInHubspot(app)) return app;
   const accepted = await recordAcceptance(app, { syncDeal: true });
-  // The one-time invoice is drafted the moment acceptance is seen, beside the
-  // subscription checkout just produced (2026-10-22). Here and not inside
+  // A fallback for the one-time invoice, which is built when the quote is
+  // published (2026-10-23): a no-op once it exists. Here and not inside
   // recordAcceptance, so the DEBUG billing bypass — which calls
   // recordAcceptance directly — never writes to HubSpot. Its own claim makes
   // the race between observers harmless, and it never throws.

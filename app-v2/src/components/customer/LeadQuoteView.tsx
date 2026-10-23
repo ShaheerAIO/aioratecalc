@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { amountInvoiced } from "@/lib/quoting";
+import { fmt$ } from "@/lib/utils";
 import type { CustomerSafeQuote } from "@/types/merchant";
 import QuoteSummary from "./QuoteSummary";
+import { openPendingTab } from "./pendingTab";
 import styles from "./LeadQuoteView.module.css";
 
 // The customer's view of a quote, always one the rep prepared. (Until
@@ -104,23 +107,38 @@ export default function LeadQuoteView({
   // Publishes the HubSpot quote if it isn't published yet, then sends the
   // merchant to it. Idempotent server-side, so a double click can't produce a
   // second document.
+  //
+  // In a NEW tab (2026-10-23), so this page — with the invoice link beside the
+  // subscription — stays where the merchant can come back to it.
   const continueToBilling = async () => {
-    if (checkoutUrl) { window.location.href = checkoutUrl; return; }
+    if (checkoutUrl) {
+      if (!window.open(checkoutUrl, "_blank", "noopener")) window.location.href = checkoutUrl;
+      return;
+    }
     setGoing(true);
     setGoError(null);
+    const tab = openPendingTab();
     try {
       const res = await fetch(`/api/lead/${token}/checkout`, { method: "POST" });
       const data = await res.json();
       if (!res.ok || !data.url) {
+        tab?.close();
         setGoError(CHECKOUT_ERRORS[data.error] ?? CHECKOUT_ERRORS.not_ready);
         setGoing(false);
         return;
       }
       // Deliberately not resetting `going` — the navigation is the end of this
       // component's life, and flipping the button back to idle mid-redirect
-      // invites a second click on a door that only opens once.
-      window.location.href = data.url;
+      // invites a second click on a door that only opens once. With a tab,
+      // this page reloads to pick up both links.
+      if (tab) {
+        tab.go(data.url);
+        window.location.reload();
+      } else {
+        window.location.href = data.url;
+      }
     } catch {
+      tab?.close();
       setGoError(CHECKOUT_ERRORS.not_ready);
       setGoing(false);
     }
@@ -153,6 +171,14 @@ export default function LeadQuoteView({
     setAccepting(false);
   };
 
+  // Both documents, side by side under the quote they split it into
+  // (2026-10-23): the subscription the merchant signs and pays, and the
+  // one-time invoice AIO charges later. Only once published — before that
+  // neither exists. A legacy quote (one-time lines on the quote itself) and a
+  // quote with nothing invoiced show the subscription alone.
+  const invoiceTotal = amountInvoiced(quote.lines);
+  const hasInvoice = quote.oneTimeInvoiced && invoiceTotal > 0;
+
   return (
     <div className={styles.page}>
       <div className={styles.container}>
@@ -164,6 +190,37 @@ export default function LeadQuoteView({
         <div className={styles.wide}>
           <QuoteSummary quote={quote} />
         </div>
+
+        {checkoutUrl && (
+          <div className={`${styles.wide} ${styles.docLinks}`} data-split={hasInvoice || undefined}>
+            <div className={styles.docLink}>
+              <div className={styles.docLinkLabel}>Subscription</div>
+              <p className={styles.docLinkText}>
+                {accepted ? "Signed, with your billing details in." : "Sign it and enter your billing details."}
+              </p>
+              <a href={checkoutUrl} target="_blank" rel="noopener noreferrer" className={styles.docLinkCta}>
+                View Subscription →
+              </a>
+            </div>
+            {hasInvoice && (
+              <div className={styles.docLink}>
+                <div className={styles.docLinkLabel}>Invoice · {fmt$(invoiceTotal)}</div>
+                <p className={styles.docLinkText}>
+                  {quote.invoice?.paid
+                    ? "Paid. Thank you."
+                    : "We'll charge it to the bank account you set up for your subscription — nothing to do."}
+                </p>
+                {quote.invoice?.link ? (
+                  <a href={quote.invoice.link} target="_blank" rel="noopener noreferrer" className={styles.docLinkCta}>
+                    View Invoice →
+                  </a>
+                ) : (
+                  <span className={styles.docLinkPending}>Your invoice is being prepared — refresh in a minute.</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className={styles.panel}>
           {accepted ? (

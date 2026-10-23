@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
-import { refreshLeadBilling } from "@/lib/billing/leadRefresh";
+import { refreshLeadBilling, refreshLeadInvoice } from "@/lib/billing/leadRefresh";
 import { hasSignedWithoutPaying } from "@/lib/onboardingModules";
 import LeadQuoteView from "@/components/customer/LeadQuoteView";
 import styles from "./quote.module.css";
@@ -40,7 +40,7 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
   // re-read the billing snapshot before deciding what to show them, exactly as
   // the checklist does, or a merchant who just paid is offered the checkout
   // again and one who signed without paying is told nothing at all.
-  const app = await refreshLeadBilling(rowToApp(row));
+  const app = await refreshLeadInvoice(await refreshLeadBilling(rowToApp(row)));
   const businessName = app.business?.dba || app.business?.legalName || null;
   const contactEmail = app.ownerContact?.email || null;
 
@@ -72,6 +72,7 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
     orderPoints: app.orderPoints,
     processing: app.processing,
     hubspotIds: app.hubspotIds,
+    hubspotInvoice: app.hubspotInvoice,
   });
 
   return (

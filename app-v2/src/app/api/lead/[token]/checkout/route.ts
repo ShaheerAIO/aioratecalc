@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
@@ -7,6 +7,7 @@ import { rowToApp } from "@/lib/storage/applicationRow";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
+import { buildOneTimeInvoiceForId } from "@/lib/billing/oneTimeInvoice";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds } from "@/types/merchant";
 
 // THE MERCHANT'S OWN DOOR TO BILLING — and the one-way door with it.
@@ -72,6 +73,8 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ to
     // safe — hs_quote_link is a predictable public URL, not a one-time bearer
     // artifact (see the header on /customer/applications/[id]/billing).
     if (app.hubspotIds?.publishedAt && app.hubspotIds.quoteLink) {
+      // A no-op once the invoice is built; otherwise this retries it.
+      if (!app.hubspotInvoice?.openedAt) after(() => buildOneTimeInvoiceForId(app.id));
       return NextResponse.json({ url: app.hubspotIds.quoteLink });
     }
 
@@ -120,6 +123,12 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ to
     }
 
     const outcome = await buildAndPublishBillingQuote(dealResult.app);
+
+    // The one-time invoice is built and opened beside the quote (2026-10-23),
+    // AFTER the response: the merchant is not kept waiting on a handful of
+    // HubSpot calls for the document they did not come here for. Never
+    // throws; the lead page and the nightly cron retry an unfinished one.
+    if (outcome.status === "published") after(() => buildOneTimeInvoiceForId(app.id));
 
     switch (outcome.status) {
       case "published":

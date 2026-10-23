@@ -23,6 +23,7 @@ import {
   QUOTE_TYPES,
   SOFTWARE_LICENSE_PRODUCT,
   amountDueAtCheckout,
+  amountInvoiced,
   buildQuote,
   describeBillingStart,
   groupProducts,
@@ -1870,7 +1871,7 @@ export default function ProductConfigurator({
               <div className={styles.docGroup} data-kind="onetime" data-commission={oneTimeComm || undefined}>
                 <div className={styles.docGroupHead}>
                   <span className={styles.docGroupLabel}>
-                    One-time <span className={styles.docGroupNote}>charged once, at checkout</span>
+                    One-time <span className={styles.docGroupNote}>invoiced separately</span>
                   </span>
                   {oneTimeComm && <span className={styles.docCommissionHead}>Your comm.</span>}
                   <span className={styles.docGroupTotal}>{fmt$(totals.oneTime)}</span>
@@ -1960,6 +1961,12 @@ export default function ProductConfigurator({
                     <div>
                       <div className={styles.docTotalValue}>{fmt$(totals.monthlyEquivalent)}</div>
                       <div className={styles.docTotalLabel}>Per month</div>
+                    </div>
+                  )}
+                  {amountInvoiced(quoteLines) > 0 && (
+                    <div>
+                      <div className={styles.docTotalValue}>{fmt$(amountInvoiced(quoteLines))}</div>
+                      <div className={styles.docTotalLabel}>Invoiced separately</div>
                     </div>
                   )}
                 </div>
