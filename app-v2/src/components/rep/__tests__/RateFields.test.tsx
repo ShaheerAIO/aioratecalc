@@ -241,22 +241,35 @@ describe("RateFields — freshQuote (closing the no-basis CNP gap)", () => {
       const [bps, setBps] = useState(0);
       return <RateFields value={value} onChange={setValue} adjustBps={bps} onAdjustBps={setBps} adjustRange={range} />;
     }
-    const box = () => screen.getByLabelText(/rate adjustment, basis points/) as HTMLInputElement;
+    const box = () => screen.getByLabelText("Card present rate, percent") as HTMLInputElement;
+    const type = (v: string) => { fireEvent.change(box(), { target: { value: v } }); fireEvent.blur(box()); };
 
-    it("clamps typed adjustments to the passed range and shows it as a hint", () => {
+    it("keeps the rate editable, clamps it to the range, and says when the limit is hit", () => {
       render(<Adj range={{ min: -12, max: 40 }} />);
-      expect(screen.getByTestId("adjust-range-hint").textContent).toBe("\u221212 to +40 bps");
-      fireEvent.change(box(), { target: { value: "300" } });
-      expect(box().value).toBe("40");
-      fireEvent.change(box(), { target: { value: "-300" } });
-      expect(box().value).toBe("-12");
+      expect(box().disabled).toBe(false);
+      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
+      type("2.30");
+      expect(box().value).toBe("2.30");
+      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
+      type("9.00");
+      expect(box().value).toBe("2.57");
+      expect(screen.getByTestId("rate-limit-reached").textContent).toBe("Limit reached");
+      type("1.00");
+      expect(box().value).toBe("2.05");
+      expect(screen.getByTestId("rate-limit-reached")).toBeTruthy();
+      // Typing the limit itself isn't trying to go past it.
+      type("2.57");
+      expect(box().value).toBe("2.57");
+      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
     });
 
-    it("falls back to +/-500 and no hint without a range", () => {
+    it("falls back to +/-500 bps without a range", () => {
       render(<Adj range={null} />);
-      expect(screen.queryByTestId("adjust-range-hint")).toBeNull();
-      fireEvent.change(box(), { target: { value: "900" } });
-      expect(box().value).toBe("500");
+      // ±500 bps around 2.17% reaches past the 5% plausibility cap, so a
+      // high but plausible rate goes through untouched.
+      type("4.80");
+      expect(box().value).toBe("4.80");
+      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
     });
   });
 });

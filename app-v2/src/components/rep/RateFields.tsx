@@ -101,9 +101,10 @@ export type RateFieldsProps = {
   cardNotPresentOnly?: boolean;
   /**
    * The rep's ± basis-point adjustment to the card-present rate (2026-10-21).
-   * Passing `onAdjustBps` turns the card-present box read-only — the rate is
-   * the card's figure plus this adjustment — and shows the adjustment box.
-   * Hosts that don't pass it keep the typed box. Refusal stays server-side
+   * The rate is the card's figure plus this adjustment. Passing `onAdjustBps`
+   * keeps the rate box typeable but clamps it to the card's figure plus
+   * `adjustRange`, and a typed rate is reported back as the adjustment
+   * (2026-10-23, replacing the separate bps box). Refusal stays server-side
    * (marginFloorBlockers, monthlyRevenueFloorBlockers).
    */
   adjustBps?: number;
@@ -122,7 +123,6 @@ export type RateFieldsProps = {
  * 2.50% read "2.5" and 3.00% read "3" — three different shapes for the same
  * kind of number, in the field where a tenfold typo is hardest to see.
  */
-const fmtBps = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `\u2212${-n}` : "0");
 const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
 export default function RateFields({
@@ -131,6 +131,20 @@ export default function RateFields({
   const lo = adjustRange?.min ?? -500;
   const hi = adjustRange?.max ?? 500;
   const setCardPresent = (pct: number) => onChange({ ...value, cardPresentRate: pct / 100 });
+  // The card's own figure, recovered from the rate the host already applied
+  // the adjustment to (RateSuggestion: cardPresentRate = card + adjustBps).
+  const cardBps = Math.round(value.cardPresentRate * 10000) - adjustBps;
+  // Clamped here rather than by DecimalField's min/max so we can tell a rep
+  // who typed past the limit from one who typed the limit itself — only the
+  // former sees "Limit reached".
+  const [limitHit, setLimitHit] = useState(false);
+  const setCardPresentAdjusted = (pct: number) => {
+    const typed = Math.round(pct * 100) - cardBps;
+    const adj = Math.max(lo, Math.min(hi, typed));
+    setLimitHit(adj !== typed);
+    onAdjustBps?.(adj);
+    setCardPresent((cardBps + adj) / 100);
+  };
   const setCardNotPresent = (pct: number) => {
     const next = pct / 100;
     onChange({ ...value, cardNotPresentRate: next, amexCardNotPresentRate: next });
@@ -184,8 +198,7 @@ export default function RateFields({
                   className={styles.input}
                   value={Number(pctText(value.cardPresentRate))}
                   max={MAX_PLAUSIBLE_CARD_RATE * 100}
-                  onChange={setCardPresent}
-                  disabled={!!onAdjustBps}
+                  onChange={onAdjustBps ? setCardPresentAdjusted : setCardPresent}
                   aria-label="Card present rate, percent"
                 />
                 <span className={styles.unit}>%</span>
@@ -202,23 +215,8 @@ export default function RateFields({
               </span>
               <span className={styles.suffix}>per transaction</span>
             </div>
-            {onAdjustBps && (
-              <label className={styles.suffix} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                Adjust rate (bps)
-                <input
-                  type="number" step={1} min={lo} max={hi}
-                  value={adjustBps}
-                  onChange={e => {
-                    const n = Math.round(Number(e.target.value));
-                    onAdjustBps(Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : 0);
-                  }}
-                  style={{ width: 72 }}
-                  aria-label="Card present rate adjustment, basis points, positive or negative"
-                />
-                {adjustRange && (
-                  <span data-testid="adjust-range-hint">{fmtBps(lo)} to {fmtBps(hi)} bps</span>
-                )}
-              </label>
+            {onAdjustBps && limitHit && (
+              <span className={styles.cnpStatus} data-testid="rate-limit-reached">Limit reached</span>
             )}
           </div>
         )}
