@@ -11,7 +11,7 @@ import {
   type PayrollPreview,
   type PayrollRow,
 } from "@/lib/actions/checkPayroll";
-import { hubspotCompanyUrl, hubspotInvoiceUrl } from "@/lib/billingView";
+import { hubspotCompanyUrl } from "@/lib/billingView";
 import styles from "./payroll-billing.module.css";
 
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
@@ -179,7 +179,6 @@ function Row({ row, run, disabled, onLinked, onCreate }: {
   const [editing, setEditing] = useState(false);
   const muted = row.employees === 0;
   const companyUrl = row.link ? hubspotCompanyUrl(row.link.id, HUBSPOT_PORTAL_ID) : null;
-  const invoiceUrl = row.invoice?.invoiceId ? hubspotInvoiceUrl(row.invoice.invoiceId, HUBSPOT_PORTAL_ID) : null;
 
   return (
     <tr className={muted ? styles.mutedRow : undefined}>
@@ -223,8 +222,10 @@ function Row({ row, run, disabled, onLinked, onCreate }: {
       </td>
       <td>
         {row.invoice?.invoiced ? (
-          invoiceUrl
-            ? <a href={invoiceUrl} target="_blank" rel="noreferrer" className={styles.link}>Draft {row.invoice.invoiceId}</a>
+          // To the company, not the invoice: HubSpot's record URL for invoices
+          // 404s, and the company sidebar lists its invoices.
+          companyUrl
+            ? <a href={companyUrl} target="_blank" rel="noreferrer" className={styles.link}>Draft {row.invoice.invoiceId}</a>
             : <span>Draft {row.invoice.invoiceId}</span>
         ) : muted ? (
           <span className={styles.sub}>Not billed</span>
