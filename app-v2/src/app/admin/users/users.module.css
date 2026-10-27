@@ -73,6 +73,9 @@
 
 .tabsRow {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
   margin-bottom: var(--space-lg);
 }
 
@@ -485,6 +488,38 @@
 
 .btnGhost:active { transform: scale(0.97); }
 
+/* ---------- Foodbuy drawer ---------- */
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: oklch(20% 0.01 32 / 0.25);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 301;
+  width: min(26rem, 100%);
+  overflow-y: auto;
+  background: var(--paper-2);
+  border-left: 1px solid var(--rule);
+  box-shadow: var(--shadow-whisper);
+  padding: var(--space-xl) var(--space-lg);
+  animation: drawerIn 250ms var(--ease-out);
+}
+
+.drawer .field { margin-bottom: var(--space-md); }
+.drawer .linkState { margin: 0 0 var(--space-md); }
+
+@keyframes drawerIn {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
 /* ---------- Mobile: stack columns, drop sticky ---------- */
 
 @media (max-width: 60rem) {
@@ -502,4 +537,5 @@
   .input, .saveButton, .btnGhost, .repRow, .tabs::before {
     transition-duration: 1ms;
   }
+  .drawer { animation: none; }
 }

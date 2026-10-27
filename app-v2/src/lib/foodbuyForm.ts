@@ -139,7 +139,7 @@ export function buildFoodbuyFormHtml(business: BusinessInfo, ownerContact: Owner
     + "<div class=\"header\"><div><div class=\"logo-text\">AIO</div><div class=\"logo-sub\">Foodbuy Enrollment</div></div>"
     + "<div class=\"doc-sub\">Prepared " + new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) + "</div></div>"
     + "<div class=\"doc-title\">Foodbuy Foodservice Enrollment — Participation Agreement</div>"
-    + "<div class=\"doc-sub\">Pre-filled from your AIO account. Click any field to edit it, complete the remaining ones, then export it as a PDF to sign and send to your AIO representative or Foodbuy account executive.</div>"
+    + "<div class=\"doc-sub\">Pre-filled from your AIO account. Click any field to edit it, complete the remaining ones including your signature, then export it as a PDF. Back on the AIO page you can send it to Foodbuy.</div>"
 
     + "<div class=\"section\"><h2>Customer Information</h2><div class=\"grid2\">"
     + row("Customer Name", field(business.legalName))

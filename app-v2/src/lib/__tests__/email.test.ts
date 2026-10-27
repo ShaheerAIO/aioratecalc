@@ -114,3 +114,52 @@ describe("sendLeadLinkEmail — reply-to rep, not send-as (10/13)", () => {
     expect(body.html).toContain("one of our representatives");
   });
 });
+
+describe("sendFoodbuyEnrollmentEmail (2026-10-26)", () => {
+  const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
+
+  async function sentBody() {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string) as {
+      to: string; from: string; html: string; reply_to?: string;
+      attachments?: { filename: string; content: string }[];
+    };
+  }
+
+  it("attaches the PDF, replies to the merchant, and keeps the generic sender name", async () => {
+    const { sendFoodbuyEnrollmentEmail } = await import("@/lib/adapters/email");
+    const result = await sendFoodbuyEnrollmentEmail({
+      to: "rep@foodbuy.com", pdf: PDF, fileName: "AIO-Foodbuy-Enrollment-Torta-Palace.pdf",
+      businessName: "Torta Palace", contact: { name: "Ana Ruiz", email: "ana@tortapalace.com", phone: "555-0100" },
+    });
+    expect(result).toEqual({ sent: true });
+    const body = await sentBody();
+    expect(body.to).toBe("rep@foodbuy.com");
+    expect(body.reply_to).toBe("ana@tortapalace.com");
+    expect(body.from).not.toContain("Ana Ruiz");
+    expect(body.attachments).toEqual([
+      { filename: "AIO-Foodbuy-Enrollment-Torta-Palace.pdf", content: Buffer.from(PDF).toString("base64") },
+    ]);
+    expect(body.html).toContain("Torta Palace");
+    expect(body.html).toContain("ana@tortapalace.com");
+    // No link, so no button and no "paste this" fallback.
+    expect(body.html).not.toContain("Button not working");
+    expect(body.html).not.toContain("<a href");
+  });
+
+  it("with no merchant email, sets no reply-to and says so", async () => {
+    const { sendFoodbuyEnrollmentEmail } = await import("@/lib/adapters/email");
+    await sendFoodbuyEnrollmentEmail({ to: "rep@foodbuy.com", pdf: PDF, fileName: "f.pdf", businessName: "Torta Palace", contact: null });
+    const body = await sentBody();
+    expect(body.reply_to).toBeUndefined();
+    expect(body.html).toContain("reaches AIO instead");
+  });
+
+  it("reports not sent when every transport fails", async () => {
+    fetchMock.mockResolvedValue({ ok: false, text: async () => "nope" });
+    const { sendFoodbuyEnrollmentEmail } = await import("@/lib/adapters/email");
+    const result = await sendFoodbuyEnrollmentEmail({ to: "rep@foodbuy.com", pdf: PDF, fileName: "f.pdf", businessName: "X" });
+    expect(result).toEqual({ sent: false });
+  });
+});

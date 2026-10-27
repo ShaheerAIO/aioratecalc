@@ -102,7 +102,24 @@ function senderDisplayName(rep?: ReplyToRep | null): string {
   return rep?.name ? `${rep.name} (AIO Payments)` : MAIL_FROM_NAME;
 }
 
-async function sendViaGraph(to: string, subject: string, html: string, rep?: ReplyToRep | null): Promise<void> {
+export type MailAttachment = { name: string; contentType: string; bytes: Uint8Array };
+
+/**
+ * What a send carries besides the body. `replyTo` sets the Reply-To header
+ * ONLY — unlike `rep`, it leaves the display name alone, for mail that isn't
+ * going to a merchant (the Foodbuy enrollment email replies to the merchant,
+ * who is not who the mail is from).
+ */
+type SendExtras = { replyTo?: ReplyToRep | null; attachments?: MailAttachment[] };
+
+function base64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64");
+}
+
+async function sendViaGraph(
+  to: string, subject: string, html: string, rep?: ReplyToRep | null, extras?: SendExtras
+): Promise<void> {
+  const replyTo = extras?.replyTo ?? rep;
   const token = await graphToken();
   const res = await fetch(
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(MAIL_FROM!)}/sendMail`,
@@ -118,7 +135,17 @@ async function sendViaGraph(to: string, subject: string, html: string, rep?: Rep
           // changing it is what would need SendAs rights we don't have. Only
           // the display NAME varies with the rep; see senderDisplayName.
           from: { emailAddress: { address: MAIL_FROM, name: senderDisplayName(rep) } },
-          ...(rep ? { replyTo: [{ emailAddress: { address: rep.email, name: rep.name } }] } : {}),
+          ...(replyTo ? { replyTo: [{ emailAddress: { address: replyTo.email, name: replyTo.name } }] } : {}),
+          ...(extras?.attachments?.length
+            ? {
+                attachments: extras.attachments.map(a => ({
+                  "@odata.type": "#microsoft.graph.fileAttachment",
+                  name: a.name,
+                  contentType: a.contentType,
+                  contentBytes: base64(a.bytes),
+                })),
+              }
+            : {}),
         },
         // These are transactional one-way sends; a copy in the shared mailbox's
         // Sent Items is what makes "did the merchant get their link?" answerable
@@ -142,7 +169,10 @@ const FROM = process.env.RESEND_FROM_EMAIL || "AIO Payments <onboarding@resend.d
 // substituted without hand-parsing the whole "Name <addr>" string twice.
 const FROM_ADDRESS = FROM.match(/<([^>]+)>/)?.[1] ?? FROM;
 
-async function sendViaResend(to: string, subject: string, html: string, rep?: ReplyToRep | null): Promise<void> {
+async function sendViaResend(
+  to: string, subject: string, html: string, rep?: ReplyToRep | null, extras?: SendExtras
+): Promise<void> {
+  const replyTo = extras?.replyTo ?? rep;
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -153,7 +183,10 @@ async function sendViaResend(to: string, subject: string, html: string, rep?: Re
       html,
       // Resend's own reply_to param — honored independently of `from`, same
       // as Graph's replyTo above.
-      ...(rep ? { reply_to: rep.email } : {}),
+      ...(replyTo ? { reply_to: replyTo.email } : {}),
+      ...(extras?.attachments?.length
+        ? { attachments: extras.attachments.map(a => ({ filename: a.name, content: base64(a.bytes) })) }
+        : {}),
     }),
   });
   if (!res.ok) throw new Error(`Resend send failed: ${await res.text()}`);
@@ -173,13 +206,13 @@ async function sendViaResend(to: string, subject: string, html: string, rep?: Re
  * us and never receives the link that creates their account.
  */
 async function send(
-  to: string, subject: string, html: string, fallbackUrl: string, rep?: ReplyToRep | null
+  to: string, subject: string, html: string, fallbackUrl: string, rep?: ReplyToRep | null, extras?: SendExtras
 ): Promise<SendMagicLinkResult> {
   let graphError: unknown = null;
 
   if (graphConfigured()) {
     try {
-      await sendViaGraph(to, subject, html, rep);
+      await sendViaGraph(to, subject, html, rep, extras);
       return { sent: true, devUrl: null };
     } catch (err) {
       graphError = err;
@@ -189,7 +222,7 @@ async function send(
 
   if (process.env.RESEND_API_KEY) {
     try {
-      await sendViaResend(to, subject, html, rep);
+      await sendViaResend(to, subject, html, rep, extras);
       if (graphError) console.warn("Graph send failed; delivered via Resend instead.");
       return { sent: true, devUrl: null };
     } catch (err) {
@@ -253,10 +286,11 @@ type Template = {
   heading: string;
   /** Rendered as one <p> each, in order. Plain text — escaped, no markup. */
   body: string[];
-  cta: string;
-  url: string;
+  /** Both or neither: an email with no link (the Foodbuy one) has no button. */
+  cta?: string;
+  url?: string;
   /** Small print under the button: what the link is good for. */
-  footnote: string;
+  footnote?: string;
   /**
    * The rep's first name, when `sendLeadLinkEmail` was given a verified one —
    * changes only the closing line's wording (see `render`'s footer below) to
@@ -266,10 +300,12 @@ type Template = {
    * routes the reply.
    */
   repName?: string;
+  /** Replaces the closing line, for mail that isn't going to a merchant. Plain text. */
+  footer?: string;
 };
 
 function render(t: Template): string {
-  const url = esc(t.url);
+  const url = t.url ? esc(t.url) : "";
   const paragraphs = t.body
     .map(
       line =>
@@ -302,20 +338,22 @@ function render(t: Template): string {
     <tr><td class="card" style="background:${C.card};border:1px solid ${C.rule};border-radius:20px;padding:38px 36px;">
       <h1 style="margin:0 0 14px;font-family:${FONT};font-size:23px;line-height:1.25;font-weight:700;color:${C.ink};">${esc(t.heading)}</h1>
       ${paragraphs}
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 18px;"><tr>
+      ${url && t.cta ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 18px;"><tr>
         <td bgcolor="${C.accent}" style="border-radius:999px;">
           <a href="${url}" style="display:inline-block;padding:14px 30px;font-family:${FONT};font-size:15px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;border-radius:999px;">${esc(t.cta)}</a>
         </td>
       </tr></table>
-      <p style="margin:0 0 20px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.ink3};">${esc(t.footnote)}</p>
+      <p style="margin:0 0 20px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.ink3};">${esc(t.footnote ?? "")}</p>
       <div style="border-top:1px solid ${C.rule};padding-top:18px;">
         <p style="margin:0 0 6px;font-family:${FONT};font-size:12px;line-height:1.5;color:${C.ink3};">Button not working? Paste this into your browser:</p>
         <p style="margin:0;font-family:${FONT};font-size:12px;line-height:1.5;word-break:break-all;"><a href="${url}" style="color:#be260b;text-decoration:underline;">${url}</a></p>
-      </div>
+      </div>` : ""}
     </td></tr>
 
     <tr><td style="padding:20px 4px 0;font-family:${FONT};font-size:12px;line-height:1.6;color:${C.ink3};">
-      ${t.repName
+      ${t.footer
+        ? esc(t.footer)
+        : t.repName
         ? `Sent by AIO Payments on behalf of ${esc(t.repName)}, your AIO representative. Questions? Just reply to this email — it goes straight to them.`
         : "Sent by AIO Payments because you&rsquo;re working with one of our representatives. Questions? Use the link above, or ask your AIO representative."}
     </td></tr>
@@ -386,4 +424,50 @@ export async function sendLeadLinkEmail(
     url,
     rep
   );
+}
+
+// 2026-10-26 — the customer's completed Foodbuy enrollment PDF, sent to the
+// Foodbuy rep set at /admin/users when the customer presses "Send to Foodbuy"
+// (api/customer/applications/[id]/foodbuy/send). The PDF rides as an
+// attachment; Reply-To is the merchant's contact, so the Foodbuy rep's answer
+// goes to the merchant rather than into the shared mailbox.
+//
+// Graph's sendMail takes attachments inline only up to ~3MB (above that it
+// needs an upload session), which is why the route caps the PDF at
+// FOODBUY_SEND_MAX_BYTES before it gets here.
+export async function sendFoodbuyEnrollmentEmail(args: {
+  to: string;
+  pdf: Uint8Array;
+  fileName: string;
+  businessName: string;
+  contact?: { name: string; email?: string; phone?: string } | null;
+}): Promise<{ sent: boolean }> {
+  const business = args.businessName.trim() || "An AIO merchant";
+  const c = args.contact;
+  const contactLine = c && (c.name || c.email || c.phone)
+    ? `Contact: ${[c.name, c.email, c.phone].filter(Boolean).join(" · ")}.`
+    : null;
+  const result = await send(
+    args.to,
+    `Foodbuy enrollment — ${business}`,
+    render({
+      preheader: `${business}'s completed Foodbuy enrollment form is attached.`,
+      heading: `Foodbuy enrollment: ${business}`,
+      body: [
+        `${business} has completed the Foodbuy Foodservice Enrollment form through AIO. Their completed form is attached as a PDF.`,
+        ...(contactLine ? [contactLine] : []),
+        c?.email
+          ? "Replying to this email goes straight to them."
+          : "There's no email on file for them, so a reply to this email reaches AIO instead.",
+      ],
+      footer: "Sent by AIO Payments on behalf of an AIO merchant.",
+    }),
+    "",
+    null,
+    {
+      replyTo: c?.email ? { email: c.email, name: c.name || undefined } : null,
+      attachments: [{ name: args.fileName, contentType: "application/pdf", bytes: args.pdf }],
+    }
+  );
+  return { sent: result.sent };
 }

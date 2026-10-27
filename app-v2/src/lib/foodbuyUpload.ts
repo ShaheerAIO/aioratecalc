@@ -7,6 +7,12 @@ import { createHash } from "crypto";
 /** Vercel's function body limit is 4.5MB; stay under it. */
 export const FOODBUY_PDF_MAX_BYTES = 4 * 1024 * 1024;
 
+/**
+ * Lower ceiling for EMAILING it: Graph's sendMail takes inline attachments only
+ * up to ~3MB (base64 inflates by a third against its 4MB request limit).
+ */
+export const FOODBUY_SEND_MAX_BYTES = 3 * 1024 * 1024;
+
 export type PdfCheck = { ok: true } | { ok: false; reason: "empty" | "too_large" | "not_pdf" };
 
 /** Size and magic-byte check. The client's content-type is never trusted. */
@@ -35,7 +41,7 @@ export function hubspotFoodbuyFileName(businessName: string, now: Date = new Dat
 
 /** What the note on the company reads. Names no internals. */
 export function foodbuyNoteBody(businessName: string): string {
-  return `Foodbuy enrollment form exported by the customer (${businessName || "business"}). Attached as a PDF; the customer signs it and sends it to Foodbuy themselves.`;
+  return `Foodbuy enrollment form exported by the customer (${businessName || "business"}). Attached as a PDF.`;
 }
 
 /** Same content already filed: skip, a re-download must not stack duplicates. */

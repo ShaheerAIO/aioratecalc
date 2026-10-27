@@ -1033,7 +1033,8 @@ export type CheckIds = {
 // signature, GPO-affiliation disclosure, and per-location distributor account
 // numbers, none of which AIO ever collects. So there's nothing to poll for
 // status; this only records that the customer has generated their pre-filled
-// copy of the form (see lib/foodbuyForm.ts) to sign and hand off themselves.
+// copy of the form (see lib/foodbuyForm.ts), and whether they then emailed it
+// to the Foodbuy rep from the Foodbuy step.
 export type FoodbuyIds = {
   generatedAt: string;
   // The customer's exported PDF, filed on their HubSpot Company (Files API
@@ -1045,6 +1046,11 @@ export type FoodbuyIds = {
   hubspotNoteId?: string;
   hubspotFileSha256?: string;
   hubspotUploadedAt?: string;
+  // Set when the customer pressed "Send to Foodbuy" and the email went out
+  // (api/customer/applications/[id]/foodbuy/send). The hash makes a second
+  // press with the same PDF a no-op; a corrected export sends again.
+  sentAt?: string;
+  sentSha256?: string;
 };
 
 // The HubSpot deal an application is currently backed by, captured at the
@@ -1142,15 +1148,15 @@ export type MerchantApplication = {
    * the details AIO's tenant create refuses to run without.
    */
   detailsConfirmedAt: string | null;
+  /** How the merchant pays the one-time invoice. Null until they choose, and
+   *  for quotes with no invoice. Written only by `savePaymentPlanAction`. */
+  paymentPlan?: "full" | "later" | null;
   // The rep's own note on this quote, mirrored onto the HubSpot deal as a
   // note owned by QUOTE_NOTE_WATCHER. Optional in general, and REQUIRED when a
   // first charge doesn't sit on the plan's own default — see
   // `quoteNoteBlockers`. Frozen with the rest of the quote at acceptance,
   // like everything else `saveQuoteConfigurationAction` writes.
   quoteNote: string | null;
-  /** How the merchant pays the one-time invoice. Null until they choose, and
-   *  for quotes with no invoice. Written only by `savePaymentPlanAction`. */
-  paymentPlan?: "full" | "later" | null;
   // The rates this quote is priced on. Null on rows written before 2026-10-06
   // and read through `ratesFor()`, which falls back to DEFAULT_QUOTE_RATES.
   quoteRates: QuoteRates | null;

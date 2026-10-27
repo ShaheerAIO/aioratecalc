@@ -14,6 +14,7 @@ import {
   type StaffRole,
 } from "@/lib/actions/users";
 import { listApplicationsAction, listRepsAction, type RepSummary } from "@/lib/actions/applications";
+import { getFoodbuyRepEmailAction, updateFoodbuyRepEmailAction } from "@/lib/actions/foodbuy";
 import { BILLING_STATE_LABELS, billingPanelState, hasBillingSyncError } from "@/lib/billingView";
 import { fmt$ } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
@@ -42,6 +43,13 @@ export default function AdminUsersPage() {
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId]       = useState<string | null>(null);
 
+  // The Foodbuy drawer: where customers' "Send to Foodbuy" emails go.
+  const [foodbuyOpen, setFoodbuyOpen]   = useState(false);
+  const [foodbuyEmail, setFoodbuyEmail] = useState("");
+  const [foodbuySaved, setFoodbuySaved] = useState<string | null>(null);
+  const [foodbuyBusy, setFoodbuyBusy]   = useState(false);
+  const [foodbuyError, setFoodbuyError] = useState("");
+
   const refreshStaff = () => listStaffUsersAction().then(setStaff).catch(e => setError(e.message));
 
   useEffect(() => {
@@ -51,6 +59,37 @@ export default function AdminUsersPage() {
       listRepsAction().then(setReps),
     ]).catch(e => setError(e.message)).finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!foodbuyOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFoodbuyOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [foodbuyOpen]);
+
+  const openFoodbuy = () => {
+    setFoodbuyError("");
+    setFoodbuyOpen(true);
+    getFoodbuyRepEmailAction()
+      .then(email => { setFoodbuySaved(email); setFoodbuyEmail(email ?? ""); })
+      .catch(e => setFoodbuyError(e instanceof Error ? e.message : "Could not load the Foodbuy rep"));
+  };
+
+  const handleSaveFoodbuy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFoodbuyError("");
+    setFoodbuyBusy(true);
+    try {
+      const saved = await updateFoodbuyRepEmailAction(foodbuyEmail);
+      setFoodbuySaved(saved);
+      setFoodbuyOpen(false);
+      setNotice(saved ? `Foodbuy forms will be sent to ${saved}.` : "Foodbuy rep cleared. Customers can't send forms until one is set.");
+    } catch (e) {
+      setFoodbuyError(e instanceof Error ? e.message : "Could not save the Foodbuy rep");
+    } finally {
+      setFoodbuyBusy(false);
+    }
+  };
 
   const repMap = new Map(reps.map(r => [r.id, r]));
   const repLabel = (ownerUserId: string) => repMap.get(ownerUserId)?.name || repMap.get(ownerUserId)?.email || "—";
@@ -183,7 +222,48 @@ export default function AdminUsersPage() {
               Customers ({apps.length})
             </button>
           </div>
+          <button type="button" className={styles.btnGhost} onClick={openFoodbuy}>
+            Foodbuy rep
+          </button>
         </div>
+
+        {foodbuyOpen && (
+          <>
+            <div className={styles.drawerBackdrop} onClick={() => setFoodbuyOpen(false)} />
+            <aside className={styles.drawer} role="dialog" aria-modal="true" aria-labelledby="foodbuy-drawer-title">
+              <div className={styles.detailHeader}>
+                <h2 id="foodbuy-drawer-title" className={styles.detailTitle}>Foodbuy rep</h2>
+                <button type="button" onClick={() => setFoodbuyOpen(false)} className={styles.btnGhost}>Close</button>
+              </div>
+              <p className={styles.formHint}>
+                When a customer finishes their Foodbuy enrollment form and presses Send to Foodbuy,
+                the PDF is emailed here from the AIO documents mailbox. Replies go to the
+                customer. Leave it blank to turn sending off.
+              </p>
+              <form onSubmit={handleSaveFoodbuy}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="foodbuy-email">Foodbuy rep&apos;s email</label>
+                  <input
+                    id="foodbuy-email"
+                    type="email"
+                    autoFocus
+                    value={foodbuyEmail}
+                    onChange={e => setFoodbuyEmail(e.target.value)}
+                    placeholder="name@foodbuy.com"
+                    className={styles.input}
+                  />
+                </div>
+                <div className={styles.linkState}>
+                  {foodbuySaved ? `Currently sending to ${foodbuySaved}.` : "Not set. Customers can't send their form yet."}
+                </div>
+                {foodbuyError && <div className={styles.errorBanner}>{foodbuyError}</div>}
+                <button type="submit" disabled={foodbuyBusy} className={styles.saveButton}>
+                  {foodbuyBusy ? "Saving…" : "Save"}
+                </button>
+              </form>
+            </aside>
+          </>
+        )}
 
         {tab === "reps" && (
           <div className={styles.columns}>

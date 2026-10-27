@@ -78,3 +78,5 @@ every variable, not just the secret). Two consequences:
 On rotation, push the secret with the **raw `$`**, not the `\$` form that goes in `.env.local`:
 Vercel stores literally and does not run dotenv-expand. (The 2026-09-24 secret happens to contain
 no `$` at all, so this was moot that time — check each new one rather than assuming.)
+
+**Third email, 2026-10-26: `sendFoodbuyEnrollmentEmail`.** It goes to the Foodbuy rep, not to a merchant, and it is the first email with an **attachment** (Graph `fileAttachment` / Resend `attachments`, both base64). It sets Reply-To to the merchant through `SendExtras.replyTo`, which, unlike `rep`, does NOT change the sender display name. `render()` now leaves out the button block when no `url`/`cta` is given, and takes an optional `footer`. Graph's sendMail accepts inline attachments only up to ~3MB, so callers must cap them (`FOODBUY_SEND_MAX_BYTES`).

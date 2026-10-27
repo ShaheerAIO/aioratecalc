@@ -189,6 +189,19 @@ export const commissionPolicy = pgTable("commission_policy", {
   isActive: boolean("is_active").notNull().default(true),
 });
 
+// Where a customer's Foodbuy enrollment PDF is emailed when they press "Send
+// to Foodbuy" (api/customer/applications/[id]/foodbuy/send). Set from the
+// drawer on /admin/users. Its own table for the same reason as every other
+// *_policy table here; single active row, admin-owned. NULL = not set up,
+// and the send refuses rather than guessing a recipient.
+export const foodbuyPolicy = pgTable("foodbuy_policy", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  repEmail: text("rep_email"),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
 // Replaces localStorage "clearrate:settings" / "clearrate:adyen_config".
 export const appSettings = pgTable("app_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -268,6 +281,11 @@ export const merchantApplications = pgTable("merchant_applications", {
   // Earlier than both `quoteAcceptedAt` above and `hubspotIds.publishedAt`,
   // and the marker the rep's quote editor freezes on first.
   detailsConfirmedAt: timestamp("details_confirmed_at", { withTimezone: true }),
+  // How the merchant pays the one-time invoice: "full" | "later". Chosen on
+  // /lead/[token]/payment before confirming. Written only by
+  // savePaymentPlanAction, so it is NOT in appToRow — see paymentPlan.ts.
+  paymentPlan: text("payment_plan"),
+  paymentPlanAt: timestamp("payment_plan_at", { withTimezone: true }),
   // The rep's note on this quote, mirrored onto the HubSpot deal. Nullable:
   // most quotes have nothing to say. It becomes REQUIRED only when a first
   // charge doesn't sit on the plan's own default — see `quoteNoteBlockers`.
@@ -281,11 +299,6 @@ export const merchantApplications = pgTable("merchant_applications", {
   // before it and on every row where the rep never set one.
   billingContact: jsonb("billing_contact").$type<MerchantApplication["billingContact"]>(),
   processing: jsonb("processing").$type<ProcessingInfo | null>(),
-  // How the merchant pays the one-time invoice: "full" | "later". Chosen on
-  // /lead/[token]/payment before confirming. Written only by
-  // savePaymentPlanAction, so it is NOT in appToRow — see paymentPlan.ts.
-  paymentPlan: text("payment_plan"),
-  paymentPlanAt: timestamp("payment_plan_at", { withTimezone: true }),
   agreement: jsonb("agreement").$type<AgreementInfo | null>(),
   // What a 2-tier quote is priced on since 2026-10-06: both card rates and the
   // per-transaction fee, as the merchant reads them. jsonb rather than three
