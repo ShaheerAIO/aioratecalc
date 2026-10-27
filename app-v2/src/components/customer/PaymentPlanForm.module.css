@@ -1,0 +1,30 @@
+.options {
+  display: grid;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+
+.option {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-start;
+  padding: var(--space-md) var(--space-lg);
+  border: 1px solid var(--line, var(--ink-2));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.option:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.selected { border-color: var(--accent); }
+
+.optionTitle {
+  display: block;
+  font-weight: 700;
+}
+
+.optionDetail {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}

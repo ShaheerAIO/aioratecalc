@@ -279,6 +279,11 @@ export const merchantApplications = pgTable("merchant_applications", {
   // before it and on every row where the rep never set one.
   billingContact: jsonb("billing_contact").$type<MerchantApplication["billingContact"]>(),
   processing: jsonb("processing").$type<ProcessingInfo | null>(),
+  // How the merchant pays the one-time invoice: "full" | "later". Chosen on
+  // /lead/[token]/payment before confirming. Written only by
+  // savePaymentPlanAction, so it is NOT in appToRow — see paymentPlan.ts.
+  paymentPlan: text("payment_plan"),
+  paymentPlanAt: timestamp("payment_plan_at", { withTimezone: true }),
   agreement: jsonb("agreement").$type<AgreementInfo | null>(),
   // What a 2-tier quote is priced on since 2026-10-06: both card rates and the
   // per-transaction fee, as the merchant reads them. jsonb rather than three

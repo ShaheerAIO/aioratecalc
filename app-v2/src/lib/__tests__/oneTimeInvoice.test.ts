@@ -103,6 +103,26 @@ beforeEach(() => {
 });
 afterEach(() => { errorSpy.mockRestore(); logSpy.mockRestore(); });
 
+describe("buildOneTimeInvoice — payment plan", () => {
+  it("requests payment online with card, ACH, Affirm and Klarna when paying over time", async () => {
+    await run({ paymentPlan: "later" });
+    expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({
+      hs_allowed_payment_methods: "ach;credit_or_debit_card",
+      hs_allowed_commerce_payment_methods: "CARD;ACH;AFFIRM;KLARNA",
+      hs_payment_collection_option: "request_payment",
+    });
+    expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_allow_partial_payments");
+  });
+
+  it("takes 5% off the invoiced lines when paying in full, and stays ACH-only", async () => {
+    await run({ paymentPlan: "full" });
+    const lines = createQuoteLineItems.mock.calls[0][0] as QuoteLine[];
+    expect(lines.map(l => l.discountAmount)).toEqual([expect.any(Number), expect.any(Number), expect.any(Number)]);
+    expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({ hs_allowed_payment_methods: "ach" });
+    expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_allow_partial_payments");
+  });
+});
+
 describe("buildOneTimeInvoice", () => {
   it("builds an invoice of only the invoiced lines, associates it and opens it", async () => {
     const result = await run();

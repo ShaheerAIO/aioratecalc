@@ -7,6 +7,7 @@
 // Both directions live together on purpose: a new column has to be added to
 // each, and splitting the pair across files is how one of them gets forgotten.
 import { merchantApplications } from "@/lib/db/schema";
+import { isPaymentPlan } from "@/lib/paymentPlan";
 import type { MerchantApplication, DealStage, PricingModel } from "@/types/merchant";
 
 export type ApplicationRow = typeof merchantApplications.$inferSelect;
@@ -35,6 +36,8 @@ export function rowToApp(row: ApplicationRow): MerchantApplication {
     orderPoints: row.orderPoints,
     quoteAcceptedAt: row.quoteAcceptedAt ? row.quoteAcceptedAt.toISOString() : null,
     detailsConfirmedAt: row.detailsConfirmedAt ? row.detailsConfirmedAt.toISOString() : null,
+    // "2"/"4" were saved before the choice became full vs later.
+    paymentPlan: isPaymentPlan(row.paymentPlan) ? row.paymentPlan : row.paymentPlan === "2" || row.paymentPlan === "4" ? "later" : null,
     quoteNote: row.quoteNote,
     quoteRates: row.quoteRates,
     targetMargin: row.targetMargin != null ? Number(row.targetMargin) : null,
@@ -69,6 +72,7 @@ export function appToRow(app: MerchantApplication) {
     foodbuyIds: app.foodbuyIds,
     hubspotIds: app.hubspotIds,
     // hubspotInvoice deliberately absent: only oneTimeInvoice.ts writes it.
+    // paymentPlan likewise: only savePaymentPlanAction writes it.
     quoteType: app.quoteType,
     quoteConfig: app.quoteConfig,
     quoteLines: app.quoteLines,

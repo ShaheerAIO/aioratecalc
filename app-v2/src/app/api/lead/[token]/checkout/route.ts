@@ -8,6 +8,7 @@ import { hasQuoteBasis } from "@/lib/leadQuote";
 import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import { buildOneTimeInvoiceForId } from "@/lib/billing/oneTimeInvoice";
+import { requiresPaymentPlan } from "@/lib/paymentPlan";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds } from "@/types/merchant";
 
 // THE MERCHANT'S OWN DOOR TO BILLING — and the one-way door with it.
@@ -107,6 +108,14 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ to
     // here rather than silently no-op'd, so the page can tell the two apart.
     if ((app.quoteLines?.length ?? 0) === 0) {
       return NextResponse.json({ error: "rate_only" }, { status: 409 });
+    }
+
+    // THE PAYMENT-PLAN GATE. The one-time invoice is built from the merchant's
+    // choice (/lead/[token]/payment) and the quote it hangs off cannot be
+    // amended, so there is no publishing without one. Only when there IS an
+    // invoice to pay.
+    if (!app.paymentPlan && requiresPaymentPlan(app)) {
+      return NextResponse.json({ error: "no_payment_plan" }, { status: 409 });
     }
 
     // Fill in a missing deal before the preconditions ask for one — see

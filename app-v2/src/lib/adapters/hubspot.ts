@@ -2458,15 +2458,28 @@ export const INVOICE_TO_LINE_ITEM = 409;
  * 2026-10-23). ACH only, like the quote — HubSpot's default is ACH + card, and
  * the probe on 878578016996 confirmed both properties take these values.
  * Dated today and due on receipt.
+ *
+ * `installments` (payment plan, 2026-10-27): HubSpot has no installment API
+ * scope, so those merchants get "Send invoice to request payment" with every
+ * online method on, Affirm and Klarna included (`hs_allowed_commerce_payment_methods`,
+ * the "Accept online payments" boxes). HubSpot rejects buy-now-pay-later together
+ * with `hs_allow_partial_payments`, so partial payments stays off.
  */
-export function draftInvoiceProperties(invoiceDate: string): Record<string, string> {
-  return {
+export function draftInvoiceProperties(invoiceDate: string, opts: { installments?: boolean } = {}): Record<string, string> {
+  const base = {
     hs_currency: "USD",
     hs_invoice_date: invoiceDate,
     hs_due_date: invoiceDate,
-    hs_allowed_payment_methods: "ach",
-    hs_allowed_commerce_payment_methods: "ACH",
   };
+  if (opts.installments) {
+    return {
+      ...base,
+      hs_allowed_payment_methods: "ach;credit_or_debit_card",
+      hs_allowed_commerce_payment_methods: "CARD;ACH;AFFIRM;KLARNA",
+      hs_payment_collection_option: "request_payment",
+    };
+  }
+  return { ...base, hs_allowed_payment_methods: "ach", hs_allowed_commerce_payment_methods: "ACH" };
 }
 
 export async function createDraftInvoice(props: Record<string, string>): Promise<string> {

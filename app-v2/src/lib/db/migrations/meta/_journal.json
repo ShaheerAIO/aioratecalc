@@ -211,6 +211,13 @@
       "when": 1792500000000,
       "tag": "0029_check_payroll",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792700000000,
+      "tag": "0031_payment_plan",
+      "breakpoints": true
     }
   ]
 }

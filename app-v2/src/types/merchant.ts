@@ -1150,6 +1150,9 @@ export type MerchantApplication = {
   // `quoteNoteBlockers`. Frozen with the rest of the quote at acceptance,
   // like everything else `saveQuoteConfigurationAction` writes.
   quoteNote: string | null;
+  /** How the merchant pays the one-time invoice. Null until they choose, and
+   *  for quotes with no invoice. Written only by `savePaymentPlanAction`. */
+  paymentPlan?: "full" | "later" | null;
   // The rates this quote is priced on. Null on rows written before 2026-10-06
   // and read through `ratesFor()`, which falls back to DEFAULT_QUOTE_RATES.
   quoteRates: QuoteRates | null;

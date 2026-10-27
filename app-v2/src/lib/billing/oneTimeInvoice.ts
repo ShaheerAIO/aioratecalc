@@ -52,6 +52,7 @@ import {
   tenantCompanyId,
   type InvoiceSnapshot,
 } from "@/lib/adapters/hubspot";
+import { applyPayInFullDiscount } from "@/lib/paymentPlan";
 import { MIN_CHECKOUT_AMOUNT, lineNetAmount, splitQuoteLines } from "@/lib/quoting";
 import { EMPTY_HUBSPOT_INVOICE, type HubspotInvoice, type MerchantApplication } from "@/types/merchant";
 
@@ -121,7 +122,15 @@ export async function buildOneTimeInvoice(app: MerchantApplication): Promise<One
   if (!app.hubspotIds?.publishedAt) return { status: "skipped", reason: "not_published" };
   if (!app.hubspotIds?.splitBilling) return { status: "skipped", reason: "not_split" };
 
-  const { invoiceLines, total } = invoiceLinesFor(app);
+  // Pay in full takes 5% off these lines HERE, at invoice time — the stored
+  // quoteLines and the published quote are untouched. Pay later is one
+  // invoice at list with online payments (incl. Klarna/Affirm) on — see draftInvoiceProperties.
+  const listed = invoiceLinesFor(app);
+  const invoiceLines = app.paymentPlan === "full" ? applyPayInFullDiscount(listed.invoiceLines) : listed.invoiceLines;
+  const total =
+    app.paymentPlan === "full"
+      ? Math.round(invoiceLines.reduce((n, l) => n + lineNetAmount(l), 0) * 100) / 100
+      : listed.total;
   // HubSpot can't take a payment under $0.50 (the quote's own floor), and a
   // fully comped kit owes nothing at all — no invoice is the right answer.
   if (invoiceLines.length === 0 || total < MIN_CHECKOUT_AMOUNT) {
@@ -190,7 +199,9 @@ export async function buildOneTimeInvoice(app: MerchantApplication): Promise<One
     // 2. The draft invoice.
     step = "draft_invoice";
     if (!inv.invoiceId) {
-      const invoiceId = await createDraftInvoice(draftInvoiceProperties(new Date().toISOString().slice(0, 10)));
+      const invoiceId = await createDraftInvoice(draftInvoiceProperties(new Date().toISOString().slice(0, 10), {
+        installments: app.paymentPlan === "later",
+      }));
       inv = { ...inv, invoiceId };
       await persist(app.id, inv);
     }
