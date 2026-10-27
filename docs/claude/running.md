@@ -13,6 +13,12 @@ npx tsx scripts/seed-users.ts   # seeds admin@aioapp.com / rep@aioapp.com — se
 npm run dev
 ```
 
+**`.env.local`'s `DATABASE_URL` IS THE PRODUCTION DATABASE** (confirmed by the product owner 2026-10-27).
+Local dev and prod share one Neon DB, so a migration applied locally is applied to prod, and a local
+schema change made before its migration is run breaks prod's queries the same way. Nothing runs
+migrations at deploy (`build` is plain `next build`); apply them by hand against this URL BEFORE
+deploying code that reads the new columns. The Vercel copy is a Secret and can't be pulled.
+
 **Dev login credentials** (seeded, not production-safe):
 - Admin: `admin@aioapp.com` / `admin123` — at `/login/breakglass`, **not** `/login`. This is the
   breakglass credential now, so it is load-bearing: override it with `SEED_ADMIN_PASSWORD` anywhere
