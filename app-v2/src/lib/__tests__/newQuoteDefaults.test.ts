@@ -29,6 +29,7 @@ const P: Array<[string, string, number, CatalogProduct["billingFrequency"], stri
   ["223511653104", "Thermal Printer", 199, "one_time", "inventory"],
   ["222497165011", "Cash Drawer", 70, "one_time", "inventory"],
   ["223511653103", "Menu Board Computer", 99, "one_time", "inventory"],
+  ["276751313619", "Orders Hub Tablet", 199, "one_time", "inventory"],
   ["338690209525", "AIO Wifi Network Package - Unifi", 698, "one_time", "inventory"],
   ["223452690133", "Onsite Installation", 999, "one_time", "Service"],
   ["223152695032", "System Onboarding and Training", 499, "one_time", "Service"],
@@ -123,10 +124,17 @@ describe("what each plan opens with", () => {
     return out;
   };
 
-  it("opens All-in-One with the kit AND the Website the plan includes", () => {
+  it("opens All-in-One with the kit and the Website it includes, but no kiosk", () => {
+    // The kit's kiosk is free but opt-in since 2026-10-27: the rep adds it.
     const cart = openingCart("all_in_one");
     expect(cart.get(WEBSITE_PRODUCT_ID)).toBe(1);
     expect(cart.get("217445755632")).toBe(1); // POS Unit, from the kit
+    expect(cart.has("222497165009")).toBe(false); // Kiosk 27"
+  });
+
+  it("opens Marketing Partial Ordering with the order tablet and a KDS", () => {
+    const cart = openingCart("marketing_partial");
+    expect([...cart]).toEqual([["276751313619", 1], ["223452690132", 1]]);
   });
 
   it("opens Order & Pay with the kit but no Website — it isn't in that plan", () => {
@@ -135,13 +143,11 @@ describe("what each plan opens with", () => {
     expect(cart.get("217445755632")).toBe(1);
   });
 
-  it("opens both marketing plans with the three Menu Board Computers", () => {
-    for (const plan of ["marketing_only", "marketing_term"] as const) {
-      expect(openingCart(plan).get("223511653103")).toBe(3);
-      // No kit, and no Website: a marketing merchant buys that separately.
-      expect(openingCart(plan).has("217445755632")).toBe(false);
-      expect(openingCart(plan).has(WEBSITE_PRODUCT_ID)).toBe(false);
-    }
+  it("opens Marketing Only with the three Menu Board Computers", () => {
+    expect(openingCart("marketing_only").get("223511653103")).toBe(3);
+    // No kit, and no Website: a marketing merchant buys that separately.
+    expect(openingCart("marketing_only").has("217445755632")).toBe(false);
+    expect(openingCart("marketing_only").has(WEBSITE_PRODUCT_ID)).toBe(false);
   });
 
   it("holds everything a plan opens with at $0 — opening a quote costs nothing", () => {

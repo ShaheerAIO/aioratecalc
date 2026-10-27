@@ -95,8 +95,8 @@ export type RateFieldsProps = {
    *
    * Computed by the host from `processesCardNotPresentOnly` (quoting.ts) —
    * which asks whether the quote carries any in-person ordering point, not
-   * whether it's a marketing quote: a `marketing_term` quote includes a
-   * kiosk, and a kiosk takes cards in person.
+   * whether it takes online orders: a Marketing Partial Ordering quote can
+   * carry a kiosk as well, and a kiosk takes cards in person.
    */
   cardNotPresentOnly?: boolean;
   /**

@@ -12,7 +12,6 @@ import {
   INCLUDED_SERVICE_PRODUCTS,
   KIOSK_PRODUCT_IDS,
   MARKETING_INCLUDED_HARDWARE,
-  MARKETING_TERM_KIOSK_IDS,
   POS_COMPANIONS,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
@@ -30,9 +29,10 @@ import {
   isAllowedForQuoteType,
   isPosRequiringTerminal,
   isPreAuthProduct,
-  isKitReplacementProduct,
+  includesMarketing,
   isMarketingQuote,
   isProcessingQuote,
+  isRetiredPick,
   isTabletProduct,
   longestBillingDelayDays,
   quoteNoteBlockers,
@@ -48,12 +48,11 @@ import {
   planIncludesWebsite,
   toQuoteLine,
   unitsFromQuoteLines,
-  websiteTakesOrders,
   WEBSITE_PRODUCT_ID,
   type BuiltQuote,
   type QuoteLimits,
 } from "@/lib/quoting";
-import { coverageLabel, kitFor, kitPicks } from "@/lib/quotePackages";
+import { coverageLabel, kitFor, kitPicks, kitProductIds } from "@/lib/quotePackages";
 import QuoteReceipt, { type QuoteMarginPreview } from "@/components/quoting/QuoteReceipt";
 import {
   commissionSummary,
@@ -309,20 +308,27 @@ export default function ProductConfigurator({
 
   // The picker only ever shows what this quote type may carry — minus the
   // tablets, unless an admin has switched them back on at
-  // /admin/settings/quote-limits (TABLET_PRODUCT_IDS).
+  // /admin/settings/quote-limits (TABLET_PRODUCT_IDS), and minus the products
+  // retired from new quotes (RETIRED_PICK_PRODUCT_IDS).
   //
-  // One already on the quote stays listed however the switch is set. Hiding a
-  // picked line would leave a rep looking at a price with no row to change it
-  // on, and the switch is a view of the catalog, not a rule about what may be
-  // sold — nothing downstream refuses a tablet.
+  // One already on the quote stays listed either way. Hiding a picked line
+  // would leave a rep looking at a price with no row to change it on, and
+  // both are a view of the catalog, not a rule about what may be sold —
+  // nothing downstream refuses one. A product the plan's kit holds stays
+  // listed too: the partial-ordering kit's order tablet is a tablet.
+  const planKitIds = useMemo(() => {
+    const k = kitFor(planned);
+    return k ? kitProductIds(k) : [];
+  }, [planned]);
   const selectable = useMemo(
-    () => catalog.filter(p =>
-      isAllowedForQuoteType(p, planned) &&
-      (limits.showTablets ||
-        !isTabletProduct(p.hubspotProductId) ||
-        picks.some(pick => pick.hubspotProductId === p.hubspotProductId && pick.qty > 0))
-    ),
-    [catalog, planned, limits.showTablets, picks]
+    () => catalog.filter(p => {
+      if (!isAllowedForQuoteType(p, planned)) return false;
+      const onQuote = picks.some(pick => pick.hubspotProductId === p.hubspotProductId && pick.qty > 0);
+      if (onQuote || planKitIds.includes(p.hubspotProductId)) return true;
+      if (isRetiredPick(p.hubspotProductId)) return false;
+      return limits.showTablets || !isTabletProduct(p.hubspotProductId);
+    }),
+    [catalog, planned, limits.showTablets, picks, planKitIds]
   );
   // The kit's products sit together at the top of the ordinary Hardware group,
   // in the kit's own order, with no label of their own. Static on purpose: the
@@ -338,7 +344,9 @@ export default function ProductConfigurator({
     // carries no product type on the Customer Facing Display, so it would
     // otherwise sit under "Uncategorized", nowhere near the POS it goes with.
     const byId = new Map(selectable.map(p => [p.hubspotProductId, p]));
-    const ordered = kitPicks(kit).flatMap(k => byId.get(k.hubspotProductId) ?? []);
+    // Every product the kit lists — the optional kiosk included, so the rep
+    // finds the free one where the kit is — not just the preselected ones.
+    const ordered = kitProductIds(kit).flatMap(id => byId.get(id) ?? []);
 
     // Each POS's companions sit directly UNDER it — "CFD + cash drawer +
     // adyen should automatically add when adding in a POS and show below them
@@ -410,12 +418,8 @@ export default function ProductConfigurator({
     processingDisclosure, packages, totals, quoteLines,
   } = built;
 
-  // Whether the Website takes online orders. `rated` above is the PLAN's answer
-  // and stays that way — the install services and the ordering-point count
-  // follow the plan, and a website merchant has nothing on site to install and
-  // no ordering point we count. This is the other question: does AIO touch
-  // their money.
-  const websiteOn = websiteTakesOrders(pickedLines, adjustments);
+  // Whether this quote carries AIO's marketing — and with it the free menu boards.
+  const withMarketing = includesMarketing(planned, pickedLines);
 
   // Each plan's monthly price, read off the live catalog entry for its
   // platform product rather than written into QUOTE_TYPES. The four notes used
@@ -513,14 +517,6 @@ export default function ProductConfigurator({
       // — which is also what keeps the quote-wide discount and billing-start
       // sweeps from ever naming it.
       if (isPreAuthProduct(l.hubspotProductId, l.name)) continue;
-      // Nor is the kit replacement charge: it is derived from how the rep
-      // filled the kit's slots, so the way to remove it is to undo the swap.
-      // A discount control on it would be a way to make the swap free.
-      if (isKitReplacementProduct(l.hubspotProductId, l.name)) continue;
-      // Nor the AMS1 charged for a kiosk's welded-on terminal — same reason,
-      // and it is why that line carries `derived` rather than being known by
-      // its product id: the rep's own AMS1 lines DO get a control.
-      if (l.derived) continue;
       // Nor is the rate disclosure, for the same reason: it is derived, it is
       // $0, and there is nothing on it to discount or delay. It still RENDERS
       // on the document — it's tagged "Card rates" below — it just carries no
@@ -665,8 +661,8 @@ export default function ProductConfigurator({
       }
 
       // Everything else the plan includes and the rep would otherwise have to
-      // add by hand: the Website on All-in-One, the three Menu Board Computers
-      // on either marketing plan. Both are held at $0 by the plan comps, so
+      // add by hand: the Website on a plan listed for it, the three Menu Board
+      // Computers on Marketing Only. Both are held at $0 by the plan comps, so
       // leaving them off doesn't save the merchant anything — it just omits
       // what they were promised.
       const included: ProductPick[] = [];
@@ -735,10 +731,6 @@ export default function ProductConfigurator({
         .filter(p => wanted.has(p.hubspotProductId))
         .map(p => ({ hubspotProductId: p.hubspotProductId, qty: wanted.get(p.hubspotProductId)! }))
     );
-    // Re-adding the Website starts it as a plain site again.
-    if (id === WEBSITE_PRODUCT_ID && qty === 0 && adjustments[id]?.onlineOrdering) {
-      setAdjustment(id, { onlineOrdering: null });
-    }
   };
 
   const toggleChannel = (id: string) =>
@@ -785,7 +777,6 @@ export default function ProductConfigurator({
       if (!merged.discountAmount) delete merged.discountAmount;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
-      if (!merged.onlineOrdering) delete merged.onlineOrdering;
       if (Object.keys(merged).length) next[id] = merged;
       else delete next[id];
     }
@@ -1490,17 +1481,12 @@ export default function ProductConfigurator({
       isProcessingQuote(planned) &&
       !autoAdded &&
       picks.some(pick => KIOSK_PRODUCT_IDS.includes(pick.hubspotProductId) && pick.qty > 0);
-    // The 2-year marketing plan LOANS its kiosk rather than discounting it, so
-    // a price under the row reads as a charge the merchant is about to see on
-    // the quote (product owner, 2026-10-09). The quote document still shows
-    // what any EXTRA one costs, which is where that number belongs.
-    const loanedByPlan = planned === "marketing_term" && MARKETING_TERM_KIOSK_IDS.includes(p.hubspotProductId);
     return (
       <div key={p.hubspotProductId} className={styles.productRow} data-picked={n > 0}>
         <div className={styles.productMain}>
           <div className={styles.productName}>{p.name}</div>
           <div className={styles.productPrice}>
-            {loanedByPlan ? "Included with the 2-year plan" : priceLabel(p.price, p.billingFrequency)}
+            {priceLabel(p.price, p.billingFrequency)}
           </div>
           {autoAdded && (
             <div className={styles.autoTag}>
@@ -1567,20 +1553,6 @@ export default function ProductConfigurator({
             aria-label={`Add one ${p.name}`}
           >+</button>
         </div>
-        {p.hubspotProductId === WEBSITE_PRODUCT_ID && n > 0 && isMarketingQuote(planned) && onAdjustmentsChange && (
-          <label className={`${styles.channel} ${styles.fullRow}`} data-on={websiteOn}>
-            <input
-              type="checkbox"
-              className={styles.channelBox}
-              checked={websiteOn}
-              onChange={e => setAdjustment(WEBSITE_PRODUCT_ID, { onlineOrdering: e.target.checked || null })}
-            />
-            <span className={styles.channelLabel}>Online ordering</span>
-            <span className={styles.channelNote}>
-              Optional. When on, the site takes orders and AIO processes the card payments.
-            </span>
-          </label>
-        )}
         {confirmKitRemove === p.hubspotProductId && (
           <div className={styles.confirmBox} role="alertdialog" aria-label={`Remove ${p.name}?`}>
             <p>
@@ -1625,20 +1597,6 @@ export default function ProductConfigurator({
       if (platform.line && l.hubspotProductId === platform.line.hubspotProductId) return { tag: "Plan" };
       if (isPreAuthProduct(l.hubspotProductId, l.name)) {
         return { tag: "Pre-auth", why: "Nothing else is due at checkout, so the card is pre-authorized. Can't be removed." };
-      }
-      if (l.derived && l.hubspotProductId === AMS1_PRODUCT.hubspotProductId) {
-        return {
-          tag: "Kit swap",
-          why: "A kiosk swapped onto this quote brings its own terminal, and the kit only covers two. Can't be removed.",
-        };
-      }
-      if (isKitReplacementProduct(l.hubspotProductId, l.name)) {
-        const n = built.packages.swaps;
-        return {
-          tag: "Kit swap",
-          why: `${n === 1 ? "One item" : `${n} items`} in the ${built.packages.applied[0]?.name ?? "kit"} ` +
-            `swapped for something else. Can't be removed — change the cart back to clear it.`,
-        };
       }
       if (l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) return { tag: "Card rates" };
       if (l.hubspotProductId === SOFTWARE_LICENSE_PRODUCT.hubspotProductId) {
@@ -1898,15 +1856,6 @@ export default function ProductConfigurator({
               </div>
             )}
 
-            {isMarketingQuote(planned) && !websiteOn && (
-              <div className={styles.docLine} data-pending="true">
-                <div className={styles.docLineMain}>
-                  <div className={styles.docLineName}>{PROCESSING_DISCLOSURE_PRODUCT.name}</div>
-                  <div className={styles.docWhy}>Add the Website with online ordering and AIO processes the card payments it takes</div>
-                </div>
-              </div>
-            )}
-
             {/* What each package covers now reads off its own banner above,
                 grouped with the lines it actually covers — this used to
                 repeat the same sentence here, off the one shared
@@ -2106,59 +2055,23 @@ export default function ProductConfigurator({
           </div>
         )}
 
-        {/* What the marketing plan turns on that the rep did not pick: the card
-            processing a Website with online ordering brings with it.
-
-            The hardware the plan hands over used to be listed here as derived
-            $0 rows. It is a PICK now (2026-10-09) — three Menu Board Computers
-            are included, not compulsory, and a merchant who wants five can buy
-            the other two — so it lives in the picker above, where its row
-            already says "3 of 5 included in the plan". Listing it again here
-            would be the same hardware in two places disagreeing about whether
-            it is a choice.
-
-            The payments row renders on EVERY marketing quote, not only the
-            ones that have a Website, and is greyed until the Website is picked
-            with online ordering on: a rep is looking at this screen with the
-            merchant, so "add a website and you can take card payments" is the
-            conversation. The whole panel disappears on a POS quote, where none
-            of this is a question. */}
-        {isMarketingQuote(planned) && (
+        {/* What marketing hands over at no cost. The hardware is a PICK
+            (2026-10-09) — three Menu Board Computers are included, not
+            compulsory, and a merchant who wants five can buy the other two —
+            so it lives in the picker above, where its row already says "3 of 5
+            included in the plan"; this only says so in words. Shown on
+            Marketing Only, and on Marketing Partial Ordering once the rep adds
+            the marketing line (2026-10-27). */}
+        {withMarketing && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
-              <h2 className={styles.sectionTitle}>Included With This Plan</h2>
+              <h2 className={styles.sectionTitle}>Included With Marketing</h2>
               <p className={styles.sectionNote}>
-                What {planName} comes with at no cost. The first{" "}
-                {MARKETING_INCLUDED_HARDWARE[0].qty} {MARKETING_INCLUDED_HARDWARE[0].name}s are free
-                — set the quantity above, and anything past that bills at list. TVs are not supplied
-                or installed by AIO.
-                {planned === "marketing_term" &&
-                  " The kiosk is the Marketing Kit you pick above — the first one is free."}
+                The first {MARKETING_INCLUDED_HARDWARE[0].qty} {MARKETING_INCLUDED_HARDWARE[0].name}s
+                are free — set the quantity above, and anything past that bills at list. TVs are not
+                supplied or installed by AIO.
               </p>
             </div>
-            <div className={styles.includedRow} data-pending={!websiteOn || undefined}>
-              <div className={styles.productMain}>
-                <div className={styles.productName}>{PROCESSING_DISCLOSURE_PRODUCT.name}</div>
-                <div className={styles.productPrice}>
-                  {websiteOn
-                    ? "Card rates, stated on the quote — bills nothing by itself"
-                    : "Add the Website above with online ordering and AIO processes the card payments it takes"}
-                </div>
-              </div>
-              <span className={styles.includedTag}>
-                {websiteOn ? "Included ×1" : "Needs online ordering"}
-              </span>
-            </div>
-
-            {processingDisclosure.missing.length > 0 && (
-              <div className={styles.error}>
-                <strong>Can&apos;t state the card rates.</strong>{" "}
-                {processingDisclosure.missing.join(", ")} isn&apos;t in the HubSpot catalog (renamed,
-                archived, or the catalog didn&apos;t load). This quote can&apos;t be sent until
-                that&apos;s fixed — the merchant would be signed up for card processing with no rates
-                written on the document.
-              </div>
-            )}
           </div>
         )}
 

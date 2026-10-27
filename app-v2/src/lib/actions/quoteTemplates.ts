@@ -20,17 +20,19 @@ import type { QuoteType } from "@/types/merchant";
 // retired for v4 on 2026-10-09, which is how that was found. When AIO ships
 // v5, this constant moves too, or an admin re-points it in
 // Admin → Quote templates.
+//
+// ONE TEMPLATE FOR EVERY PLAN since 2026-10-27 — Elizabeth Phillips: "easy OB
+// should use quote template v 4 for everything and it should just be a blank
+// quote". The plan-specific documents (Marketing Only, the 2-year term) are no
+// longer defaults; the lines on the quote say what the plan is.
+// Marketing Partial Ordering has no policy column (the 2-year plan's
+// `marketing_term_template_id` was left unread rather than renamed), so this
+// default is always what it uses.
 const DEFAULT_TEMPLATE_IDS: Record<QuoteType, string> = {
-  order_pay_only: "854670598854",  // AIO Quote v4
-  all_in_one: "854670598854",      // AIO Quote v4
-  marketing_only: "817697352408",  // Marketing Only (one-time hardware payment) Quote
-  // Marketing Only (2-year term) Quote — BAY AREA ONLY. HubSpot carries a
-  // second, equally active "OUTSIDE BAY AREA" version (850518393534); EasyOB
-  // has no notion of a merchant's region, so the default is the Bay Area one
-  // (Shaheer, 2026-10-09) and an outside-the-Bay deal is an admin re-point in
-  // Admin → Quote templates. If that becomes common, it wants a region on the
-  // quote rather than a global default.
-  marketing_term: "854671277804",
+  order_pay_only: "854670598854",    // AIO Quote v4
+  all_in_one: "854670598854",        // AIO Quote v4
+  marketing_only: "854670598854",    // AIO Quote v4
+  marketing_partial: "854670598854", // AIO Quote v4
 };
 
 export type QuoteTemplatePolicy = Record<QuoteType, string>;
@@ -40,7 +42,7 @@ function rowToPolicy(row: typeof quoteTemplatePolicy.$inferSelect): QuoteTemplat
     order_pay_only: row.orderPayOnlyTemplateId,
     all_in_one: row.allInOneTemplateId,
     marketing_only: row.marketingOnlyTemplateId,
-    marketing_term: row.marketingTermTemplateId,
+    marketing_partial: DEFAULT_TEMPLATE_IDS.marketing_partial,
   };
 }
 
@@ -99,7 +101,6 @@ export async function updateQuoteTemplatePolicyAction(input: QuoteTemplatePolicy
     allInOneTemplateId: input.all_in_one,
     orderPayOnlyTemplateId: input.order_pay_only,
     marketingOnlyTemplateId: input.marketing_only,
-    marketingTermTemplateId: input.marketing_term,
     updatedByUserId: effective.userId,
     updatedAt: new Date(),
   };

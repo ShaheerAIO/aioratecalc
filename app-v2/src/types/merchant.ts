@@ -364,20 +364,21 @@ export type QuoteType =
   // hardware, no processing rate, none of the mandatory install lines. The
   // kiosk is sold separately.
   | "marketing_only"
-  // AIO Marketing Platform (2-year term) — $299/mo. The same marketing plan on
-  // a 2-year commitment, which INCLUDES one Mega or 27" kiosk at no cost. A
-  // plan of its own rather than a product a rep adds, because it replaces the
-  // $199 subscription rather than stacking on it — see PLATFORM_PRODUCTS.
-  | "marketing_term";
+  // Marketing Partial Ordering — $299/mo (2026-10-27, the scenario sheet's
+  // "$299 flat tier"). Online and/or kiosk ordering with NO POS: the merchant
+  // keeps their own. Marketing is optional on it. It processes, so it is a
+  // processing plan, not a marketing one — see `isMarketingQuote`.
+  | "marketing_partial";
 
 /**
- * What the `quote_type` column may actually hold. The two retired values are
- * still on rows written before 2026-10-05 and still have to parse; every read
+ * What the `quote_type` column may actually hold. The retired values are still
+ * on rows written before they were retired and still have to parse; every read
  * goes through `quoteTypeOf`, which maps them onto a live plan. Nothing may be
  * WRITTEN as one — hence the separate, wider type rather than widening
- * `QuoteType` itself.
+ * `QuoteType` itself. `marketing_term` (the $299 2-year kiosk-loan plan) was
+ * retired 2026-10-27 for the Mega Kiosk Loaner add-on.
  */
-export type StoredQuoteType = QuoteType | "full_pos" | "food_truck";
+export type StoredQuoteType = QuoteType | "full_pos" | "food_truck" | "marketing_term";
 
 // A line on a quote. Price and frequency are SNAPSHOT at quote time rather than
 // joined live from the catalog — HubSpot line items work the same way (they
@@ -549,12 +550,9 @@ export type LineAdjustment = {
   // `removed` (2026-10-21, gone): it took the derived WiFi package off a quote.
   // The package is an ordinary pick now, so a rep un-picks it instead. Saved
   // adjustments may still carry `removed: true`; nothing reads it any more.
-  /**
-   * The Website takes online orders, so AIO processes the card payments it
-   * takes. Only the Website line on a marketing quote honors this. Absent
-   * means a plain website with no payments, which is the default.
-   */
-  onlineOrdering?: boolean | null;
+  // `onlineOrdering` (2026-10-08 to 2026-10-27, gone): it made a marketing
+  // quote's Website take orders. Online ordering is its own product on the
+  // ordering plans now (ONLINE_ORDERING_PRODUCT).
 };
 
 /** The two things a rep can set on one unit of a multi-unit line. */

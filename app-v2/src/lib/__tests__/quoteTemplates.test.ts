@@ -74,10 +74,9 @@ const TEMPLATES = [
 const DEFAULTS: Record<QuoteType, string> = {
   all_in_one: "854670598854",
   order_pay_only: "854670598854",
-  marketing_only: "817697352408",
-  // Its own document since 2026-10-09 — the 2-year term has a template of its
-  // own in HubSpot (two, in fact, split by region).
-  marketing_term: "854671277804",
+  // AIO Quote v4 for every plan since 2026-10-27 (Elizabeth Phillips).
+  marketing_only: "854670598854",
+  marketing_partial: "854670598854",
 };
 
 beforeEach(() => {
@@ -112,7 +111,8 @@ describe("getQuoteTemplatePolicy", () => {
       all_in_one: "787244469949",
       order_pay_only: "787244469949",
       marketing_only: "817697352408",
-      marketing_term: "854671277804",
+      // No column of its own: always the default.
+      marketing_partial: "854670598854",
     });
   });
 });
@@ -156,7 +156,7 @@ describe("updateQuoteTemplatePolicyAction", () => {
 
     await updateQuoteTemplatePolicyAction({
       all_in_one: "787244469949", order_pay_only: "787244469949",
-      marketing_only: "817697352408", marketing_term: "817697352408",
+      marketing_only: "817697352408", marketing_partial: "854670598854",
     });
 
     expect(inserted).toHaveLength(1);
@@ -164,7 +164,6 @@ describe("updateQuoteTemplatePolicyAction", () => {
       allInOneTemplateId: "787244469949",
       orderPayOnlyTemplateId: "787244469949",
       marketingOnlyTemplateId: "817697352408",
-      marketingTermTemplateId: "817697352408",
       updatedByUserId: "admin-1",
     });
   });

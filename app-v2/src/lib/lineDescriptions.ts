@@ -17,6 +17,7 @@ export const LINE_DESCRIPTIONS: Record<string, string> = {
   // ── Plans ────────────────────────────────────────────────────────────────
   "335283119838": "The AIO platform: online and in-store ordering, payments, marketing and staff tools.", // All-in-One Platform
   "335279520445": "The AIO platform for ordering and payments. Marketing is not included.", // All-in-One (Order & Pay only)
+  "343582047937": "Online and kiosk ordering with payments, alongside the point of sale you already have.", // AIO Marketing Partial Ordering
   "332609247965": "Social media management (3 posts and 1 reel a week), content creation, review and newsletter management, and a brand book.", // AIO Marketing Platform
   "332927902454": "The AIO Marketing Platform on a 2-year term, with a 27\" kiosk and three menu board computers included.", // AIO Marketing Platform (2-year term) - BAY AREA
   "334139877086": "The AIO Marketing Platform on a 2-year term, with a 27\" kiosk and three menu board computers included.", // AIO Marketing Platform (2-year term)
@@ -24,6 +25,8 @@ export const LINE_DESCRIPTIONS: Record<string, string> = {
   // ── Software ─────────────────────────────────────────────────────────────
   "335280960199": "Software for each device running an AIO app beyond the three your plan includes.", // Additional Software License
   "333275576048": "Your restaurant's website, built and hosted by AIO.", // Website
+  "343374665412": "Online ordering for your customers, with payments processed by AIO.", // Online Ordering
+  "343579168455": "AIO's marketing services, included with your ordering plan.", // Marketing (Partial Ordering)
   "223152695998": "Payroll for your team, priced per employee each month.", // Payroll - AIO Platform (Per Person)
   "260559288040": "Card processing at the rates AIO has quoted you.", // AIO Processing Two Tiered Rate
 
@@ -51,6 +54,7 @@ export const LINE_DESCRIPTIONS: Record<string, string> = {
   "260674226888": "A 65\" interactive kiosk for self-ordering and on-screen promotion.", // Mega Kiosk
   "332617109238": "A 65\" Mega Kiosk that displays your marketing content in store.", // Marketing Kit - Mega Kiosk
   "332793212658": "A 27\" kiosk that displays your marketing content in store.", // Marketing Kit - 27" Kiosk
+  "343373224660": "A 65\" Mega Kiosk on loan that displays your marketing content in store, on a 2-year term.", // Mega Kiosk Loaner
   "223452690132": "A kitchen screen that shows your staff incoming orders.", // KDS (Kitchen Display System)
   "223511653103": "Runs your digital menu board. The TV is not supplied or installed by AIO.", // Menu Board Computer
   "276751313619": "A tablet that brings your online and delivery orders into one place.", // Orders Hub Tablet

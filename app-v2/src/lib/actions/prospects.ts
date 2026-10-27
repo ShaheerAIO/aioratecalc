@@ -734,7 +734,7 @@ export async function createProspectAction(input: {
   // takes online orders sells through it, so its rate half is real and must be
   // kept — the rep form shows those inputs for exactly the same reason.
   const quoteType: QuoteType = quoteTypeOf(input.quoteType);
-  const rated = quoteHasProcessing(quoteType, input.picks ?? [], input.adjustments);
+  const rated = quoteHasProcessing(quoteType, input.picks ?? []);
 
   const quoteConfig =
     rated && input.quoteConfig && input.quoteConfig.monthlyVolume > 0 && input.quoteConfig.avgTicket > 0
@@ -755,7 +755,7 @@ export async function createProspectAction(input: {
   // `ZERO_FEE_OVERRIDES`.
   await assertRateAboveFloor(
     rated, analysis, quoteConfig, input.quoteRates, input.pricingModel,
-    processesCardNotPresentOnly(quoteType, input.picks ?? [], input.adjustments)
+    processesCardNotPresentOnly(quoteType, input.picks ?? [])
   );
 
   const quoteNote = (input.quoteNote ?? "").trim() || null;
@@ -1007,11 +1007,11 @@ export async function saveQuoteConfigurationAction(input: {
   // uses for its own floor preview. The statement isn't resubmitted on a save
   // (only the wizard's upload step sets it), so `app.analysis` is the basis,
   // same as `EditQuotePanel`'s `previewAnalysis`.
-  const rated = quoteHasProcessing(quoteType, input.picks ?? [], input.adjustments ?? {});
+  const rated = quoteHasProcessing(quoteType, input.picks ?? []);
   await assertRateAboveFloor(
     rated, app.analysis ?? null, quoteConfig ?? null,
     input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES, input.pricingModel,
-    processesCardNotPresentOnly(quoteType, input.picks ?? [], input.adjustments ?? {})
+    processesCardNotPresentOnly(quoteType, input.picks ?? [])
   );
 
   const quoteNote = input.quoteNote === undefined

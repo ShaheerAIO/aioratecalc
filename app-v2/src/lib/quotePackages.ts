@@ -18,46 +18,33 @@
 //
 // ── WHAT DECIDES WHETHER A LINE FITS A SLOT ────────────────────────────────
 //
-// Each slot is a SHEET ITEM (POS, KDS, printer …). A cart line fits a slot two
-// ways, and only two:
+// Each slot is a SHEET ITEM (POS, KDS, printer …), and a cart line fits it only
+// when the line is made of that item — or of one the slot names as its
+// alternative (`PackageSlot.or`: the partial-ordering kit's "KDS or printer").
+// Anything else is added to the quote normally, at its price.
 //
-//   1. EXACT — the line is made of that very item.
-//   2. SWAP  — the POS, the KDS and the two kiosks in `INTERCHANGEABLE` fill
-//      each other's slots in EITHER direction, whatever they cost (Shaheer,
-//      2026-10-16), and the $400 "Free Kit Replacement Item" that quoting.ts
-//      derives per swap is what pays for it. The Mega Kiosk is deliberately
-//      not a member — $2,700 into the $735 KDS slot is $1,965 that $400 does
-//      not come close to covering.
-//
-// EVERYTHING ELSE fits only its own slot and is otherwise added to the quote
-// normally, at its price (product owner, 2026-10-18: "you can only swap KDS
-// Kiosk and POS with each other in the qsr kit. Everything else gets added
-// normally"). That retired the older MSRP rule (2026-10-09), under which any
-// item could take any dearer slot — a printer the KDS seat, a tableside device
-// the POS seat — and hardware off the sheet (mPOS, the tablets) could swap in
-// at its HubSpot price. None of that covers anything any more.
-//
-// EVERY swap is charged. See `PackageDecomposition.swaps`.
+// SWAPS ARE GONE (2026-10-27, the scenario sheet: "Swap fee eliminated").
+// From 2026-10-16 the POS, the KDS and the kiosks could fill each other's
+// slots for a $400 "Free Kit Replacement Item" each; what replaced that is the
+// free first kiosk — a slot that sits EMPTY until the rep adds a kiosk
+// (`PackageSlot.optional`), so the kiosk "seems free, but we were down to give
+// it for free all along" (product owner).
 //
 // ── ONE HUBSPOT LINE CAN BE SEVERAL SHEET ITEMS ────────────────────────────
 //
-// "Kiosk 27" + Payment Terminal (AMS1) and Mount" is a kiosk AND a terminal;
-// "POS Unit - With Customer Facing Display" is a POS AND a display. Those are
-// expanded into their parts (PRODUCT_PARTS) and a unit is covered only if EVERY
-// part finds a slot — a kiosk whose terminal has nowhere to go would otherwise
-// be covered for part of its price, which is a partial discount on one line and
-// the rounding problem `splitPartialDiscount` exists to avoid.
+// "POS Unit - With Customer Facing Display" is a POS AND a display. It is
+// expanded into its parts (PRODUCT_PARTS) and a unit is covered only if EVERY
+// part finds a slot — otherwise it would be covered for part of its price,
+// which is a partial discount on one line and the rounding problem
+// `splitPartialDiscount` exists to avoid.
 //
 // ── V1 LIMITS ──────────────────────────────────────────────────────────────
 //
-// - ONE-TIME lines only. A weekly fee and a hardware price are different units
-//   (see quoteTotals), and nothing in the kit is recurring.
-// - WHOLE UNITS only. A swap dearer than the slot is not covered at all rather
-//   than covered "up to the slot value", which would need a fractional discount on
-//   one line. That is the next decision to make, not a gap in this one.
-// - A kit APPLIES only when an ORDERING DEVICE (a POS, kiosk or tableside
-//   device) was placed — in whatever slot it landed. A WiFi package and a
-//   drawer on their own are not a system, so without this a quote of just a
+// - ONE-TIME lines only. A monthly fee and a hardware price are different units
+//   (see quoteTotals), and nothing in a kit is recurring.
+// - A kit APPLIES only when an ORDERING DEVICE (a POS, kiosk, tableside device,
+//   or the partial-ordering kit's order tablet) was placed. A WiFi package and
+//   a drawer on their own are not a system, so without this a quote of just a
 //   printer and the WiFi package would get the network for free.
 
 import type { QuoteLine, QuoteType } from "@/types/merchant";
@@ -71,7 +58,7 @@ import type { QuoteLine, QuoteType } from "@/types/merchant";
  */
 export type SheetKey =
   | "pos" | "cfd" | "terminal"
-  | "kiosk27" | "kiosk156" | "mega" | "tableside"
+  | "kiosk27" | "kiosk156" | "mega" | "tableside" | "tablet"
   | "kds" | "printer" | "drawer" | "menuboard" | "wifi";
 
 export type SheetItem = {
@@ -105,6 +92,10 @@ export const SHEET_ITEMS: Record<SheetKey, SheetItem> = {
   mega:      { label: "Mega Kiosk",                           msrp: 2700, orders: true },
   // suggested MSRP $603 (finalized $399, list $330)
   tableside: { label: "AIO Tableside POS",                    msrp: 603, orders: true },
+  // HubSpot $199. Not on the sheet. It is the partial-ordering plan's order
+  // tablet — the scenario sheet's "Samsung tablet" — and the device that
+  // makes that kit a system, so it counts as ordering here.
+  tablet:    { label: "Orders Hub Tablet",                    msrp: 199, orders: true },
   // suggested MSRP and Zia tab $735 (list $399, finalized $499)
   kds:       { label: "KDS",                                  msrp: 735 },
   // suggested MSRP and Zia tab $336 (list $199, finalized $249)
@@ -125,23 +116,28 @@ export const SHEET_ITEMS: Record<SheetKey, SheetItem> = {
  * Keyed by product id, like ORDER_POINT_RULES, so a rename in HubSpot can't
  * silently drop a product out of the kit.
  *
- * NOT MAPPED, on purpose: mPOS and the Orders Hub / Clock-in tablets (no sheet
- * row), the Epson Sticky Printer (a label printer — not the sheet's printer),
- * and the Marketing Kit kiosks (they belong to the marketing plans).
+ * NOT MAPPED, on purpose: mPOS and the Clock-in tablet (no sheet row), the
+ * Epson Sticky Printer (a label printer — not the sheet's printer), and the
+ * Marketing Kit kiosks (displays, not part of any kit).
  */
 export const PRODUCT_PARTS: Record<string, SheetKey[]> = {
   "217445755632": ["pos"],                // POS Unit
   "223452690130": ["pos", "cfd"],         // POS Unit - With Customer Facing Display
   "318736467644": ["cfd"],                // Customer Facing Display
   "223511653105": ["terminal"],           // Payment Terminal - AMS1
-  "222497165009": ["kiosk27", "terminal"],  // Kiosk 27" + Payment Terminal (AMS1) and Mount
-  "223519571666": ["kiosk156", "terminal"], // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+  // The kiosk SKUs carry an AMS1 inside them, but as ONE part since
+  // 2026-10-27: the kiosk is an optional slot now, and with its terminal as a
+  // separate part the kit had to hold a terminal seat for it — which a loose
+  // AMS1 took for free whenever no kiosk was added.
+  "222497165009": ["kiosk27"],            // Kiosk 27" + Payment Terminal (AMS1) and Mount
+  "223519571666": ["kiosk156"],           // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
   "260674226888": ["mega"],               // Mega Kiosk
   "335279520447": ["tableside"],          // AIO Tableside POS
   "223452690132": ["kds"],                // KDS (Kitchen Display System)
   "223511653104": ["printer"],            // Thermal Printer
   "222497165011": ["drawer"],             // Cash Drawer
   "223511653103": ["menuboard"],          // Menu Board Computer
+  "276751313619": ["tablet"],             // Orders Hub Tablet
   // AIO retired "AIO WiFi Network Package" (281351401209) 2026-10-13 and
   // replaced it with the Unifi variant, a rep pick since 2026-10-21 — see
   // WIFI_PRODUCT_ID / RETIRED_WIFI_PRODUCTS there. The sheet slot and its MSRP
@@ -153,25 +149,6 @@ export const PRODUCT_PARTS: Record<string, SheetKey[]> = {
 export function sheetMsrpOf(hubspotProductId: string): number | null {
   const parts = PRODUCT_PARTS[hubspotProductId];
   return parts ? parts.reduce((sum, k) => sum + SHEET_ITEMS[k].msrp, 0) : null;
-}
-
-/**
- * The ONLY items that may take a seat that isn't their own: the POS, the KDS
- * and the two kiosks, in each other's slots, in either direction, whatever
- * they cost (Shaheer, 2026-10-16; narrowed to exactly these 2026-10-18).
- *
- * A set of named members rather than a flag on `SheetItem`, because the MEGA
- * KIOSK'S ABSENCE is the point: at $2,700 it would take the $735 KDS slot and
- * the $400 replacement charge would cover less than a quarter of it. Adding a
- * member here is a pricing decision, so it should read like one.
- */
-const INTERCHANGEABLE: ReadonlySet<SheetKey> = new Set<SheetKey>([
-  "pos", "kds", "kiosk27", "kiosk156",
-]);
-
-/** Whether this part may take this slot's seat. */
-function interchanges(part: SheetKey, slot: SheetKey): boolean {
-  return INTERCHANGEABLE.has(part) && INTERCHANGEABLE.has(slot);
 }
 
 /** One physical part of a cart line. */
@@ -188,6 +165,13 @@ function partsOf(line: QuoteLine): Part[] | null {
 export type PackageSlot = {
   item: SheetKey;
   qty: number;
+  /** Other items that fill this slot as well as `item` does — "a KDS or a printer". */
+  or?: SheetKey[];
+  /**
+   * Not preselected: the slot sits empty until the rep adds something that
+   * fits it. The free first kiosk (2026-10-27).
+   */
+  optional?: true;
 };
 
 export type QuotePackage = {
@@ -210,9 +194,14 @@ export type QuotePackage = {
  * silently change what every open quote decomposes to.
  *
  * Contents are the QSR kit as Shaheer specified it 2026-10-08: printer, POS,
- * kiosk, KDS, cash drawer, menu board, WiFi package and TWO Adyen terminals —
- * one for the POS, one inside the kiosk line item — plus the POS's customer
- * facing display, which the sheet's POS assembly carries.
+ * kiosk, KDS, cash drawer, menu board, WiFi package and the POS's AMS1, plus
+ * the POS's customer facing display, which the sheet's POS assembly carries.
+ * Since 2026-10-27 the kiosk is OPTIONAL — the first one a rep adds is free,
+ * a 27" or a 15.6" — and it goes on Order & Pay and All-in-One alike.
+ *
+ * The Partial Ordering Kit is the scenario sheet's "$299 flat tier" hardware
+ * (2026-10-27): the order tablet, a KDS or a printer, and the same free first
+ * kiosk.
  */
 export const PACKAGES: QuotePackage[] = [
   {
@@ -230,20 +219,29 @@ export const PACKAGES: QuotePackage[] = [
       // beside them — comes first, directly under it. A row whose quantity
       // changes on its own has to be where the rep can see it change.
       //
-      // The decomposition itself does not depend on this order: an exact fit
-      // takes the only slot its item could, and a swap takes the cheapest slot
-      // it fits, with the index only breaking a tie between two slots of the
-      // SAME price. The one such pair is kiosk27 and wifi at $999, and wifi is
-      // outside the interchange group, so it is never a swap target at all.
+      // The decomposition itself does not depend on this order: each item
+      // fits exactly one slot here.
       { item: "pos", qty: 1 },
       { item: "cfd", qty: 1 },
       { item: "drawer", qty: 1 },
-      { item: "terminal", qty: 2 },
-      { item: "kiosk27", qty: 1 },
+      { item: "terminal", qty: 1 },
+      { item: "kiosk27", qty: 1, or: ["kiosk156"], optional: true },
       { item: "kds", qty: 1 },
       { item: "printer", qty: 1 },
       { item: "menuboard", qty: 1 },
       { item: "wifi", qty: 1 },
+    ],
+  },
+  {
+    id: "partial_ordering_kit",
+    name: "Partial Ordering Kit",
+    active: true,
+    plans: ["marketing_partial"],
+    maxPerQuote: 1,
+    slots: [
+      { item: "tablet", qty: 1 },
+      { item: "kds", qty: 1, or: ["printer"] },
+      { item: "kiosk27", qty: 1, or: ["kiosk156"], optional: true },
     ],
   },
 ];
@@ -273,10 +271,13 @@ export function coverageLabel(covered: number, onQuote: number, where: string): 
  * The product a rep would pick for each slot, for preselecting the kit when a
  * plan is chosen.
  *
- * `terminal` is ABSENT on purpose. The kit's two terminals are the POS's AMS1 —
- * which the configurator adds alongside every POS it picks, kit or not
- * (`minimumTerminalsFor`) — and the one inside the kiosk SKU. Naming the
- * terminal here would add a second AMS1 for the kiosk that already has one.
+ * `terminal` is ABSENT on purpose. The kit's terminal is the POS's AMS1, which
+ * the configurator adds alongside every POS it picks, kit or not
+ * (`minimumTerminalsFor`). Naming it here would add it twice.
+ *
+ * An OPTIONAL slot's product is listed with the kit but not preselected, and
+ * a slot's `or` alternative is listed beside it (the printer the partial kit
+ * takes instead of a KDS), so the rep sees both where the kit is.
  * `wifi` is HERE since 2026-10-21, when the WiFi package stopped being a
  * derived always-included line and became a pick like the KDS (product owner:
  * "Just add the network package as a regular item in the hardware picker just
@@ -286,6 +287,7 @@ export function coverageLabel(covered: number, onQuote: number, where: string): 
  */
 export const KIT_DEFAULT_PRODUCTS: Partial<Record<SheetKey, string>> = {
   pos: "217445755632",       // POS Unit
+  tablet: "276751313619",    // Orders Hub Tablet
   kiosk27: "222497165009",   // Kiosk 27" + Payment Terminal (AMS1) and Mount
   cfd: "318736467644",       // Customer Facing Display
   kds: "223452690132",       // KDS (Kitchen Display System)
@@ -300,14 +302,27 @@ export function kitFor(quoteType: QuoteType): QuotePackage | null {
   return PACKAGES.find(p => p.active && p.plans.includes(quoteType)) ?? null;
 }
 
-/** What to preselect so the quote opens with the whole kit on it. */
+/** What to preselect so the quote opens with the kit on it — every slot but the optional ones. */
 export function kitPicks(kit: QuotePackage): Array<{ hubspotProductId: string; qty: number }> {
   const qtyById = new Map<string, number>();
   for (const slot of kit.slots) {
+    if (slot.optional) continue;
     const id = KIT_DEFAULT_PRODUCTS[slot.item];
     if (id) qtyById.set(id, (qtyById.get(id) ?? 0) + slot.qty);
   }
   return [...qtyById].map(([hubspotProductId, qty]) => ({ hubspotProductId, qty }));
+}
+
+/** Every product the kit lists, in slot order: optional slots and `or` alternatives included. */
+export function kitProductIds(kit: QuotePackage): string[] {
+  const ids: string[] = [];
+  for (const slot of kit.slots) {
+    for (const item of [slot.item, ...(slot.or ?? [])]) {
+      const id = KIT_DEFAULT_PRODUCTS[item];
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
 }
 
 // ── Decomposition ───────────────────────────────────────────────────────────
@@ -320,12 +335,11 @@ export type AppliedPackage = {
   price: number;
 };
 
-/** One unit of one line landing in one slot. `swapped` is the fuzzy case. */
+/** One unit of one line landing in one slot. */
 export type FilledSlot = {
   hubspotProductId: string;
   part: SheetKey;
   slot: SheetKey;
-  swapped: boolean;
 };
 
 export type PackageDecomposition = {
@@ -338,20 +352,6 @@ export type PackageDecomposition = {
   applied: AppliedPackage[];
   /** Which item went in which slot — what to read to see WHY something was or wasn't covered. */
   filled: FilledSlot[];
-  /**
-   * How many UNITS landed in a slot that isn't their own — what the merchant is
-   * charged a "Free Kit Replacement Item" for, one each (`resolveKitReplacementLine`).
-   *
-   * Counted per unit and NOT as `filled.filter(f => f.swapped).length`, because
-   * one physical unit can be several sheet items: a "Kiosk 27" + AMS1" that
-   * moved would otherwise be billed as two swaps.
-   */
-  swaps: number;
-  /**
-   * Terminals welded into a swapped-in kiosk that the kit had no seat left
-   * for. quoting.ts charges the merchant one AMS1 each — see `placeUnit`.
-   */
-  extraTerminals: number;
   /** Listed price of everything the kits absorbed. */
   coveredListAmount: number;
   /** What the kits are worth to the merchant. The kit is free, so this IS `coveredListAmount`. */
@@ -359,109 +359,42 @@ export type PackageDecomposition = {
 };
 
 function none(lines: QuoteLine[]): PackageDecomposition {
-  return { lines, applied: [], filled: [], swaps: 0, extraTerminals: 0, coveredListAmount: 0, savings: 0 };
+  return { lines, applied: [], filled: [], coveredListAmount: 0, savings: 0 };
 }
 
 /** A coverable line and how much of it is still unclaimed. */
 type PoolEntry = { line: QuoteLine; parts: Part[]; left: number; msrp: number };
 
-type Slot = { item: SheetKey; owner: number };
+type Slot = { accepts: SheetKey[]; item: SheetKey; owner: number };
 
 // A kit can't be applied more times than this, whatever a package says. A
 // guard against a data-entry mistake, not a business rule.
 const MAX_PACKAGE_INSTANCES = 10;
 
-/** A placement: where each part of one unit sits, and what it couldn't seat. */
-type Placement = {
-  placed: Array<{ part: Part; slot: number }>;
-  /**
-   * Terminals this unit brought that the kit has no seat left for. Only ever
-   * non-zero on an INTERCHANGE swap — see `placeUnit`.
-   */
-  extraTerminals: number;
-};
-
 /**
- * Where one unit of this entry would go. Returns the slot index per part, or
- * null if ANY part has nowhere to go — a unit is covered whole or not at all.
- *
- * Exact beats swap, per part. Among swaps the CHEAPEST slot wins (lowest slot
- * index on a tie), so the answer never depends on the order lines arrived in.
- *
- * ONE EXCEPTION, and it is what makes a kiosk swappable at all: the kiosk SKUs
- * are a kiosk AND a terminal welded together, and the kit holds only two
- * terminal seats — one for the POS's loose AMS1, one for the kiosk that comes
- * in the kit. So a SECOND kiosk swapped into a screen slot always arrives with
- * a terminal that has nowhere to sit, and "covered whole or not at all" would
- * leave the entire $1,495 line charged over a $350 part of it. Instead the
- * terminal is seated nowhere and COUNTED, and quoting.ts charges the merchant
- * an AMS1 for each one (Shaheer, 2026-10-16) — which is the same money a
- * second POS already costs, whose loose AMS1 is charged for the same reason.
- *
- * It is allowed only when another part of the same unit got its seat by
- * INTERCHANGE, so an ordinary cart can never quietly lose a terminal: the
- * exact pass can't produce one (nothing interchanges with `allowSwap` false),
- * and nothing but a terminal is ever left unseated.
+ * Where one unit of this entry would go: the slot index per part, or null if
+ * ANY part has nowhere to go — a unit is covered whole or not at all.
  */
-function placeUnit(
-  entry: PoolEntry,
-  slots: Slot[],
-  allowSwap: boolean
-): Placement | null {
+function placeUnit(entry: PoolEntry, slots: Slot[]): Array<{ part: Part; slot: number }> | null {
   const used = new Set<number>();
   const placed: Array<{ part: Part; slot: number }> = [];
-  const unseated: Part[] = [];
-  let interchanged = false;
-
   for (const part of entry.parts) {
-    let pick = slots.findIndex((s, i) => s.owner < 0 && !used.has(i) && s.item === part.key);
-
-    if (pick < 0 && allowSwap) {
-      let best = Infinity;
-      slots.forEach((s, i) => {
-        if (s.owner >= 0 || used.has(i) || !interchanges(part.key, s.item)) return;
-        const msrp = SHEET_ITEMS[s.item].msrp;
-        if (msrp < best) { best = msrp; pick = i; }
-      });
-    }
-
-    if (pick < 0) { unseated.push(part); continue; }
-    if (part.key !== slots[pick].item) interchanged = true;
+    const pick = slots.findIndex((s, i) => s.owner < 0 && !used.has(i) && s.accepts.includes(part.key));
+    if (pick < 0) return null;
     used.add(pick);
     placed.push({ part, slot: pick });
   }
-
-  if (unseated.length === 0) return { placed, extraTerminals: 0 };
-  // Only a welded-on terminal, and only alongside an interchange. Anything
-  // else unseated means this unit genuinely doesn't fit.
-  if (!interchanged || unseated.some(p => p.key !== "terminal")) return null;
-  return { placed, extraTerminals: unseated.length };
-}
-
-/**
- * How many open slots this entry's parts could land in right now — its
- * flexibility. A unit with ONE place to go has to be placed before one with
- * three, or the flexible one takes the only seat the other could use.
- */
-function flexibility(entry: PoolEntry, slots: Slot[]): number {
-  let n = 0;
-  for (const part of entry.parts) {
-    slots.forEach(s => {
-      if (s.owner >= 0) return;
-      if (s.item === part.key || interchanges(part.key, s.item)) n += 1;
-    });
-  }
-  return n;
+  return placed;
 }
 
 /**
  * Cover what the kits cover, out of the cart.
  *
- * Per kit instance: first every unit that fits EXACTLY, then the leftovers by
- * SWAP — the MOST CONSTRAINED unit first (fewest slots it could take), dearest
- * on a tie, into the cheapest slot it fits. This is a heuristic, not a matching solver —
- * it can still leave money on the table in a contrived cart, and it never
- * covers anything the rules above don't allow. An instance that places no
+ * Per kit instance, every unit that fits: single-part lines before composite
+ * ones, so a POS-with-display never takes the seats a loose POS and display
+ * would each have filled (the merchant would pay for both of those instead);
+ * then DEAREST first, so where a slot takes either of two items (a KDS or a
+ * printer) the merchant gets the dearer one free. An instance that places no
  * ordering device is thrown away and no further instances are tried.
  */
 export function decomposePackages({
@@ -494,12 +427,14 @@ export function decomposePackages({
   });
   if (pool.length === 0) return none(lines);
 
+  // Fewest parts, then dearest; a stable sort keeps input order among equals.
+  const order = pool.map((_, e) => e).sort(
+    (a, b) => pool[a].parts.length - pool[b].parts.length || pool[b].msrp - pool[a].msrp
+  );
   const taken = pool.map(() => 0);
   const by = pool.map(() => new Set<string>());
   const filled: FilledSlot[] = [];
   const applied: AppliedPackage[] = [];
-  let swaps = 0;
-  let extraTerminals = 0;
 
   for (const pkg of active) {
     const cap = Math.min(pkg.maxPerQuote ?? MAX_PACKAGE_INSTANCES, MAX_PACKAGE_INSTANCES);
@@ -507,62 +442,25 @@ export function decomposePackages({
 
     for (let n = 0; n < cap; n++) {
       const slots: Slot[] = pkg.slots.flatMap(s =>
-        Array.from({ length: s.qty }, () => ({ item: s.item, owner: -1 }))
+        Array.from({ length: s.qty }, () => ({ accepts: [s.item, ...(s.or ?? [])], item: s.item, owner: -1 }))
       );
       const left = pool.map(e => e.left);
       const placedUnits = pool.map(() => 0);
       const placements: FilledSlot[] = [];
-
       let placedOrderingDevice = false;
-      // Per INSTANCE, because an instance that places no ordering device is
-      // thrown away below — its swaps were never charged for anything.
-      let instanceSwaps = 0;
-      let instanceExtraTerminals = 0;
-      const commit = (e: number, { placed, extraTerminals }: Placement) => {
-        let movedThisUnit = false;
-        instanceExtraTerminals += extraTerminals;
-        for (const { part, slot } of placed) {
-          slots[slot].owner = e;
-          if (part.orders) placedOrderingDevice = true;
-          const swapped = part.key !== slots[slot].item;
-          if (swapped) movedThisUnit = true;
-          placements.push({
-            hubspotProductId: pool[e].line.hubspotProductId,
-            part: part.key,
-            slot: slots[slot].item,
-            swapped,
-          });
-        }
-        // One charge per UNIT, however many of its parts moved.
-        if (movedThisUnit) instanceSwaps += 1;
-        left[e] -= 1;
-        placedUnits[e] += 1;
-      };
 
-      // Exact fits first, in input order. Nothing here competes: an exact fit
-      // takes a slot only that item could have, give or take duplicates.
-      pool.forEach((_, e) => {
+      for (const e of order) {
         while (left[e] > 0) {
-          const placed = placeUnit(pool[e], slots, false);
+          const placed = placeUnit(pool[e], slots);
           if (!placed) break;
-          commit(e, placed);
-        }
-      });
-
-      // Then swaps, one unit at a time, re-ranking after each placement.
-      for (;;) {
-        let next: { e: number; flex: number; placed: Placement } | null = null;
-        for (let e = 0; e < pool.length; e++) {
-          if (left[e] <= 0) continue;
-          const placed = placeUnit(pool[e], slots, true);
-          if (!placed) continue;
-          const flex = flexibility(pool[e], slots);
-          if (!next || flex < next.flex || (flex === next.flex && pool[e].msrp > pool[next.e].msrp)) {
-            next = { e, flex, placed };
+          for (const { part, slot } of placed) {
+            slots[slot].owner = e;
+            if (part.orders) placedOrderingDevice = true;
+            placements.push({ hubspotProductId: pool[e].line.hubspotProductId, part: part.key, slot: slots[slot].item });
           }
+          left[e] -= 1;
+          placedUnits[e] += 1;
         }
-        if (!next) break;
-        commit(next.e, next.placed);
       }
 
       // No ordering device placed means no system here, whatever else fit.
@@ -575,8 +473,6 @@ export function decomposePackages({
         by[e].add(pkg.name);
       });
       filled.push(...placements);
-      swaps += instanceSwaps;
-      extraTerminals += instanceExtraTerminals;
       count += 1;
     }
 
@@ -605,5 +501,5 @@ export function decomposePackages({
   });
   coveredListAmount = Math.round(coveredListAmount * 100) / 100;
 
-  return { lines: out, applied, filled, swaps, extraTerminals, coveredListAmount, savings: coveredListAmount };
+  return { lines: out, applied, filled, coveredListAmount, savings: coveredListAmount };
 }

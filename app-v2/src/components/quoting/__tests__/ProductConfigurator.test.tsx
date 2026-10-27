@@ -98,7 +98,7 @@ describe("a new quote opens on no plan at all", () => {
     render(<Host />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
 
-    for (const label of [/Order & Pay Only/, /All-in-One/, /Marketing Only/, /Marketing — Kiosk Loan/]) {
+    for (const label of [/Order & Pay Only/, /All-in-One/, /Marketing Only/, /Marketing Partial Ordering/]) {
       expect(planCard(label).dataset.active).not.toBe("true");
     }
     expect(picksText()).toBe("");

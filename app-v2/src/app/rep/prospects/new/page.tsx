@@ -143,10 +143,10 @@ function NewProspectFlow() {
   // a marketing merchant whose Website takes online orders sells through it,
   // so they get the ticket/volume inputs and a quoted rate — while still
   // getting none of the POS hardware, install lines or ordering points.
-  const rated = quoteType !== null && quoteHasProcessing(quoteType, picks, adjustments);
+  const rated = quoteType !== null && quoteHasProcessing(quoteType, picks);
   // Every sale is online, so there is no card-present rate to show anywhere
   // on this page — not in the boxes, not on the document preview.
-  const cnpOnly = quoteType !== null && processesCardNotPresentOnly(quoteType, picks, adjustments);
+  const cnpOnly = quoteType !== null && processesCardNotPresentOnly(quoteType, picks);
 
   // ── Review What We Know — Business/OwnerContact/Processing, fully editable,
   // prefilled from the company on the deal — see prospects.ts's

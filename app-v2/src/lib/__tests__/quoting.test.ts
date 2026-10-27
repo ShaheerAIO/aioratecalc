@@ -7,7 +7,6 @@ import {
   WIFI_PRODUCT_ID,
   MARKETING_PRODUCTS,
   MARKETING_INCLUDED_HARDWARE,
-  MARKETING_TERM_KIOSK_IDS,
   DEFAULT_UNIT_CAPS,
   PLANS_INCLUDING_WEBSITE,
   applyPlanIncludedHardware,
@@ -63,10 +62,13 @@ const CATALOG: CatalogProduct[] = [
   p("335279520445", "All-in-One (Order & Pay only)", 299, "monthly", ""),
   p("335283119838", "All-in-One Platform", 399, "monthly", ""),
   p("332609247965", "AIO Marketing Platform", 199, "monthly", "Software"),
-  // HubSpot holds two active records for the 2-year term and they are NOT
-  // identical: 332927902454 includes "1 x Mega Kiosk or 27\" Kiosk" and is the
-  // one `marketing_term` quotes, while 334139877086 includes only the 27" and
-  // is retired.
+  // Marketing Partial Ordering and its two $0 lines.
+  p("343582047937", "AIO Marketing Partial Ordering", 299, "monthly", "Software"),
+  p("343374665412", "Online Ordering", 0, "monthly", "Software"),
+  p("343579168455", "Marketing (Partial Ordering)", 0, "monthly", ""),
+  p("343373224660", "Mega Kiosk Loaner", 100, "monthly", "inventory"),
+  // The retired 2-year plan's two records (`marketing_term`, 2026-10-06 to
+  // 2026-10-27). Saved quotes still carry them.
   p("332927902454", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
   p("334139877086", "AIO Marketing Platform (2-year term)", 299, "monthly", "Software"),
   p("332617109238", "Marketing Kit - Mega Kiosk", 1500, "one_time", "inventory"),
@@ -79,6 +81,9 @@ const CATALOG: CatalogProduct[] = [
   p("223452690130", "POS Unit - With Customer Facing Display", 899, "one_time", "inventory"),
   p("260674226888", "Mega Kiosk", 2459, "one_time", "inventory"),
   p("222497165009", "Kiosk 27\" + Payment Terminal (AMS1) and Mount", 999, "one_time", "inventory"),
+  p("223519571666", "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount", 1195, "one_time", "inventory"),
+  p("223452690132", "KDS (Kitchen Display System)", 735, "one_time", "inventory"),
+  p("223511653104", "Thermal Printer", 295, "one_time", "inventory"),
   p("335279520447", "AIO Tableside POS", 399, "one_time", ""),
   p("223511653101", "mPOS", 349, "one_time", "inventory"),
   p("223511653105", "Payment Terminal - AMS1", 300, "one_time", "inventory"),
@@ -112,9 +117,9 @@ describe("picker exclusions", () => {
   it("hides the placeholders, the pre-auth, and every derived line", () => {
     const hidden = CATALOG.filter(c => !isPickable(c)).map(c => c.name).sort();
     expect(hidden).toEqual([
+      "AIO Marketing Partial Ordering",
       "AIO Marketing Platform",
-      // Both 2-year records: one is this plan's derived platform line, the
-      // other is its retired twin. Neither may be picked.
+      // Both 2-year records, retired with their plan. Neither may be picked.
       "AIO Marketing Platform (2-year term)",
       "AIO Marketing Platform (2-year term)",
       "AIO Pre Auth",
@@ -132,7 +137,7 @@ describe("picker exclusions", () => {
     // A rep picking one by hand is how a quote ends up with two platform fees,
     // and it is the largest recurring line on the document.
     for (const plan of Object.values(PLATFORM_PRODUCTS)) {
-      expect(isPickable(find(plan.name))).toBe(false);
+      expect(isPickable(find(plan.name)), plan.name).toBe(false);
     }
   });
 
@@ -182,9 +187,9 @@ describe("picker exclusions", () => {
 });
 
 describe("quote types", () => {
-  it("shows All-in-One, Order & Pay Only, then the two marketing plans (10/15 product-owner order)", () => {
+  it("shows All-in-One, Order & Pay Only, Marketing Partial Ordering, then Marketing Only", () => {
     expect(QUOTE_TYPES.map(t => t.id)).toEqual([
-      "all_in_one", "order_pay_only", "marketing_only", "marketing_term",
+      "all_in_one", "order_pay_only", "marketing_partial", "marketing_only",
     ]);
   });
 
@@ -197,31 +202,59 @@ describe("quote types", () => {
     expect(quoteTypeOf(undefined)).toBe("all_in_one");
     expect(quoteTypeOf("order_pay_only")).toBe("order_pay_only");
     expect(quoteTypeOf("marketing_only")).toBe("marketing_only");
-    expect(quoteTypeOf("marketing_term")).toBe("marketing_term");
+    expect(quoteTypeOf("marketing_partial")).toBe("marketing_partial");
+    // The 2-year kiosk plan, retired 2026-10-27: Marketing Only + a Loaner.
+    expect(quoteTypeOf("marketing_term")).toBe("marketing_only");
   });
 
-  it("lets a POS quote carry marketing products, but not the reverse", () => {
-    // The Website can sit on a POS quote. The kits cannot — they belong to the
-    // marketing plans, and a processing quote sells its own hardware.
+  it("lets a POS quote carry the Website and a Mega, but not the 27\" Marketing Kit", () => {
     expect(isAllowedForQuoteType(find("Website"), "all_in_one")).toBe(true);
-    expect(isAllowedForQuoteType(find("Marketing Kit - Mega Kiosk"), "all_in_one")).toBe(false);
+    // A Mega goes on any plan since 2026-10-27, bought or on loan.
+    expect(isAllowedForQuoteType(find("Marketing Kit - Mega Kiosk"), "all_in_one")).toBe(true);
+    expect(isAllowedForQuoteType(find("Mega Kiosk Loaner"), "order_pay_only")).toBe(true);
     expect(isAllowedForQuoteType(find("Marketing Kit - 27\" Kiosk"), "all_in_one")).toBe(false);
     expect(isAllowedForQuoteType(find("QSR POS Hardware Bundle"), "all_in_one")).toBe(false);
-    for (const plan of ["marketing_only", "marketing_term"] as const) {
-      expect(isAllowedForQuoteType(find("POS Unit"), plan)).toBe(false);
-      expect(isAllowedForQuoteType(find("Mega Kiosk"), plan)).toBe(false);
-      // The plan includes three of these free, but they are a PICK — a
-      // merchant can want none, or want five and pay for the other two.
-      expect(isAllowedForQuoteType(find("Menu Board Computer"), plan)).toBe(true);
-    }
+    expect(isAllowedForQuoteType(find("POS Unit"), "marketing_only")).toBe(false);
+    expect(isAllowedForQuoteType(find("Mega Kiosk"), "marketing_only")).toBe(false);
+    // The plan includes three of these free, but they are a PICK — a
+    // merchant can want none, or want five and pay for the other two.
+    expect(isAllowedForQuoteType(find("Menu Board Computer"), "marketing_only")).toBe(true);
   });
 
   it("allows exactly the marketing products on a marketing-only quote", () => {
-    for (const plan of ["marketing_only", "marketing_term"] as const) {
-      const allowed = CATALOG.filter(c => isAllowedForQuoteType(c, plan))
-        .map(c => c.hubspotProductId).sort();
-      expect(allowed).toEqual(MARKETING_PRODUCTS.map(m => m.hubspotProductId).sort());
+    const allowed = CATALOG.filter(c => isAllowedForQuoteType(c, "marketing_only"))
+      .map(c => c.hubspotProductId).sort();
+    expect(allowed).toEqual(MARKETING_PRODUCTS.map(m => m.hubspotProductId).sort());
+  });
+
+  it("keeps online ordering off Marketing Only, and the marketing line on Partial Ordering alone", () => {
+    expect(isAllowedForQuoteType(find("Online Ordering"), "marketing_only")).toBe(false);
+    for (const plan of ["marketing_partial", "order_pay_only", "all_in_one"] as const) {
+      expect(isAllowedForQuoteType(find("Online Ordering"), plan), plan).toBe(true);
     }
+    expect(isAllowedForQuoteType(find("Marketing (Partial Ordering)"), "marketing_partial")).toBe(true);
+    for (const plan of ["marketing_only", "order_pay_only", "all_in_one"] as const) {
+      expect(isAllowedForQuoteType(find("Marketing (Partial Ordering)"), plan), plan).toBe(false);
+    }
+  });
+
+  it("allows ordering without a POS on Marketing Partial Ordering, and no POS of any kind", () => {
+    const allowed = CATALOG.filter(c => isAllowedForQuoteType(c, "marketing_partial")).map(c => c.name).sort();
+    expect(allowed).toEqual([
+      "KDS (Kitchen Display System)",
+      "Kiosk 27\" + Payment Terminal (AMS1) and Mount",
+      "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount",
+      "Marketing (Partial Ordering)",
+      "Marketing Kit - Mega Kiosk",
+      "Mega Kiosk Loaner",
+      "Menu Board Computer",
+      "Online Ordering",
+      "Orders Hub Tablet",
+      "Payment Terminal - AMS1",
+      "Thermal Printer",
+      "AIO Wifi Network Package - Unifi",
+      "Website",
+    ].sort());
   });
 
   it("derives the software license instead of offering it as a pick", () => {
@@ -252,7 +285,13 @@ describe("always-included services", () => {
 
   it("adds none of them to a marketing-only quote — nothing is being installed", () => {
     expect(resolveIncludedServices("marketing_only", SOMETHING, CATALOG)).toEqual({ lines: [], missing: [] });
-    expect(resolveIncludedServices("marketing_term", SOMETHING, CATALOG)).toEqual({ lines: [], missing: [] });
+  });
+
+  it("installs and trains on a Marketing Partial Ordering quote with hardware (product owner, 2026-10-27)", () => {
+    const { lines } = resolveIncludedServices("marketing_partial", [line("Orders Hub Tablet", 1)], CATALOG);
+    expect(lines.map(l => l.name)).toEqual(["Onsite Installation", "System Onboarding and Training"]);
+    // Online ordering alone puts nothing on site.
+    expect(resolveIncludedServices("marketing_partial", [line("Online Ordering", 1)], CATALOG).lines).toEqual([]);
   });
 
   it("adds none of them to a rate-only quote — no products means nothing to install", () => {
@@ -462,15 +501,16 @@ describe("snapshot immutability", () => {
 });
 
 describe("deriveOrderPoints", () => {
-  it("counts 3 POS + 2 kiosks + a website product as 6", () => {
-    // The website channel chip is gone (2026-10-13) — the Website PRODUCT is
-    // now the ordering point, so it's counted as a picked line, not a channel.
-    const lines = [line("POS Unit", 3), line("Mega Kiosk", 2), line("Website", 1)];
-    const { orderPoints } = deriveOrderPoints(lines, []);
+  it("counts 3 POS + 2 kiosks + online ordering as 6, and the Website as nothing", () => {
+    // Online ordering is the ordering point since 2026-10-27, not the Website
+    // ("Website alone does not include online ordering").
+    const lines = [line("POS Unit", 3), line("Mega Kiosk", 2), line("Online Ordering", 1), line("Website", 1)];
+    const { orderPoints, unclassified } = deriveOrderPoints(lines, []);
 
-    expect(orderPoints.hardware).toEqual({ "POS Unit": 3, "Mega Kiosk": 2, "Website": 1 });
+    expect(orderPoints.hardware).toEqual({ "POS Unit": 3, "Mega Kiosk": 2, "Online Ordering": 1 });
     expect(orderPoints.channels).toEqual([]);
     expect(orderPoints.total).toBe(6);
+    expect(unclassified).toEqual([]);
   });
 
   it("no longer moves the platform fee — the count is reporting only", () => {
@@ -502,14 +542,11 @@ describe("deriveOrderPoints", () => {
     expect(needsReview).toEqual([]);
   });
 
-  it("counts the Website PRODUCT now, and a stale 'website' channel on an old saved row doesn't double it", () => {
-    // Reversed 2026-10-13: the channel chip is gone, the product is the single
-    // source of truth. A saved row that still carries the retired "website"
-    // channel id must not add a second point — deriveOrderPoints drops any
-    // channel id no longer in ORDER_POINT_CHANNELS.
-    const { orderPoints } = deriveOrderPoints([line("Website", 1)], ["website"]);
+  it("ignores a stale 'website' channel on an old saved row", () => {
+    // The channel chip went 2026-10-13; deriveOrderPoints drops any channel
+    // id no longer in ORDER_POINT_CHANNELS.
+    const { orderPoints } = deriveOrderPoints([line("Online Ordering", 1)], ["website"]);
     expect(orderPoints.total).toBe(1);
-    expect(orderPoints.hardware).toEqual({ "Website": 1 });
     expect(orderPoints.channels).toEqual([]);
   });
 
@@ -615,7 +652,7 @@ describe("platform line selection", () => {
 
   it("gives each plan its own monthly platform product", () => {
     const prices: Record<QuoteType, number> = {
-      order_pay_only: 299, all_in_one: 399, marketing_only: 199, marketing_term: 299,
+      order_pay_only: 299, all_in_one: 399, marketing_only: 199, marketing_partial: 299,
     };
     for (const [quoteType, price] of Object.entries(prices) as Array<[QuoteType, number]>) {
       const platform = resolvePlatformLine(quoteType, SOME_PICK, [], CATALOG);
@@ -654,8 +691,8 @@ describe("platform line selection", () => {
     const built = buildQuote("all_in_one", websiteOnly, [], CATALOG);
     expect(built.blockers).toEqual([]);
     expect(built.platform.status).toBe("resolved");
-    expect(built.orderPoints.total).toBe(1);
-    expect(built.orderPoints.hardware).toEqual({ "Website": 1 });
+    // A website takes no orders since 2026-10-27, so it counts no point.
+    expect(built.orderPoints.total).toBe(0);
     // FIXED (was a KNOWN GAP): picking the Website product is now the ONLY
     // way to declare a website on a processing quote, which made
     // `pickedLines` non-empty for a merchant with nothing physically on
@@ -673,24 +710,21 @@ describe("platform line selection", () => {
     expect(built.totals.oneTime).toBe(0);
   });
 
-  it("quotes the 2-year term as the PLAN, picking HubSpot's 'Mega or 27\"' record", () => {
-    // It used to be a product a rep added, which replaced the $199 line. It is
-    // a plan of its own since 2026-10-06 — and of HubSpot's two $299 records
-    // this is the one whose description carries the kiosk CHOICE.
-    const platform = resolvePlatformLine("marketing_term", [], [], CATALOG);
+  it("finds Marketing Partial Ordering's plan by NAME until its HubSpot id is filled in", () => {
+    const platform = resolvePlatformLine("marketing_partial", SOME_PICK, [], CATALOG);
     expect(platform.status).toBe("resolved");
-    expect(platform.line!.hubspotProductId).toBe("332927902454");
     expect(platform.line!.unitPrice).toBe(299);
+    // Before the record exists, the quote refuses rather than going out without a plan.
+    const without = CATALOG.filter(c => c.name !== "AIO Marketing Partial Ordering");
+    expect(resolvePlatformLine("marketing_partial", SOME_PICK, [], without).status).toBe("unresolved");
   });
 
   it("never leaves a marketing plan rate-only — there is no rate behind it", () => {
     // `none_needed` is for a processing quote with nothing on it. An empty
     // marketing quote is a subscription nobody has added to yet, and it bills.
-    for (const [plan, price] of [["marketing_only", 199], ["marketing_term", 299]] as const) {
-      const platform = resolvePlatformLine(plan, [], [], CATALOG);
-      expect(platform.status).toBe("resolved");
-      expect(platform.line!.unitPrice).toBe(price);
-    }
+    const platform = resolvePlatformLine("marketing_only", [], [], CATALOG);
+    expect(platform.status).toBe("resolved");
+    expect(platform.line!.unitPrice).toBe(199);
   });
 
   it("finds the plan by product id, so a HubSpot rename can't drop the platform fee", () => {
@@ -815,24 +849,37 @@ describe("buildQuote — the one derivation", () => {
   });
 });
 
-// ── The two marketing plans ─────────────────────────────────────────────────
-// $199 and $299 (2-year term) differ in exactly two ways: the platform line,
-// and whether the kiosk is free. Everything else about them is identical, and
-// these are the tests that keep it that way.
+// ── Marketing ───────────────────────────────────────────────────────────────
+// Marketing Only, and the marketing half of Marketing Partial Ordering. The
+// 2-year kiosk plan was retired 2026-10-27 for the Mega Kiosk Loaner.
 describe("marketing plans", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
   const MEGA = "Marketing Kit - Mega Kiosk";
   const KIOSK_27 = "Marketing Kit - 27\" Kiosk";
 
-  it("holds the three Menu Board Computers each plan includes at no charge", () => {
-    for (const plan of ["marketing_only", "marketing_term"] as const) {
-      const built = buildQuote(plan, picked([["Menu Board Computer", 3], [MEGA, 1]]), [], CATALOG);
-      const boards = built.quoteLines.filter(l => l.name === "Menu Board Computer");
-      expect(boards.map(l => [l.qty, l.discountPercent ?? null, l.coveredByPackage ?? null])).toEqual([
-        [3, 100, PLATFORM_PRODUCTS[plan].name],
-      ]);
-      expect(quoteTotals(boards).oneTime).toBe(0);
-    }
+  it("holds the three Menu Board Computers Marketing Only includes at no charge", () => {
+    const built = buildQuote("marketing_only", picked([["Menu Board Computer", 3], [MEGA, 1]]), [], CATALOG);
+    const boards = built.quoteLines.filter(l => l.name === "Menu Board Computer");
+    expect(boards.map(l => [l.qty, l.discountPercent ?? null, l.coveredByPackage ?? null])).toEqual([
+      [3, 100, PLATFORM_PRODUCTS.marketing_only.name],
+    ]);
+    expect(quoteTotals(boards).oneTime).toBe(0);
+  });
+
+  it("holds them free on Marketing Partial Ordering only when the rep adds the marketing line", () => {
+    const base = picked([["Online Ordering", 1], ["Menu Board Computer", 3]]);
+    const without = buildQuote("marketing_partial", base, [], CATALOG);
+    expect(without.quoteLines.filter(l => l.name === "Menu Board Computer").map(l => l.discountPercent ?? null))
+      .toEqual([null]);
+
+    const withMarketing = buildQuote(
+      "marketing_partial", [...base, line("Marketing (Partial Ordering)", 1)], [], CATALOG
+    );
+    expect(withMarketing.quoteLines.filter(l => l.name === "Menu Board Computer")
+      .map(l => [l.qty, l.discountPercent ?? null, l.coveredByPackage ?? null]))
+      .toEqual([[3, 100, PLATFORM_PRODUCTS.marketing_partial.name]]);
+    // $299 either way — the marketing line is $0.
+    expect(withMarketing.totals.recurring).toEqual(without.totals.recurring);
   });
 
   it("bills the ones past the three the plan covers, as a SPLIT line", () => {
@@ -857,41 +904,18 @@ describe("marketing plans", () => {
       .map(l => [l.qty, l.discountPercent ?? null])).toEqual([[3, null]]);
   });
 
-  it("blocks a 2-year quote with no kiosk on it", () => {
-    // The kiosk is part of what $299/mo buys. A quote without one charges the
-    // committed price for hardware that never appears on the document.
-    const built = buildQuote("marketing_term", [], [], CATALOG);
-    expect(built.blockers).toHaveLength(1);
-    expect(built.blockers[0]).toContain("includes one kiosk at no cost");
-  });
-
-  it("refuses a 2-year quote carrying more than one kiosk, and still comps the first", () => {
-    // Elizabeth Phillips, 2026-10-12 — the plan includes ONE kiosk and a
-    // second one on the same document is a sale nobody has priced. The comp
-    // keeps running while the rep fixes it, so a refused quote isn't also
-    // showing the wrong money.
-    const built = buildQuote("marketing_term", picked([[MEGA, 3]]), [], CATALOG);
-    expect(built.blockers).toHaveLength(1);
-    expect(built.blockers[0]).toContain("includes exactly one kiosk");
-
-    const kiosks = built.quoteLines.filter(l => l.name === MEGA);
-    expect(kiosks.map(l => [l.qty, l.discountPercent ?? null])).toEqual([[1, 100], [2, null]]);
-    expect(built.totals.oneTime).toBe(3000);
+  it("loans a Mega for $100 a month on top of the plan — the retired 2-year plan's $299", () => {
+    const built = buildQuote("marketing_only", picked([["Mega Kiosk Loaner", 1]]), [], CATALOG);
+    expect(built.blockers).toEqual([]);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
-  });
-
-  it("takes exactly one kiosk, of either kind, without complaint", () => {
-    for (const kit of [MEGA, KIOSK_27]) {
-      const built = buildQuote("marketing_term", picked([[kit, 1]]), [], CATALOG);
-      expect(built.blockers).toEqual([]);
-      expect(built.totals.oneTime).toBe(0);
-    }
+    expect(built.totals.oneTime).toBe(0);
   });
 
   it("caps the marketing kits like the ordering kiosks they are", () => {
     // They were the one uncapped family until 2026-10-12.
     expect(maxQtyFor(find(MEGA).hubspotProductId)).toBe(6);
     expect(maxQtyFor(find(KIOSK_27).hubspotProductId)).toBe(6);
+    expect(maxQtyFor(find("Mega Kiosk Loaner").hubspotProductId)).toBe(6);
   });
 
   it("charges for the same kiosk on the $199 plan", () => {
@@ -901,39 +925,33 @@ describe("marketing plans", () => {
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 199 }]);
   });
 
-  it("refuses both kiosks at once, and comps the DEARER one meanwhile", () => {
-    // "Dont allow both or more than one" (2026-10-12) — but while the rep is
-    // taking one off, the money shown still has to be the money the plan
-    // means: the comp lands on the Mega, not the 27".
-    const built = buildQuote("marketing_term", picked([[KIOSK_27, 1], [MEGA, 1]]), [], CATALOG);
-    expect(built.blockers).toHaveLength(1);
-    expect(built.blockers[0]).toContain("not both");
-    const free = built.quoteLines.find(l => l.discountPercent === 100 && l.name !== "Menu Board Computer");
-    expect(free!.name).toBe(MEGA);
-    expect(built.totals.oneTime).toBe(999);
-  });
-
-  it("names both kiosks the plan may include", () => {
-    expect(MARKETING_TERM_KIOSK_IDS).toEqual([find(MEGA).hubspotProductId, find(KIOSK_27).hubspotProductId]);
+  it("names the hardware the plan includes", () => {
     expect(MARKETING_INCLUDED_HARDWARE.map(h => h.hubspotProductId))
       .toEqual([find("Menu Board Computer").hubspotProductId]);
   });
 
-  it("reopens a 2-year quote with the kiosk whole and the included hardware gone", () => {
-    // The split halves sum back to what the rep picked, and the three derived
-    // Menu Board Computers must NOT come back as picks — the server refuses
-    // them outright on a marketing quote, so a round-trip would wedge the save.
-    const first = buildQuote("marketing_term", picked([[MEGA, 2]]), [], CATALOG);
-    const reopened = picksFromQuoteLines(first.quoteLines, "marketing_term");
-    expect(reopened).toEqual([{ hubspotProductId: find(MEGA).hubspotProductId, qty: 2 }]);
+  it("reopens a retired 2-year quote as Marketing Only with the kiosk it covered on loan", () => {
+    // What a `marketing_term` row saved: the 2-year platform line, the kiosk
+    // the plan covered, and a second kiosk the merchant bought.
+    const covered: QuoteLine = {
+      ...line(MEGA, 1), discountPercent: 100, coveredByPackage: "AIO Marketing Platform (2-year term)",
+    };
+    const saved = [line("AIO Marketing Platform (2-year term)", 1), covered, line(MEGA, 1)];
+    const reopened = picksFromQuoteLines(saved, quoteTypeOf("marketing_term"));
+    expect(reopened).toEqual([
+      { hubspotProductId: find("Mega Kiosk Loaner").hubspotProductId, qty: 1 },
+      { hubspotProductId: find(MEGA).hubspotProductId, qty: 1 },
+    ]);
 
-    const second = buildQuote(
-      "marketing_term",
+    const rebuilt = buildQuote(
+      "marketing_only",
       reopened.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
-      [],
-      CATALOG
+      [], CATALOG
     );
-    expect(second.quoteLines).toEqual(first.quoteLines);
+    // The same money: $199 + $100 loan, and the bought kiosk at $1,500.
+    expect(rebuilt.totals.recurring).toEqual([{ frequency: "monthly", amount: 299 }]);
+    expect(rebuilt.totals.oneTime).toBe(1500);
+    expect(rebuilt.blockers).toEqual([]);
   });
 
   it("keeps the Menu Board Computer as a pick when reopening a POS quote", () => {
@@ -945,86 +963,63 @@ describe("marketing plans", () => {
   it("will not let a rep charge for what the plan already paid for", () => {
     // Same rule as a package-covered line, and for the same reason: the
     // subscription bought it. An unrelated edit on the row can't restore it.
+    const boards = find("Menu Board Computer").hubspotProductId;
     const built = buildQuote(
-      "marketing_term",
-      picked([[MEGA, 1]]),
+      "marketing_only",
+      picked([["Menu Board Computer", 3]]),
       [],
       CATALOG,
-      { [find(MEGA).hubspotProductId]: { billingStart: { mode: "days", days: 60 } } }
+      { [boards]: { billingStart: { mode: "days", days: 60 } } }
     );
-    const kiosk = built.quoteLines.find(l => l.name === MEGA)!;
-    expect(kiosk.discountPercent).toBe(100);
+    expect(built.quoteLines.find(l => l.name === "Menu Board Computer")!.discountPercent).toBe(100);
     expect(built.totals.oneTime).toBe(0);
   });
 });
 
-// ── The website unlock ──────────────────────────────────────────────────────
-// A marketing merchant whose $50 Website takes online orders sells through it,
-// so AIO processes those card payments. That makes them a PROCESSING merchant
-// without making them a POS merchant, and these tests exist to keep those two
-// apart. Online ordering is optional: a plain website takes no payments.
-describe("website on a marketing quote", () => {
+// ── The website, and where online ordering went ─────────────────────────────
+// From 2026-10-08 a Marketing Only Website could take online orders, which
+// made the merchant a processing one. Since 2026-10-27 online ordering is its
+// own product on the ordering plans, and a Website is only a website. A
+// marketing quote SAVED with the old toggle still carries the rate line, and
+// that keeps it processing.
+describe("the website and online ordering", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
   const SITE_ID = find("Website").hubspotProductId;
-  const ORDERING = { [SITE_ID]: { onlineOrdering: true } };
 
-  it("separates 'is this a POS deal' from 'does AIO touch their money'", () => {
+  it("never makes a Marketing Only quote process — a website takes no orders", () => {
     const withSite = [{ hubspotProductId: SITE_ID }];
-
-    for (const plan of ["marketing_only", "marketing_term"] as const) {
-      // The plan alone: no processing.
-      expect(isProcessingQuote(plan)).toBe(false);
-      expect(quoteHasProcessing(plan, [])).toBe(false);
-      // A plain website takes no payments.
-      expect(quoteHasProcessing(plan, withSite)).toBe(false);
-      expect(quoteHasProcessing(plan, withSite, {})).toBe(false);
-      // With online ordering they process — but it is still not a POS deal.
-      expect(quoteHasProcessing(plan, withSite, ORDERING)).toBe(true);
-      expect(isProcessingQuote(plan)).toBe(false);
-    }
-
-    // A processing plan processes whatever is on it.
+    expect(isProcessingQuote("marketing_only")).toBe(false);
+    expect(quoteHasProcessing("marketing_only", [])).toBe(false);
+    expect(quoteHasProcessing("marketing_only", withSite)).toBe(false);
+    // A processing plan processes whatever is on it — Partial Ordering included.
     expect(quoteHasProcessing("all_in_one", [])).toBe(true);
+    expect(quoteHasProcessing("marketing_partial", [])).toBe(true);
   });
 
-  it("reads processing off SAVED lines by the rate line, which legacy website quotes all carry", () => {
-    const saved = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING).quoteLines;
+  it("keeps a marketing quote SAVED with online ordering processing, off its rate line", () => {
+    const saved = [line("AIO Marketing Platform", 1), line("Website", 1), line(RATE_LINE, 1)];
     expect(quoteHasProcessing("marketing_only", saved)).toBe(true);
-    const plain = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG).quoteLines;
-    expect(quoteHasProcessing("marketing_only", plain)).toBe(false);
+    // And reopening it no longer carries the toggle anywhere.
+    expect(adjustmentsFromQuoteLines(saved)[SITE_ID]).toBeUndefined();
   });
 
-  it("adds no rate line for a website without online ordering", () => {
+  it("adds no rate line to a Marketing Only website", () => {
     const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG);
     expect(built.blockers).toEqual([]);
     expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 249 }]);
   });
 
-  it("keeps online ordering on when a saved quote is reopened", () => {
-    const saved = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING).quoteLines;
-    expect(adjustmentsFromQuoteLines(saved, "marketing_only")[SITE_ID]).toEqual({ onlineOrdering: true });
-    const plain = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG).quoteLines;
-    expect(adjustmentsFromQuoteLines(plain, "marketing_only")[SITE_ID]).toBeUndefined();
-  });
-
-  it("states the card rates on the quote once online ordering is on", () => {
-    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING);
+  it("states the card rates on a Marketing Partial Ordering quote that takes orders online", () => {
+    // Scenario C less the hardware: $299 plan + $50 website, $0 online ordering.
+    const built = buildQuote("marketing_partial", picked([["Website", 1], ["Online Ordering", 1]]), [], CATALOG);
     expect(built.blockers).toEqual([]);
     expect(built.quoteLines.map(l => l.name)).toEqual([
-      "AIO Marketing Platform",
-      "Website",
-      // Appended after the charged lines since 2026-10-14, alongside the
-      // pre-auth, so a $0 line can't be counted by `quoteSanityBlockers`.
-      RATE_LINE,
+      "AIO Marketing Partial Ordering", "Website", "Online Ordering", RATE_LINE,
     ]);
-    // It discloses, it doesn't bill: $199 + $50 and nothing one-time.
-    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 249 }]);
-    expect(built.totals.oneTime).toBe(0);
-  });
-
-  it("leaves a marketing quote with no website alone", () => {
-    const built = buildQuote("marketing_only", picked([["Marketing Kit - Mega Kiosk", 1]]), [], CATALOG);
-    expect(built.quoteLines.map(l => l.name)).not.toContain(RATE_LINE);
+    expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 349 }]);
+    // Nothing on site, so no install.
+    expect(built.includedServices.lines).toEqual([]);
   });
 
   it("adds it to a POS quote too, since 2026-10-14 — the rates have to be on the document", () => {
@@ -1032,7 +1027,7 @@ describe("website on a marketing quote", () => {
     // merchant obviously knows they're buying payments — which left the rates
     // written NOWHERE on the document a POS merchant signs. Product owner,
     // 2026-10-14.
-    const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Website", 1]]), [], CATALOG, ORDERING);
+    const built = buildQuote("all_in_one", picked([["POS Unit", 1], ["Website", 1]]), [], CATALOG);
     expect(built.quoteLines.map(l => l.name)).toContain(RATE_LINE);
   });
 
@@ -1047,32 +1042,18 @@ describe("website on a marketing quote", () => {
     expect(built.blockers).toEqual([]);
   });
 
-  it("still installs nothing — a website merchant has nothing on site", () => {
-    // The regression this whole split exists to prevent: answering "do they
-    // process" with the plan predicate, or "is this a POS deal" with this one,
-    // puts a $999 onsite installation on a website merchant's quote.
-    const built = buildQuote("marketing_term", picked([["Website", 1], ["Marketing Kit - Mega Kiosk", 1]]), [], CATALOG);
-    expect(built.includedServices.lines).toEqual([]);
-    expect(built.quoteLines.map(l => l.name)).not.toContain("Onsite Installation");
-    expect(built.quoteLines.map(l => l.name)).not.toContain("AIO Wifi Network Package - Unifi");
-    // The Website PRODUCT is the ordering point since 2026-10-13 (was 0; the
-    // retired channel used to carry it instead), so this is 1, not 0 — the
-    // Marketing Kit stays 0 either way (it's not an ordering kiosk).
-    expect(built.orderPoints.total).toBe(1);
-  });
-
   it("blocks the quote when the rate product is missing from the catalog", () => {
     const stripped = CATALOG.filter(c => c.name !== RATE_LINE);
-    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], stripped, ORDERING);
+    const built = buildQuote("marketing_partial", picked([["Online Ordering", 1]]), [], stripped);
     expect(built.blockers).toHaveLength(1);
     expect(built.blockers[0]).toContain("has to state their rates");
   });
 
   it("never hands the rate line back as a pick — no rep may put it on by hand", () => {
-    const built = buildQuote("marketing_only", picked([["Website", 1]]), [], CATALOG, ORDERING);
+    const built = buildQuote("marketing_partial", picked([["Online Ordering", 1]]), [], CATALOG);
     expect(isPickable(find(RATE_LINE))).toBe(false);
-    expect(picksFromQuoteLines(built.quoteLines, "marketing_only"))
-      .toEqual([{ hubspotProductId: find("Website").hubspotProductId, qty: 1 }]);
+    expect(picksFromQuoteLines(built.quoteLines, "marketing_partial"))
+      .toEqual([{ hubspotProductId: find("Online Ordering").hubspotProductId, qty: 1 }]);
   });
 });
 
@@ -1253,7 +1234,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     const first = buildQuote("all_in_one", picked([["POS Unit", 1], ["AIO Wifi Network Package - Unifi", 1]]), [], CATALOG);
     expect(first.quoteLines.map(l => l.name)).toContain("AIO Wifi Network Package - Unifi");
 
-    expect(adjustmentsFromQuoteLines(first.quoteLines, "all_in_one")[WIFI_PRODUCT_ID]).toBeUndefined();
+    expect(adjustmentsFromQuoteLines(first.quoteLines)[WIFI_PRODUCT_ID]).toBeUndefined();
     const picks = picksFromQuoteLines(first.quoteLines, "all_in_one");
     expect(picks).toContainEqual({ hubspotProductId: WIFI_PRODUCT_ID, qty: 1 });
 
@@ -1262,7 +1243,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
       picks.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
       [],
       CATALOG,
-      adjustmentsFromQuoteLines(first.quoteLines, "all_in_one")
+      adjustmentsFromQuoteLines(first.quoteLines)
     );
     expect(second.quoteLines).toEqual(first.quoteLines);
   });
@@ -1282,17 +1263,20 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     expect(license.blockers.join(" ")).toContain("Additional Software License");
   });
 
-  it("drops kits and the hardware bundle when a processing quote is reopened, and keeps every AMS1", () => {
+  it("drops the 27\" kit and the hardware bundle when a processing quote is reopened, and keeps every AMS1", () => {
+    // The Mega kit stays: a Mega goes on any plan since 2026-10-27.
     const lines = [
       line("POS Unit", 2),
       line("Payment Terminal - AMS1", 3),
       line("Marketing Kit - Mega Kiosk", 1),
+      line("Marketing Kit - 27\" Kiosk", 1),
       line("QSR POS Hardware Bundle", 1),
       line("Additional Software License", 2),
     ];
     expect(picksFromQuoteLines(lines, "all_in_one")).toEqual([
       { hubspotProductId: find("POS Unit").hubspotProductId, qty: 2 },
       { hubspotProductId: AMS1_PRODUCT.hubspotProductId, qty: 3 },
+      { hubspotProductId: find("Marketing Kit - Mega Kiosk").hubspotProductId, qty: 1 },
     ]);
   });
 
@@ -1318,18 +1302,19 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
   });
 });
 
-describe("the Website the All-in-One plan includes", () => {
+describe("the Website All-in-One includes", () => {
   const website = () => line("Website", 1);
   const websiteLine = (lines: QuoteLine[]) => lines.find(l => l.name === "Website")!;
 
-  // This has moved three times in three days: added to All-in-One 2026-10-07,
-  // removed by the 2026-10-09 notes, and put back the same day by the product
-  // owner ("website is included in all in one package"). The list is what
-  // makes each of those one word, so it is asserted directly.
+  // This has moved five times: added to All-in-One 2026-10-07, removed by the
+  // 2026-10-09 notes, put back the same day, taken off on 2026-10-27 by the
+  // scenario sheet and put back the same day (Elizabeth Phillips: "All in one
+  // does include website for free"). The list is what makes each of those one
+  // word, so it is asserted directly.
   it("is included on All-in-One only", () => {
     expect(PLANS_INCLUDING_WEBSITE).toEqual(["all_in_one"]);
     expect(planIncludesWebsite("all_in_one")).toBe(true);
-    for (const t of ["order_pay_only", "marketing_only", "marketing_term"] as const) {
+    for (const t of ["order_pay_only", "marketing_only", "marketing_partial"] as const) {
       expect(planIncludesWebsite(t)).toBe(false);
     }
   });
@@ -1340,9 +1325,7 @@ describe("the Website the All-in-One plan includes", () => {
       discountPercent: 100,
       coveredByPackage: PLATFORM_PRODUCTS.all_in_one.name,
     });
-    // The plan fee alone — the $50/mo site is inside it.
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
-    expect(built.blockers).toEqual([]);
   });
 
   it("stays at $0 even when the rep edits the row", () => {
@@ -1351,24 +1334,15 @@ describe("the Website the All-in-One plan includes", () => {
     expect(websiteLine(built.quoteLines).discountPercent).toBe(100);
   });
 
-  it("applies the comp through the helper, which is the only thing the list drives", () => {
-    const covered = applyPlanIncludedWebsite("all_in_one", [website()]);
-    expect(covered[0].coveredByPackage).toBe(PLATFORM_PRODUCTS.all_in_one.name);
-    expect(applyPlanIncludedWebsite("order_pay_only", [website()])[0].coveredByPackage).toBeUndefined();
-  });
-
   it("is charged on Order & Pay", () => {
     const built = buildQuote("order_pay_only", [line("POS Unit", 1), website()], [], CATALOG);
     expect(websiteLine(built.quoteLines).discountPercent).toBeUndefined();
     expect(websiteLine(built.quoteLines).coveredByPackage).toBeUndefined();
   });
 
-  it("reopens as a plain pick, with no adjustment read back from its 100%", () => {
-    const built = buildQuote("all_in_one", [line("POS Unit", 1), website()], [], CATALOG);
-    expect(picksFromQuoteLines(built.quoteLines, "all_in_one")).toContainEqual({
-      hubspotProductId: find("Website").hubspotProductId, qty: 1,
-    });
-    expect(adjustmentsFromQuoteLines(built.quoteLines, "all_in_one")[find("Website").hubspotProductId]).toBeUndefined();
+  it("applies the comp through the helper, which is the only thing the list drives", () => {
+    expect(applyPlanIncludedWebsite("all_in_one", [website()])[0].coveredByPackage).toBe(PLATFORM_PRODUCTS.all_in_one.name);
+    expect(applyPlanIncludedWebsite("order_pay_only", [website()])[0].coveredByPackage).toBeUndefined();
   });
 });
 
@@ -1430,52 +1404,54 @@ describe("quantities counted against what they attach to", () => {
 // `processesCardNotPresentOnly`.
 describe("processesCardNotPresentOnly", () => {
   const picked = (names: Array<[string, number]>) => names.map(([n, q]) => line(n, q));
-  const SITE_ID = find("Website").hubspotProductId;
-  const ORDERING = { [SITE_ID]: { onlineOrdering: true } };
+  const RATE = find(RATE_LINE);
 
-  it("is true for a marketing quote whose website takes orders and nothing else", () => {
-    expect(processesCardNotPresentOnly("marketing_only", picked([["Website", 1]]), ORDERING)).toBe(true);
+  it("is true for a Marketing Partial Ordering quote that only takes orders online", () => {
+    expect(processesCardNotPresentOnly("marketing_partial", picked([["Online Ordering", 1], ["Website", 1]]))).toBe(true);
+    // The order tablet and KDS take no card either.
+    expect(processesCardNotPresentOnly(
+      "marketing_partial", picked([["Online Ordering", 1], ["Orders Hub Tablet", 1], ["KDS (Kitchen Display System)", 1]])
+    )).toBe(true);
+  });
+
+  it("is true for a marketing quote saved with the old website-ordering toggle", () => {
+    expect(processesCardNotPresentOnly("marketing_only", [...picked([["Website", 1]]), toQuoteLine(RATE, 1)])).toBe(true);
   });
 
   it("is FALSE once a kiosk is on it — a kiosk takes a card in person", () => {
-    // The trap the naive predicate falls into: `marketing_term` INCLUDES a
-    // kiosk, so "marketing + a website" would have called every 2-year-term
-    // merchant card-not-present-only.
-    const withKiosk = picked([["Website", 1], ["Mega Kiosk", 1]]);
-    expect(processesCardNotPresentOnly("marketing_only", withKiosk, ORDERING)).toBe(false);
-    expect(processesCardNotPresentOnly("marketing_term", withKiosk, ORDERING)).toBe(false);
+    const withKiosk = picked([["Online Ordering", 1], ["Kiosk 27\" + Payment Terminal (AMS1) and Mount", 1]]);
+    expect(processesCardNotPresentOnly("marketing_partial", withKiosk)).toBe(false);
   });
 
   it("is FALSE with an AMS1 on it, which carries ZERO ordering points but reads cards", () => {
     // The second trap: the terminal is explicitly 0 points (ORDER_POINT_RULES),
     // so a points-only test would wave it through.
-    const withTerminal = picked([["Website", 1], ["Payment Terminal - AMS1", 1]]);
-    expect(processesCardNotPresentOnly("marketing_only", withTerminal, ORDERING)).toBe(false);
+    const withTerminal = picked([["Online Ordering", 1], ["Payment Terminal - AMS1", 1]]);
+    expect(processesCardNotPresentOnly("marketing_partial", withTerminal)).toBe(false);
   });
 
-  it("is FALSE for every processing plan, whatever is or isn't picked", () => {
+  it("is FALSE for both POS plans, whatever is or isn't picked", () => {
     // A POS plan puts a system in a restaurant. That merchant takes cards
     // across a counter even before a rep has picked anything.
     for (const plan of ["all_in_one", "order_pay_only"] as const) {
       expect(processesCardNotPresentOnly(plan, [])).toBe(false);
-      expect(processesCardNotPresentOnly(plan, picked([["Website", 1]]), ORDERING)).toBe(false);
+      expect(processesCardNotPresentOnly(plan, picked([["Online Ordering", 1]]))).toBe(false);
     }
   });
 
   it("is FALSE for a marketing quote that doesn't process at all", () => {
-    // Nothing to quote a rate on, in either lane.
-    expect(processesCardNotPresentOnly("marketing_only", picked([["Website", 1]]), {})).toBe(false);
+    expect(processesCardNotPresentOnly("marketing_only", picked([["Website", 1]]))).toBe(false);
     expect(processesCardNotPresentOnly("marketing_only", [])).toBe(false);
   });
 
-  it("works off PICKS, which carry no name — the product id is the primary key", () => {
+  it("works off PICKS, which carry no name — the kiosk's product id is enough", () => {
     // `ProductPick` is {hubspotProductId, qty}. The rep surfaces hold those,
-    // not quote lines, so a name-dependent lookup would silently never match.
-    expect(processesCardNotPresentOnly("marketing_only", [{ hubspotProductId: SITE_ID }], ORDERING)).toBe(true);
+    // not quote lines, so the card-present devices are recognised by id.
+    const online = { hubspotProductId: find("Online Ordering").hubspotProductId };
+    expect(processesCardNotPresentOnly("marketing_partial", [online])).toBe(true);
     expect(processesCardNotPresentOnly(
-      "marketing_only",
-      [{ hubspotProductId: SITE_ID }, { hubspotProductId: find("Mega Kiosk").hubspotProductId }],
-      ORDERING
+      "marketing_partial",
+      [online, { hubspotProductId: find("Kiosk 27\" + Payment Terminal (AMS1) and Mount").hubspotProductId }]
     )).toBe(false);
   });
 });
@@ -1557,5 +1533,15 @@ describe("payroll needs a counter POS (2026-10-18)", () => {
     const pos = toQuoteLine(catalog.find(c => c.name === "POS Unit")!, 1);
     const ok = buildQuote("all_in_one", [payrollLine, pos], [], catalog);
     expect(ok.blockers.join(" ")).not.toContain("Payroll");
+  });
+});
+
+describe("the marketing line on Marketing Partial Ordering", () => {
+  it("is one per quote, and never reads as unclassified hardware (HubSpot gives it no type)", () => {
+    const id = find("Marketing (Partial Ordering)").hubspotProductId;
+    expect(maxQtyFor(id)).toBe(1);
+    const { unclassified, orderPoints } = deriveOrderPoints([line("Marketing (Partial Ordering)", 1)], []);
+    expect(unclassified).toEqual([]);
+    expect(orderPoints.total).toBe(0);
   });
 });

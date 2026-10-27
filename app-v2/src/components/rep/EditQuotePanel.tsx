@@ -63,7 +63,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   // Read off the SAVED lines, derived ones included — a comped install lives
   // on a derived line, and picksFromQuoteLines drops those by design.
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>(
-    adjustmentsFromQuoteLines(app.quoteLines, savedQuoteType)
+    adjustmentsFromQuoteLines(app.quoteLines)
   );
   const [quote, setQuote] = useState<ConfiguredQuote | null>(null);
   // Reopened from the row, so a rep editing an existing quote sees the reason
@@ -85,9 +85,9 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   // whether its Website takes online orders, not on the plan alone. Everything
   // below hangs off this: the margin control, the rate preview, and whether an
   // empty picker is a legitimate quote.
-  const rated = quoteHasProcessing(quoteType, picks, adjustments);
+  const rated = quoteHasProcessing(quoteType, picks);
   // Online ordering and nothing on site: no card-present rate to show.
-  const cnpOnly = processesCardNotPresentOnly(quoteType, picks, adjustments);
+  const cnpOnly = processesCardNotPresentOnly(quoteType, picks);
 
   // Whether there's ANY volume basis to preview or floor-check a margin
   // against — a statement, or a rep-entered volume/ticket config. Neither

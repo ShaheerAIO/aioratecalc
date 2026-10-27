@@ -34,8 +34,8 @@ import type {
 // on 10/6, back to lead with Order & Pay Only on 10/13, and back to leading
 // with All-in-One again on 10/15 (product owner: "aio, order n pay, marketing
 // should be the order of the packages") — this is that order: All-in-One,
-// Order & Pay Only, then the two marketing entries (marketing_only before
-// marketing_term, unchanged).
+// Order & Pay Only, then the ordering-without-a-POS plan and Marketing Only.
+// The 2-year kiosk-loan plan was retired 2026-10-27 (see `quoteTypeOf`).
 export const QUOTE_TYPES: Array<{ id: QuoteType; label: string; note: string }> = [
   {
     id: "all_in_one",
@@ -48,14 +48,14 @@ export const QUOTE_TYPES: Array<{ id: QuoteType; label: string; note: string }> 
     note: "Hardware, software and a processing rate.",
   },
   {
-    id: "marketing_only",
-    label: "Marketing Only",
-    note: "Marketing alone. Kiosk bought separately.",
+    id: "marketing_partial",
+    label: "Marketing Partial Ordering",
+    note: "Online and/or kiosk ordering, no POS. Marketing optional.",
   },
   {
-    id: "marketing_term",
-    label: "Marketing — Kiosk Loan",
-    note: "2-year commitment. Mega or 27\" kiosk included.",
+    id: "marketing_only",
+    label: "Marketing Only",
+    note: "Marketing alone. Mega kiosk loaned or bought separately.",
   },
 ];
 
@@ -74,20 +74,32 @@ export const QUOTE_TYPES: Array<{ id: QuoteType; label: string; note: string }> 
  *
  * Rows written before quote types existed at all are null, and are full-POS
  * deals, so they map the same way.
+ *
+ * `marketing_term`, the $299 2-year plan that included one kiosk, was retired
+ * 2026-10-27 (product owner): the kiosk is now the $100/mo Mega Kiosk Loaner
+ * on top of Marketing Only, which is the same $299. A row on it reopens as
+ * Marketing Only, and `picksFromQuoteLines` turns the kiosk the plan covered
+ * into one Loaner, so the money doesn't move.
  */
 export function quoteTypeOf(stored: StoredQuoteType | null | undefined): QuoteType {
   if (stored === "full_pos" || stored === "food_truck" || stored == null) return "all_in_one";
+  if (stored === "marketing_term") return "marketing_only";
   return stored;
 }
 
 /**
- * True for the two marketing plans. They differ only in price, term and
- * whether the kiosk is included — every selection rule treats them alike, so
- * asking this rather than naming one of them is what keeps the $299 plan from
- * quietly inheriting POS behaviour.
+ * True for Marketing Only, the one plan AIO doesn't process for. Marketing
+ * Partial Ordering carries marketing too, but it takes orders and so payments,
+ * which makes it a processing plan — see `includesMarketing` for the question
+ * of whether a quote carries marketing at all.
  */
 export function isMarketingQuote(quoteType: QuoteType): boolean {
-  return quoteType === "marketing_only" || quoteType === "marketing_term";
+  return quoteType === "marketing_only";
+}
+
+/** Marketing Partial Ordering: ordering without a POS (2026-10-27). */
+export function isPartialOrderingQuote(quoteType: QuoteType): boolean {
+  return quoteType === "marketing_partial";
 }
 
 /** True for the plans that carry a processing rate and an ordering-point count. */
@@ -96,11 +108,53 @@ export function isProcessingQuote(quoteType: QuoteType): boolean {
 }
 
 /**
- * The Website add-on, $50/mo. On a marketing quote it is the one product that
- * changes what AIO is to this merchant: a website takes orders, orders take
- * card payments, and those payments run through AIO.
+ * The Website add-on, $50/mo on every plan. Since 2026-10-27 it is a website
+ * and nothing more — it does not take orders (the scenario sheet: "Website
+ * alone does not include online ordering"). Online ordering is its own line.
  */
 export const WEBSITE_PRODUCT_ID = "333275576048";
+
+/**
+ * A product this code knows by id, falling back to its exact name — the shape
+ * for a 2026-10-27 product whose HubSpot record didn't exist yet. An empty id
+ * never equals a real one, so the lookup falls through to the name; once the
+ * id is filled in the name only matters for a record renamed since.
+ */
+type NamedProduct = { name: string; hubspotProductId: string };
+
+export function isNamedProduct(product: NamedProduct, line: { hubspotProductId: string; name?: string }): boolean {
+  return (
+    (product.hubspotProductId !== "" && line.hubspotProductId === product.hubspotProductId) ||
+    (line.name ?? "").trim() === product.name
+  );
+}
+
+/**
+ * Online ordering, $0/mo — an ordering point on its own, website or not
+ * (product owner, 2026-10-27: "maybe we can offer online ordering without a
+ * website"). A line rather than a flag so the merchant reads it on the quote
+ * and a reopened quote can tell it's there.
+ */
+export const ONLINE_ORDERING_PRODUCT: NamedProduct = { name: "Online Ordering", hubspotProductId: "343374665412" };
+
+/**
+ * Marketing on a Marketing Partial Ordering quote, $0/mo: the plan is $299
+ * either way, and this line is what says the merchant took the marketing
+ * half — and so the three free menu boards (product owner, 2026-10-27).
+ */
+export const MARKETING_ADDON_PRODUCT: NamedProduct = { name: "Marketing (Partial Ordering)", hubspotProductId: "343579168455" };
+
+/** The Mega Kiosk on loan, $100/mo each, on any plan. Created 2026-10-27. */
+export const MEGA_LOANER_PRODUCT_ID = "343373224660";
+
+/** Whether this quote carries AIO's marketing, which is what brings the three menu boards. */
+export function includesMarketing(
+  quoteType: QuoteType,
+  items: Array<{ hubspotProductId: string; name?: string }> | null | undefined
+): boolean {
+  if (isMarketingQuote(quoteType)) return true;
+  return isPartialOrderingQuote(quoteType) && (items ?? []).some(i => isNamedProduct(MARKETING_ADDON_PRODUCT, i));
+}
 
 /**
  * The most of each product one quote may carry, by HubSpot product id.
@@ -147,6 +201,9 @@ export const DEFAULT_UNIT_CAPS: Record<string, number> = {
   // about what that plan includes rather than about how many fit in a room.
   "332617109238": 6,  // Marketing Kit - Mega Kiosk
   "332793212658": 6,  // Marketing Kit - 27" Kiosk
+  "343373224660": 6,  // Mega Kiosk Loaner
+  "343374665412": 1,  // Online Ordering — one per merchant, like the Website
+  "343579168455": 1,  // Marketing (Partial Ordering) — a switch, not a quantity
 };
 
 /**
@@ -178,6 +235,25 @@ export function isTabletProduct(hubspotProductId: string): boolean {
 
 export const DEFAULT_SHOW_TABLETS = false;
 
+/**
+ * Products no longer offered on NEW quotes (2026-10-27, product owner): the
+ * 27" Marketing Kit ("remove the 27 inch kiosk from marketing entirely") and
+ * the ordering Mega Kiosk (Mega taking payments is not sold to new customers;
+ * a Mega is a display, bought as the Marketing Kit or on loan).
+ *
+ * VISIBILITY ONLY, for the same reason as the tablet switch: a draft that
+ * already carries one must still save, so the configurator keeps showing a
+ * retired product that is on the quote and simply stops offering it otherwise.
+ */
+export const RETIRED_PICK_PRODUCT_IDS: readonly string[] = [
+  "332793212658", // Marketing Kit - 27" Kiosk
+  "260674226888", // Mega Kiosk (ordering)
+];
+
+export function isRetiredPick(hubspotProductId: string): boolean {
+  return RETIRED_PICK_PRODUCT_IDS.includes(hubspotProductId);
+}
+
 /** The most of this product a quote may carry, or null when there's no limit. */
 export function maxQtyFor(
   hubspotProductId: string,
@@ -193,18 +269,6 @@ export function carriesWebsite(items: Array<{ hubspotProductId: string }> | null
 }
 
 /**
- * Whether the Website on a marketing quote takes online orders. Optional
- * (Shaheer, 2026-10-08): a website can be just a website, and only one that
- * takes orders puts card payments through AIO. Off unless the rep turns it on.
- */
-export function websiteTakesOrders(
-  items: Array<{ hubspotProductId: string }> | null | undefined,
-  adjustments: QuoteAdjustments | null | undefined
-): boolean {
-  return carriesWebsite(items) && adjustments?.[WEBSITE_PRODUCT_ID]?.onlineOrdering === true;
-}
-
-/**
  * Does this quote carry a processing rate at all?
  *
  * Deliberately NOT the same question as `isProcessingQuote`, and the two are
@@ -214,28 +278,19 @@ export function websiteTakesOrders(
  * AIO processes money for this merchant, which decides whether there is a rate
  * to quote, a statement worth reading, and an Adyen account to open.
  *
- * They came apart on 2026-10-06: a marketing merchant whose Website takes
- * online orders sells through it, so they process — but they still have
- * nothing on site to install, no ordering points to count and no POS hardware
- * to pick. Answering either question with the other's predicate is how a
- * website merchant ends up quoted a $999 onsite installation, or billed for
- * card processing with no Adyen account behind it.
- *
- * Two inputs, because callers hold one of two things. The configurator hosts
- * hold PICKS plus the rep's adjustments, where the online-ordering toggle
- * lives. Everything downstream holds SAVED lines, where the toggle has become
- * the card-rate disclosure line — present exactly when the Website takes
- * orders, and on every website quote saved before the toggle existed, which
- * is what keeps those rows processing.
+ * They came apart on 2026-10-06, when a Marketing Only Website could take
+ * online orders. Since 2026-10-27 it can't — ordering means an ordering plan —
+ * so on a NEW quote the two agree. They still differ on a SAVED one: a
+ * marketing quote saved with the old toggle carries the card-rate disclosure
+ * line, and that line is what keeps the row processing (an Adyen account, a
+ * rate on the document) after the toggle itself is gone.
  */
 export function quoteHasProcessing(
   quoteType: QuoteType,
-  items: Array<{ hubspotProductId: string }> | null | undefined,
-  adjustments?: QuoteAdjustments | null
+  items: Array<{ hubspotProductId: string }> | null | undefined
 ): boolean {
   if (isProcessingQuote(quoteType)) return true;
-  if ((items ?? []).some(i => i.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId)) return true;
-  return websiteTakesOrders(items, adjustments);
+  return (items ?? []).some(i => i.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId);
 }
 
 /**
@@ -244,17 +299,18 @@ export function quoteHasProcessing(
  * card-present rate to quote, and showing one invites a rep to negotiate a
  * number that can never apply (product owner, 2026-10-14).
  *
- * Only a MARKETING quote can be this. A processing plan puts a system in a
- * restaurant — the whole point of it is taking cards across a counter — so
- * `all_in_one` and `order_pay_only` are card-present merchants by
- * construction, whatever they have or haven't picked yet.
+ * Two plans can be this. Marketing Partial Ordering taking online orders and
+ * no kiosk is the live case; a Marketing Only quote saved with the old
+ * website-ordering toggle is the legacy one. Order & Pay and All-in-One put a
+ * POS in a restaurant — the whole point of it is taking cards across a
+ * counter — so they are card-present merchants by construction, whatever they
+ * have or haven't picked yet.
  *
- * Within marketing, the question is NOT "is it marketing + a website", which
- * is what it looks like it should be: a `marketing_term` quote INCLUDES a
- * kiosk, and a kiosk takes a card in person. So anything on the quote that a
- * customer can tap a card against disqualifies it — every ordering-point
- * product except the Website itself, plus the AMS1, which is a card reader
- * and deliberately counts zero ordering points (see ORDER_POINT_RULES).
+ * The question is NOT "is there online ordering": a kiosk takes a card in
+ * person. So anything on the quote that a customer can tap a card against
+ * disqualifies it — every ordering-point product except online ordering
+ * itself, plus the AMS1, which is a card reader and deliberately counts zero
+ * ordering points (see ORDER_POINT_RULES).
  *
  * The three surviving ORDER_POINT_CHANNELS (QR, third-party delivery,
  * phone-AI) are all card-not-present, so none of them is checked here.
@@ -267,16 +323,15 @@ export function processesCardNotPresentOnly(
    * the primary key for both lookups below, and the name is their fallback
    * for a product created after the rules were written.
    */
-  items: Array<{ hubspotProductId: string; name?: string }> | null | undefined,
-  adjustments?: QuoteAdjustments | null
+  items: Array<{ hubspotProductId: string; name?: string }> | null | undefined
 ): boolean {
-  if (!isMarketingQuote(quoteType)) return false;
-  if (!quoteHasProcessing(quoteType, items, adjustments)) return false;
+  if (!isMarketingQuote(quoteType) && !isPartialOrderingQuote(quoteType)) return false;
+  if (!quoteHasProcessing(quoteType, items)) return false;
   return !(items ?? []).some(item => {
     const line = { hubspotProductId: item.hubspotProductId, name: item.name ?? "" };
     return (
       isAms1Product(line.hubspotProductId, line.name) ||
-      (line.hubspotProductId !== WEBSITE_PRODUCT_ID && orderPointsPerUnit(line) > 0)
+      (!isNamedProduct(ONLINE_ORDERING_PRODUCT, line) && orderPointsPerUnit(line) > 0)
     );
   });
 }
@@ -367,30 +422,82 @@ export function isPickable(product: CatalogProduct): boolean {
 // DERIVING them on 2026-10-09: not every marketing merchant wants three, some
 // want none, and some want more and will pay for them. The rep sets the
 // quantity and `applyPlanIncludedHardware` holds the first three at $0.
+//
+// The 27" Marketing Kit stays listed so a draft carrying one still saves; it
+// is no longer OFFERED (RETIRED_PICK_PRODUCT_IDS).
 export const MARKETING_PRODUCTS = [
   { name: "Marketing Kit - Mega Kiosk", hubspotProductId: "332617109238" },
   { name: "Marketing Kit - 27\" Kiosk", hubspotProductId: "332793212658" },
+  { name: "Mega Kiosk Loaner", hubspotProductId: MEGA_LOANER_PRODUCT_ID },
   { name: "Website", hubspotProductId: "333275576048" },
   { name: "Menu Board Computer", hubspotProductId: "223511653103" },
 ] as const;
 
 /**
- * The kiosk the 2-year term includes, as the two products it may be.
- *
- * The rep picks one — the plan's HubSpot description is literally "1 x Mega
- * Kiosk or 27\" Kiosk" — and ONE unit of it is held at $0 by
- * `applyPlanIncludedKiosk`. Anything beyond the first bills at the Marketing
- * Kit price, which is why the inclusion is a line SPLIT and not a flag on the
- * product.
- *
- * Order matters only as a tiebreak: a quote carrying both gets the comp on the
- * dearer one, since the plan says "either" and the merchant should not lose by
- * also buying the other.
+ * What a Marketing Partial Ordering quote may carry by hand: ordering without
+ * a POS (2026-10-27). The tablet and the KDS or printer receive the orders,
+ * the kiosks and online ordering take them, and the marketing products come
+ * along for a merchant who takes the marketing half. A POS of any kind is NOT
+ * here — that is the line between this plan and Order & Pay, and
+ * `partialOrderingPosBlockers` says so out loud for a payload that carries one.
  */
-export const MARKETING_TERM_KIOSK_IDS = [
-  "332617109238", // Marketing Kit - Mega Kiosk — $1,500
-  "332793212658", // Marketing Kit - 27" Kiosk — $999
+const PARTIAL_ORDERING_PRODUCT_IDS: readonly string[] = [
+  "276751313619", // Orders Hub Tablet
+  "223452690132", // KDS (Kitchen Display System)
+  "223511653104", // Thermal Printer
+  "250458906315", // Epson Sticky Printer
+  "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
+  "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+  "223511653105", // Payment Terminal - AMS1
+  "338690209525", // AIO Wifi Network Package - Unifi
+  "332617109238", // Marketing Kit - Mega Kiosk
+  MEGA_LOANER_PRODUCT_ID,
+  WEBSITE_PRODUCT_ID,
+  "223511653103", // Menu Board Computer
 ];
+
+/**
+ * Every device that makes a restaurant a POS merchant. None may go on a
+ * Marketing Partial Ordering quote (product owner, 2026-10-27).
+ */
+const POS_DEVICE_PRODUCT_IDS: readonly string[] = [
+  "217445755632", // POS Unit
+  "223452690130", // POS Unit - With Customer Facing Display
+  "339229355762", // POS (Dual Screen) + Payment Terminal
+  "223511653101", // mPOS
+  "335279520447", // AIO Tableside POS
+];
+
+/** A POS on a Marketing Partial Ordering quote. Reports, like the other ceilings. */
+export function partialOrderingPosBlockers(
+  quoteType: QuoteType,
+  lines: Array<{ hubspotProductId: string; name: string; qty: number }>
+): string[] {
+  if (!isPartialOrderingQuote(quoteType)) return [];
+  const pos = lines.filter(l => POS_DEVICE_PRODUCT_IDS.includes(l.hubspotProductId) && l.qty > 0);
+  if (!pos.length) return [];
+  const names = [...new Set(pos.map(l => `"${l.name.trim()}"`))].join(", ");
+  return [
+    `Marketing Partial Ordering is ordering without a POS, so it can't carry ${names}. ` +
+    `Take it off, or quote this merchant on Order & Pay or All-in-One.`,
+  ];
+}
+
+/**
+ * Marketing Partial Ordering is sold for its ordering, so a quote on it has
+ * to take orders somewhere: a kiosk or online ordering.
+ */
+export function partialOrderingPointBlockers(
+  quoteType: QuoteType,
+  lines: Array<{ hubspotProductId: string; name: string; qty: number }>
+): string[] {
+  if (!isPartialOrderingQuote(quoteType)) return [];
+  if (lines.some(l => l.qty > 0 && orderPointsPerUnit(l) > 0)) return [];
+  return [
+    `Marketing Partial Ordering needs a way to take orders — add a kiosk or Online Ordering, ` +
+    `or quote this merchant on Marketing Only.`,
+  ];
+}
 
 /**
  * Hardware both marketing plans include at no charge, as a CEILING on what is
@@ -423,7 +530,9 @@ export const MARKETING_INCLUDED_HARDWARE = [
  * `applyPackageComp` holds it there however the rep edits the row.
  */
 export function applyPlanIncludedHardware(quoteType: QuoteType, lines: QuoteLine[]): QuoteLine[] {
-  if (!isMarketingQuote(quoteType)) return lines;
+  // Marketing Only always; Marketing Partial Ordering when the rep added the
+  // marketing half. Not All-in-One, whose marketing comes with the kit's one.
+  if (!includesMarketing(quoteType, lines)) return lines;
   const planName = PLATFORM_PRODUCTS[quoteType].name;
 
   return lines.flatMap(line => {
@@ -442,7 +551,7 @@ function isMarketingProduct(id: string, name: string): boolean {
   return MARKETING_PRODUCTS.some(m => m.hubspotProductId === id || m.name === name.trim());
 }
 
-/** The two kiosk kits. Not the Website — that one is allowed on a POS quote. */
+/** The two kiosk kits. Not the Website — that one is allowed on every quote. */
 function isMarketingKit(id: string, name: string): boolean {
   const trimmed = name.trim();
   return MARKETING_PRODUCTS.some(
@@ -455,16 +564,20 @@ function isMarketingKit(id: string, name: string): boolean {
  * picker AND re-applied server-side, because "the rep can't see it" is not the
  * same as "it can't be sent".
  *
- * Marketing plans only carry the marketing products. Processing plans carry
- * any other pickable product except the marketing kits — those kiosks belong
- * to the marketing plans, and a POS quote sells its own hardware.
+ * Marketing Only carries the marketing products. Marketing Partial Ordering
+ * carries its own list (no POS), plus online ordering and its marketing
+ * line. Order & Pay and All-in-One carry any other pickable product except the
+ * 27" Marketing Kit; the Mega — bought or on loan — goes on any plan since
+ * 2026-10-27, and so does online ordering. The marketing line is the partial
+ * plan's alone: All-in-One already includes marketing and Order & Pay has none.
  */
 export function isAllowedForQuoteType(product: CatalogProduct, quoteType: QuoteType): boolean {
   if (!isPickable(product)) return false;
-  if (!isMarketingQuote(quoteType)) {
-    return !isMarketingKit(product.hubspotProductId, product.name);
-  }
-  return isMarketingProduct(product.hubspotProductId, product.name);
+  if (isNamedProduct(MARKETING_ADDON_PRODUCT, product)) return isPartialOrderingQuote(quoteType);
+  if (isNamedProduct(ONLINE_ORDERING_PRODUCT, product)) return !isMarketingQuote(quoteType);
+  if (isMarketingQuote(quoteType)) return isMarketingProduct(product.hubspotProductId, product.name);
+  if (isPartialOrderingQuote(quoteType)) return PARTIAL_ORDERING_PRODUCT_IDS.includes(product.hubspotProductId);
+  return product.hubspotProductId !== "332793212658"; // Marketing Kit - 27" Kiosk
 }
 
 // ── Mandatory install services (derived, not chosen) ────────────────────────
@@ -587,8 +700,9 @@ export function companionsFor(hubspotProductId: string): typeof POS_COMPANIONS[n
 
 /**
  * Screens that consume a software license: anything that runs an AIO app.
- * The first three on a processing quote are included in the platform fee
- * (2026-10-21). The Hardware heading in the quote builder reads this number.
+ * The first three are included in the platform fee — on EVERY plan since
+ * 2026-10-27, Marketing Only included (it was processing plans only from
+ * 2026-10-21). The Hardware heading in the quote builder reads this number.
  */
 export const INCLUDED_SCREEN_COUNT = 3;
 
@@ -600,6 +714,10 @@ export const SCREEN_PRODUCT_IDS = [
   "260674226888", // Mega Kiosk
   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+  // A Mega is a screen however it got there — bought or on loan (the sheet:
+  // "The Mega counts as one of the 3 licenses").
+  "332617109238", // Marketing Kit - Mega Kiosk
+  MEGA_LOANER_PRODUCT_ID,
   // NOT the Menu Board Computer: it drives a TV, it is not a screen anyone
   // works on, and it takes no license (product owner, 2026-10-18).
   // Both tablets run an AIO app, so each one takes a license like any other
@@ -1071,15 +1189,13 @@ export type SoftwareLicenseResult = IncludedServicesResult & { screens: number }
 
 /**
  * One Additional Software License per screen past the three the platform fee
- * includes. Marketing plans don't get one — their screens are a different offer.
+ * includes, on every plan (2026-10-27: "Every plan … includes 3 licenses").
  * The license is derived, never picked, so a hand-added line can't double it.
  */
 export function resolveSoftwareLicense(
-  quoteType: QuoteType,
   pickedLines: QuoteLine[],
   catalog: CatalogProduct[]
 ): SoftwareLicenseResult {
-  if (!isProcessingQuote(quoteType)) return { lines: [], missing: [], screens: 0 };
   const screens = screenCount(pickedLines);
   const extra = Math.max(0, screens - INCLUDED_SCREEN_COUNT);
   if (extra === 0) return { lines: [], missing: [], screens };
@@ -1131,22 +1247,10 @@ export function isPreAuthProduct(id: string, name: string): boolean {
 }
 
 /**
- * What a merchant pays to take something other than what the kit holds.
- *
- * The kit's slots are a fixed list of items (quotePackages.ts), and a rep may
- * fill a screen slot with any of the four interchangeable screens — a POS where
- * the KDS was, a kiosk where the POS was. Every such substitution costs one of
- * these, $400 (Shaheer, 2026-10-16). It applies to EVERY swap, not only the
- * ones the old MSRP ceiling used to refuse: a cheaper stand-in is still a kit
- * item AIO has to source differently, and one rule is one a rep can say out
- * loud.
- *
- * DERIVED AND UNTOUCHABLE, for the same reasons as `PRE_AUTH_PRODUCT`: reps
- * used to add it by hand from the picker, which meant it was on the quote only
- * when somebody remembered. `buildQuote` appends it after every adjustment, so
- * no discount, billing start or removal can reach it. A rep who could discount
- * it has made the swap free, which is the thing this charge exists to prevent;
- * if that discretion is ever wanted, the per-product discount cap is the way.
+ * The $400 charge a kit swap used to carry (2026-10-16 to 2026-10-27). Swaps
+ * are gone — the scenario sheet: "Swap fee eliminated" — so nothing derives it
+ * any more. Kept so it stays out of the picker and so a saved quote that
+ * carries the line drops it on reopen rather than reading it back as a pick.
  */
 export const KIT_REPLACEMENT_PRODUCT = {
   name: "Free Kit Replacement Item",
@@ -1158,26 +1262,6 @@ export function isKitReplacementProduct(id: string, name: string): boolean {
     id === KIT_REPLACEMENT_PRODUCT.hubspotProductId ||
     name.trim() === KIT_REPLACEMENT_PRODUCT.name
   );
-}
-
-/**
- * One replacement charge per swapped unit, or nothing when the cart took the
- * kit as it comes.
- *
- * Resolved by id first and name second, like the pre-auth: a HubSpot rename
- * must not silently drop the charge off every quote.
- */
-export function resolveKitReplacementLine(
-  swaps: number,
-  catalog: CatalogProduct[]
-): IncludedServicesResult {
-  if (swaps <= 0) return { lines: [], missing: [] };
-  const product =
-    catalog.find(p => p.hubspotProductId === KIT_REPLACEMENT_PRODUCT.hubspotProductId) ??
-    catalog.find(p => p.name.trim() === KIT_REPLACEMENT_PRODUCT.name);
-  return product
-    ? { lines: [toQuoteLine(product, swaps)], missing: [] }
-    : { lines: [], missing: [KIT_REPLACEMENT_PRODUCT.name] };
 }
 
 /**
@@ -1204,34 +1288,6 @@ export function resolvePreAuthLine(
   return product
     ? { lines: [toQuoteLine(product, 1)], missing: [] }
     : { lines: [], missing: [PRE_AUTH_PRODUCT.name] };
-}
-
-/**
- * An AMS1 for every terminal a swapped-in kiosk brought that the kit has no
- * seat for (`PackageDecomposition.extraTerminals`).
- *
- * The kit holds two terminals: one for the POS's loose AMS1, one for the kiosk
- * it comes with. A second kiosk swapped into a screen slot is a third, and the
- * terminal is welded into the kiosk SKU, so it cannot be charged as part of
- * that line without a fractional discount on it. It is charged as its own AMS1
- * line instead (Shaheer, 2026-10-16) — the same $350 a second POS already
- * costs, whose loose AMS1 is charged for exactly the same reason.
- *
- * Marked `derived` so reopening re-derives it rather than reading it back as a
- * pick: the AMS1 is an ordinary pickable product, so this is the one derived
- * line that can't be recognised by its product id alone.
- */
-export function resolveExtraTerminalLine(
-  extraTerminals: number,
-  catalog: CatalogProduct[]
-): IncludedServicesResult {
-  if (extraTerminals <= 0) return { lines: [], missing: [] };
-  const product =
-    catalog.find(p => p.hubspotProductId === AMS1_PRODUCT.hubspotProductId) ??
-    catalog.find(p => p.name.trim() === AMS1_PRODUCT.name);
-  return product
-    ? { lines: [{ ...toQuoteLine(product, extraTerminals), derived: true }], missing: [] }
-    : { lines: [], missing: [AMS1_PRODUCT.name] };
 }
 
 /**
@@ -1308,11 +1364,10 @@ export function resolveProcessingDisclosure(
   quoteType: QuoteType,
   pickedLines: QuoteLine[],
   catalog: CatalogProduct[],
-  adjustments: QuoteAdjustments = {},
   hasChargedLines: boolean = true
 ): IncludedServicesResult {
   if (!hasChargedLines) return { lines: [], missing: [] };
-  if (!quoteHasProcessing(quoteType, pickedLines, adjustments)) return { lines: [], missing: [] };
+  if (!quoteHasProcessing(quoteType, pickedLines)) return { lines: [], missing: [] };
 
   const product =
     catalog.find(p => p.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) ??
@@ -1320,35 +1375,6 @@ export function resolveProcessingDisclosure(
   return product
     ? { lines: [toQuoteLine(product, 1)], missing: [] }
     : { lines: [], missing: [PROCESSING_DISCLOSURE_PRODUCT.name] };
-}
-
-/**
- * Hold the ONE kiosk the 2-year term includes at $0, splitting the line when
- * the merchant bought more than one.
- *
- * The same expression as a package: the covered unit stays on the quote at
- * MSRP discounted to 100%, carrying `coveredByPackage`, and the remainder
- * bills at the Marketing Kit price. A flag on the product would have made
- * every kiosk free; a blended percentage across the line would round.
- *
- * The comp lands on the DEAREST eligible line, because the plan says "a Mega
- * or a 27\"" and a merchant who buys both should not be worse off for it.
- */
-export function applyPlanIncludedKiosk(quoteType: QuoteType, lines: QuoteLine[]): QuoteLine[] {
-  if (quoteType !== "marketing_term") return lines;
-
-  let best = -1;
-  lines.forEach((line, i) => {
-    if (!MARKETING_TERM_KIOSK_IDS.includes(line.hubspotProductId) || line.qty < 1) return;
-    if (best < 0 || line.unitPrice > lines[best].unitPrice) best = i;
-  });
-  if (best < 0) return lines;
-
-  const planName = PLATFORM_PRODUCTS[quoteType].name;
-  const line = lines[best];
-  const covered: QuoteLine = { ...line, qty: 1, coveredByPackage: planName };
-  const rest: QuoteLine[] = line.qty > 1 ? [{ ...line, qty: line.qty - 1 }] : [];
-  return [...lines.slice(0, best), covered, ...rest, ...lines.slice(best + 1)];
 }
 
 /**
@@ -1363,6 +1389,10 @@ export function applyPlanIncludedKiosk(quoteType: QuoteType, lines: QuoteLine[])
  * A list you can empty rather than a hardcoded plan check, for the same reason
  * `COMPED_SERVICE_PRODUCT_IDS` is: this has now changed three times in three
  * days, and each time it should be one word.
+ *
+ * Emptied on 2026-10-27 on the scenario sheet's "Website is $50 a month
+ * additional on any plan", and put back the same day — Elizabeth Phillips:
+ * "All in one does include website for free". Every other plan pays $50.
  */
 export const PLANS_INCLUDING_WEBSITE: readonly QuoteType[] = ["all_in_one"];
 
@@ -1371,9 +1401,9 @@ export function planIncludesWebsite(quoteType: QuoteType): boolean {
 }
 
 /**
- * The Website the All-in-One plan includes, marked as covered by the plan so
+ * The Website a plan includes, marked as covered by the plan so
  * `applyPackageComp` holds it at 100% off — the same expression as the
- * 2-year term's kiosk. The Website is single-instance, so the whole line is
+ * marketing plan's menu boards. The Website is single-instance, so the whole line is
  * the included one; a rep can still take it off the quote.
  */
 export function applyPlanIncludedWebsite(quoteType: QuoteType, lines: QuoteLine[]): QuoteLine[] {
@@ -1617,14 +1647,11 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   // counts one point like a bare POS Unit. Was 0-with-needsReview while the
   // contents were unknown.
   "QSR POS Hardware Bundle": { pointsPerUnit: 1, hubspotProductId: "252941875920" },
-  // The website PRODUCT is the ordering point now (2026-10-13, product
-  // owner) — the "website / online ordering" CHANNEL chip was removed
-  // because it was redundant with this $50/mo line already being on the
-  // quote. This is now the single source of truth: a saved row carrying the
-  // retired channel id loses that point (deriveOrderPoints drops any channel
-  // id no longer in ORDER_POINT_CHANNELS) and gains it back here instead, so
-  // the total is unchanged. Do not migrate old rows' `channels` data.
-  "Website": { pointsPerUnit: 1, hubspotProductId: "333275576048" },
+  // Online ordering is the ordering point, not the Website (2026-10-27). It
+  // was the Website from 2026-10-13, when the "website / online ordering"
+  // CHANNEL chip was folded into the $50/mo line; the scenario sheet then
+  // split them ("Website alone does not include online ordering").
+  "Online Ordering": { pointsPerUnit: 1, hubspotProductId: ONLINE_ORDERING_PRODUCT.hubspotProductId },
 
   // Explicitly does not count
   // Both tablets were 0-with-needsReview until Shaheer settled them
@@ -1632,6 +1659,12 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   // review flag, which was refusing the billing publish on every quote that
   // carried one (billing/preconditions.ts rule 6) with no way for a rep to
   // clear it short of dropping the line.
+  // A website, not an ordering point, since 2026-10-27 (see Online Ordering
+  // above). Explicit, so it never reads as unclassified hardware.
+  "Website": { pointsPerUnit: 0, hubspotProductId: "333275576048" },
+  // HubSpot carries no product type on it, so without this rule it would be
+  // reported as unclassified hardware on every quote that takes marketing.
+  "Marketing (Partial Ordering)": { pointsPerUnit: 0, hubspotProductId: MARKETING_ADDON_PRODUCT.hubspotProductId },
   "Orders Hub Tablet": { pointsPerUnit: 0, hubspotProductId: "276751313619" },
   "Clock in Tablet": { pointsPerUnit: 0, hubspotProductId: "276754193118" },
   "Payment Terminal - AMS1": { pointsPerUnit: 0, hubspotProductId: "223511653105" },
@@ -1642,6 +1675,8 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   // show the rep an "unclassified hardware" warning on every marketing quote.
   "Marketing Kit - Mega Kiosk": { pointsPerUnit: 0, hubspotProductId: "332617109238" },
   "Marketing Kit - 27\" Kiosk": { pointsPerUnit: 0, hubspotProductId: "332793212658" },
+  // Display only — the loaned Mega can't take an order or a payment.
+  "Mega Kiosk Loaner": { pointsPerUnit: 0, hubspotProductId: MEGA_LOANER_PRODUCT_ID },
   "Menu Board Computer": { pointsPerUnit: 0, hubspotProductId: "223511653103" },
   "Thermal Printer": { pointsPerUnit: 0, hubspotProductId: "223511653104" },
   "Epson Sticky Printer": { pointsPerUnit: 0, hubspotProductId: "250458906315" },
@@ -1763,8 +1798,11 @@ export const PLATFORM_PRODUCTS: Record<QuoteType, { name: string; hubspotProduct
   order_pay_only: { name: "All-in-One (Order & Pay only)", hubspotProductId: "335279520445" },
   all_in_one: { name: "All-in-One Platform", hubspotProductId: "335283119838" },
   marketing_only: { name: "AIO Marketing Platform", hubspotProductId: "332609247965" },
-  marketing_term: { name: "AIO Marketing Platform (2-year term)", hubspotProductId: "332927902454" },
+  marketing_partial: { name: "AIO Marketing Partial Ordering", hubspotProductId: "343582047937" },
 };
+
+/** The name `marketing_term`'s covered kiosk line carries, which is how reopening recognises it. */
+const MARKETING_TERM_PLAN_NAME = "AIO Marketing Platform (2-year term)";
 
 /**
  * Platform products AIO no longer sells. They are deactivated in HubSpot, so
@@ -1780,14 +1818,12 @@ const RETIRED_PLATFORM_PRODUCTS = [
   // The $49/wk marketing platform. Same NAME as its $199/mo replacement, which
   // is harmless here: both are platform lines either way.
   { name: "AIO Marketing Platform", hubspotProductId: "223152695997" },
-  // The SECOND $299 2-year record. HubSpot carries two, and they are NOT
-  // duplicates: this one's description includes a 27" kiosk only, where
-  // 332927902454 — the one `marketing_term` quotes — includes "1 x Mega Kiosk
-  // or 27\" Kiosk". The choice is the offer, so this narrower twin is retired
-  // and listed here so a quote that already carries it reopens without
-  // offering it back as a pickable product. Deactivating it is a HubSpot-side
-  // cleanup; this entry stays either way, for the rows that have it.
-  { name: "AIO Marketing Platform (2-year term)", hubspotProductId: "334139877086" },
+  // Both $299 2-year records — the plan `marketing_term` quoted (renamed
+  // "… - BAY AREA" in HubSpot) and its narrower twin. The plan was retired
+  // 2026-10-27; these stay so a quote that carries one reopens without
+  // offering it back as a pickable product.
+  { name: MARKETING_TERM_PLAN_NAME, hubspotProductId: "332927902454" },
+  { name: MARKETING_TERM_PLAN_NAME, hubspotProductId: "334139877086" },
 ];
 
 /** Any derived platform line, on today's plans or a retired one. */
@@ -1874,25 +1910,26 @@ function isDroppedOnReopen(line: QuoteLine, quoteType: QuoteType): boolean {
     isKitReplacementProduct(line.hubspotProductId, line.name) ||
     isSoftwareLicenseProduct(line.hubspotProductId, line.name) ||
     isHardwareBundle(line.hubspotProductId, line.name) ||
-    // Kits belong on the marketing plans. A processing quote that still carries
-    // one (saved before they were taken off) must not send it back as a pick —
-    // the server would refuse the whole save.
-    (!isMarketingQuote(quoteType) && isMarketingKit(line.hubspotProductId, line.name))
+    // The 27" Marketing Kit belongs on Marketing Only. A quote on any other
+    // plan that still carries one (saved before it was taken off) must not
+    // send it back as a pick — the server would refuse the whole save. The
+    // Mega Kit goes on any plan since 2026-10-27, so it comes back.
+    (!isMarketingQuote(quoteType) && line.hubspotProductId === "332793212658")
   );
 }
 
 export function picksFromQuoteLines(
   lines: QuoteLine[] | null | undefined,
   /**
-   * The plan the quote is on. Needed because one product group is sellable on
-   * some plans and not others: the marketing kiosks belong to the marketing
-   * plans, so a POS quote that still carries one (saved before they were taken
+   * The plan the quote is on. Needed because one product is sellable on some
+   * plans and not others: the 27" Marketing Kit belongs to Marketing Only, so
+   * a quote on another plan that still carries one (saved before it was taken
    * off) must not send it back as a pick — the server refuses the whole save.
    *
    * What the plan COMPS does come back as a pick, covered lines included: the
-   * three free Menu Board Computers and the 2-year term's kiosk are ordinary
-   * picks whose first N units a comp holds at $0, so reopening has to return
-   * the quantity the rep chose and let the comp re-apply on the way out.
+   * three free Menu Board Computers are ordinary picks whose first N units a
+   * comp holds at $0, so reopening has to return the quantity the rep chose
+   * and let the comp re-apply on the way out.
    */
   quoteType: QuoteType
 ): Array<{ hubspotProductId: string; qty: number }> {
@@ -1908,6 +1945,13 @@ export function picksFromQuoteLines(
     // network off a quote the merchant was shown with one.
     if (isRetiredWifiLine(l)) {
       merged.set(WIFI_PRODUCT_ID, Math.max(merged.get(WIFI_PRODUCT_ID) ?? 0, 1));
+      continue;
+    }
+    // The kiosk the retired 2-year plan covered comes back as what replaced
+    // it: one Mega Kiosk Loaner, $100/mo on the $199 plan — the same $299.
+    // Any further kiosk on that row was bought, and comes back as bought.
+    if (l.coveredByPackage === MARKETING_TERM_PLAN_NAME && isMarketingKit(l.hubspotProductId, l.name)) {
+      merged.set(MEGA_LOANER_PRODUCT_ID, (merged.get(MEGA_LOANER_PRODUCT_ID) ?? 0) + l.qty);
       continue;
     }
     merged.set(l.hubspotProductId, (merged.get(l.hubspotProductId) ?? 0) + l.qty);
@@ -2416,14 +2460,7 @@ export function checkoutAmountBlockers(lines: QuoteLine[]): string[] {
  * come back free too, and would stay free even after the package stopped
  * applying.
  */
-export function adjustmentsFromQuoteLines(
-  lines: QuoteLine[] | null | undefined,
-  /**
-   * The plan, when the caller has it. Only a marketing quote reads anything
-   * from it (the online-ordering toggle, below).
-   */
-  quoteType?: QuoteType
-): QuoteAdjustments {
+export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined): QuoteAdjustments {
   // How many units of each product the merchant is actually being charged for,
   // so a discounted line smaller than that total is recognised as a SPLIT and
   // its quantity is carried back. Without this a "1 of 3 free" reopens as
@@ -2474,20 +2511,6 @@ export function adjustmentsFromQuoteLines(
     // no key and can't overwrite the half that does.
     if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
   }
-
-  // The online-ordering toggle is saved as the disclosure line it produces.
-  // Without this, reopening a website quote that takes orders turns it off.
-  //
-  // MARKETING ONLY, since 2026-10-14: the disclosure line goes on every quote
-  // AIO processes for now, so on a POS quote its presence says nothing about
-  // the website and reading it as the toggle would tick that box on every
-  // `all_in_one` quote reopened.
-  if (
-    quoteType && isMarketingQuote(quoteType) &&
-    (lines ?? []).some(l => l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId)
-  ) {
-    out[WEBSITE_PRODUCT_ID] = { ...out[WEBSITE_PRODUCT_ID], onlineOrdering: true };
-  }
   return out;
 }
 
@@ -2520,14 +2543,10 @@ export type BuiltQuote = {
   requiredTerminals: RequiredTerminalsResult;
   /** Additional software licenses past the three screens the plan includes. */
   softwareLicense: SoftwareLicenseResult;
-  /** The $0 card-rate disclosure, on a marketing quote whose website takes online orders. */
+  /** The $0 card-rate disclosure, on every quote AIO processes for that charges something. */
   processingDisclosure: IncludedServicesResult;
   /** The $0.50 checkout charge, present only when nothing else is due at checkout. Never editable. */
   preAuth: IncludedServicesResult;
-  /** $400 per kit item swapped for something else. Empty when the cart took the kit as it comes. Never editable. */
-  kitReplacement: IncludedServicesResult;
-  /** An AMS1 per terminal a swapped-in kiosk brought that the kit has no seat for. Never editable. */
-  extraTerminals: IncludedServicesResult;
   breakdown: OrderPointsBreakdown;
   /** Which pre-made packages the cart broke down into, and what they absorbed. */
   packages: PackageDecomposition;
@@ -2590,20 +2609,17 @@ export function buildQuote(
   const platform = resolvePlatformLine(quoteType, picks, effectiveChannels, catalog);
   const includedServices = resolveIncludedServices(quoteType, picks, catalog);
   const requiredTerminals = resolveRequiredAms1(quoteType, picks, catalog);
-  const softwareLicense = resolveSoftwareLicense(quoteType, picks, catalog);
+  const softwareLicense = resolveSoftwareLicense(picks, catalog);
 
   // Everything a PLAN hands over at no charge, taken out of what the rep
-  // picked before anything else runs: the 2-year term's kiosk, the marketing
-  // plans' three menu boards, and (when a plan is listed for it) the Website.
+  // picked before anything else runs: marketing's three menu boards, and
+  // (when a plan is listed for it) the Website.
   // Each comp is a line SPLIT, so it has to happen while these are still the
   // picks; the covered halves then flow through the adjustment pass like a
   // package-covered line.
   const picksWithInclusions = applyPlanIncludedWebsite(
     quoteType,
-    applyPlanIncludedHardware(
-      quoteType,
-      applyPlanIncludedKiosk(quoteType, withRequiredTerminals(picks, requiredTerminals))
-    )
+    applyPlanIncludedHardware(quoteType, withRequiredTerminals(picks, requiredTerminals))
   );
 
   // The hardware kit, resolved against the mandatory services AND the picks —
@@ -2647,17 +2663,7 @@ export function buildQuote(
     return splitPartialDiscount(adjusted, adjustment);
   });
 
-  // What the merchant owes for taking the kit apart — one $400 line per unit
-  // that landed in a slot that isn't its own. Appended AFTER the adjustment
-  // pass, which is the whole of what makes it untouchable: adjustments are
-  // keyed by product id and this line was never among the keys.
-  //
-  // Unlike the two below it this one IS a real charge, so it belongs in
-  // `chargedLines` — it counts toward the sanity floor, toward what's collected
-  // at checkout, and therefore toward whether a pre-auth line is needed at all.
-  const kitReplacement = resolveKitReplacementLine(packages.swaps, catalog);
-  const extraTerminals = resolveExtraTerminalLine(packages.extraTerminals, catalog);
-  const chargedLines = [...adjustedLines, ...extraTerminals.lines, ...kitReplacement.lines];
+  const chargedLines = adjustedLines;
 
   // The rate disclosure and the pre-authorization both come LAST and past
   // every adjustment, for the same two reasons: neither is the rep's to edit,
@@ -2669,7 +2675,7 @@ export function buildQuote(
   // The disclosure is judged on whether anything is being CHARGED, and the
   // pre-auth on what would be collected once it's there.
   const processingDisclosure = resolveProcessingDisclosure(
-    quoteType, picks, catalog, adjustments, chargedLines.length > 0
+    quoteType, picks, catalog, chargedLines.length > 0
   );
   const withDisclosure = [...chargedLines, ...processingDisclosure.lines];
   const preAuth = resolvePreAuthLine(withDisclosure, catalog);
@@ -2705,21 +2711,6 @@ export function buildQuote(
       `"${name}" is included on every quote but isn't in the HubSpot catalog, so it can't be priced.`
     );
   }
-  for (const name of extraTerminals.missing) {
-    blockers.push(
-      `A kiosk swapped into this quote brings a terminal the kit has no room for, which is charged as ` +
-      `"${name}" — but that product isn't in the HubSpot catalog (renamed, archived, or the catalog ` +
-      `didn't load).`
-    );
-  }
-  for (const name of kitReplacement.missing) {
-    blockers.push(
-      `This quote swaps ${packages.swaps === 1 ? "an item" : `${packages.swaps} items`} out of the ` +
-      `${packages.applied[0]?.name ?? "kit"}, which is charged as "${name}" — but that product isn't ` +
-      `in the HubSpot catalog (renamed, archived, or the catalog didn't load). The merchant would get ` +
-      `the swap for nothing.`
-    );
-  }
   for (const name of processingDisclosure.missing) {
     blockers.push(
       `AIO processes card payments for this merchant, so the quote has to state their rates — but ` +
@@ -2753,6 +2744,8 @@ export function buildQuote(
   // …and nothing is on it in a quantity that has nothing to attach to.
   blockers.push(...relativeCeilingBlockers(quoteLines));
   blockers.push(...payrollBlockers(quoteLines));
+  blockers.push(...partialOrderingPosBlockers(quoteType, quoteLines));
+  blockers.push(...partialOrderingPointBlockers(quoteType, quoteLines));
 
   for (const [productId, { name, qty }] of qtyByProduct) {
     const max = maxQtyFor(productId, limits.unitCaps);
@@ -2760,36 +2753,6 @@ export function buildQuote(
       blockers.push(
         `This quote has ${qty} × "${name}" on it, over the limit of ${max}. Drop the extras, or ask ` +
         `an admin to raise it in Admin → Quote limits.`
-      );
-    }
-  }
-
-  // The kiosk is part of what the 2-year plan buys, so such a quote carries
-  // exactly one: without it the merchant pays the committed price and the
-  // hardware they were promised never appears on the document, and with more
-  // than one they are billed for a second kiosk the plan reads as included.
-  //
-  // The upper half is Elizabeth Phillips, 2026-10-12 — "only allow either
-  // 27inch kiosk or mega kiosk, dont allow both or more than one". It is a
-  // REFUSAL rather than a comp on the extra: the plan hands over one, and
-  // whether the merchant may buy a second on the same document is a pricing
-  // decision nobody has made. `applyPlanIncludedKiosk` still comps the dearer
-  // line, which is what stops a refused quote from also being mispriced while
-  // the rep is fixing it.
-  if (quoteType === "marketing_term") {
-    const kiosks = quoteLines.reduce(
-      (n, l) => n + (MARKETING_TERM_KIOSK_IDS.includes(l.hubspotProductId) ? l.qty : 0),
-      0
-    );
-    if (kiosks === 0) {
-      blockers.push(
-        `The 2-year marketing plan includes one kiosk at no cost — add a Marketing Kit (Mega Kiosk ` +
-        `or 27") so the merchant gets the hardware they're paying for.`
-      );
-    } else if (kiosks > 1) {
-      blockers.push(
-        `The 2-year marketing plan includes exactly one kiosk — a Mega or a 27", not both and not ` +
-        `${kiosks}. Take the extras off, or quote them on a separate marketing quote.`
       );
     }
   }
@@ -2803,8 +2766,6 @@ export function buildQuote(
     softwareLicense,
     processingDisclosure,
     preAuth,
-    kitReplacement,
-    extraTerminals,
     breakdown,
     packages,
     totals,

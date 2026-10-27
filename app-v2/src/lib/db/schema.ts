@@ -71,6 +71,8 @@ export const quoteTemplatePolicy = pgTable("quote_template_policy", {
   // Added in migration 0017, when the marketing plan split into $199 and the
   // $299 2-year term. Same template as the $199 plan by default — the document
   // reads identically, only the plan line and the included kiosk differ.
+  // UNREAD since 2026-10-27, when the plan was retired; left in place rather
+  // than dropped, like `min_rate_margin_bps`.
   marketingTermTemplateId: text("marketing_term_template_id").notNull().default("817697352408"),
   updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -242,8 +244,8 @@ export const merchantApplications = pgTable("merchant_applications", {
   // this list is TypeScript-side only and needs no migration.
   quoteType: text("quote_type", {
     enum: [
-      "order_pay_only", "all_in_one", "marketing_only", "marketing_term",
-      "full_pos", "food_truck",
+      "order_pay_only", "all_in_one", "marketing_only", "marketing_partial",
+      "marketing_term", "full_pos", "food_truck",
     ],
   }),
   // The rep-entered ticket/volume basis for a quote built without a statement.

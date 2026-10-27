@@ -82,10 +82,8 @@ describe("the billing start a plan opens with", () => {
     }
   });
 
-  it("gives the marketing plans none — they bill from checkout", () => {
-    for (const plan of ["marketing_only", "marketing_term"] as const) {
-      expect(planDefaultBillingStart(plan)).toBeNull();
-    }
+  it("gives Marketing Only none — it bills from checkout", () => {
+    expect(planDefaultBillingStart("marketing_only")).toBeNull();
   });
 
   it("opens inside the ceiling, so a brand-new quote is never born blocked", () => {
@@ -131,7 +129,7 @@ describe("what a POS carries with it", () => {
 
 describe("plan defaults are complete", () => {
   it("answers for every quote type, so a new plan can't be silently skipped", () => {
-    const all: QuoteType[] = ["all_in_one", "order_pay_only", "marketing_only", "marketing_term"];
+    const all: QuoteType[] = ["all_in_one", "order_pay_only", "marketing_only", "marketing_partial"];
     for (const plan of all) {
       expect(() => planDefaultBillingStart(plan)).not.toThrow();
     }

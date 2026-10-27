@@ -133,7 +133,7 @@ function NewProposalFlow() {
           const existingType = quoteTypeOf(existing.quoteType);
           setQuoteType(existingType);
           setPicks(picksFromQuoteLines(existing.quoteLines, existingType));
-          setAdjustments(adjustmentsFromQuoteLines(existing.quoteLines, existingType));
+          setAdjustments(adjustmentsFromQuoteLines(existing.quoteLines));
           setChannels(existing.orderPoints?.channels ?? []);
         }
       })
