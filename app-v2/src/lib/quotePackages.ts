@@ -172,6 +172,15 @@ export type PackageSlot = {
    * fits it. The free first kiosk (2026-10-27).
    */
   optional?: true;
+  /**
+   * The rep may CHARGE for what fills this slot instead of giving it away
+   * (2026-10-28, product owner: "The rep should be able to give the kiosk away
+   * for free in the QSR package, but if they want to charge for it they also
+   * should be able to"). A product named in `decomposePackages`' `outsideKit`
+   * never fills a slot marked this, so it stays on the quote at its price. On
+   * the QSR Kit's kiosk only; the partial-ordering kit's kiosk stays free.
+   */
+  chargeable?: true;
 };
 
 export type QuotePackage = {
@@ -225,7 +234,7 @@ export const PACKAGES: QuotePackage[] = [
       { item: "cfd", qty: 1 },
       { item: "drawer", qty: 1 },
       { item: "terminal", qty: 1 },
-      { item: "kiosk27", qty: 1, or: ["kiosk156"], optional: true },
+      { item: "kiosk27", qty: 1, or: ["kiosk156"], optional: true, chargeable: true },
       { item: "kds", qty: 1 },
       { item: "printer", qty: 1 },
       { item: "menuboard", qty: 1 },
@@ -325,6 +334,29 @@ export function kitProductIds(kit: QuotePackage): string[] {
   return ids;
 }
 
+/**
+ * The products that fill this slot on their own — the 27" and the 15.6"
+ * kiosk for the kiosk slot. Read off PRODUCT_PARTS rather than
+ * KIT_DEFAULT_PRODUCTS, which names one product per item and so would miss
+ * the 15.6" a rep added by hand.
+ */
+export function slotProductIds(slot: PackageSlot): string[] {
+  const accepts: SheetKey[] = [slot.item, ...(slot.or ?? [])];
+  return Object.entries(PRODUCT_PARTS)
+    .filter(([, parts]) => parts.length === 1 && accepts.includes(parts[0]))
+    .map(([id]) => id);
+}
+
+/**
+ * The products this plan's kit lets a rep charge for instead of giving away
+ * (`PackageSlot.chargeable`). Empty on a plan with no such slot, which is what
+ * keeps a stale "charge" flag from doing anything there.
+ */
+export function chargeableKitProductIds(quoteType: QuoteType): string[] {
+  const kit = kitFor(quoteType);
+  return kit ? kit.slots.filter(s => s.chargeable).flatMap(slotProductIds) : [];
+}
+
 // ── Decomposition ───────────────────────────────────────────────────────────
 
 export type AppliedPackage = {
@@ -365,7 +397,7 @@ function none(lines: QuoteLine[]): PackageDecomposition {
 /** A coverable line and how much of it is still unclaimed. */
 type PoolEntry = { line: QuoteLine; parts: Part[]; left: number; msrp: number };
 
-type Slot = { accepts: SheetKey[]; item: SheetKey; owner: number };
+type Slot = { accepts: SheetKey[]; item: SheetKey; owner: number; chargeable: boolean };
 
 // A kit can't be applied more times than this, whatever a package says. A
 // guard against a data-entry mistake, not a business rule.
@@ -375,11 +407,13 @@ const MAX_PACKAGE_INSTANCES = 10;
  * Where one unit of this entry would go: the slot index per part, or null if
  * ANY part has nowhere to go — a unit is covered whole or not at all.
  */
-function placeUnit(entry: PoolEntry, slots: Slot[]): Array<{ part: Part; slot: number }> | null {
+function placeUnit(entry: PoolEntry, slots: Slot[], charged: boolean): Array<{ part: Part; slot: number }> | null {
   const used = new Set<number>();
   const placed: Array<{ part: Part; slot: number }> = [];
   for (const part of entry.parts) {
-    const pick = slots.findIndex((s, i) => s.owner < 0 && !used.has(i) && s.accepts.includes(part.key));
+    const pick = slots.findIndex((s, i) =>
+      s.owner < 0 && !used.has(i) && s.accepts.includes(part.key) && !(charged && s.chargeable)
+    );
     if (pick < 0) return null;
     used.add(pick);
     placed.push({ part, slot: pick });
@@ -396,15 +430,24 @@ function placeUnit(entry: PoolEntry, slots: Slot[]): Array<{ part: Part; slot: n
  * then DEAREST first, so where a slot takes either of two items (a KDS or a
  * printer) the merchant gets the dearer one free. An instance that places no
  * ordering device is thrown away and no further instances are tried.
+ *
+ * `outsideKit` names products the rep is charging for (2026-10-28): they never
+ * fill a `chargeable` slot. They still COUNT as the ordering device that makes
+ * the first instance a system — a kiosk the merchant pays for is still the
+ * kiosk the kit goes with, and without that, charging for the kiosk on a
+ * kiosk-only quote would also put the KDS, printer and the rest back on at
+ * full price.
  */
 export function decomposePackages({
   lines,
   quoteType,
   packages = PACKAGES,
+  outsideKit = [],
 }: {
   lines: QuoteLine[];
   quoteType: QuoteType;
   packages?: QuotePackage[];
+  outsideKit?: readonly string[];
 }): PackageDecomposition {
   const active = packages.filter(p => p.active && p.plans.includes(quoteType));
   if (active.length === 0 || lines.length === 0) return none(lines);
@@ -436,13 +479,22 @@ export function decomposePackages({
   const filled: FilledSlot[] = [];
   const applied: AppliedPackage[] = [];
 
+  const charged = pool.map(e => outsideKit.includes(e.line.hubspotProductId));
+
   for (const pkg of active) {
     const cap = Math.min(pkg.maxPerQuote ?? MAX_PACKAGE_INSTANCES, MAX_PACKAGE_INSTANCES);
     let count = 0;
+    // An ordering device kept out of a chargeable slot of THIS kit.
+    const chargedOrdering = pool.some((e, i) =>
+      charged[i] &&
+      e.parts.some(part => part.orders && pkg.slots.some(s => s.chargeable && [s.item, ...(s.or ?? [])].includes(part.key)))
+    );
 
     for (let n = 0; n < cap; n++) {
       const slots: Slot[] = pkg.slots.flatMap(s =>
-        Array.from({ length: s.qty }, () => ({ accepts: [s.item, ...(s.or ?? [])], item: s.item, owner: -1 }))
+        Array.from({ length: s.qty }, () => ({
+          accepts: [s.item, ...(s.or ?? [])], item: s.item, owner: -1, chargeable: !!s.chargeable,
+        }))
       );
       const left = pool.map(e => e.left);
       const placedUnits = pool.map(() => 0);
@@ -451,7 +503,7 @@ export function decomposePackages({
 
       for (const e of order) {
         while (left[e] > 0) {
-          const placed = placeUnit(pool[e], slots);
+          const placed = placeUnit(pool[e], slots, charged[e]);
           if (!placed) break;
           for (const { part, slot } of placed) {
             slots[slot].owner = e;
@@ -463,8 +515,10 @@ export function decomposePackages({
         }
       }
 
-      // No ordering device placed means no system here, whatever else fit.
-      if (!placedOrderingDevice) break;
+      // No ordering device placed means no system here, whatever else fit —
+      // unless the first instance's device is one the rep is charging for.
+      const chargedSystem = count === 0 && chargedOrdering && placements.length > 0;
+      if (!placedOrderingDevice && !chargedSystem) break;
 
       pool.forEach((entry, e) => {
         if (!placedUnits[e]) return;

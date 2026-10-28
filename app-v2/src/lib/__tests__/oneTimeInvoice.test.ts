@@ -103,23 +103,17 @@ beforeEach(() => {
 });
 afterEach(() => { errorSpy.mockRestore(); logSpy.mockRestore(); });
 
-describe("buildOneTimeInvoice — payment plan", () => {
-  it("requests payment online with card, ACH, Affirm and Klarna when paying over time", async () => {
-    await run({ paymentPlan: "later" });
+describe("buildOneTimeInvoice — payment methods", () => {
+  it("always requests payment online with card, ACH, Affirm and Klarna, billed at list", async () => {
+    await run();
     expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({
       hs_allowed_payment_methods: "ach;credit_or_debit_card",
       hs_allowed_commerce_payment_methods: "CARD;ACH;AFFIRM;KLARNA",
       hs_payment_collection_option: "request_payment",
     });
     expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_allow_partial_payments");
-  });
-
-  it("takes 5% off the invoiced lines when paying in full, and stays ACH-only", async () => {
-    await run({ paymentPlan: "full" });
     const lines = createQuoteLineItems.mock.calls[0][0] as QuoteLine[];
-    expect(lines.map(l => l.discountAmount)).toEqual([expect.any(Number), expect.any(Number), expect.any(Number)]);
-    expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({ hs_allowed_payment_methods: "ach" });
-    expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_allow_partial_payments");
+    expect(lines.every(l => !l.discountAmount)).toBe(true);
   });
 });
 
@@ -131,8 +125,8 @@ describe("buildOneTimeInvoice", () => {
     // POS, install and the comped terminal — never the plan or the pre-auth,
     // which are on the quote.
     expect(createQuoteLineItems).toHaveBeenCalledWith([POS, INSTALL, COMPED]);
-    // ACH only, like the quote. Created as a draft; opened as its own step.
-    expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({ hs_currency: "USD", hs_allowed_payment_methods: "ach" });
+    // Card, ACH, Affirm and Klarna. Created as a draft; opened as its own step.
+    expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({ hs_currency: "USD", hs_allowed_payment_methods: "ach;credit_or_debit_card" });
     expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_invoice_status");
     expect(openInvoice).toHaveBeenCalledWith("inv-1");
     expect(associateInvoice).toHaveBeenCalledWith("inv-1", [

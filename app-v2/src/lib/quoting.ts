@@ -6,7 +6,7 @@
 // operates on is read from HubSpot server-side and passed in.
 
 import { fmt$, monthlyEquivalent } from "@/lib/utils";
-import { decomposePackages, type PackageDecomposition } from "@/lib/quotePackages";
+import { chargeableKitProductIds, decomposePackages, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
   QuoteAdjustments, QuoteLine, QuoteRates, QuoteTotals, QuoteType, StoredQuoteType, UnitAdjustment,
@@ -897,8 +897,13 @@ export function screenCount(lines: Array<{ hubspotProductId: string; qty: number
  * Installation ($999) and System Onboarding and Training ($499) are still
  * derived onto every hardware quote, but at list price, and a rep discounts or
  * delays them like any other line. The mechanism stays for the next promotion.
+ *
+ * BOTH COMPED AGAIN 2026-10-28 (product owner: "installation should be
+ * automatically discounted to 100% off", then the same day extended to
+ * System Onboarding and Training). Onsite Installation and System Onboarding
+ * and Training are both on the list.
  */
-export const COMPED_SERVICE_PRODUCT_IDS: string[] = [];
+export const COMPED_SERVICE_PRODUCT_IDS: string[] = ["223452690133", "223152695032"];
 
 export function isCompedService(line: Pick<QuoteLine, "hubspotProductId">): boolean {
   return COMPED_SERVICE_PRODUCT_IDS.includes(line.hubspotProductId);
@@ -2511,6 +2516,14 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
     // no key and can't overwrite the half that does.
     if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
   }
+  // "Charge for the kiosk" (2026-10-28) is a choice about the PRODUCT, so it
+  // is merged in last, onto whatever shape the product reopened as — per-unit
+  // mode included, which the loop above skips.
+  for (const line of lines ?? []) {
+    if (line.outsideKit && !line.coveredByPackage) {
+      out[line.hubspotProductId] = { ...out[line.hubspotProductId], outsideKit: true };
+    }
+  }
   return out;
 }
 
@@ -2633,16 +2646,36 @@ export function buildQuote(
   //
   // Order-point counting runs BEFORE this and on the unsplit picks, which is
   // the same count either way — splitting a line preserves its total quantity.
+  //
+  // A product the rep chose to charge for (`LineAdjustment.outsideKit`, the
+  // QSR Kit's kiosk, 2026-10-28) is kept out of the kit's chargeable slot
+  // HERE, before anything is covered, rather than discounted back up later:
+  // `applyPackageComp` is unconditional, so a covered line can't be charged.
+  // Only products this plan's kit lets a rep charge for are honoured, so a
+  // flag left over from another plan does nothing.
+  const chargeable = chargeableKitProductIds(quoteType);
+  const outsideKit = chargeable.filter(id => adjustments[id]?.outsideKit === true);
   const packages = decomposePackages({
     lines: [...includedServices.lines, ...picksWithInclusions],
     quoteType,
+    outsideKit,
   });
+  // Stamped on the line so the choice survives a save: the saved lines are
+  // all a reopened quote has, and a full-price kiosk alone doesn't say it was
+  // chosen (see `adjustmentsFromQuoteLines`). Marked whether or not the kit
+  // applied, or charging the kiosk on a quote with nothing else in the kit
+  // would reopen free.
+  const packagedLines = outsideKit.length
+    ? packages.lines.map(l =>
+        !l.coveredByPackage && outsideKit.includes(l.hubspotProductId) ? { ...l, outsideKit: true as const } : l
+      )
+    : packages.lines;
 
   const unitCursor = new Map<string, number>();
   const adjustedLines = [
     ...(platform.line ? [platform.line] : []),
     ...softwareLicense.lines,
-    ...packages.lines,
+    ...packagedLines,
   ].flatMap(line => {
     const adjustment = adjustments[line.hubspotProductId];
     // "Adjust each unit" mode: the units are numbered across every chargeable

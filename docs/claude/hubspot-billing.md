@@ -215,21 +215,18 @@ Second test company / Deal - 8 — draft invoice `878578016996`, line items `352
 - **Still untested:** whether $0 or under-$0.50 invoices are refused (EasyOB never builds one, see
   `nothing_to_invoice`), and charging the stored ACH method.
 
-## Payment plan (2026-10-26)
+## Payment plan: removed (2026-10-28)
 
-`/lead/[token]/payment` sits between the quote preview and `/confirm`. The merchant picks `full` (5% off the
-one-time invoice, charged to the method HubSpot stored at quote checkout) or `later` (list price, they pay on
-HubSpot checkout and pick installments themselves via Klarna/Affirm; 2026-10-27 — no more 2/4 question).
-Stored in `merchant_applications.payment_plan` (migration 0031), written only by `savePaymentPlanAction`, and
-`/api/lead/[token]/checkout` refuses with `no_payment_plan` when it's missing and there's an invoice to pay.
-Rate-only and recurring-only quotes skip the step (`requiresPaymentPlan`).
+Product owner, 2026-10-28: "Remove the UI for 'how would you like to pay' because the payment plans for the
+invoice come through Klarna at checkout." The `/lead/[token]/payment` step (added 2026-10-26, commit 19f14b0) is
+gone: the quote preview's Continue goes straight to `/confirm` again, and the `no_payment_plan` checkout gate,
+`savePaymentPlanAction`, `PaymentPlanForm` and `lib/paymentPlan.ts` are deleted.
 
-- **Done:** the 5% is applied at invoice time in `buildOneTimeInvoice` (`applyPayInFullDiscount`, as a dollar
-  discount so it stacks on a rep discount); stored `quoteLines` and the published quote are untouched.
-- **Installments:** HubSpot's native payment plan is NOT creatable through the API (`hs_payment_plan_status` is
-  read-only). Plan `later` creates the invoice with `hs_payment_collection_option: request_payment` and
-  `hs_allowed_commerce_payment_methods: CARD;ACH;AFFIRM;KLARNA` (the UI's "Accept online payments" boxes; verified
-  2026-10-27 that Klarna then shows at checkout). The invoice still shows the full balance; Klarna/Affirm do the
-  splitting on their side. HubSpot rejects BNPL together with `hs_allow_partial_payments`, so that tick is off. No staff action needed. Rows saved earlier as `2`/`4` read back as `later`.
-- **UNVERIFIED:** that HubSpot charges an invoice against the ACH method stored at quote checkout, which "pay in
-  full uses saved info" depends on.
+- **Every** one-time invoice now behaves like the old "pay over time": billed at list (the 5% pay-in-full discount
+  is gone), `hs_payment_collection_option: request_payment`, `hs_allowed_commerce_payment_methods:
+  CARD;ACH;AFFIRM;KLARNA` (`draftInvoiceProperties(date, { installments: true })`). Klarna/Affirm do the splitting at
+  HubSpot checkout (verified 2026-10-27). HubSpot rejects BNPL with `hs_allow_partial_payments`, so that stays off.
+  Payroll invoices (`checkPayroll.ts`) still use the ACH-only default.
+- **DB:** `merchant_applications.payment_plan` / `payment_plan_at` and migration 0031 are left in place, unread and
+  unwritten (no drop; local DATABASE_URL is production). The `MerchantApplication.paymentPlan` mapping was removed
+  from `types/merchant.ts` / `applicationRow.ts`; the Drizzle schema fields remain. Old values are ignored.

@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
-import { requiresPaymentPlan } from "@/lib/paymentPlan";
 import ConfirmDetailsForm from "@/components/customer/ConfirmDetailsForm";
 import styles from "./confirm.module.css";
 import leadStyles from "../lead.module.css";
@@ -44,9 +43,6 @@ export default async function LeadConfirmPage({ params }: { params: Promise<{ to
   // along with the quote. Send them to the quote, which is where their
   // published document (or their accept button, on a rate-only quote) is.
   if (app.detailsConfirmedAt) redirect(`/lead/${token}/quote`);
-
-  // The payment-plan choice comes first whenever there is an invoice to pay.
-  if (!app.paymentPlan && requiresPaymentPlan(app)) redirect(`/lead/${token}/payment`);
 
   // The pricing basis, shown locked. Prefer the statement's own measured
   // figures over the rep's typed ones for exactly the reason

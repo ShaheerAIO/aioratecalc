@@ -145,12 +145,10 @@ describe("the AE's hardware commission in the document layout", () => {
     // knows a product on this quote wasn't counted.
     const docTotals = container.querySelector(`.${styles.docTotals}`);
     expect(docTotals?.textContent).toContain("Customer Facing Display");
-    // The $0.00 total here is a REAL zero, not a stand-in for the missing
-    // display: the WiFi package AIO includes is priced at exactly its cost
-    // ($698/$698), so it earns nothing and says so. That is why the
-    // "not counted" footnote has to sit beside the total rather than
-    // instead of it — the two facts are independent.
-    expect(docTotals?.textContent).toContain("Your hardware commission (est.)");
-    expect(docTotals?.textContent).toContain("$0.00");
+    // Since 2026-10-28 install AND training are both comped, so nothing else
+    // on this quote earns a figure and the total row is omitted entirely: the
+    // footnote above is the only commission line, rather than a misleading
+    // "$0.00" beside the missing display.
+    expect(docTotals?.textContent).not.toContain("Your hardware commission (est.)");
   });
 });

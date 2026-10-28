@@ -312,25 +312,23 @@ describe("quoteSanityBlockers", () => {
   });
 });
 
-describe("buildQuote with no service comp (since 2026-10-18)", () => {
+describe("buildQuote with the standing service comp (since 2026-10-28)", () => {
   const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)];
 
-  it("charges the install and the training at list, untouched", () => {
+  it("comps the install and the training to 100%", () => {
     const built = buildQuote("all_in_one", picked, [], CATALOG);
-    expect(built.quoteLines.filter(l => l.discountPercent != null)).toEqual([]);
-    // $999 install + $499 training + $749 POS + $300 AMS1. The WiFi package is
+    expect(built.quoteLines.filter(l => l.discountPercent != null).map(l => l.hubspotProductId)).toEqual([INSTALL_ID, TRAINING_ID]);
+    // $0 install + $0 training + $749 POS + $300 AMS1. The WiFi package is
     // a pick since 2026-10-21, so a POS-only cart carries none.
-    expect(built.totals.oneTime).toBe(2547);
+    expect(built.totals.oneTime).toBe(1049);
   });
 });
 
 describe("buildQuote with adjustments", () => {
   const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)];
-  // The standing service comp ended 2026-10-18 and the list is empty. The
-  // mechanism stays for the next promotion, so this block exercises it with
-  // the install and the training put back on it.
-  beforeEach(() => { COMPED_SERVICE_PRODUCT_IDS.push(INSTALL_ID, TRAINING_ID); });
-  afterEach(() => { COMPED_SERVICE_PRODUCT_IDS.length = 0; });
+  // Both services are on the standing comp (2026-10-28).
+  beforeEach(() => { COMPED_SERVICE_PRODUCT_IDS.splice(0, COMPED_SERVICE_PRODUCT_IDS.length, INSTALL_ID, TRAINING_ID); });
+  afterEach(() => { COMPED_SERVICE_PRODUCT_IDS.splice(0, COMPED_SERVICE_PRODUCT_IDS.length, INSTALL_ID, TRAINING_ID); });
 
   it("comps a DERIVED install line — the discount reps actually write most", () => {
     const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 100 } };

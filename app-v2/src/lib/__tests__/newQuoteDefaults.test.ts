@@ -81,12 +81,12 @@ describe("the quote a rep opens on, end to end", () => {
     const platform = built.quoteLines.find(l => l.name === "All-in-One Platform")!;
     expect(platform.billingStart).toEqual({ mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS });
 
-    // The kit covers the hardware; the install ($999) and the training ($499)
-    // are charged at list since 2026-10-18. Both are invoiced after
+    // The kit covers the hardware; the install and the training are
+    // both comped to $0 again (2026-10-28). Both are invoiced after
     // acceptance (2026-10-22), so the quote's own checkout owes nothing and
     // carries the $0.50 pre-auth.
     expect(built.packages.applied).toHaveLength(1);
-    expect(built.totals.oneTime).toBe(999 + 499 + 0.5);
+    expect(built.totals.oneTime).toBe(0.5);
     expect(built.preAuth.lines).toHaveLength(1);
     expect(built.quoteLines.some(l => l.hubspotProductId === PRE_AUTH_PRODUCT.hubspotProductId)).toBe(true);
   });

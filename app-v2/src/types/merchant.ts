@@ -469,6 +469,19 @@ export type QuoteLine = {
    */
   derived?: true;
   /**
+   * Set on a line the rep chose to CHARGE for although the plan's kit would
+   * have given it away — the QSR Kit's free first kiosk (2026-10-28, product
+   * owner: "if they want to charge for it they also should be able to").
+   * `buildQuote` stamps it from `LineAdjustment.outsideKit`, and it is what
+   * `adjustmentsFromQuoteLines` reads that choice back from: a line at full
+   * price says nothing about WHY it isn't covered, so without this a reopened
+   * quote would quietly hand the kiosk back for free.
+   *
+   * Never sent to HubSpot — `toLineItemProperties` names the properties it
+   * emits, and this is not one of them.
+   */
+  outsideKit?: true;
+  /**
    * Hardware commission inputs, SNAPSHOT from `CatalogProduct` at
    * `toQuoteLine` time — same rule as `unitPrice`/`billingFrequency` above: a
    * saved quote must keep computing the same commission even after the
@@ -547,6 +560,16 @@ export type LineAdjustment = {
    * representation, and `adjustmentsFromQuoteLines` reads it back off them.
    */
   units?: UnitAdjustment[] | null;
+  /**
+   * Charge for this product instead of letting the kit's free slot take it
+   * (2026-10-28) — the "Charge for kiosk" button on the QSR Kit's kiosk. Only
+   * a slot marked `PackageSlot.chargeable` honours it, and it works by keeping
+   * the product OUT of that slot, not by discounting: a package-covered line's
+   * 100% is unconditional (`applyPackageComp`), so the line has to never be
+   * covered in the first place. Once charged it is an ordinary line, and the
+   * rep's discounts reach it like any other. Persisted as `QuoteLine.outsideKit`.
+   */
+  outsideKit?: true | null;
   // `removed` (2026-10-21, gone): it took the derived WiFi package off a quote.
   // The package is an ordinary pick now, so a rep un-picks it instead. Saved
   // adjustments may still carry `removed: true`; nothing reads it any more.
@@ -1148,9 +1171,6 @@ export type MerchantApplication = {
    * the details AIO's tenant create refuses to run without.
    */
   detailsConfirmedAt: string | null;
-  /** How the merchant pays the one-time invoice. Null until they choose, and
-   *  for quotes with no invoice. Written only by `savePaymentPlanAction`. */
-  paymentPlan?: "full" | "later" | null;
   // The rep's own note on this quote, mirrored onto the HubSpot deal as a
   // note owned by QUOTE_NOTE_WATCHER. Optional in general, and REQUIRED when a
   // first charge doesn't sit on the plan's own default — see

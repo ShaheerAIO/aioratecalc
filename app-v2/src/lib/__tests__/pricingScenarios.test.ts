@@ -47,7 +47,8 @@ const CATALOG: CatalogProduct[] = [
   p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
 ];
 
-const INSTALL_AND_TRAINING = 999 + 499;
+// Install and training are both comped to $0 again since 2026-10-28.
+const INSTALL_AND_TRAINING = 0;
 
 function quote(plan: QuoteType, picks: Array<[string, number]>) {
   const lines = picks.map(([name, qty]) => toQuoteLine(CATALOG.find(c => c.name === name)!, qty));

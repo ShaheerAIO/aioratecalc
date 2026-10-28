@@ -43,7 +43,7 @@
 // a number that pays people.
 
 import {
-  isCompedService, isPreAuthProduct, lineNetAmount,
+  INCLUDED_SERVICE_PRODUCTS, isCompedService, isPreAuthProduct, lineNetAmount,
   PROCESSING_DISCLOSURE_PRODUCT, quoteTotals,
 } from "@/lib/quoting";
 import type { QuoteLine } from "@/types/merchant";
@@ -228,7 +228,13 @@ export function hardwareCommission(hardwareMargin: number, policy: HardwareCommi
 //      made the untargeted version absurd — a QSR Kit quote, whose nine
 //      in-plan lines sit at 100% off by AIO's own decision, showed the AE
 //      −$1,635.90, and the comped Install + Training pair alone put −$674.10
-//      on EVERY quote. Still no Math.max(0, …) anywhere in this section.
+//      on EVERY quote. Still no Math.max(0, …) on HARDWARE.
+//      NARROWED FURTHER 2026-10-28 (product owner: "cant get negative
+//      commission off discounting the onboarding and installation"): the two
+//      SERVICE lines (Onsite Installation, System Onboarding and Training)
+//      are floored at 0 per line for rep and rsm, so a rep discounting them
+//      below cost costs nothing off their commission. Hardware still goes
+//      negative.
 //   3. null IS NOT 0. A line contributes a commission only when BOTH its cost
 //      and its rate are non-null — a missing cost means "nobody has told us
 //      yet", and treating it as 0 would pay commission on the full sale
@@ -365,11 +371,14 @@ export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission 
 
   const marginTotal = lineNetAmount(line) - cost * line.qty;
 
+  // Service lines (install/training) never go negative; hardware does.
+  const floor = INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === line.hubspotProductId) ? 0 : -Infinity;
+
   return {
     hubspotProductId: line.hubspotProductId,
     name: line.name,
-    rep: repBps === null ? null : marginTotal * (repBps / 10000),
-    rsm: rsmBps === null ? null : marginTotal * (rsmBps / 10000),
+    rep: repBps === null ? null : Math.max(floor, marginTotal * (repBps / 10000)),
+    rsm: rsmBps === null ? null : Math.max(floor, marginTotal * (rsmBps / 10000)),
     status: "computed",
   };
 }

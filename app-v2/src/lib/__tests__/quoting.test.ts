@@ -275,11 +275,9 @@ describe("always-included services", () => {
         "System Onboarding and Training",
       ]);
       expect(lines.every(l => l.qty === 1)).toBe(true);
-      // Both are CHARGED. The install and the training were comped to $0
-      // from 2026-09-18 until the product owner ended it on 2026-10-18:
-      // "included but priced". See COMPED_SERVICE_PRODUCT_IDS.
-      expect(quoteTotals(lines).oneTime).toBe(999 + 499);
-      for (const l of lines) expect(l.discountPercent ?? 0).toBe(0);
+      // Both are comped to $0 again (2026-10-28). See COMPED_SERVICE_PRODUCT_IDS.
+      expect(quoteTotals(lines).oneTime).toBe(0);
+      expect(lines.map(l => l.discountPercent ?? 0)).toEqual([100, 100]);
     }
   });
 
@@ -765,9 +763,9 @@ describe("buildQuote — the one derivation", () => {
       // Last, past every adjustment — see `resolveProcessingDisclosure`.
       RATE_LINE,
     ]);
-    // 999 + 499 + 2×749 + 69 + 2×300 = $3,665 due once. The install
-    // and the training are charged at list since 2026-10-18.
-    expect(built.totals.oneTime).toBe(3665);
+    // 0 + 0 + 2×749 + 69 + 2×300 = $2,167 due once. Install and training are
+    // both comped again since 2026-10-28.
+    expect(built.totals.oneTime).toBe(2167);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 

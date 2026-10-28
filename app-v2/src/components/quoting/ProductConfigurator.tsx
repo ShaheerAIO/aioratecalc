@@ -11,7 +11,9 @@ import {
   INCLUDED_SCREEN_COUNT,
   INCLUDED_SERVICE_PRODUCTS,
   KIOSK_PRODUCT_IDS,
+  MARKETING_ADDON_PRODUCT,
   MARKETING_INCLUDED_HARDWARE,
+  ONLINE_ORDERING_PRODUCT,
   POS_COMPANIONS,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
@@ -31,6 +33,8 @@ import {
   isPreAuthProduct,
   includesMarketing,
   isMarketingQuote,
+  isNamedProduct,
+  isPartialOrderingQuote,
   isProcessingQuote,
   isRetiredPick,
   isTabletProduct,
@@ -52,7 +56,9 @@ import {
   type BuiltQuote,
   type QuoteLimits,
 } from "@/lib/quoting";
-import { coverageLabel, kitFor, kitPicks, kitProductIds } from "@/lib/quotePackages";
+import {
+  chargeableKitProductIds, coverageLabel, KIT_DEFAULT_PRODUCTS, kitFor, kitPicks, kitProductIds, slotProductIds,
+} from "@/lib/quotePackages";
 import QuoteReceipt, { type QuoteMarginPreview } from "@/components/quoting/QuoteReceipt";
 import {
   commissionSummary,
@@ -338,12 +344,18 @@ export default function ProductConfigurator({
   // gets added back.
   const kit = kitFor(planned);
   const groups = useMemo(() => {
-    if (!kit) return groupProducts(selectable);
+    // "Marketing (Partial Ordering)" has no row (2026-10-28, product owner:
+    // "Hide the Marketing (Partial Ordering) line item, it will confuse
+    // people"): the Marketing chip is its only control. It stays in
+    // `selectable` — the picks are resolved against that, and the line still
+    // goes on the quote and brings the three free menu boards.
+    const listed = selectable.filter(p => !isNamedProduct(MARKETING_ADDON_PRODUCT, p));
+    if (!kit) return groupProducts(listed);
 
     // Pulled from WHEREVER they are, not just the Hardware group: HubSpot
     // carries no product type on the Customer Facing Display, so it would
     // otherwise sit under "Uncategorized", nowhere near the POS it goes with.
-    const byId = new Map(selectable.map(p => [p.hubspotProductId, p]));
+    const byId = new Map(listed.map(p => [p.hubspotProductId, p]));
     // Every product the kit lists — the optional kiosk included, so the rep
     // finds the free one where the kit is — not just the preselected ones.
     const ordered = kitProductIds(kit).flatMap(id => byId.get(id) ?? []);
@@ -370,7 +382,7 @@ export default function ProductConfigurator({
     const inKit = ordered;
     const kitIds = placed;
 
-    const rest = groupProducts(selectable.filter(p => !kitIds.has(p.hubspotProductId)));
+    const rest = groupProducts(listed.filter(p => !kitIds.has(p.hubspotProductId)));
     if (inKit.length === 0) return rest;
 
     const hardware = rest.find(g => g.type === "inventory");
@@ -736,6 +748,119 @@ export default function ProductConfigurator({
   const toggleChannel = (id: string) =>
     onChannelsChange(channels.includes(id) ? channels.filter(c => c !== id) : [...channels, id]);
 
+  // ── Marketing Partial Ordering's three chips (2026-10-28) ─────────────────
+  // Product owner: "When you select MPO, there should be big chips for kiosk,
+  // online ordering, and marketing that will autoselect the stuff
+  // accordingly." Each chip is only a shortcut onto the picks — it stores
+  // nothing of its own, so it reads lit straight off them and a reopened
+  // quote lights the right ones. Kiosk and Online Ordering keep their rows
+  // in the list; Marketing has none (see `groups`), so this is its control.
+  //
+  // Several quantities change in one press, so this writes the picks once
+  // rather than calling `setQtyFor` per product off a stale `picks`.
+  const setPickQtys = (changes: Array<[string, number]>) => {
+    const wanted = new Map(picks.map(p => [p.hubspotProductId, p.qty]));
+    for (const [id, qty] of changes) {
+      if (qty > 0) wanted.set(id, qty);
+      else wanted.delete(id);
+    }
+    onPicksChange(
+      selectable
+        .filter(p => wanted.has(p.hubspotProductId))
+        .map(p => ({ hubspotProductId: p.hubspotProductId, qty: wanted.get(p.hubspotProductId)! }))
+    );
+  };
+  const partialChips = (() => {
+    if (!isPartialOrderingQuote(planned) || !kit) return [];
+    // The kit's optional kiosk slot: the 27" is what a rep would add for the
+    // free first kiosk, and a 15.6" added by hand lights the chip too.
+    const kioskIds = kit.slots.filter(s => s.optional).flatMap(slotProductIds);
+    const kiosk = selectable.find(p => p.hubspotProductId === KIT_DEFAULT_PRODUCTS.kiosk27);
+    const online = selectable.find(p => isNamedProduct(ONLINE_ORDERING_PRODUCT, p));
+    const marketing = selectable.find(p => isNamedProduct(MARKETING_ADDON_PRODUCT, p));
+    const boards = MARKETING_INCLUDED_HARDWARE.flatMap(h => {
+      const product = selectable.find(p => p.hubspotProductId === h.hubspotProductId);
+      return product ? [{ product, qty: h.qty as number }] : [];
+    });
+    return [
+      {
+        id: "kiosk", label: "Kiosk", product: kiosk,
+        on: kioskIds.some(id => qtyOf(id) > 0),
+        // Off takes every kiosk off, whichever size: the chip says "Kiosk".
+        toggle: (on: boolean) =>
+          setPickQtys(on ? [[kiosk!.hubspotProductId, 1]] : kioskIds.map(id => [id, 0] as [string, number])),
+      },
+      {
+        id: "online", label: "Online Ordering", product: online,
+        on: online ? qtyOf(online.hubspotProductId) > 0 : false,
+        toggle: (on: boolean) => setPickQtys([[online!.hubspotProductId, on ? 1 : 0]]),
+      },
+      {
+        id: "marketing", label: "Marketing", product: marketing,
+        on: marketing ? qtyOf(marketing.hubspotProductId) > 0 : false,
+        // The marketing line is what makes the three menu boards free
+        // (`includesMarketing`), so the chip brings them too — the same three
+        // Marketing Only opens with — and takes those three back off again,
+        // leaving any the merchant is paying for beyond them.
+        toggle: (on: boolean) =>
+          setPickQtys([
+            [marketing!.hubspotProductId, on ? 1 : 0],
+            ...boards.map(b => {
+              const have = qtyOf(b.product.hubspotProductId);
+              return [b.product.hubspotProductId, on ? Math.max(have, b.qty) : Math.max(0, have - b.qty)] as [string, number];
+            }),
+          ]),
+      },
+    ];
+  })();
+  const partialChipRow = partialChips.length > 0 ? (
+    <div className={styles.bigChipRow}>
+      {partialChips.map(c => (
+        <button
+          key={c.id}
+          type="button"
+          className={styles.bigChip}
+          data-on={c.on}
+          aria-pressed={c.on}
+          // A product missing from the catalog can't be picked; the chip
+          // says so rather than doing nothing.
+          disabled={!c.product}
+          title={c.product ? undefined : `"${c.label}" isn't in the HubSpot catalog`}
+          onClick={() => c.toggle(!c.on)}
+        >
+          {c.label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  // ── Charging for the QSR Kit's kiosk (2026-10-28) ─────────────────────────
+  // Product owner: "The rep should be able to give the kiosk away for free in
+  // the QSR package, but if they want to charge for it they also should be
+  // able to." Free stays the default; the button keeps the kiosk OUT of the
+  // kit's slot (`LineAdjustment.outsideKit`), which `buildQuote` decides —
+  // this only sets the flag.
+  const chargeableIds = chargeableKitProductIds(planned);
+  const kioskChargeControl = (id: string, covered: number) => {
+    if (!onAdjustmentsChange || !chargeableIds.includes(id) || qtyOf(id) <= 0) return null;
+    const charged = adjustments[id]?.outsideKit === true;
+    // Only offered while the kit is actually giving it away, or to undo.
+    if (!charged && covered <= 0) return null;
+    return (
+      <div className={styles.chargeKiosk}>
+        {charged && <span className={styles.autoTag}>Charged at its price, not in the package. </span>}
+        <button
+          type="button"
+          className={styles.linkBtn}
+          aria-pressed={charged}
+          onClick={() => setAdjustment(id, { outsideKit: charged ? null : true })}
+        >
+          {charged ? "Make it free" : "Charge for kiosk"}
+        </button>
+      </div>
+    );
+  };
+
   // ── Clearing the cart ─────────────────────────────────────────────────────
   // Starting the hardware over used to mean stepping every row back to zero
   // one press at a time, which on a seeded kit is a dozen rows.
@@ -777,6 +902,7 @@ export default function ProductConfigurator({
       if (!merged.discountAmount) delete merged.discountAmount;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
+      if (!merged.outsideKit) delete merged.outsideKit;
       if (Object.keys(merged).length) next[id] = merged;
       else delete next[id];
     }
@@ -1506,6 +1632,7 @@ export default function ProductConfigurator({
               {coverageLabel(covered, onQuote, "the package")}
             </div>
           )}
+          {kioskChargeControl(p.hubspotProductId, covered)}
           {planCovered > 0 && (
             <div className={styles.coveredTag}>
               {planCovered >= onQuote
@@ -1752,6 +1879,7 @@ export default function ProductConfigurator({
                 hardware later.
               </div>
             )}
+            {partialChipRow}
             {groups.map(group => (
               <div key={group.type} className={styles.group}>
                 <div className={styles.groupTitle}>{group.label}</div>
@@ -2013,6 +2141,7 @@ export default function ProductConfigurator({
             </div>
           )}
 
+          {partialChipRow}
           {groups.map(group => (
             <div key={group.type} className={styles.group}>
               <div className={styles.groupTitle}>{group.label}</div>

@@ -281,9 +281,8 @@ export const merchantApplications = pgTable("merchant_applications", {
   // Earlier than both `quoteAcceptedAt` above and `hubspotIds.publishedAt`,
   // and the marker the rep's quote editor freezes on first.
   detailsConfirmedAt: timestamp("details_confirmed_at", { withTimezone: true }),
-  // How the merchant pays the one-time invoice: "full" | "later". Chosen on
-  // /lead/[token]/payment before confirming. Written only by
-  // savePaymentPlanAction, so it is NOT in appToRow — see paymentPlan.ts.
+  // LEGACY, unread and unwritten since 2026-10-28 (payment step removed; every
+  // invoice offers Klarna/Affirm). Column kept: no migration — see hubspot-billing.md.
   paymentPlan: text("payment_plan"),
   paymentPlanAt: timestamp("payment_plan_at", { withTimezone: true }),
   // The rep's note on this quote, mirrored onto the HubSpot deal. Nullable:

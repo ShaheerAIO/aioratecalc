@@ -99,7 +99,6 @@ export default function LeadQuoteView({
     // Only reachable from a stale tab: the button that reaches this route is
     // only rendered once `detailsConfirmed` is true.
     not_confirmed: "Please check and confirm your details first.",
-    no_payment_plan: "Please choose how you'd like to pay first.",
     expired: "This link has expired. Ask your AIO representative for a new one.",
     invalid: "This link is no longer valid. Ask your AIO representative for a new one.",
   };
@@ -310,7 +309,7 @@ export default function LeadQuoteView({
                 address and who we should bill. It only takes a minute.
               </p>
               <div className={styles.acceptRow}>
-                <a href={`/lead/${token}/payment`} className={styles.acceptBtn}>
+                <a href={`/lead/${token}/confirm`} className={styles.acceptBtn}>
                   Continue
                 </a>
               </div>

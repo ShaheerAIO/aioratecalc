@@ -159,10 +159,8 @@ describe("commissionRateToBps", () => {
 
 describe("isPolicyComped", () => {
   const INSTALL = "223452690133"; // Onsite Installation
-  // The service comp ended 2026-10-18 and the list is empty; the mechanism is
-  // kept for the next promotion, so it is exercised with the install on it.
-  beforeEach(() => { COMPED_SERVICE_PRODUCT_IDS.push(INSTALL); });
-  afterEach(() => { COMPED_SERVICE_PRODUCT_IDS.length = 0; });
+  // Install is on the comp list again since 2026-10-28; make sure it is.
+  beforeEach(() => { if (!COMPED_SERVICE_PRODUCT_IDS.includes(INSTALL)) COMPED_SERVICE_PRODUCT_IDS.push(INSTALL); });
 
   it("is true for a package/plan-covered line", () => {
     expect(isPolicyComped(hwLine({ coveredByPackage: "QSR Kit", discountPercent: 100 }))).toBe(true);
@@ -349,5 +347,22 @@ describe("quoteHardwareCommission", () => {
   it("is all zero/empty for an empty quote", () => {
     const result = quoteHardwareCommission([]);
     expect(result).toEqual({ rep: 0, rsm: 0, perLine: [], missingCost: [], recurringWithRate: [] });
+  });
+});
+
+describe("service lines never produce negative commission (2026-10-28)", () => {
+  const base = { qty: 1, unitPrice: 999, costToRep: 500, repCommissionBps: 1000, rsmCommissionBps: 500 };
+  it("floors install and training at 0 when discounted below cost", () => {
+    for (const [id, name] of [["223452690133", "Onsite Installation"], ["223152695032", "System Onboarding and Training"]]) {
+      const r = lineHardwareCommission(hwLine({ ...base, hubspotProductId: id, name, discountPercent: 80 }));
+      expect(r.status).toBe("computed");
+      expect(r.rep).toBe(0);
+      expect(r.rsm).toBe(0);
+    }
+  });
+  it("still lets hardware discounted below cost go negative", () => {
+    const r = lineHardwareCommission(hwLine({ ...base, discountPercent: 80 }));
+    expect(r.rep).toBeLessThan(0);
+    expect(r.rsm).toBeLessThan(0);
   });
 });

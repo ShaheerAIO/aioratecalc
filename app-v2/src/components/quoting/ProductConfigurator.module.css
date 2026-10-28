@@ -1037,6 +1037,44 @@
 
 .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
+/* Marketing Partial Ordering's Kiosk / Online Ordering / Marketing chips
+   (2026-10-28, product owner: "big chips"). The plan is sold on which of the
+   three a merchant takes, so they sit above the list at the plan cards'
+   weight rather than the channel chips'. */
+.bigChipRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+}
+
+.bigChip {
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ink-2);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-xs);
+  cursor: pointer;
+  transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out);
+}
+
+.bigChip[data-on="true"] {
+  border-color: var(--accent);
+  background: oklch(69% 0.17 32 / 0.1);
+  color: var(--accent-text);
+}
+
+.bigChip:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.bigChip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* The QSR Kit kiosk's "Charge for kiosk" / "Make it free" (2026-10-28). Small
+   on purpose: free is the default, and this is the exception. */
+.chargeKiosk { margin-top: 2px; }
+
 /* The document reads as paper on the page, not as one more panel.
  *
  * Its charges are a TABLE (product owner, 2026-10-14: "instead of lines for
