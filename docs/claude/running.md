@@ -115,3 +115,10 @@ TWILIO_FROM_NUMBER          # Phase 4 — E.164, e.g. +15551234567
 NEXT_PUBLIC_BASE_URL        # Phase 1.5 — used to build the customer lead-link URL; keep in sync with actual dev port
 ```
 (Phase F — Foodbuy — needs no env vars: it has no API, see lib/foodbuyForm.ts.)
+
+## Deploying
+
+Production deploys go out from the CLI, **from the repo root, not `app-v2/`**: the Vercel project's Root
+Directory is `app-v2`, so a deploy started inside it fails with `The specified Root Directory "app-v2" does not
+exist`. From anywhere: `vercel --prod --yes --cwd "<repo root>"`. It uploads the working tree, so uncommitted
+edits ship too.
