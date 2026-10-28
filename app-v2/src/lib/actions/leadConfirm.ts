@@ -24,7 +24,14 @@ import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { getLeadApplicationByToken } from "@/lib/leadToken";
 import { applyLeadConfirmation, confirmationErrors } from "@/lib/leadConfirm";
-import { updateCompanyMerchantDetails, updateCompanyEin } from "@/lib/adapters/hubspot";
+import {
+  associateContactToCompany,
+  ensureQuoteContact,
+  updateCompanyConfirmedDetails,
+  updateCompanyEin,
+  updateContactDetails,
+  type ContactDetailsPatch,
+} from "@/lib/adapters/hubspot";
 import { withStateCode } from "@/lib/utils";
 import type { OnboardingFieldErrors } from "@/lib/onboardingValidation";
 import type { BusinessInfo, OwnerContact, ProcessingInfo } from "@/types/merchant";
@@ -84,27 +91,90 @@ export async function confirmLeadDetailsAction(
 
   // Best-effort, and AFTER the save: the row is what the publish reads, and a
   // HubSpot hiccup must not cost the merchant a confirmation they just made.
-  // Two separate calls on purpose — see `updateCompanyEin`'s own comment on
-  // why the EIN does not travel with the other four properties.
   const companyId = row.tenantLink?.hubspotCompanyId;
   if (companyId) {
-    try {
-      await updateCompanyMerchantDetails(companyId, {
-        legalName: business.legalName,
-        legalStreet: business.address,
-        legalCity: business.city,
-        previousProcessor: next.processing?.currentProcessor,
-        mcc: next.processing?.mcc,
-      });
-    } catch (err) {
-      console.error("lead confirm: HubSpot company detail sync failed", row.id, err);
-    }
-    try {
-      await updateCompanyEin(companyId, business.ein);
-    } catch (err) {
-      console.error("lead confirm: HubSpot EIN write failed", row.id, err);
-    }
+    await pushConfirmationToHubSpot(row.id, companyId, {
+      business,
+      ownerContact: next.ownerContact as OwnerContact,
+      billingContact: next.billingContact as OwnerContact | null,
+      processing: next.processing as ProcessingInfo,
+    });
   }
 
   return { ok: true };
+}
+
+/**
+ * Everything the merchant confirmed OVERRULES HubSpot (product owner,
+ * 2026-10-28: "everything that the customer confirms at the end of their
+ * journey must overrule whats already in hubspot. All of it"):
+ *  - the Company: DBA as `name`, operating address, phone, website, business
+ *    type, legal name/street/city, MCC, previous processor — and the EIN in
+ *    its own PATCH (see `updateCompanyEin` for why);
+ *  - the owner and billing Contacts: found or created by email, their name,
+ *    title and phone overwritten, and labelled on the Company. No billing
+ *    contact means "same as the owner", so the owner carries both labels.
+ *
+ * Previously-terminated and bankruptcy are confirmed too but have no HubSpot
+ * property to land in. Each write is caught on its own, so one refusal never
+ * takes the others down.
+ */
+async function pushConfirmationToHubSpot(
+  appId: string,
+  companyId: string,
+  confirmed: {
+    business: BusinessInfo;
+    ownerContact: OwnerContact;
+    billingContact: OwnerContact | null;
+    processing: ProcessingInfo;
+  },
+): Promise<void> {
+  const { business, ownerContact, billingContact, processing } = confirmed;
+  try {
+    await updateCompanyConfirmedDetails(companyId, {
+      business,
+      mcc: processing?.mcc,
+      previousProcessor: processing?.currentProcessor,
+    });
+  } catch (err) {
+    console.error("lead confirm: HubSpot company detail sync failed", appId, err);
+  }
+  try {
+    await updateCompanyEin(companyId, business.ein);
+  } catch (err) {
+    console.error("lead confirm: HubSpot EIN write failed", appId, err);
+  }
+
+  // Sequential, not parallel: when the billing contact IS the owner (same
+  // email), two concurrent find-or-creates would race to create one person.
+  const ownerIsBilling =
+    !billingContact || billingContact.email.trim().toLowerCase() === ownerContact.email.trim().toLowerCase();
+  await pushConfirmedContact(appId, companyId, ownerContact, ownerIsBilling ? ["owner", "billing"] : ["owner"]);
+  if (!ownerIsBilling) await pushConfirmedContact(appId, companyId, billingContact, ["billing"]);
+}
+
+async function pushConfirmedContact(
+  appId: string,
+  companyId: string,
+  contact: OwnerContact,
+  roles: Array<"owner" | "billing">,
+): Promise<void> {
+  if (!contact.email?.trim()) return;
+  try {
+    const contactId = await ensureQuoteContact({
+      firstName: contact.firstName ?? "",
+      lastName: contact.lastName ?? "",
+      email: contact.email,
+      phone: contact.phone,
+    });
+    const patch: ContactDetailsPatch = {};
+    if (contact.firstName?.trim()) patch.firstname = contact.firstName.trim();
+    if (contact.lastName?.trim()) patch.lastname = contact.lastName.trim();
+    if (contact.title?.trim()) patch.jobtitle = contact.title.trim();
+    if (contact.phone?.trim()) patch.phone = contact.phone.trim();
+    await updateContactDetails(contactId, patch);
+    await associateContactToCompany(contactId, companyId, roles);
+  } catch (err) {
+    console.error(`lead confirm: HubSpot ${roles.join("+")} contact sync failed`, appId, err);
+  }
 }

@@ -3,8 +3,10 @@
 
 import { paymentProcessingArr } from "@/lib/billing/processingArr";
 import { commissionRateToBps, quoteHardwareCommission } from "@/lib/commission";
+import { locationAddress } from "@/types/merchant";
 import type {
   BillingFrequency,
+  BusinessInfo,
   CatalogProduct,
   DealStage,
   HubspotSubscriptionSnapshot,
@@ -1080,6 +1082,89 @@ export async function updateCompanyEin(companyId: string, ein: string | null | u
   });
   if (!res.ok) throw hubspotErr("HubSpot company EIN update failed", res.status, await res.text());
   return true;
+}
+
+/**
+ * The portal's "Business Type" select (`migrated_00nfi00000pf0i3ual`), keyed by
+ * EasyOB's `bizType`. Non-profit has no option there and is left out: an
+ * unknown enum value fails the whole PATCH.
+ */
+const BUSINESS_TYPE_PROP = "migrated_00nfi00000pf0i3ual";
+const BUSINESS_TYPE_OPTIONS: Partial<Record<BusinessInfo["bizType"], string>> = {
+  "sole-prop": "Sole Proprietorship",
+  "partnership": "Partnership",
+  "corp": "C Corp",
+  "s-corp": "S Corp",
+  "llc": "LLC",
+};
+
+export type ConfirmedCompanyDetails = {
+  business: Partial<BusinessInfo>;
+  mcc?: string | null;
+  previousProcessor?: string | null;
+};
+
+/**
+ * Pure: the Company properties for what the merchant confirmed on
+ * `/lead/[token]/confirm`. The merchant's answer OVERRULES what HubSpot holds
+ * (product owner, 2026-10-28: "everything that the customer confirms at the
+ * end of their journey must overrule whats already in hubspot"), including
+ * the Company `name` (their DBA) and the operating address. Blanks are still
+ * left out: a box left empty is not an answer to erase with.
+ *
+ * The operating address goes through `locationAddress`, so a merchant who
+ * left the DBA address blank ("same as legal") writes the legal one there.
+ * Every name here was checked against portal 244508708 on 2026-10-28.
+ */
+export function buildConfirmedCompanyProperties(details: ConfirmedCompanyDetails): Record<string, string> {
+  const biz = details.business;
+  const location = locationAddress({
+    address: biz.address ?? "", city: biz.city ?? "", state: biz.state ?? "", zip: biz.zip ?? "",
+    dbaAddress: biz.dbaAddress, dbaCity: biz.dbaCity, dbaState: biz.dbaState, dbaZip: biz.dbaZip,
+  });
+  const candidates: Record<string, string | null | undefined> = {
+    name: biz.dba,
+    address: location.address,
+    city: location.city,
+    state: location.state,
+    zip: location.zip,
+    phone: biz.phone,
+    website: biz.website,
+    [BUSINESS_TYPE_PROP]: biz.bizType ? BUSINESS_TYPE_OPTIONS[biz.bizType] : null,
+    [COMPANY_WRITE_PROPS.legalName]: biz.legalName,
+    [COMPANY_WRITE_PROPS.legalStreet]: biz.address,
+    [COMPANY_WRITE_PROPS.legalCity]: biz.city,
+    [COMPANY_WRITE_PROPS.mcc]: details.mcc,
+    [COMPANY_WRITE_PROPS.previousProcessor]: details.previousProcessor,
+  };
+  const properties: Record<string, string> = {};
+  for (const [name, raw] of Object.entries(candidates)) {
+    const value = clean(raw);
+    if (value) properties[name] = value;
+  }
+  return properties;
+}
+
+/**
+ * PATCH the merchant's confirmed details onto their Company, general CRM
+ * token. The EIN still travels separately (`updateCompanyEin`). Returns the
+ * property names written; nothing to write makes no call.
+ */
+export async function updateCompanyConfirmedDetails(
+  companyId: string,
+  details: ConfirmedCompanyDetails,
+): Promise<string[]> {
+  const properties = buildConfirmedCompanyProperties(details);
+  const written = Object.keys(properties);
+  if (!written.length) return [];
+
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/${companyId}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ properties }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot company confirmed-details update failed", res.status, await res.text());
+  return written;
 }
 
 /** The wide read behind the prospect prefill. A superset of getTenantCompany. */
@@ -2329,6 +2414,34 @@ export async function associateDealToContact(dealId: string, contactId: string):
   } catch (err) {
     console.warn("associateDealToContact: errored", dealId, contactId, err);
   }
+}
+
+// contact → company labels, read from the portal's label registry 2026-10-28.
+// "Business Owner" is USER_DEFINED; "Billing Contact" is HubSpot's own.
+export const CONTACT_TO_COMPANY_LABELS = {
+  owner: { associationCategory: "USER_DEFINED", associationTypeId: 3 },
+  billing: { associationCategory: "HUBSPOT_DEFINED", associationTypeId: 931 },
+} as const;
+
+/**
+ * Put a Contact on the Company with the given labels. A v4 PUT adds labels
+ * and keeps any the pair already had, so re-running it is harmless.
+ */
+export async function associateContactToCompany(
+  contactId: string,
+  companyId: string,
+  roles: Array<keyof typeof CONTACT_TO_COMPANY_LABELS>,
+): Promise<void> {
+  if (!roles.length) return;
+  const res = await fetchWithRetry(
+    `${BASE}/crm/v4/objects/contacts/${contactId}/associations/companies/${companyId}`,
+    {
+      method: "PUT",
+      headers: billingHeaders(),
+      body: JSON.stringify(roles.map(role => CONTACT_TO_COMPANY_LABELS[role])),
+    }
+  );
+  if (!res.ok) throw hubspotErr(`HubSpot contact ${contactId} → company ${companyId} association failed`, res.status, await res.text());
 }
 
 export type QuoteSnapshot = {

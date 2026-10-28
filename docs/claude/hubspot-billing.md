@@ -101,6 +101,26 @@ verbatim-`quoteLines` hazard, both constraints above.
     `isEligibleForAioProvisioning` does not require one — so that would have created an AIO tenant
     with a blank address, on an alias that is globally unique and never freed.
 
+- **WHAT THE MERCHANT CONFIRMS OVERRULES HUBSPOT — ALL OF IT** (product owner, 2026-10-28: "everything
+  that the customer confirms at the end of their journey must overrule whats already in hubspot. All of it").
+  Before this, the confirm step only wrote legal name/street/city, processor, MCC and EIN; the operating
+  address, phone, website, entity type and both contacts never reached HubSpot. `pushConfirmationToHubSpot`
+  (`actions/leadConfirm.ts`) now writes, best-effort and each write caught on its own:
+  - **Company** (`updateCompanyConfirmedDetails` / `buildConfirmedCompanyProperties`): `name` ← DBA, operating
+    `address`/`city`/`state`/`zip` via `locationAddress` (blank DBA address → the legal one), `phone`, `website`,
+    "Business Type" `migrated_00nfi00000pf0i3ual` (non-profit has no option and is left out), the legal trio,
+    `mcc_code`, `previous_processor`. EIN stays in its own PATCH. **This reverses "Company `address` seeds
+    nothing" only in the write direction** — the prefill still never seeds the legal address from it.
+  - **Contacts**: owner and billing are found-or-created by email, their name/title/phone overwritten, and
+    labelled on the Company — "Business Owner" (USER_DEFINED 3) / "Billing Contact" (HUBSPOT_DEFINED 931).
+    No billing contact (or the same email) → the owner carries both labels. Sequential so the same person
+    isn't created twice.
+  - Blanks are still left out (an empty box is not an answer). Previously-terminated and bankruptcy have no
+    HubSpot property and are not written.
+  - Live-verified 2026-10-28 on company `357159545548`: the Company PATCH and the Business Owner association
+    both landed. The Billing Contact label and the contact overwrite were not run live (they would have
+    rewritten real staff contacts).
+
 ## The one-time invoice
 
 Product owner, 2026-10-22/23: **one-time lines (hardware, install, training, packages, kit swaps) go

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { updateCompanyMerchantDetails } from "@/lib/adapters/hubspot";
+import { buildConfirmedCompanyProperties, updateCompanyMerchantDetails } from "@/lib/adapters/hubspot";
 
 const fetchMock = vi.fn();
 
@@ -49,5 +49,43 @@ describe("updateCompanyMerchantDetails", () => {
   it("throws on a HubSpot refusal so the caller can report it", async () => {
     fetchMock.mockResolvedValue(new Response('{"message":"nope"}', { status: 403 }));
     await expect(updateCompanyMerchantDetails("1", { mcc: "5812" })).rejects.toThrow(/company update failed/);
+  });
+});
+
+describe("buildConfirmedCompanyProperties", () => {
+  const business = {
+    legalName: "Elizabeth's Special Restaurant", dba: "Elizabeth's Test Company", bizType: "corp" as const,
+    address: "1925 Campbell Avenue", city: "San Jose", state: "CA", zip: "95125",
+    phone: "908-820-4000", website: "http://www.elizabeth.com",
+  };
+
+  it("maps everything the merchant confirmed, DBA as the company name", () => {
+    expect(buildConfirmedCompanyProperties({
+      business: { ...business, dbaAddress: "1 Main St", dbaCity: "Campbell", dbaState: "CA", dbaZip: "95008" },
+      mcc: "5812", previousProcessor: "toast",
+    })).toEqual({
+      name: "Elizabeth's Test Company",
+      address: "1 Main St", city: "Campbell", state: "CA", zip: "95008",
+      phone: "908-820-4000",
+      website: "http://www.elizabeth.com",
+      migrated_00nfi00000pf0i3ual: "C Corp",
+      legal_trading_name_as_registered_with_government: "Elizabeth's Special Restaurant",
+      legal_street_address_as_registered_with_government: "1925 Campbell Avenue",
+      legal_city_address_as_registered_with_government: "San Jose",
+      mcc_code: "5812",
+      previous_processor: "toast",
+    });
+  });
+
+  it("writes the legal address as the operating one when the DBA address is blank", () => {
+    const props = buildConfirmedCompanyProperties({ business: { ...business, dbaAddress: "" } });
+    expect([props.address, props.city, props.state, props.zip]).toEqual(["1925 Campbell Avenue", "San Jose", "CA", "95125"]);
+  });
+
+  it("leaves out blanks and a business type the portal has no option for", () => {
+    const props = buildConfirmedCompanyProperties({ business: { ...business, bizType: "non-profit", website: " " }, mcc: "" });
+    expect(props).not.toHaveProperty("migrated_00nfi00000pf0i3ual");
+    expect(props).not.toHaveProperty("website");
+    expect(props).not.toHaveProperty("mcc_code");
   });
 });
