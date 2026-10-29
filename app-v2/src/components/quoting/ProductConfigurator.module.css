@@ -1071,10 +1071,6 @@
 
 .bigChip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-/* The QSR Kit kiosk's "Charge for kiosk" / "Make it free" (2026-10-28). Small
-   on purpose: free is the default, and this is the exception. */
-.chargeKiosk { margin-top: 2px; }
-
 /* The document reads as paper on the page, not as one more panel.
  *
  * Its charges are a TABLE (product owner, 2026-10-14: "instead of lines for

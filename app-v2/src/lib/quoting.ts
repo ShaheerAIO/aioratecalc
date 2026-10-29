@@ -6,7 +6,7 @@
 // operates on is read from HubSpot server-side and passed in.
 
 import { fmt$, monthlyEquivalent } from "@/lib/utils";
-import { chargeableKitProductIds, decomposePackages, type PackageDecomposition } from "@/lib/quotePackages";
+import { decomposePackages, kitFor, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
   QuoteAdjustments, QuoteLine, QuoteRates, QuoteTotals, QuoteType, StoredQuoteType, UnitAdjustment,
@@ -941,6 +941,54 @@ export function applyServiceComp(line: QuoteLine, adjustment?: LineAdjustment): 
 }
 
 /**
+ * THE FIRST KIOSK IS A DISCOUNTED LINE, NOT A KIT SLOT (2026-10-29, product
+ * owner: "Make the first free kiosk fully out of the package. It needs to
+ * feel like a discount to the customer. Instead of the 'make it free' button
+ * just have it added as a regular line item with the discount behaviour as
+ * discussed."). On a plan that comes with a kit (`kitFor`: All-in-One, Order
+ * & Pay, Marketing Partial Ordering), ONE kiosk unit — a 27" or a 15.6",
+ * across both — goes on the quote at list, 100% off, and the merchant reads
+ * "$999, 100% off" where they used to read "Included in the package".
+ *
+ * Which product it is, when the quote has both: the DEARER line (the 27" at
+ * today's prices), the same "merchant gets the dearer one free" the kit's
+ * slot used to give. A tie goes to the order of this list.
+ */
+export const FIRST_KIOSK_PRODUCT_IDS: readonly string[] = [
+  "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
+  "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
+];
+
+/** The product carrying this quote's first kiosk, or null when it has none (or the plan has no kit). */
+export function firstKioskProductId(quoteType: QuoteType, lines: QuoteLine[]): string | null {
+  if (!kitFor(quoteType)) return null;
+  let first: QuoteLine | null = null;
+  for (const id of FIRST_KIOSK_PRODUCT_IDS) {
+    const line = lines.find(l => l.hubspotProductId === id && l.qty > 0);
+    if (line && (!first || line.unitPrice > first.unitPrice)) first = line;
+  }
+  return first?.hubspotProductId ?? null;
+}
+
+/**
+ * The first kiosk's standing comp, as the adjustment it amounts to: 100% off
+ * ONE unit (`discountQty: 1`), so a second kiosk on the same line splits off
+ * at list (`splitPartialDiscount`) rather than both sharing a blended 50%.
+ *
+ * A DEFAULT, not an override — the `applyServiceComp` rule: a rep who set
+ * EITHER lever keeps it, and a discount of 0 is how a rep charges for the
+ * kiosk (the configurator writes it when the box is cleared, and
+ * `adjustmentsFromQuoteLines` reads a full-price first kiosk back as it).
+ * Unlike the service comp it can't be applied to the finished line: the split
+ * needs the quantity, so it goes in before `splitPartialDiscount` does.
+ */
+export function applyFirstKioskComp(adjustment: LineAdjustment | undefined): LineAdjustment {
+  const repSet = adjustment?.discountPercent ?? adjustment?.discountAmount;
+  if (repSet !== undefined && repSet !== null) return adjustment!;
+  return { ...adjustment, discountPercent: 100, discountQty: 1 };
+}
+
+/**
  * Hold a package-covered line at 100% off.
  *
  * Unconditional, unlike `applyServiceComp`: a comp is a discount AIO chooses
@@ -955,6 +1003,10 @@ export function applyServiceComp(line: QuoteLine, adjustment?: LineAdjustment): 
  * otherwise silently put the covered half back onto the quote at full price.
  * The rep's own discount still reaches the remainder line, which is the half
  * the merchant is actually being charged for.
+ *
+ * Nothing a rep can do keeps hardware out of a kit. (The QSR kiosk's
+ * "Charge for kiosk" did, 2026-10-28; the kiosk left the kit the next day —
+ * see `applyFirstKioskComp`.)
  */
 export function applyPackageComp(line: QuoteLine): QuoteLine {
   if (!line.coveredByPackage) return line;
@@ -2303,13 +2355,15 @@ export function adjustmentBlockers(
       if (pct !== undefined && pct !== null) {
         if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
           blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
-        } else if (pct > lineCap && !((isCompedService(line) || line.coveredByPackage) && pct === 100)) {
-          // A comped service or a package-covered line sitting at exactly 100%
-          // is exempt: both are AIO policy — off the price sheet, and out of the
-          // package the merchant is already paying for — and the cap exists to
-          // bound REP discretion. Without this every quote carrying either would
-          // refuse to send, since the default cap is 50%. Any other figure on
-          // those lines IS a rep's choice and is capped like anything else.
+        } else if (pct > lineCap && !((isCompedService(line) || line.coveredByPackage || (line.firstKiosk && line.qty === 1)) && pct === 100)) {
+          // A comped service, a package-covered line or the single first-kiosk
+          // unit sitting at exactly 100% is exempt: all three are AIO policy —
+          // off the price sheet, out of the package the merchant is already
+          // paying for, and the free first kiosk — and the cap exists to bound
+          // REP discretion. Without this every quote carrying one would refuse
+          // to send, since the default cap is 50%. Any other figure on those
+          // lines IS a rep's choice and is capped like anything else, and so is
+          // 100% across SEVERAL kiosks: only the first one is AIO's to give.
           blockers.push(
             isSpecific
               ? `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit admin set for this product. ` +
@@ -2517,12 +2571,26 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
     // no key and can't overwrite the half that does.
     if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
   }
-  // "Charge for the kiosk" (2026-10-28) is a choice about the PRODUCT, so it
-  // is merged in last, onto whatever shape the product reopened as — per-unit
-  // mode included, which the loop above skips.
+  // The first kiosk (2026-10-29), whose default is no adjustment at all
+  // (`applyFirstKioskComp`). Its own 100% on the one unit IS that default, so
+  // it reopens as nothing — read back as a rep's 100% it would stop splitting,
+  // and a second kiosk added later would come out free too. One the rep
+  // CHARGED for carries no discount, which would reopen as that default 100%,
+  // so it comes back as an explicit 0 instead, which the comp leaves alone.
   for (const line of lines ?? []) {
-    if (line.outsideKit && !line.coveredByPackage) {
-      out[line.hubspotProductId] = { ...out[line.hubspotProductId], outsideKit: true };
+    if (!line.firstKiosk) continue;
+    const id = line.hubspotProductId;
+    const reopened = out[id];
+    if (reopened?.units) continue;
+    if (reopened?.discountAmount) continue;
+    if (reopened?.discountPercent === 100 && line.qty === 1 && line.discountPercent === 100) {
+      const rest = { ...reopened };
+      delete rest.discountPercent;
+      delete rest.discountQty;
+      if (Object.keys(rest).length) out[id] = rest;
+      else delete out[id];
+    } else if (!reopened?.discountPercent) {
+      out[id] = { ...reopened, discountPercent: 0 };
     }
   }
   return out;
@@ -2647,38 +2715,25 @@ export function buildQuote(
   //
   // Order-point counting runs BEFORE this and on the unsplit picks, which is
   // the same count either way — splitting a line preserves its total quantity.
-  //
-  // A product the rep chose to charge for (`LineAdjustment.outsideKit`, the
-  // QSR Kit's kiosk, 2026-10-28) is kept out of the kit's chargeable slot
-  // HERE, before anything is covered, rather than discounted back up later:
-  // `applyPackageComp` is unconditional, so a covered line can't be charged.
-  // Only products this plan's kit lets a rep charge for are honoured, so a
-  // flag left over from another plan does nothing.
-  const chargeable = chargeableKitProductIds(quoteType);
-  const outsideKit = chargeable.filter(id => adjustments[id]?.outsideKit === true);
   const packages = decomposePackages({
     lines: [...includedServices.lines, ...picksWithInclusions],
     quoteType,
-    outsideKit,
   });
-  // Stamped on the line so the choice survives a save: the saved lines are
-  // all a reopened quote has, and a full-price kiosk alone doesn't say it was
-  // chosen (see `adjustmentsFromQuoteLines`). Marked whether or not the kit
-  // applied, or charging the kiosk on a quote with nothing else in the kit
-  // would reopen free.
-  const packagedLines = outsideKit.length
-    ? packages.lines.map(l =>
-        !l.coveredByPackage && outsideKit.includes(l.hubspotProductId) ? { ...l, outsideKit: true as const } : l
-      )
-    : packages.lines;
+
+  // The first kiosk is never in the kit (2026-10-29): its 100% is a default
+  // discount on its own line, applied with the rep's edits below.
+  const firstKiosk = firstKioskProductId(quoteType, picks);
 
   const unitCursor = new Map<string, number>();
   const adjustedLines = [
     ...(platform.line ? [platform.line] : []),
     ...softwareLicense.lines,
-    ...packagedLines,
+    ...packages.lines,
   ].flatMap(line => {
-    const adjustment = adjustments[line.hubspotProductId];
+    const adjustment = line.hubspotProductId === firstKiosk && !line.coveredByPackage
+      && !hasUnitAdjustments(adjustments[line.hubspotProductId])
+      ? applyFirstKioskComp(adjustments[line.hubspotProductId])
+      : adjustments[line.hubspotProductId];
     // "Adjust each unit" mode: the units are numbered across every chargeable
     // line of the product, so the cursor carries on from where the last one
     // stopped. Covered lines are skipped here and fall through to the package
@@ -2697,7 +2752,15 @@ export function buildQuote(
     return splitPartialDiscount(adjusted, adjustment);
   });
 
-  const chargedLines = adjustedLines;
+  // Marked on the FIRST line of the product — the 100% unit, when the default
+  // split it — so the cap exemption, the commission rate and a reopen can find
+  // it on the saved lines, which are all a reopened quote has.
+  let kioskMarked = false;
+  const chargedLines = adjustedLines.map(line => {
+    if (kioskMarked || line.hubspotProductId !== firstKiosk) return line;
+    kioskMarked = true;
+    return { ...line, firstKiosk: true as const };
+  });
 
   // The rate disclosure and the pre-authorization both come LAST and past
   // every adjustment, for the same two reasons: neither is the rep's to edit,

@@ -46,6 +46,7 @@ import {
   lineListAmount,
   lineNetAmount,
   companionsFor,
+  FIRST_KIOSK_PRODUCT_IDS,
   maxQtyFor,
   minimumTerminalsFor,
   planDefaultBillingStart,
@@ -57,7 +58,7 @@ import {
   type QuoteLimits,
 } from "@/lib/quoting";
 import {
-  chargeableKitProductIds, coverageLabel, KIT_DEFAULT_PRODUCTS, kitFor, kitPicks, kitProductIds, slotProductIds,
+  coverageLabel, kitFor, kitPicks, kitProductIds,
 } from "@/lib/quotePackages";
 import QuoteReceipt, { type QuoteMarginPreview } from "@/components/quoting/QuoteReceipt";
 import {
@@ -356,8 +357,9 @@ export default function ProductConfigurator({
     // carries no product type on the Customer Facing Display, so it would
     // otherwise sit under "Uncategorized", nowhere near the POS it goes with.
     const byId = new Map(listed.map(p => [p.hubspotProductId, p]));
-    // Every product the kit lists — the optional kiosk included, so the rep
-    // finds the free one where the kit is — not just the preselected ones.
+    // Every product the kit lists — the printer beside the partial kit's KDS
+    // included — not just the preselected ones. The kiosk is no longer one of
+    // them (2026-10-29): its first one is a discount, not a kit slot.
     const ordered = kitProductIds(kit).flatMap(id => byId.get(id) ?? []);
 
     // Each POS's companions sit directly UNDER it — "CFD + cash drawer +
@@ -772,10 +774,10 @@ export default function ProductConfigurator({
   };
   const partialChips = (() => {
     if (!isPartialOrderingQuote(planned) || !kit) return [];
-    // The kit's optional kiosk slot: the 27" is what a rep would add for the
-    // free first kiosk, and a 15.6" added by hand lights the chip too.
-    const kioskIds = kit.slots.filter(s => s.optional).flatMap(slotProductIds);
-    const kiosk = selectable.find(p => p.hubspotProductId === KIT_DEFAULT_PRODUCTS.kiosk27);
+    // The 27" is what a rep would add for the free first kiosk (100% off, see
+    // `applyFirstKioskComp`), and a 15.6" added by hand lights the chip too.
+    const kioskIds = FIRST_KIOSK_PRODUCT_IDS;
+    const kiosk = selectable.find(p => p.hubspotProductId === FIRST_KIOSK_PRODUCT_IDS[0]);
     const online = selectable.find(p => isNamedProduct(ONLINE_ORDERING_PRODUCT, p));
     const marketing = selectable.find(p => isNamedProduct(MARKETING_ADDON_PRODUCT, p));
     const boards = MARKETING_INCLUDED_HARDWARE.flatMap(h => {
@@ -834,31 +836,22 @@ export default function ProductConfigurator({
     </div>
   ) : null;
 
-  // ── Charging for the QSR Kit's kiosk (2026-10-28) ─────────────────────────
-  // Product owner: "The rep should be able to give the kiosk away for free in
-  // the QSR package, but if they want to charge for it they also should be
-  // able to." Free stays the default; the button keeps the kiosk OUT of the
-  // kit's slot (`LineAdjustment.outsideKit`), which `buildQuote` decides —
-  // this only sets the flag.
-  const chargeableIds = chargeableKitProductIds(planned);
-  const kioskChargeControl = (id: string, covered: number) => {
-    if (!onAdjustmentsChange || !chargeableIds.includes(id) || qtyOf(id) <= 0) return null;
-    const charged = adjustments[id]?.outsideKit === true;
-    // Only offered while the kit is actually giving it away, or to undo.
-    if (!charged && covered <= 0) return null;
-    return (
-      <div className={styles.chargeKiosk}>
-        {charged && <span className={styles.autoTag}>Charged at its price, not in the package. </span>}
-        <button
-          type="button"
-          className={styles.linkBtn}
-          aria-pressed={charged}
-          onClick={() => setAdjustment(id, { outsideKit: charged ? null : true })}
-        >
-          {charged ? "Make it free" : "Charge for kiosk"}
-        </button>
-      </div>
-    );
+  // ── The first kiosk (2026-10-29) ──────────────────────────────────────────
+  // Product owner: "Make the first free kiosk fully out of the package ...
+  // just have it added as a regular line item with the discount behaviour as
+  // discussed." It is 100% off ONE unit until the rep changes its discount
+  // (`applyFirstKioskComp`), which the row's own Adjust drawer does. No
+  // discount at all IS that default, so clearing the box charges for it with
+  // an explicit 0 instead; a figure typed over the default (or over that 0)
+  // stays on the one unit, as the row showed it.
+  const firstKioskId = quoteLines.find(l => l.firstKiosk)?.hubspotProductId ?? null;
+  const kioskDefault = (id: string) => {
+    const a = adjustments[id];
+    return id === firstKioskId && (a?.discountPercent ?? a?.discountAmount) == null && !a?.units;
+  };
+  const kioskUnscoped = (id: string) => {
+    const a = adjustments[id];
+    return id === firstKioskId && !a?.discountPercent && a?.discountAmount == null && a?.discountQty == null && !a?.units;
   };
 
   // ── Clearing the cart ─────────────────────────────────────────────────────
@@ -898,11 +891,11 @@ export default function ProductConfigurator({
         }
       }
       if (!merged.units) delete merged.units;
-      if (!merged.discountPercent) delete merged.discountPercent;
+      // Kept at 0 on the first kiosk: that 0 is the rep charging for it.
+      if (!merged.discountPercent && !(merged.discountPercent === 0 && id === firstKioskId)) delete merged.discountPercent;
       if (!merged.discountAmount) delete merged.discountAmount;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
-      if (!merged.outsideKit) delete merged.outsideKit;
       if (Object.keys(merged).length) next[id] = merged;
       else delete next[id];
     }
@@ -939,6 +932,12 @@ export default function ProductConfigurator({
     //
     // `discountAmount: null` on every write: the two levers are mutually
     // exclusive, so typing in this box is also how a rep abandons the other.
+    if (id === firstKioskId) {
+      setAdjustment(id, next
+        ? { discountPercent: next, discountAmount: null, ...(kioskUnscoped(id) ? { discountQty: 1 } : {}) }
+        : { discountPercent: 0, discountAmount: null, discountQty: null });
+      return;
+    }
     setAdjustment(id, next
       ? { discountPercent: next, discountAmount: null }
       : { discountPercent: null, discountAmount: null, discountQty: null });
@@ -946,7 +945,12 @@ export default function ProductConfigurator({
 
   const setDiscountQty = (id: string, raw: string) => {
     const qty = raw.trim() === "" ? null : Number(raw);
-    setAdjustment(id, { discountQty: qty === null || Number.isNaN(qty) ? null : qty });
+    // On the default first kiosk the 100% is only implied; writing a quantity
+    // alone would leave nothing for it to scope.
+    setAdjustment(id, {
+      discountQty: qty === null || Number.isNaN(qty) ? null : qty,
+      ...(kioskDefault(id) ? { discountPercent: 100 } : {}),
+    });
   };
 
   // A discount in DOLLARS — its OWN lever since 2026-10-14, not a percentage
@@ -968,8 +972,10 @@ export default function ProductConfigurator({
   // Scoped by `discountQty` the same way the percentage is: "$200 off,
   // applies to 1 of 3" takes $200 off that one unit's line after the split.
   const setDiscountAmount = (id: string, raw: string) => {
+    // Clearing it on the first kiosk charges for it, as the percent box does.
+    const cleared = { discountPercent: id === firstKioskId ? 0 : null, discountAmount: null, discountQty: null };
     if (raw.trim() === "") {
-      setAdjustment(id, { discountPercent: null, discountAmount: null, discountQty: null });
+      setAdjustment(id, cleared);
       return;
     }
     const amount = Number(raw);
@@ -980,8 +986,8 @@ export default function ProductConfigurator({
     // than $0 (see that function).
     const next = Math.round(Math.max(0, amount) * 100) / 100;
     setAdjustment(id, next > 0
-      ? { discountAmount: next, discountPercent: null }
-      : { discountAmount: null, discountPercent: null, discountQty: null });
+      ? { discountAmount: next, discountPercent: null, ...(kioskUnscoped(id) ? { discountQty: 1 } : {}) }
+      : cleared);
   };
 
   // ── Per-unit editing ──────────────────────────────────────────────────────
@@ -1300,7 +1306,7 @@ export default function ProductConfigurator({
                   <input
                     type="number" min={1} max={l.qty} step={1}
                     className={styles.adjustInput}
-                    value={adjustments[id]?.discountQty ?? ""}
+                    value={adjustments[id]?.discountQty ?? (kioskDefault(id) ? 1 : "")}
                     placeholder={String(l.qty)}
                     onChange={e => setDiscountQty(id, e.target.value)}
                     aria-label={`How many ${l.name} the discount applies to`}
@@ -1632,7 +1638,11 @@ export default function ProductConfigurator({
               {coverageLabel(covered, onQuote, "the package")}
             </div>
           )}
-          {kioskChargeControl(p.hubspotProductId, covered)}
+          {p.hubspotProductId === firstKioskId && (
+            <div className={styles.autoTag}>
+              The first kiosk is 100% off unless you change its discount. Clear the discount to charge for it.
+            </div>
+          )}
           {planCovered > 0 && (
             <div className={styles.coveredTag}>
               {planCovered >= onQuote

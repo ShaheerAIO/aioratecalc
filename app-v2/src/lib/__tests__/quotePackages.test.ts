@@ -95,10 +95,10 @@ const qtyOf = (lines: QuoteLine[], id: string) =>
   lines.filter(l => l.hubspotProductId === id).reduce((n, l) => n + l.qty, 0);
 const slotsFilled = (out: ReturnType<typeof run>) => out.filled.map(f => f.slot);
 
-// One POS + its terminal, the free kiosk (which carries its own terminal), and
-// the rest of the kit. This is the cart the kit was specified against.
+// One POS + its terminal and the rest of the kit. This is the cart the kit was
+// specified against, less the kiosk, which left it 2026-10-29.
 const FULL = () => [
-  line(ID.pos), line(ID.ams1), line(ID.cfd), line(ID.kiosk27), line(ID.kds),
+  line(ID.pos), line(ID.ams1), line(ID.cfd), line(ID.kds),
   line(ID.printer), line(ID.drawer), line(ID.menuboard), line(ID.wifi),
 ];
 
@@ -153,10 +153,11 @@ describe("the shipped kit", () => {
     for (const s of KIT.slots) expect(reachable.has(s.item)).toBe(true);
   });
 
-  it("is worth the $4,850 of sheet MSRP it was specified as, the free kiosk included", () => {
+  it("is worth $3,851 of sheet MSRP since the kiosk left it", () => {
     // $5,200 until 2026-10-27, less the kiosk's terminal seat ($350): the
-    // kiosk SKU is one part now, terminal and all.
-    expect(KIT.slots.reduce((n, s) => n + SHEET_ITEMS[s.item].msrp * s.qty, 0)).toBe(4850);
+    // kiosk SKU is one part now, terminal and all. Less the 27" kiosk ($999)
+    // since 2026-10-29: the first kiosk is a discount, not a kit slot.
+    expect(KIT.slots.reduce((n, s) => n + SHEET_ITEMS[s.item].msrp * s.qty, 0)).toBe(3851);
   });
 
   it("is on for Order & Pay and All-in-One only, and one per quote", () => {
@@ -165,18 +166,21 @@ describe("the shipped kit", () => {
     expect(KIT.maxPerQuote).toBe(1);
   });
 
-  it("holds the kiosk as an OPTIONAL slot — the first one a rep adds is free", () => {
-    const kiosk = KIT.slots.find(s => s.item === "kiosk27")!;
-    expect(kiosk.optional).toBe(true);
-    expect(kiosk.or).toEqual(["kiosk156"]);
+  it("holds no kiosk slot, but goes WITH a kiosk (2026-10-29)", () => {
+    for (const pkg of PACKAGES) {
+      for (const s of pkg.slots) {
+        expect([s.item, ...(s.or ?? [])]).not.toContain("kiosk27");
+        expect([s.item, ...(s.or ?? [])]).not.toContain("kiosk156");
+      }
+      expect(pkg.appliesWith).toEqual(["kiosk27", "kiosk156"]);
+    }
   });
 
-  it("gives Marketing Partial Ordering its own kit: the order tablet, a KDS or a printer, and the free kiosk", () => {
+  it("gives Marketing Partial Ordering its own kit: the order tablet, and a KDS or a printer", () => {
     expect(PARTIAL_KIT).toMatchObject({ active: true, plans: ["marketing_partial"], maxPerQuote: 1 });
     expect(PARTIAL_KIT.slots).toEqual([
       { item: "tablet", qty: 1 },
       { item: "kds", qty: 1, or: ["printer"] },
-      { item: "kiosk27", qty: 1, or: ["kiosk156"], optional: true },
     ]);
   });
 });
@@ -282,35 +286,35 @@ describe("decomposePackages — composite products", () => {
     expect(out.lines[0]).toMatchObject({ discountPercent: 100, coveredByPackage: "QSR Kit" });
   });
 
-  it("covers a kiosk whole in the kiosk slot, its built-in terminal with it", () => {
-    const out = run([line(ID.kiosk27)]);
-    expect(out.filled.map(f => [f.part, f.slot])).toEqual([["kiosk27", "kiosk27"]]);
-    expect(out.lines[0]).toMatchObject({ discountPercent: 100, coveredByPackage: "QSR Kit" });
-  });
-
   it("covers a unit whole or not at all — no credit for part of a POS-with-display", () => {
     // The second unit's POS and display have nowhere to go, so it is charged
-    // whole — and the kiosk slot stays open.
+    // whole.
     const out = run([line(ID.posCfd, 2)]);
     expect(qtyOf(covered(out.lines), ID.posCfd)).toBe(1);
     expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.posCfd)).toBe(1);
-    expect(slotsFilled(out)).not.toContain("kiosk27");
   });
 });
 
-describe("decomposePackages — the free kiosk (2026-10-27)", () => {
-  it("covers the first kiosk a rep adds, 27\" or 15.6\", and charges the second", () => {
+describe("decomposePackages — the kiosk is out of the kit (2026-10-29)", () => {
+  it("never covers a kiosk, 27\" or 15.6\", however many", () => {
     for (const id of [ID.kiosk27, ID.kioskMini]) {
       const out = run([line(ID.pos), line(id, 2)]);
-      expect(qtyOf(covered(out.lines), id), id).toBe(1);
-      expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), id), id).toBe(1);
+      expect(qtyOf(covered(out.lines), id), id).toBe(0);
+      expect(out.filled.some(f => f.hubspotProductId === id), id).toBe(false);
     }
   });
 
-  it("gives the dearer kiosk the free seat when the cart has both", () => {
-    const out = run([line(ID.pos), line(ID.kioskMini), line(ID.kiosk27)]);
-    expect(qtyOf(covered(out.lines), ID.kiosk27)).toBe(1);
-    expect(qtyOf(covered(out.lines), ID.kioskMini)).toBe(0);
+  it("still applies with a kiosk as the ordering device: a kiosk and a KDS cover the KDS", () => {
+    for (const id of [ID.kiosk27, ID.kioskMini]) {
+      const out = run([line(id), line(ID.kds)]);
+      expect(out.applied.map(a => a.name), id).toEqual(["QSR Kit"]);
+      expect(covered(out.lines).map(l => l.hubspotProductId), id).toEqual([ID.kds]);
+    }
+  });
+
+  it("covers nothing for a kiosk alone — there is nothing else to cover", () => {
+    const lines = [line(ID.kiosk27)];
+    expect(run(lines).lines).toBe(lines);
   });
 
   it("never lets a loose terminal take a kiosk's place when no kiosk is added", () => {
@@ -320,10 +324,10 @@ describe("decomposePackages — the free kiosk (2026-10-27)", () => {
     expect(qtyOf(covered(out.lines), ID.ams1)).toBe(1);
   });
 
-  it("never lets anything else into the kiosk slot — no POS, KDS or Mega", () => {
-    const out = run([line(ID.pos, 2), line(ID.kds, 2), line(ID.mega)]);
-    expect(slotsFilled(out)).not.toContain("kiosk27");
-    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.mega)).toBe(1);
+  it("goes with the 27\" and 15.6\" only: a Mega Kiosk is not the system the kit goes with", () => {
+    const out = run([line(ID.mega), line(ID.kds)]);
+    expect(out.applied).toEqual([]);
+    expect(qtyOf(run([line(ID.pos), line(ID.mega)]).lines.filter(l => !l.coveredByPackage), ID.mega)).toBe(1);
   });
 });
 
@@ -345,17 +349,16 @@ describe("decomposePackages — the partial-ordering kit", () => {
     expect(qtyOf(covered(both.lines), ID.printer)).toBe(0);
   });
 
-  it("covers the first kiosk and charges a second KDS and a second kiosk", () => {
+  it("charges a second KDS, and covers no kiosk (2026-10-29)", () => {
     const out = partial([line(ID.tablet), line(ID.kds, 2), line(ID.kiosk27, 2)]);
     expect(qtyOf(covered(out.lines), ID.kds)).toBe(1);
-    expect(qtyOf(covered(out.lines), ID.kiosk27)).toBe(1);
+    expect(qtyOf(covered(out.lines), ID.kiosk27)).toBe(0);
     expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.kds)).toBe(1);
-    expect(qtyOf(out.lines.filter(l => !l.coveredByPackage), ID.kiosk27)).toBe(1);
   });
 
-  it("covers a kiosk-only cart's kiosk — the kiosk is an ordering device", () => {
-    const out = partial([line(ID.kiosk27)]);
-    expect(qtyOf(covered(out.lines), ID.kiosk27)).toBe(1);
+  it("applies with a kiosk in place of the tablet — the kiosk is an ordering device", () => {
+    const out = partial([line(ID.kiosk27), line(ID.kds)]);
+    expect(covered(out.lines).map(l => l.hubspotProductId)).toEqual([ID.kds]);
   });
 
   it("does not apply without an ordering device: a KDS alone is not a system", () => {
@@ -440,21 +443,24 @@ describe("preselecting the kit", () => {
     expect(ids).toContain(ID.wifi);
   });
 
-  it("lists the free kiosk with the kit but never preselects it", () => {
-    expect(kitPicks(KIT).map(k => k.hubspotProductId)).not.toContain(ID.kiosk27);
-    expect(kitProductIds(KIT)).toContain(ID.kiosk27);
+  it("neither lists nor preselects a kiosk — it left the kit 2026-10-29", () => {
+    for (const kit of [KIT, PARTIAL_KIT]) {
+      expect(kitPicks(kit).map(k => k.hubspotProductId)).not.toContain(ID.kiosk27);
+      expect(kitProductIds(kit)).not.toContain(ID.kiosk27);
+      expect(kitProductIds(kit)).not.toContain(ID.kioskMini);
+    }
   });
 
-  it("preselects the partial kit's tablet and KDS, and lists the printer and kiosk beside them", () => {
+  it("preselects the partial kit's tablet and KDS, and lists the printer beside them", () => {
     expect(kitPicks(PARTIAL_KIT)).toEqual([
       { hubspotProductId: ID.tablet, qty: 1 },
       { hubspotProductId: ID.kds, qty: 1 },
     ]);
-    expect(kitProductIds(PARTIAL_KIT)).toEqual([ID.tablet, ID.kds, ID.printer, ID.kiosk27]);
+    expect(kitProductIds(PARTIAL_KIT)).toEqual([ID.tablet, ID.kds, ID.printer]);
   });
 
   it.each(["order_pay_only", "all_in_one"] as const)(
-    "fills every slot of the kit but the optional kiosk on %s, derived terminal and WiFi pick included",
+    "fills every slot of the kit on %s, derived terminal and WiFi pick included",
     quoteType => {
       // The fixture only carries the All-in-One platform product; each plan
       // needs its own, or the quote (rightly) refuses to price.
@@ -468,7 +474,7 @@ describe("preselecting the kit", () => {
       // Slot by slot: nothing the kit specifies is left open.
       const filled = new Map<string, number>();
       for (const f of built.packages.filled) filled.set(f.slot, (filled.get(f.slot) ?? 0) + 1);
-      for (const s of KIT.slots) expect(filled.get(s.item) ?? 0, s.item).toBe(s.optional ? 0 : s.qty);
+      for (const s of KIT.slots) expect(filled.get(s.item) ?? 0, s.item).toBe(s.qty);
 
       // And so there is no hardware left over to charge for — only the
       // nothing: install and training are both comped to $0 again (2026-10-28).
@@ -511,12 +517,16 @@ describe("buildQuote with the kit on it", () => {
   it("covers the derived AMS1 and the picked WiFi package along with the picks", () => {
     const built = build();
 
-    for (const id of [ID.pos, ID.kiosk27, ID.kds, ID.printer, ID.drawer, ID.menuboard, ID.ams1, ID.wifi]) {
+    for (const id of [ID.pos, ID.kds, ID.printer, ID.drawer, ID.menuboard, ID.ams1, ID.wifi]) {
       const l = built.quoteLines.find(x => x.hubspotProductId === id)!;
       expect(l, id).toBeDefined();
       expect(l.coveredByPackage, id).toBe("QSR Kit");
       expect(l.discountPercent, id).toBe(100);
     }
+    // The kiosk beside them is the first kiosk: 100% off, but not the kit's.
+    const kiosk = built.quoteLines.find(x => x.hubspotProductId === ID.kiosk27)!;
+    expect(kiosk).toMatchObject({ qty: 1, discountPercent: 100, firstKiosk: true });
+    expect(kiosk.coveredByPackage).toBeUndefined();
     expect(built.blockers).toEqual([]);
   });
 
@@ -573,9 +583,11 @@ describe("buildQuote with the kit on it", () => {
     const built = build([line(ID.pos, 2), line(ID.kiosk27, 2), line(ID.printer), line(ID.drawer), line(ID.menuboard)]);
     expect(built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)).toBeUndefined();
     expect(built.quoteLines.filter(l => l.derived)).toEqual([]);
-    // Charged at list instead: the second POS and the second kiosk.
+    // Charged at list instead: the second POS and the second kiosk (the
+    // first is 100% off on its own line).
     expect(qtyOf(built.quoteLines.filter(l => !l.coveredByPackage), ID.pos)).toBe(1);
-    expect(qtyOf(built.quoteLines.filter(l => !l.coveredByPackage), ID.kiosk27)).toBe(1);
+    expect(built.quoteLines.filter(l => l.hubspotProductId === ID.kiosk27).map(l => [l.qty, l.discountPercent ?? 0]))
+      .toEqual([[1, 100], [1, 0]]);
     expect(built.blockers.filter(b => b.includes("Replacement"))).toEqual([]);
   });
 

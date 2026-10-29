@@ -261,6 +261,14 @@ describe("QuoteSummary — how a discount is described", () => {
     expect(screen.getByText("Included")).toBeTruthy();
   });
 
+  it("says '100% off' on the free first kiosk — it reads as a discount (2026-10-29)", () => {
+    render(<QuoteSummary quote={{ ...DISCOUNTED_QUOTE, lines: [
+      { hubspotProductId: "222497165009", name: "Kiosk 27\" + Payment Terminal (AMS1) and Mount", qty: 1, unitPrice: 999, billingFrequency: "one_time", productType: "inventory", discountPercent: 100, firstKiosk: true },
+    ] }} />);
+    expect(screen.getByText("100% off")).toBeTruthy();
+    expect(screen.queryByText("Included")).toBeNull();
+  });
+
   it("prices the cash-discounted line at the figure the rep agreed", () => {
     // 3 × $749 = $2,247, less $747, is $1,500.00 exactly.
     render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);

@@ -1,22 +1,25 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { PACKAGES, chargeableKitProductIds, decomposePackages } from "@/lib/quotePackages";
+import { PACKAGES } from "@/lib/quotePackages";
 import {
+  DEFAULT_QUOTE_LIMITS,
   MARKETING_ADDON_PRODUCT,
+  adjustmentBlockers,
   adjustmentsFromQuoteLines,
   buildQuote,
+  firstKioskProductId,
   includesMarketing,
   lineNetAmount,
   picksFromQuoteLines,
   toQuoteLine,
 } from "@/lib/quoting";
 import { lineHardwareCommission } from "@/lib/commission";
-import type { CatalogProduct, QuoteAdjustments, QuoteType } from "@/types/merchant";
+import type { CatalogProduct, QuoteAdjustments, QuoteLine, QuoteType } from "@/types/merchant";
 
-// The two product-owner changes of 2026-10-28:
-//  - the QSR Kit's free first kiosk can be CHARGED for instead
-//    (`LineAdjustment.outsideKit`), decided inside buildQuote and persisted on
-//    the saved lines;
-//  - Marketing Partial Ordering's Marketing chip puts the hidden $0
+// Two product-owner changes:
+//  - 2026-10-29: the first kiosk is OUT of the kit — a regular line at list,
+//    100% off by default, a discount the rep can change like any other
+//    (`applyFirstKioskComp`), marked `QuoteLine.firstKiosk` on the saved lines;
+//  - 2026-10-28: Marketing Partial Ordering's Marketing chip puts the hidden $0
 //    "Marketing (Partial Ordering)" line on the quote, which is still a real
 //    line and still brings the three free menu boards.
 
@@ -61,143 +64,189 @@ const byName = (name: string) => CATALOG.find(c => c.name === name)!;
 const lines = (picks: Array<[string, number]>) => picks.map(([name, qty]) => toQuoteLine(byName(name), qty));
 
 const KIOSK_NAME = "Kiosk 27\" + Payment Terminal (AMS1) and Mount";
-// The QSR kit as the configurator seeds it, plus the optional kiosk.
-const QSR_WITH_KIOSK: Array<[string, number]> = [
+const KIOSK_156_NAME = "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount";
+const QSR_KIT: Array<[string, number]> = [
   ["POS Unit", 1], ["Customer Facing Display", 1], ["Cash Drawer", 1], ["Payment Terminal - AMS1", 1],
   ["KDS (Kitchen Display System)", 1], ["Thermal Printer", 1], ["Menu Board Computer", 1],
-  ["AIO Wifi Network Package - Unifi", 1], [KIOSK_NAME, 1],
+  ["AIO Wifi Network Package - Unifi", 1],
 ];
+// The kit as the configurator seeds it, plus a kiosk.
+const QSR_WITH_KIOSK: Array<[string, number]> = [...QSR_KIT, [KIOSK_NAME, 1]];
+const MPO_WITH_KIOSK: Array<[string, number]> = [
+  ["Orders Hub Tablet", 1], ["KDS (Kitchen Display System)", 1], [KIOSK_NAME, 1],
+];
+const withKiosks = (picks: Array<[string, number]>, qty: number) =>
+  [...picks.filter(([n]) => n !== KIOSK_NAME), [KIOSK_NAME, qty]] as Array<[string, number]>;
 
-const CHARGE: QuoteAdjustments = { [KIOSK]: { outsideKit: true } };
+const CHARGE: QuoteAdjustments = { [KIOSK]: { discountPercent: 0 } };
 
-const build = (plan: QuoteType, picks: Array<[string, number]>, adjustments: QuoteAdjustments = {}) =>
-  buildQuote(plan, lines(picks), [], CATALOG, adjustments);
+const build = (
+  plan: QuoteType, picks: Array<[string, number]>, adjustments: QuoteAdjustments = {},
+  discountCaps: Record<string, number> = {},
+) => buildQuote(plan, lines(picks), [], CATALOG, adjustments, 50, { ...DEFAULT_QUOTE_LIMITS, discountCaps });
 
-const kioskLines = (built: ReturnType<typeof buildQuote>) =>
+const kioskLines = (built: { quoteLines: QuoteLine[] }) =>
   built.quoteLines.filter(l => l.hubspotProductId === KIOSK);
 
-describe("charging for the QSR Kit's kiosk (2026-10-28)", () => {
-  it("is offered on the QSR Kit's kiosk slot only — both kiosk sizes, never on the partial-ordering kit", () => {
-    expect(chargeableKitProductIds("all_in_one").sort()).toEqual([KIOSK, KIOSK_156].sort());
-    expect(chargeableKitProductIds("order_pay_only").sort()).toEqual([KIOSK, KIOSK_156].sort());
-    expect(chargeableKitProductIds("marketing_partial")).toEqual([]);
-    expect(chargeableKitProductIds("marketing_only")).toEqual([]);
-  });
+/** Save → reopen → rebuild, the way the configurator does it. */
+const reopen = (plan: QuoteType, saved: QuoteLine[]) =>
+  buildQuote(
+    plan,
+    picksFromQuoteLines(saved, plan).map(pick =>
+      toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)
+    ),
+    [], CATALOG, adjustmentsFromQuoteLines(saved)
+  );
 
-  for (const plan of ["all_in_one", "order_pay_only"] as const) {
-    it(`${plan}: free by default; charged, it bills at list and the rest of the kit stays free`, () => {
-      const free = build(plan, QSR_WITH_KIOSK);
-      const charged = build(plan, QSR_WITH_KIOSK, CHARGE);
+const PLANS: Array<[QuoteType, Array<[string, number]>]> = [
+  ["all_in_one", QSR_WITH_KIOSK],
+  ["order_pay_only", QSR_WITH_KIOSK],
+  ["marketing_partial", MPO_WITH_KIOSK],
+];
 
-      // Free: the whole kiosk is package-covered at 100%.
-      expect(kioskLines(free)).toHaveLength(1);
-      expect(kioskLines(free)[0]).toMatchObject({ qty: 1, discountPercent: 100, coveredByPackage: "QSR Kit" });
-      expect(kioskLines(free)[0].outsideKit).toBeUndefined();
+describe("the first kiosk is a discounted line, not a kit slot (2026-10-29)", () => {
+  for (const [plan, picks] of PLANS) {
+    it(`${plan}: one line at list, 100% off, marked — never covered by the kit`, () => {
+      const built = build(plan, picks);
+      expect(kioskLines(built)).toEqual([
+        expect.objectContaining({ qty: 1, unitPrice: 999, discountPercent: 100, firstKiosk: true }),
+      ]);
+      expect(kioskLines(built)[0].coveredByPackage).toBeUndefined();
+      expect(lineNetAmount(kioskLines(built)[0])).toBe(0);
+      expect(built.blockers).toEqual([]);
+    });
 
-      // Charged: an ordinary line at its price, marked so a reopen knows why.
-      expect(kioskLines(charged)).toHaveLength(1);
-      const kiosk = kioskLines(charged)[0];
-      expect(kiosk.coveredByPackage).toBeUndefined();
-      expect(kiosk.outsideKit).toBe(true);
-      expect(lineNetAmount(kiosk)).toBe(999);
-
-      // Exactly the kiosk's price moved — nothing else came out of the kit.
-      expect(charged.totals.oneTime - free.totals.oneTime).toBe(999);
-      expect(charged.totals.monthlyEquivalent).toBe(free.totals.monthlyEquivalent);
-      for (const name of ["POS Unit", "KDS (Kitchen Display System)", "AIO Wifi Network Package - Unifi"]) {
-        const line = charged.quoteLines.find(l => l.name === name)!;
-        expect(line.coveredByPackage, name).toBe("QSR Kit");
-      }
-      expect(charged.packages.applied.map(a => a.name)).toEqual(["QSR Kit"]);
-      expect(charged.blockers).toEqual(free.blockers);
+    it(`${plan}: two kiosks split one free + one at list, not a blended 50%`, () => {
+      const built = build(plan, withKiosks(picks, 2));
+      expect(kioskLines(built).map(l => [l.qty, l.discountPercent ?? 0, l.firstKiosk ?? false]))
+        .toEqual([[1, 100, true], [1, 0, false]]);
+      expect(built.blockers).toEqual([]);
     });
   }
 
-  it("a charged kiosk takes the rep's discount like any line", () => {
-    const built = build("all_in_one", QSR_WITH_KIOSK, { [KIOSK]: { outsideKit: true, discountPercent: 20 } });
-    const kiosk = kioskLines(built)[0];
-    expect(kiosk.coveredByPackage).toBeUndefined();
-    expect(lineNetAmount(kiosk)).toBeCloseTo(799.2, 2);
+  it("is not on a plan without a kit", () => {
+    expect(firstKioskProductId("marketing_only", lines([[KIOSK_NAME, 1]]))).toBeNull();
+    expect(firstKioskProductId("all_in_one", lines([[KIOSK_NAME, 1]]))).toBe(KIOSK);
   });
 
-  it("only the first kiosk is ever free, so a second one bills either way", () => {
-    const two: Array<[string, number]> = [...QSR_WITH_KIOSK.filter(([n]) => n !== KIOSK_NAME), [KIOSK_NAME, 2]];
-    const free = build("all_in_one", two);
-    expect(kioskLines(free).map(l => [l.qty, l.coveredByPackage ?? null])).toEqual([[1, "QSR Kit"], [1, null]]);
-    const charged = build("all_in_one", two, CHARGE);
-    expect(kioskLines(charged).map(l => [l.qty, l.coveredByPackage ?? null])).toEqual([[2, null]]);
+  it("is one unit across both sizes: the dearer one when the quote has both", () => {
+    const both = build("all_in_one", [...QSR_KIT, [KIOSK_156_NAME, 1], [KIOSK_NAME, 1]]);
+    expect(kioskLines(both)).toEqual([expect.objectContaining({ discountPercent: 100, firstKiosk: true })]);
+    const mini = both.quoteLines.filter(l => l.hubspotProductId === KIOSK_156);
+    expect(mini).toHaveLength(1);
+    expect(mini[0].discountPercent).toBeUndefined();
+    expect(mini[0].firstKiosk).toBeUndefined();
+
+    // A 15.6" alone is the first kiosk.
+    const alone = build("all_in_one", [...QSR_KIT, [KIOSK_156_NAME, 1]]);
+    expect(alone.quoteLines.find(l => l.hubspotProductId === KIOSK_156))
+      .toMatchObject({ discountPercent: 100, firstKiosk: true });
+  });
+
+  it("removing the discount charges list, is not blocked, and leaves the rest of the kit free", () => {
+    const free = build("all_in_one", QSR_WITH_KIOSK);
+    const charged = build("all_in_one", QSR_WITH_KIOSK, CHARGE);
+    expect(kioskLines(charged)).toHaveLength(1);
+    expect(kioskLines(charged)[0].firstKiosk).toBe(true);
+    expect(lineNetAmount(kioskLines(charged)[0])).toBe(999);
+    expect(charged.blockers).toEqual([]);
     expect(charged.totals.oneTime - free.totals.oneTime).toBe(999);
+    for (const name of ["POS Unit", "KDS (Kitchen Display System)", "AIO Wifi Network Package - Unifi"]) {
+      expect(charged.quoteLines.find(l => l.name === name)!.coveredByPackage, name).toBe("QSR Kit");
+    }
   });
 
-  it("on a kiosk-only kit, charging the kiosk still leaves the kit applied to the rest", () => {
+  it("a rep's 30% is held to the cap: under a 50% cap it passes, under 20% it is refused", () => {
+    const thirty = { [KIOSK]: { discountPercent: 30 } };
+    const under = build("all_in_one", QSR_WITH_KIOSK, thirty, { [KIOSK]: 50 });
+    expect(lineNetAmount(kioskLines(under)[0])).toBeCloseTo(699.3, 2);
+    expect(under.blockers).toEqual([]);
+
+    const over = build("all_in_one", QSR_WITH_KIOSK, thirty, { [KIOSK]: 20 });
+    expect(over.blockers).toEqual([expect.stringMatching(/discounted 30%, over the 20% limit/)]);
+    // And the publish re-check, which only has the saved lines, agrees.
+    expect(adjustmentBlockers(over.quoteLines, 50, undefined, { [KIOSK]: 20 })).toHaveLength(1);
+  });
+
+  it("the default 100% is exempt from the cap, at publish too — but only on the one kiosk", () => {
+    const built = build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2), {}, { [KIOSK]: 20 });
+    expect(built.blockers).toEqual([]);
+    expect(adjustmentBlockers(built.quoteLines, 50, undefined, { [KIOSK]: 20 })).toEqual([]);
+
+    // 100% across BOTH kiosks is the rep giving the second one away.
+    const both = build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2), { [KIOSK]: { discountPercent: 100 } });
+    expect(both.blockers).toEqual([expect.stringMatching(/discounted 100%, over the 50% limit/)]);
+  });
+
+  it("a kiosk-only QSR quote still gets the kit on the rest (the kiosk is still its ordering device)", () => {
     const picks: Array<[string, number]> = [[KIOSK_NAME, 1], ["KDS (Kitchen Display System)", 1]];
-    const free = build("order_pay_only", picks);
-    const charged = build("order_pay_only", picks, CHARGE);
-    expect(kioskLines(free)[0].coveredByPackage).toBe("QSR Kit");
-    expect(kioskLines(charged)[0].coveredByPackage).toBeUndefined();
-    // The kiosk the merchant pays for is still the system the kit goes with.
-    expect(charged.quoteLines.find(l => l.name === "KDS (Kitchen Display System)")!.coveredByPackage).toBe("QSR Kit");
-    expect(charged.totals.oneTime - free.totals.oneTime).toBe(999);
-  });
-
-  it("a charged kiosk alone, with nothing else in the kit, is still marked as charged", () => {
-    const built = build("order_pay_only", [[KIOSK_NAME, 1]], CHARGE);
-    expect(built.packages.applied).toEqual([]);
-    expect(kioskLines(built)[0]).toMatchObject({ outsideKit: true });
-    expect(adjustmentsFromQuoteLines(built.quoteLines)[KIOSK]).toEqual({ outsideKit: true });
-  });
-
-  it("decomposePackages: an outsideKit product never fills the chargeable slot; a 15.6\" still can", () => {
-    const qsr = lines([["POS Unit", 1], [KIOSK_NAME, 1], ["Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount", 1]]);
-    const d = decomposePackages({ lines: qsr, quoteType: "all_in_one", outsideKit: [KIOSK] });
-    expect(d.lines.find(l => l.hubspotProductId === KIOSK)!.coveredByPackage).toBeUndefined();
-    expect(d.lines.find(l => l.hubspotProductId === KIOSK_156)!.coveredByPackage).toBe("QSR Kit");
-  });
-
-  it("is ignored on Marketing Partial Ordering, whose kit has no chargeable slot", () => {
-    const picks: Array<[string, number]> = [
-      ["Orders Hub Tablet", 1], ["KDS (Kitchen Display System)", 1], [KIOSK_NAME, 1],
-    ];
-    const built = build("marketing_partial", picks, CHARGE);
-    expect(kioskLines(built)[0].coveredByPackage).toBe("Partial Ordering Kit");
-    expect(kioskLines(built)[0].outsideKit).toBeUndefined();
-  });
-
-  it("hardware commission: a charged kiosk earns like a sale; a free one is 'included'", () => {
-    const free = kioskLines(build("all_in_one", QSR_WITH_KIOSK))[0];
-    const charged = kioskLines(build("all_in_one", QSR_WITH_KIOSK, CHARGE))[0];
-    expect(lineHardwareCommission(free)).toMatchObject({ status: "included", rep: null });
-    const c = lineHardwareCommission(charged);
-    expect(c.status).not.toBe("included");
-    // (999 − 600) × 45% — the charged-kiosk rate (2026-10-29)
-    expect(c.rep).toBeCloseTo(179.55, 2);
+    for (const adjustments of [{}, CHARGE]) {
+      const built = build("order_pay_only", picks, adjustments);
+      expect(built.packages.applied.map(a => a.name)).toEqual(["QSR Kit"]);
+      expect(built.quoteLines.find(l => l.name === "KDS (Kitchen Display System)")!.coveredByPackage).toBe("QSR Kit");
+      expect(kioskLines(built)[0].coveredByPackage).toBeUndefined();
+    }
   });
 });
 
-describe("the charge flag survives saving and reopening", () => {
-  it("round-trips: saved lines → picks + adjustments → the same quote", () => {
-    const saved = build("all_in_one", QSR_WITH_KIOSK, CHARGE).quoteLines;
-
-    const reopenedAdjustments = adjustmentsFromQuoteLines(saved);
-    expect(reopenedAdjustments[KIOSK]).toEqual({ outsideKit: true });
-
-    const reopenedPicks = picksFromQuoteLines(saved, "all_in_one");
-    const rebuilt = buildQuote(
-      "all_in_one",
-      reopenedPicks.map(pick => toQuoteLine(CATALOG.find(c => c.hubspotProductId === pick.hubspotProductId)!, pick.qty)),
-      [], CATALOG, reopenedAdjustments
-    );
-    expect(rebuilt.quoteLines).toEqual(saved);
+describe("first-kiosk commission: 45% rep / 5% RSM of margin, floored at $0 (2026-10-29)", () => {
+  // Cost $600, list $999, the product's own rep rate 10%.
+  it("pays nothing on the free kiosk — computed, floored, never negative", () => {
+    const c = lineHardwareCommission(kioskLines(build("all_in_one", QSR_WITH_KIOSK))[0]);
+    expect(c).toMatchObject({ status: "computed", rep: 0, rsm: 0 });
   });
 
-  it("carries a discount on the charged kiosk back alongside the flag", () => {
-    const saved = build("all_in_one", QSR_WITH_KIOSK, { [KIOSK]: { outsideKit: true, discountPercent: 20 } }).quoteLines;
-    expect(adjustmentsFromQuoteLines(saved)[KIOSK]).toEqual({ outsideKit: true, discountPercent: 20 });
+  it("pays the flat rate on a charged first kiosk, ignoring the product's own", () => {
+    const c = lineHardwareCommission(kioskLines(build("all_in_one", QSR_WITH_KIOSK, CHARGE))[0]);
+    expect(c.rep).toBeCloseTo(399 * 0.45, 6);
+    expect(c.rsm).toBeCloseTo(399 * 0.05, 6);
   });
 
-  it("a free kiosk reopens free — no flag appears from nowhere", () => {
+  it("pays a second kiosk the product's own rate", () => {
+    const [first, second] = kioskLines(build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2)));
+    expect(lineHardwareCommission(first)).toMatchObject({ rep: 0, rsm: 0 });
+    expect(lineHardwareCommission(second).rep).toBeCloseTo(399 * 0.10, 6);
+  });
+
+  it("splits a line of two charged kiosks: one at the flat rate, one at the product's", () => {
+    const [line] = kioskLines(build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2), CHARGE));
+    expect(line).toMatchObject({ qty: 2, firstKiosk: true });
+    expect(lineHardwareCommission(line).rep).toBeCloseTo(399 * 0.45 + 399 * 0.10, 6);
+  });
+});
+
+describe("the first kiosk survives saving and reopening", () => {
+  const cases: Array<[string, QuoteType, Array<[string, number]>, QuoteAdjustments]> = [
+    ["free", "all_in_one", QSR_WITH_KIOSK, {}],
+    ["free, one of two", "all_in_one", withKiosks(QSR_WITH_KIOSK, 2), {}],
+    ["free on Marketing Partial Ordering", "marketing_partial", MPO_WITH_KIOSK, {}],
+    ["charged", "all_in_one", QSR_WITH_KIOSK, CHARGE],
+    ["charged, two on one line", "order_pay_only", withKiosks(QSR_WITH_KIOSK, 2), CHARGE],
+    ["at 30%", "all_in_one", QSR_WITH_KIOSK, { [KIOSK]: { discountPercent: 30 } }],
+  ];
+  for (const [name, plan, picks, adjustments] of cases) {
+    it(`reproduces the same lines: ${name}`, () => {
+      const saved = build(plan, picks, adjustments).quoteLines;
+      expect(reopen(plan, saved).quoteLines).toEqual(saved);
+    });
+  }
+
+  it("a free kiosk reopens as the default (no adjustment); a charged one as an explicit 0, so it isn't re-comped", () => {
+    expect(adjustmentsFromQuoteLines(build("all_in_one", QSR_WITH_KIOSK).quoteLines)[KIOSK]).toBeUndefined();
+    expect(adjustmentsFromQuoteLines(build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2)).quoteLines)[KIOSK])
+      .toBeUndefined();
+    expect(adjustmentsFromQuoteLines(build("all_in_one", QSR_WITH_KIOSK, CHARGE).quoteLines)[KIOSK])
+      .toEqual({ discountPercent: 0 });
+    expect(adjustmentsFromQuoteLines(build("all_in_one", QSR_WITH_KIOSK, { [KIOSK]: { discountPercent: 30 } }).quoteLines)[KIOSK])
+      .toEqual({ discountPercent: 30 });
+  });
+
+  it("a reopened free kiosk still splits when a second one is added", () => {
     const saved = build("all_in_one", QSR_WITH_KIOSK).quoteLines;
-    expect(adjustmentsFromQuoteLines(saved)[KIOSK]).toBeUndefined();
+    const reopenedAdjustments = adjustmentsFromQuoteLines(saved);
+    const more = build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2), reopenedAdjustments);
+    expect(kioskLines(more).map(l => [l.qty, l.discountPercent ?? 0])).toEqual([[1, 100], [1, 0]]);
+    expect(more.blockers).toEqual([]);
   });
 });
 

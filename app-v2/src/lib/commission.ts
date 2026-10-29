@@ -346,12 +346,15 @@ export type LineHardwareCommission = {
  * (`derivePricingForRole`); nobody asked for it to be hidden, but don't
  * later assume it is, because it visibly is not.
  */
-// A CHARGED QSR-kit kiosk (QuoteLine.outsideKit, not covered) pays a flat,
-// lower rate than the product's own, and is floored at 0 like the service
-// lines (product owner, 2026-10-29: "lower commission rate for the first
-// kiosk, 45 & 5"; "discounting first kiosk does not remove commission").
-export const CHARGED_KIOSK_REP_BPS = 4500; // 45%
-export const CHARGED_KIOSK_RSM_BPS = 500; // 5%
+// The FIRST KIOSK (QuoteLine.firstKiosk — free by default, or whatever the rep
+// set it to) pays a flat, lower rate than the product's own, and is floored at
+// 0 like the service lines (product owner, 2026-10-29: "lower commission rate
+// for the first kiosk, 45 & 5"; "discounting first kiosk does not remove
+// commission"). One unit only: any other kiosks on the same line (a discount
+// set across all of them) earn the product's own rates, unfloored, like any
+// hardware.
+export const FIRST_KIOSK_REP_BPS = 4500; // 45%
+export const FIRST_KIOSK_RSM_BPS = 500; // 5%
 
 export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission {
   const none = (status: LineCommissionStatus): LineHardwareCommission => ({
@@ -372,21 +375,37 @@ export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission 
   const cost = line.costToRep ?? null;
   if (cost === null) return none("no_cost");
 
-  const chargedKiosk = line.outsideKit === true;
-  const repBps = chargedKiosk ? CHARGED_KIOSK_REP_BPS : (line.repCommissionBps ?? null);
-  const rsmBps = chargedKiosk ? CHARGED_KIOSK_RSM_BPS : (line.rsmCommissionBps ?? null);
-  if (repBps === null && rsmBps === null) return none("no_rate");
+  const firstKiosk = line.firstKiosk === true;
+  const repBps = line.repCommissionBps ?? null;
+  const rsmBps = line.rsmCommissionBps ?? null;
+  if (!firstKiosk && repBps === null && rsmBps === null) return none("no_rate");
 
   const marginTotal = lineNetAmount(line) - cost * line.qty;
 
   // Service lines (install/training) never go negative; hardware does.
-  const floor = chargedKiosk || INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === line.hubspotProductId) ? 0 : -Infinity;
+  const floor = INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === line.hubspotProductId) ? 0 : -Infinity;
+  const at = (margin: number, bps: number | null, min: number) =>
+    bps === null ? null : Math.max(min, margin * (bps / 10000));
+
+  if (firstKiosk) {
+    // One unit's share of the margin at the flat rate, floored; the rest of
+    // the line (0 when it is the usual single unit) at the product's own.
+    const unit = marginTotal / line.qty;
+    const rest = marginTotal - unit;
+    return {
+      hubspotProductId: line.hubspotProductId,
+      name: line.name,
+      rep: at(unit, FIRST_KIOSK_REP_BPS, 0)! + (at(rest, repBps, floor) ?? 0),
+      rsm: at(unit, FIRST_KIOSK_RSM_BPS, 0)! + (at(rest, rsmBps, floor) ?? 0),
+      status: "computed",
+    };
+  }
 
   return {
     hubspotProductId: line.hubspotProductId,
     name: line.name,
-    rep: repBps === null ? null : Math.max(floor, marginTotal * (repBps / 10000)),
-    rsm: rsmBps === null ? null : Math.max(floor, marginTotal * (rsmBps / 10000)),
+    rep: at(marginTotal, repBps, floor),
+    rsm: at(marginTotal, rsmBps, floor),
     status: "computed",
   };
 }

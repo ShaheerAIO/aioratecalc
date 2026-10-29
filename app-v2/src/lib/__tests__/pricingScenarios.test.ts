@@ -128,4 +128,12 @@ describe("pricing scenarios, Oct 23 sheet", () => {
     expect(orderPay.hardware).toBe(aio.hardware);
     expect(orderPay.monthly).toBe(299);
   });
+
+  it("puts the free kiosk on as a line at list, 100% off — a discount, not the kit (2026-10-29)", () => {
+    for (const [plan, picks] of [["all_in_one", [...QSR, KIOSK]], ["marketing_partial", [TABLET, KDS, KIOSK]]] as const) {
+      const kiosk = quote(plan, [...picks]).built.quoteLines.filter(l => l.name === KIOSK[0]);
+      expect(kiosk, plan).toEqual([expect.objectContaining({ qty: 1, unitPrice: 1495, discountPercent: 100, firstKiosk: true })]);
+      expect(kiosk[0].coveredByPackage, plan).toBeUndefined();
+    }
+  });
 });

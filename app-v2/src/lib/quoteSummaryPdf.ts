@@ -40,9 +40,10 @@ const lineLabel = (l: QuoteLine) => `${displayName(l)}${l.qty > 1 ? ` ×${l.qty}
 const isDiscounted = (l: QuoteLine) => (l.discountPercent ?? 0) > 0 || (l.discountAmount ?? 0) > 0;
 
 // Same wording as the on-screen summary: a cash discount reads as the dollars
-// agreed, 100% reads as "Included".
+// agreed, 100% reads as "Included" — but "100% off" on the first kiosk, which
+// is meant to read as a discount (2026-10-29).
 function discountLabel(l: QuoteLine): string {
-  if (l.discountPercent === 100) return "Included";
+  if (l.discountPercent === 100 && !l.firstKiosk) return "Included";
   if ((l.discountAmount ?? 0) > 0) return `${fmt$(l.discountAmount!)} off`;
   return `${l.discountPercent}% off`;
 }

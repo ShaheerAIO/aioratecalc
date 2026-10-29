@@ -99,6 +99,19 @@ describe("quoteSummarySections", () => {
   });
 });
 
+describe("quoteSummarySections — the first kiosk (2026-10-29)", () => {
+  it("prints the free first kiosk as 100% off, not 'Included'", () => {
+    const first: QuoteLine = {
+      name: "Kiosk 27\" + Payment Terminal (AMS1) and Mount", hubspotProductId: "222497165009", qty: 1, unitPrice: 999,
+      billingFrequency: "one_time", productType: "inventory", discountPercent: 100, firstKiosk: true,
+    };
+    const flat = quoteSummarySections({ ...QUOTE, lines: [PLATFORM, first] } as CustomerSafeQuote)
+      .flatMap(s => s.rows.flatMap(r => [r.label, r.value ?? "", ...(r.notes ?? [])])).join("\n");
+    expect(flat).toContain("List $999.00, 100% off");
+    expect(flat).not.toContain("Included");
+  });
+});
+
 describe("quoteSummarySections — payroll and display names (2026-10-29)", () => {
   const PAYROLL: QuoteLine = {
     name: "AIO Payroll", hubspotProductId: PAYROLL_PRODUCT_ID, qty: 1, unitPrice: 59,

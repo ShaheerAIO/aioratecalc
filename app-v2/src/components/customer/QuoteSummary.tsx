@@ -89,8 +89,10 @@ export default function QuoteSummary({ quote }: Props) {
   // work out as, which is the whole reason the cash lever exists (2026-10-14).
   // 100% is "Included" either way: on a comped or package-covered line that
   // is what it means, and a percentage nobody chose is not worth printing.
+  // Except on the first kiosk, which is meant to read as a discount
+  // (2026-10-29, product owner: "It needs to feel like a discount").
   const discountLabel = (l: QuoteLine) => {
-    if (l.discountPercent === 100) return "Included";
+    if (l.discountPercent === 100 && !l.firstKiosk) return "Included";
     if ((l.discountAmount ?? 0) > 0) return `${fmt$(l.discountAmount!)} off`;
     return `${l.discountPercent}% off`;
   };
@@ -282,11 +284,12 @@ export default function QuoteSummary({ quote }: Props) {
   );
 }
 
-// The processing half of the quote, in a card of its own. Both rates are the
-// same size and style (product owner, 2026-10-29: "make cp smaller"); card
-// present is listed first, and is left out for a merchant who never takes a
-// card in person. Shown on every quote AIO processes for, with or without a
-// known volume.
+// The processing half of the quote, in a card of its own. Card present is
+// listed first and shown ~15% larger and in black (product owner, 2026-10-29:
+// "the cp rate is way too small, make it bigger slightly. Make it like 15%
+// bigger and black"); it is left out for a merchant who never takes a card in
+// person. Shown on every quote AIO processes for, with or without a known
+// volume.
 function PaymentDetails({ payment }: { payment: CustomerSafePayment }) {
   const fee = `+ ${fmt$(payment.perTransactionFee)} per transaction`;
 
@@ -295,8 +298,8 @@ function PaymentDetails({ payment }: { payment: CustomerSafePayment }) {
       <h2 className={styles.lineGroupTitle}>Payment Details</h2>
       {payment.cardPresentRate !== null && (
         <div className={styles.lineRow}>
-          <span className={styles.lineDesc}>Card present</span>
-          <span className={styles.lineDesc}>{fmtPct2(payment.cardPresentRate)} {fee}</span>
+          <span className={`${styles.lineDesc} ${styles.lineDescCp}`}>Card present</span>
+          <span className={`${styles.lineDesc} ${styles.lineDescCp}`}>{fmtPct2(payment.cardPresentRate)} {fee}</span>
         </div>
       )}
       <div className={styles.lineRow}>

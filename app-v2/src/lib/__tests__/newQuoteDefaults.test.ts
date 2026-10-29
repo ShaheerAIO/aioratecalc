@@ -125,7 +125,8 @@ describe("what each plan opens with", () => {
   };
 
   it("opens All-in-One with the kit and the Website it includes, but no kiosk", () => {
-    // The kit's kiosk is free but opt-in since 2026-10-27: the rep adds it.
+    // The first kiosk is free (100% off, not in the kit since 2026-10-29) but
+    // opt-in: the rep adds it.
     const cart = openingCart("all_in_one");
     expect(cart.get(WEBSITE_PRODUCT_ID)).toBe(1);
     expect(cart.get("217445755632")).toBe(1); // POS Unit, from the kit

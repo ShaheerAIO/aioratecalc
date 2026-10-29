@@ -367,29 +367,38 @@ describe("service lines never produce negative commission (2026-10-28)", () => {
   });
 });
 
-describe("charged QSR-kit kiosk (2026-10-29)", () => {
-  const kiosk = { qty: 1, unitPrice: 1000, costToRep: 600, repCommissionBps: 1000, rsmCommissionBps: 200, outsideKit: true as const };
+describe("the first kiosk (2026-10-29)", () => {
+  const kiosk = { qty: 1, unitPrice: 1000, costToRep: 600, repCommissionBps: 1000, rsmCommissionBps: 200, firstKiosk: true as const };
   it("pays 45% rep / 5% rsm of margin at list, ignoring the product's own rates", () => {
     const r = lineHardwareCommission(hwLine(kiosk));
     expect(r.status).toBe("computed");
     expect(r.rep).toBeCloseTo(180, 6);
     expect(r.rsm).toBeCloseTo(20, 6);
   });
-  it("floors at 0 when discounted below cost, even 100% off", () => {
+  it("floors at 0 when discounted below cost, even 100% off (its default)", () => {
     for (const discountPercent of [80, 100]) {
       const r = lineHardwareCommission(hwLine({ ...kiosk, discountPercent }));
+      expect(r.status).toBe("computed");
       expect(r.rep).toBe(0);
       expect(r.rsm).toBe(0);
     }
   });
-  it("stays included when covered by the package", () => {
-    expect(lineHardwareCommission(hwLine({ ...kiosk, coveredByPackage: "qsr_kit", unitPrice: 0 })).status).toBe("included");
+  it("pays the flat rate even on a product with no rate of its own", () => {
+    const r = lineHardwareCommission(hwLine({ ...kiosk, repCommissionBps: null, rsmCommissionBps: null }));
+    expect(r.rep).toBeCloseTo(180, 6);
+    expect(r.rsm).toBeCloseTo(20, 6);
+  });
+  it("on a line of several kiosks, pays the flat rate on one unit and the product's own on the rest", () => {
+    // 3 × $1,000 at 80% off: $200/unit against a $600 cost, −$400 margin each.
+    const r = lineHardwareCommission(hwLine({ ...kiosk, qty: 3, discountPercent: 80 }));
+    expect(r.rep).toBeCloseTo(0 + -800 * 0.10, 6);
+    expect(r.rsm).toBeCloseTo(0 + -800 * 0.02, 6);
   });
   it("still needs a cost", () => {
     expect(lineHardwareCommission(hwLine({ ...kiosk, costToRep: null })).status).toBe("no_cost");
   });
   it("leaves ordinary hardware negative below cost", () => {
-    const r = lineHardwareCommission(hwLine({ ...kiosk, outsideKit: undefined, discountPercent: 80 }));
+    const r = lineHardwareCommission(hwLine({ ...kiosk, firstKiosk: undefined, discountPercent: 80 }));
     expect(r.rep).toBeLessThan(0);
   });
 });

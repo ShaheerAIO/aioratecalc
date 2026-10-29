@@ -167,3 +167,10 @@
   margin-top: var(--space-3xs);
   font-variant-numeric: tabular-nums;
 }
+
+/* Card present row in Payment Details: 15% larger than .lineDesc (0.75rem)
+   and black (product owner, 2026-10-29). */
+.lineDescCp {
+  font-size: 0.8625rem;
+  color: var(--ink);
+}

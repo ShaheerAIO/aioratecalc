@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 //
-// The two builder controls the product owner asked for on 2026-10-28:
+// Two builder controls the product owner asked for:
 //  - Marketing Partial Ordering's Kiosk / Online Ordering / Marketing chips,
-//    with the "Marketing (Partial Ordering)" row hidden from the list;
-//  - "Charge for kiosk" on the QSR Kit's free kiosk.
+//    with the "Marketing (Partial Ordering)" row hidden from the list
+//    (2026-10-28);
+//  - the first kiosk as a 100%-off line whose discount the rep changes like
+//    any other, replacing the "Charge for kiosk" button (2026-10-29).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
@@ -98,6 +100,8 @@ describe("Marketing Partial Ordering chips", () => {
     fireEvent.click(chip("Kiosk"));
     await waitFor(() => expect(picksText()).toContain(`${KIOSK}:1`));
     expect(chip("Kiosk").getAttribute("aria-pressed")).toBe("true");
+    // The kiosk it adds is the first kiosk: 100% off.
+    expect(screen.getByText(/The first kiosk is 100% off/)).toBeTruthy();
 
     fireEvent.click(chip("Online Ordering"));
     await waitFor(() => expect(picksText()).toContain(`${ONLINE}:1`));
@@ -131,25 +135,42 @@ describe("Marketing Partial Ordering chips", () => {
   });
 });
 
-describe("Charge for kiosk on the QSR Kit", () => {
-  it("defaults to free, and the button flips the kiosk out of the kit and back", async () => {
-    render(<Host initialType="all_in_one" initialPicks={[{ hubspotProductId: "217445755632", qty: 1 }, { hubspotProductId: KIOSK, qty: 1 }]} />);
-    const charge = await screen.findByRole("button", { name: "Charge for kiosk" });
+describe("the first kiosk's discount (2026-10-29)", () => {
+  const KIOSK_DISCOUNT = "Discount percent for Kiosk 27\" + Payment Terminal (AMS1) and Mount";
+  const adjustmentsNow = () => JSON.parse(screen.getByTestId("adjustments").textContent!);
+  const openDrawers = () => {
+    for (const b of screen.getAllByRole("button").filter(b => b.hasAttribute("aria-expanded"))) {
+      if (b.getAttribute("aria-expanded") === "false") fireEvent.click(b);
+    }
+  };
+  const QSR_PICKS: ProductPick[] = [{ hubspotProductId: "217445755632", qty: 1 }, { hubspotProductId: KIOSK, qty: 1 }];
+
+  it("shows 100% off with no button of its own; clearing the box charges for it, typing 100 makes it free", async () => {
+    render(<Host initialType="all_in_one" initialPicks={QSR_PICKS} />);
+    await screen.findByText(/The first kiosk is 100% off/);
+    expect(screen.queryByRole("button", { name: "Charge for kiosk" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Make it free" })).toBeNull();
     expect(screen.getByTestId("adjustments").textContent).toBe("{}");
 
-    fireEvent.click(charge);
-    const free = await screen.findByRole("button", { name: "Make it free" });
-    expect(JSON.parse(screen.getByTestId("adjustments").textContent!)).toEqual({ [KIOSK]: { outsideKit: true } });
-    expect(screen.getByText(/Charged at its price/)).toBeTruthy();
+    openDrawers();
+    const box = await screen.findByLabelText(KIOSK_DISCOUNT) as HTMLInputElement;
+    expect(box.value).toBe("100");
 
-    fireEvent.click(free);
-    await screen.findByRole("button", { name: "Charge for kiosk" });
-    expect(screen.getByTestId("adjustments").textContent).toBe("{}");
+    fireEvent.change(box, { target: { value: "" } });
+    await waitFor(() => expect(adjustmentsNow()).toEqual({ [KIOSK]: { discountPercent: 0 } }));
+    expect((screen.getByLabelText(KIOSK_DISCOUNT) as HTMLInputElement).value).toBe("");
+
+    fireEvent.change(screen.getByLabelText(KIOSK_DISCOUNT), { target: { value: "100" } });
+    await waitFor(() => expect(adjustmentsNow()).toEqual({ [KIOSK]: { discountPercent: 100, discountQty: 1 } }));
   });
 
-  it("isn't offered on Marketing Partial Ordering's kiosk", async () => {
-    render(<Host initialType="marketing_partial" initialPicks={[{ hubspotProductId: KIOSK, qty: 1 }]} />);
-    await waitFor(() => expect(chip("Kiosk").getAttribute("aria-pressed")).toBe("true"));
-    expect(screen.queryByRole("button", { name: "Charge for kiosk" })).toBeNull();
+  it("a figure typed over the default stays on the one free unit", async () => {
+    render(<Host initialType="all_in_one" initialPicks={[QSR_PICKS[0], { hubspotProductId: KIOSK, qty: 2 }]} />);
+    await screen.findByText(/The first kiosk is 100% off/);
+    openDrawers();
+    expect((await screen.findByLabelText(/How many Kiosk 27.* the discount applies to/) as HTMLInputElement).value).toBe("1");
+
+    fireEvent.change(screen.getByLabelText(KIOSK_DISCOUNT), { target: { value: "30" } });
+    await waitFor(() => expect(adjustmentsNow()).toEqual({ [KIOSK]: { discountPercent: 30, discountQty: 1 } }));
   });
 });
