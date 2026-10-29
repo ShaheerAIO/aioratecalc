@@ -171,6 +171,22 @@
 .basisRow .affix { display: flex; }
 .basisRow .rateInput { width: 100%; }
 
+/* An empty box has to read as unfilled. The $ and the placeholder are the only
+   text in it until a rep types, and at full strength they look like a value
+   already entered. Typed text stays at full ink. */
+.basisRow .rateInput::placeholder {
+  color: var(--ink-3);
+  opacity: 0.4;
+}
+.basisRow .affix:has(.rateInput:placeholder-shown) > span {
+  opacity: 0.4;
+}
+
+.basisRow .label {
+  font-weight: 800;
+  color: var(--ink);
+}
+
 /* Above the rates since 2026-10-15, so the rule that separated it from them
    is now a bottom border rather than a top one — it still divides the basis
    from the rates, it is just on the other side of the pair now. */
