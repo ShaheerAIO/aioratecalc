@@ -3,6 +3,7 @@
 
 import { paymentProcessingArr } from "@/lib/billing/processingArr";
 import { commissionRateToBps, quoteHardwareCommission } from "@/lib/commission";
+import { PAYROLL_PRODUCT_ID, carriesWebsite, includesMarketing, isProcessingQuote, quoteTypeOf } from "@/lib/quoting";
 import { locationAddress } from "@/types/merchant";
 import type {
   BillingFrequency,
@@ -267,6 +268,22 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
   if (app.quoteAcceptedAt) {
     const arr = paymentProcessingArr(app);
     if (arr !== null) props.payment_processing_arr = String(arr);
+  }
+  // "Modules Used" — EasyOB overwrites it on every deal sync (product owner,
+  // 2026-10-29), so boxes a rep ticked by hand that the quote doesn't back are
+  // cleared. Written only once the quote has a plan: before that there is
+  // nothing to say, and an empty value would wipe the rep's ticks for nothing.
+  // Partial Ordering counts as POS/Payments — it has no POS but takes payments.
+  // All-in-One is marketing + the QSR kit, though `includesMarketing` (which
+  // is about the menu boards marketing brings) says no to it.
+  if (app.quoteType) {
+    const quoteType = quoteTypeOf(app.quoteType);
+    const modules: string[] = [];
+    if (quoteType === "all_in_one" || includesMarketing(quoteType, app.quoteLines)) modules.push("Marketing");
+    if (carriesWebsite(app.quoteLines)) modules.push("Website");
+    if (isProcessingQuote(quoteType)) modules.push("POS/Payments");
+    if (app.quoteLines?.some(l => l.hubspotProductId === PAYROLL_PRODUCT_ID)) modules.push("Payroll");
+    props.modules_used = modules.join(";");
   }
   // Hardware commission — "Calculate both RSM & AE commission and map back to
   // the rep_commission & rsm_commission fields on the [Deal] object

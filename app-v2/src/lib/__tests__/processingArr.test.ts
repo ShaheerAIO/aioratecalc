@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { paymentProcessingArr, paymentProcessingArrBreakdown } from "@/lib/billing/processingArr";
 import { buildDealProperties, isAtOrPastClosedWon, SALES_PIPELINE_STAGES } from "@/lib/adapters/hubspot";
 import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE } from "@/types/merchant";
+import { MARKETING_ADDON_PRODUCT, PAYROLL_PRODUCT_ID, WEBSITE_PRODUCT_ID } from "@/lib/quoting";
 import type { MerchantApplication, StoredQuoteType } from "@/types/merchant";
 
 // `payment_processing_arr` on the HubSpot deal, and the gate that keeps it
@@ -179,6 +180,40 @@ describe("buildDealProperties — payment_processing_arr", () => {
   it("omits it when a quoted rate exceeds MAX_PLAUSIBLE_CARD_RATE, even though the merchant has accepted", () => {
     const props = buildDealProperties(app({ quoteRates: { ...DEFAULT_QUOTE_RATES, cardPresentRate: 0.20 } }));
     expect(props).not.toHaveProperty("payment_processing_arr");
+  });
+});
+
+describe("buildDealProperties — modules_used", () => {
+  const line = (hubspotProductId: string) => ({ hubspotProductId, name: "", qty: 1 });
+  const modules = (over: Partial<MerchantApplication>) => buildDealProperties(app(over)).modules_used;
+
+  it("ticks Marketing and POS/Payments on All-in-One", () => {
+    expect(modules({ quoteLines: [] })).toBe("Marketing;POS/Payments");
+  });
+
+  it("ticks only POS/Payments on Order & Pay Only", () => {
+    expect(modules({ quoteType: "order_pay_only" as StoredQuoteType, quoteLines: [] })).toBe("POS/Payments");
+  });
+
+  it("ticks only Marketing on Marketing Only", () => {
+    expect(modules({ quoteType: "marketing_only" as StoredQuoteType, quoteLines: [] })).toBe("Marketing");
+  });
+
+  it("ticks Marketing on Partial Ordering only with the marketing line", () => {
+    const quoteType = "marketing_partial" as StoredQuoteType;
+    expect(modules({ quoteType, quoteLines: [] })).toBe("POS/Payments");
+    expect(modules({ quoteType, quoteLines: [line(MARKETING_ADDON_PRODUCT.hubspotProductId)] as never }))
+      .toBe("Marketing;POS/Payments");
+  });
+
+  it("ticks Website and Payroll from their lines", () => {
+    expect(modules({ quoteType: "order_pay_only" as StoredQuoteType, quoteLines: [line(WEBSITE_PRODUCT_ID), line(PAYROLL_PRODUCT_ID)] as never }))
+      .toBe("Website;POS/Payments;Payroll");
+  });
+
+  // An empty value would clear the rep's own ticks before EasyOB knows anything.
+  it("is omitted until the quote has a plan", () => {
+    expect(buildDealProperties(app({ quoteType: null }))).not.toHaveProperty("modules_used");
   });
 });
 

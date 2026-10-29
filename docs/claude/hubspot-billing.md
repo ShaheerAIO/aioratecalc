@@ -67,6 +67,12 @@ verbatim-`quoteLines` hazard, both constraints above.
   is not derivable from it. Marketing-only quotes and quotes with no volume are OMITTED, not zeroed:
   this property feeds HubSpot's calculated `total_arr`, which the sales org reads as booked revenue,
   and a 0 there reads as a measured zero. `saas_revenue` is deliberately not written.
+- **`modules_used` ("Modules Used", deal checkbox) is OVERWRITTEN on every deal sync** (product
+  owner, 2026-10-29) from `buildDealProperties`: Marketing = All-in-One, Marketing Only, or Partial
+  Ordering with the marketing line; Website / Payroll = that line is on the quote; POS/Payments =
+  every processing plan, Partial Ordering included (no POS, but it takes payments). Full replace, so
+  a rep's hand ticks the quote doesn't back are cleared. Omitted while `quoteType` is null. The
+  older `moduels__cloned_` ("Modules (Deals)", 11 options) is deliberately not written.
 - **"Is this deal closed?" is NOT "is this deal past Closed Won?"** AIO's Sales pipeline runs
   Onboarding, Onboarding Delayed, Configuration, Deployment/Training and Deal Active AFTER
   `closedwon`, and HubSpot flags every one of them `closed: false` — so until 2026-10-12 a rep could
