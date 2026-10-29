@@ -36,7 +36,7 @@ import {
   isNamedProduct,
   isPartialOrderingQuote,
   isProcessingQuote,
-  isRetiredPick,
+  isHiddenPick,
   isTabletProduct,
   longestBillingDelayDays,
   quoteNoteBlockers,
@@ -316,7 +316,8 @@ export default function ProductConfigurator({
   // The picker only ever shows what this quote type may carry — minus the
   // tablets, unless an admin has switched them back on at
   // /admin/settings/quote-limits (TABLET_PRODUCT_IDS), and minus the products
-  // retired from new quotes (RETIRED_PICK_PRODUCT_IDS).
+  // retired from new quotes or hidden on this plan (RETIRED_PICK_PRODUCT_IDS,
+  // PLAN_HIDDEN_PICK_PRODUCT_IDS).
   //
   // One already on the quote stays listed either way. Hiding a picked line
   // would leave a rep looking at a price with no row to change it on, and
@@ -332,7 +333,7 @@ export default function ProductConfigurator({
       if (!isAllowedForQuoteType(p, planned)) return false;
       const onQuote = picks.some(pick => pick.hubspotProductId === p.hubspotProductId && pick.qty > 0);
       if (onQuote || planKitIds.includes(p.hubspotProductId)) return true;
-      if (isRetiredPick(p.hubspotProductId)) return false;
+      if (isHiddenPick(p.hubspotProductId, planned)) return false;
       return limits.showTablets || !isTabletProduct(p.hubspotProductId);
     }),
     [catalog, planned, limits.showTablets, picks, planKitIds]
@@ -359,7 +360,7 @@ export default function ProductConfigurator({
     const byId = new Map(listed.map(p => [p.hubspotProductId, p]));
     // Every product the kit lists — the printer beside the partial kit's KDS
     // included — not just the preselected ones. The kiosk is no longer one of
-    // them (2026-10-29): its first one is a discount, not a kit slot.
+    // them (2026-10-29): its first one is an ordinary line, not a kit slot.
     const ordered = kitProductIds(kit).flatMap(id => byId.get(id) ?? []);
 
     // Each POS's companions sit directly UNDER it — "CFD + cash drawer +
@@ -774,8 +775,8 @@ export default function ProductConfigurator({
   };
   const partialChips = (() => {
     if (!isPartialOrderingQuote(planned) || !kit) return [];
-    // The 27" is what a rep would add for the free first kiosk (100% off, see
-    // `applyFirstKioskComp`), and a 15.6" added by hand lights the chip too.
+    // The 27" is what a rep would add for the first kiosk (which may be
+    // discounted up to 100%), and a 15.6" added by hand lights the chip too.
     const kioskIds = FIRST_KIOSK_PRODUCT_IDS;
     const kiosk = selectable.find(p => p.hubspotProductId === FIRST_KIOSK_PRODUCT_IDS[0]);
     const online = selectable.find(p => isNamedProduct(ONLINE_ORDERING_PRODUCT, p));
@@ -837,22 +838,11 @@ export default function ProductConfigurator({
   ) : null;
 
   // ── The first kiosk (2026-10-29) ──────────────────────────────────────────
-  // Product owner: "Make the first free kiosk fully out of the package ...
-  // just have it added as a regular line item with the discount behaviour as
-  // discussed." It is 100% off ONE unit until the rep changes its discount
-  // (`applyFirstKioskComp`), which the row's own Adjust drawer does. No
-  // discount at all IS that default, so clearing the box charges for it with
-  // an explicit 0 instead; a figure typed over the default (or over that 0)
-  // stays on the one unit, as the row showed it.
+  // Product owner: "Make it charged normally, and then allow the discount to
+  // be 100 without affecting commission." It goes on at list like any line;
+  // the row just says that its one unit may be discounted past the cap
+  // (`QuoteLine.firstKiosk`, see `adjustmentBlockers`).
   const firstKioskId = quoteLines.find(l => l.firstKiosk)?.hubspotProductId ?? null;
-  const kioskDefault = (id: string) => {
-    const a = adjustments[id];
-    return id === firstKioskId && (a?.discountPercent ?? a?.discountAmount) == null && !a?.units;
-  };
-  const kioskUnscoped = (id: string) => {
-    const a = adjustments[id];
-    return id === firstKioskId && !a?.discountPercent && a?.discountAmount == null && a?.discountQty == null && !a?.units;
-  };
 
   // ── Clearing the cart ─────────────────────────────────────────────────────
   // Starting the hardware over used to mean stepping every row back to zero
@@ -891,8 +881,7 @@ export default function ProductConfigurator({
         }
       }
       if (!merged.units) delete merged.units;
-      // Kept at 0 on the first kiosk: that 0 is the rep charging for it.
-      if (!merged.discountPercent && !(merged.discountPercent === 0 && id === firstKioskId)) delete merged.discountPercent;
+      if (!merged.discountPercent) delete merged.discountPercent;
       if (!merged.discountAmount) delete merged.discountAmount;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
@@ -932,12 +921,6 @@ export default function ProductConfigurator({
     //
     // `discountAmount: null` on every write: the two levers are mutually
     // exclusive, so typing in this box is also how a rep abandons the other.
-    if (id === firstKioskId) {
-      setAdjustment(id, next
-        ? { discountPercent: next, discountAmount: null, ...(kioskUnscoped(id) ? { discountQty: 1 } : {}) }
-        : { discountPercent: 0, discountAmount: null, discountQty: null });
-      return;
-    }
     setAdjustment(id, next
       ? { discountPercent: next, discountAmount: null }
       : { discountPercent: null, discountAmount: null, discountQty: null });
@@ -945,12 +928,7 @@ export default function ProductConfigurator({
 
   const setDiscountQty = (id: string, raw: string) => {
     const qty = raw.trim() === "" ? null : Number(raw);
-    // On the default first kiosk the 100% is only implied; writing a quantity
-    // alone would leave nothing for it to scope.
-    setAdjustment(id, {
-      discountQty: qty === null || Number.isNaN(qty) ? null : qty,
-      ...(kioskDefault(id) ? { discountPercent: 100 } : {}),
-    });
+    setAdjustment(id, { discountQty: qty === null || Number.isNaN(qty) ? null : qty });
   };
 
   // A discount in DOLLARS — its OWN lever since 2026-10-14, not a percentage
@@ -972,10 +950,8 @@ export default function ProductConfigurator({
   // Scoped by `discountQty` the same way the percentage is: "$200 off,
   // applies to 1 of 3" takes $200 off that one unit's line after the split.
   const setDiscountAmount = (id: string, raw: string) => {
-    // Clearing it on the first kiosk charges for it, as the percent box does.
-    const cleared = { discountPercent: id === firstKioskId ? 0 : null, discountAmount: null, discountQty: null };
     if (raw.trim() === "") {
-      setAdjustment(id, cleared);
+      setAdjustment(id, { discountPercent: null, discountAmount: null, discountQty: null });
       return;
     }
     const amount = Number(raw);
@@ -986,8 +962,8 @@ export default function ProductConfigurator({
     // than $0 (see that function).
     const next = Math.round(Math.max(0, amount) * 100) / 100;
     setAdjustment(id, next > 0
-      ? { discountAmount: next, discountPercent: null, ...(kioskUnscoped(id) ? { discountQty: 1 } : {}) }
-      : cleared);
+      ? { discountAmount: next, discountPercent: null }
+      : { discountAmount: null, discountPercent: null, discountQty: null });
   };
 
   // ── Per-unit editing ──────────────────────────────────────────────────────
@@ -1038,17 +1014,17 @@ export default function ProductConfigurator({
       billingStart:
         mode === "now" ? null
         : mode === "date" ? { mode: "date", date: firstOfNextMonth() }
-        : { mode: "days", days: 60 },
+        : { mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS },
     });
   };
 
   const setStartMode = (ids: string[], mode: "now" | "date" | "days") => {
     if (mode === "now") return setAdjustments(ids, { billingStart: null });
     // Seeded with the values the portal actually uses — the 1st of next month
-    // for a date, 60 days for a delay (52 of the 72 day-delayed lines).
+    // for a date, the plan default (PLAN_DEFAULT_BILLING_DELAY_DAYS, 45 since 2026-10-29) for a delay; 60 was the portal favourite, 52 of the 72 day-delayed lines.
     const seed: BillingStart = mode === "date"
       ? { mode: "date", date: firstOfNextMonth() }
-      : { mode: "days", days: 60 };
+      : { mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS };
     setAdjustments(ids, { billingStart: seed });
   };
 
@@ -1306,7 +1282,7 @@ export default function ProductConfigurator({
                   <input
                     type="number" min={1} max={l.qty} step={1}
                     className={styles.adjustInput}
-                    value={adjustments[id]?.discountQty ?? (kioskDefault(id) ? 1 : "")}
+                    value={adjustments[id]?.discountQty ?? ""}
                     placeholder={String(l.qty)}
                     onChange={e => setDiscountQty(id, e.target.value)}
                     aria-label={`How many ${l.name} the discount applies to`}
@@ -1640,7 +1616,7 @@ export default function ProductConfigurator({
           )}
           {p.hubspotProductId === firstKioskId && (
             <div className={styles.autoTag}>
-              The first kiosk is 100% off unless you change its discount. Clear the discount to charge for it.
+              The first kiosk can be discounted up to 100%.
             </div>
           )}
           {planCovered > 0 && (
@@ -1904,7 +1880,7 @@ export default function ProductConfigurator({
             <section>
               <div className={styles.buildHeadRow}>
                 <h3 className={styles.buildHead}>Ordering channels</h3>
-                <span className={styles.buildMeta}>{orderPoints.total} ordering points</span>
+                <span className={styles.buildMeta}>{orderPoints.total} licenses</span>
               </div>
               <div className={styles.chipRow}>
                 {ORDER_POINT_CHANNELS.map(c => (
@@ -2287,7 +2263,7 @@ export default function ProductConfigurator({
         {rated && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>
-              <h2 className={styles.sectionTitle}>Ordering Points</h2>
+              <h2 className={styles.sectionTitle}>Licenses</h2>
               <p className={styles.sectionNote}>
                 Every place an order can be placed. Hardware is counted from the lines above; these
                 channels never appear on a hardware list, so they have to be declared here. Reported
@@ -2309,7 +2285,7 @@ export default function ProductConfigurator({
             </div>
 
             <div className={styles.countRow}>
-              <span className={styles.countLabel}>Ordering points</span>
+              <span className={styles.countLabel}>Licenses</span>
               <span className={styles.countValue}>{orderPoints.total}</span>
             </div>
 
@@ -2334,7 +2310,7 @@ export default function ProductConfigurator({
           can follow the page down without becoming its own scroll box. */}
       <aside className={styles.sideCol}>
         {/* The plan's platform fee. Its own panel since 2026-10-05: it used to
-            live inside Ordering Points because the count selected the tier, and
+            live inside Licenses because the count selected the tier, and
             leaving it there would keep implying a link that no longer exists —
             and would hide it entirely on a marketing-only quote, which now
             carries one too.

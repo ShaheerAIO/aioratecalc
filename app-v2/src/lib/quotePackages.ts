@@ -29,9 +29,9 @@
 // free first kiosk. From 2026-10-27 it was an optional kit slot; since
 // 2026-10-29 it is OUT of the kit altogether (product owner: "Make the first
 // free kiosk fully out of the package. It needs to feel like a discount to
-// the customer"): an ordinary line at 100% off, a discount the rep can change
-// — see `applyFirstKioskComp` in quoting.ts. The kits still go WITH a kiosk
-// (`QuotePackage.appliesWith`).
+// the customer"); later that day it became an ordinary line at list that the
+// rep may discount up to 100% — see `FIRST_KIOSK_PRODUCT_IDS` in quoting.ts.
+// The kits still go WITH a kiosk (`QuotePackage.appliesWith`).
 //
 // ── ONE HUBSPOT LINE CAN BE SEVERAL SHEET ITEMS ────────────────────────────
 //
@@ -204,12 +204,12 @@ export type QuotePackage = {
  * Contents are the QSR kit as Shaheer specified it 2026-10-08: printer, POS,
  * kiosk, KDS, cash drawer, menu board, WiFi package and the POS's AMS1, plus
  * the POS's customer facing display, which the sheet's POS assembly carries.
- * The kiosk LEFT the kit 2026-10-29: the first one is free as a discount on
- * its own line (`applyFirstKioskComp`), and the kit only goes with it
- * (`appliesWith`). It goes on Order & Pay and All-in-One alike.
+ * The kiosk LEFT the kit 2026-10-29: the first one is an ordinary line the
+ * rep may discount up to 100% (`FIRST_KIOSK_PRODUCT_IDS`), and the kit only
+ * goes with it (`appliesWith`). It goes on Order & Pay and All-in-One alike.
  *
  * The Partial Ordering Kit is the scenario sheet's "$299 flat tier" hardware
- * (2026-10-27): the order tablet and a KDS or a printer, beside the same free
+ * (2026-10-27): the order tablet and a KDS or a printer, beside the same
  * first kiosk.
  */
 export const PACKAGES: QuotePackage[] = [

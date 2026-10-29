@@ -24,16 +24,17 @@ describe("defaultFoodbuyForm", () => {
     expect(f.business.address).toBe("123 Main St");
   });
 
-  it("never pre-fills the EIN, even when AIO holds one", () => {
+  it("pre-fills the EIN the merchant already gave (2026-10-29), blank when none is held", () => {
     const f = defaultFoodbuyForm({ business: { ...BUSINESS, ein: "98-7654321" } as BusinessInfo, ownerContact: CONTACT, foodbuyIds: null });
-    expect(f.business.ein).toBe("");
+    expect(f.business.ein).toBe("98-7654321");
+    expect(defaultFoodbuyForm({ business: BUSINESS, ownerContact: CONTACT, foodbuyIds: null }).business.ein).toBe("");
   });
 
   it("leaves an unspecified business type blank rather than asserting one", () => {
     expect(defaultFoodbuyForm({ business: { ...BUSINESS, bizType: "" }, ownerContact: CONTACT, foodbuyIds: null }).business.bizType).toBe("");
   });
 
-  it("restores the last send's answers, but never the EIN, acceptance or signature", () => {
+  it("restores the last send's answers, but never acceptance or signature; the EIN comes from business.ein", () => {
     const saved = toSavedForm({ ...completeForm(), locations: [{ ...completeForm().locations[0], acct: "999" }] });
     expect(saved.business).not.toHaveProperty("ein");
     expect(saved).not.toHaveProperty("signature");
@@ -45,6 +46,10 @@ describe("defaultFoodbuyForm", () => {
     expect(f.business.ein).toBe("");
     expect(f.accept).toBe(false);
     expect(f.signature).toBe("");
+    expect(defaultFoodbuyForm({
+      business: { ...BUSINESS, ein: "98-7654321" }, ownerContact: CONTACT,
+      foodbuyIds: { generatedAt: "2026-10-01T00:00:00Z", form: saved },
+    }).business.ein).toBe("98-7654321");
   });
 });
 

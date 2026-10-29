@@ -94,7 +94,7 @@ export function quoteSummarySections(quote: CustomerSafeQuote): SummarySection[]
     const n = quote.orderPoints.total;
     sections.push({
       title: "Configuration",
-      rows: [{ label: `Configured for ${n} ordering point${n === 1 ? "" : "s"}${channels.length ? ` (${channels.join(", ")})` : ""}.` }],
+      rows: [{ label: `Configured for ${n} license${n === 1 ? "" : "s"}${channels.length ? ` (${channels.join(", ")})` : ""}.` }],
     });
   }
 

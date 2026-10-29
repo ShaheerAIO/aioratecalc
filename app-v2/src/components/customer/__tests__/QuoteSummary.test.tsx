@@ -149,22 +149,22 @@ const PRODUCTS_QUOTE_WITH_POINTS: CustomerSafeQuote = {
 describe("QuoteSummary — ordering-point count", () => {
   it("renders the count as a plain configuration fact", () => {
     render(<QuoteSummary quote={PRODUCTS_QUOTE_WITH_POINTS} />);
-    expect(screen.getByText("Configured for 3 ordering points.")).toBeTruthy();
+    expect(screen.getByText("Configured for 3 licenses.")).toBeTruthy();
   });
 
   it("singularizes a count of exactly one", () => {
     render(<QuoteSummary quote={{ ...PRODUCTS_QUOTE_WITH_POINTS, orderPoints: { hardware: {}, channels: [], total: 1 } }} />);
-    expect(screen.getByText("Configured for 1 ordering point.")).toBeTruthy();
+    expect(screen.getByText("Configured for 1 license.")).toBeTruthy();
   });
 
   it("renders nothing when there's no order-point basis at all", () => {
     render(<QuoteSummary quote={{ ...PRODUCTS_QUOTE_WITH_POINTS, orderPoints: null }} />);
-    expect(screen.queryByText(/ordering point/i)).toBeNull();
+    expect(screen.queryByText(/license/i)).toBeNull();
   });
 
   it("renders nothing for a zero count rather than printing it like a price", () => {
     render(<QuoteSummary quote={{ ...PRODUCTS_QUOTE_WITH_POINTS, orderPoints: { hardware: {}, channels: [], total: 0 } }} />);
-    expect(screen.queryByText(/ordering point/i)).toBeNull();
+    expect(screen.queryByText(/license/i)).toBeNull();
   });
 
   it("also renders on a rated quote, not only a rate-only one", () => {
@@ -174,12 +174,12 @@ describe("QuoteSummary — ordering-point count", () => {
       lineTotals: PRODUCTS_QUOTE_WITH_POINTS.lineTotals,
       orderPoints: { hardware: {}, channels: [], total: 2 },
     }} />);
-    expect(screen.getByText("Configured for 2 ordering points.")).toBeTruthy();
+    expect(screen.getByText("Configured for 2 licenses.")).toBeTruthy();
   });
 
   it("never ends up inside a line row — it's a sibling of the lines, not an addition to one", () => {
     render(<QuoteSummary quote={PRODUCTS_QUOTE_WITH_POINTS} />);
-    const note = screen.getByText("Configured for 3 ordering points.");
+    const note = screen.getByText("Configured for 3 licenses.");
     expect(note.closest("section")).toBeNull();
   });
 });
@@ -195,12 +195,12 @@ describe("QuoteSummary — ordering-channel names", () => {
       ...PRODUCTS_QUOTE_WITH_POINTS,
       orderPoints: { hardware: {}, channels: ["qr", "phone_ai"], total: 2 },
     }} />);
-    expect(screen.getByText("Configured for 2 ordering points (QR code ordering, Phone-AI ordering).")).toBeTruthy();
+    expect(screen.getByText("Configured for 2 licenses (QR code ordering, Phone-AI ordering).")).toBeTruthy();
   });
 
   it("renders no channel list when none were declared, even with a nonzero count", () => {
     render(<QuoteSummary quote={PRODUCTS_QUOTE_WITH_POINTS} />);
-    const note = screen.getByText("Configured for 3 ordering points.");
+    const note = screen.getByText("Configured for 3 licenses.");
     expect(note.textContent).not.toContain("(");
   });
 
@@ -209,7 +209,7 @@ describe("QuoteSummary — ordering-channel names", () => {
       ...PRODUCTS_QUOTE_WITH_POINTS,
       orderPoints: { hardware: {}, channels: ["qr", "some_retired_channel"], total: 2 },
     }} />);
-    const note = screen.getByText(/Configured for 2 ordering points/);
+    const note = screen.getByText(/Configured for 2 licenses/);
     expect(note.textContent).toContain("QR code ordering");
     expect(note.textContent).not.toContain("some_retired_channel");
     expect(note.textContent).not.toContain("undefined");
@@ -220,7 +220,7 @@ describe("QuoteSummary — ordering-channel names", () => {
       ...PRODUCTS_QUOTE_WITH_POINTS,
       orderPoints: { hardware: {}, channels: ["some_retired_channel"], total: 1 },
     }} />);
-    const note = screen.getByText("Configured for 1 ordering point.");
+    const note = screen.getByText("Configured for 1 license.");
     expect(note.textContent).not.toContain("(");
     expect(note.textContent).not.toContain("undefined");
   });
@@ -409,10 +409,10 @@ describe("QuoteSummary — payroll box, ordering points, payment order", () => {
     expect(software.textContent).not.toContain("$476.00");
   });
 
-  it("shows the license line as an ordering point", () => {
+  it("shows the license line as a license", () => {
     render(<QuoteSummary quote={MIXED} />);
-    expect(screen.getByText("Additional Ordering Point ×2")).toBeTruthy();
-    expect(screen.queryByText(/license/i)).toBeNull();
+    expect(screen.getByText("Additional License ×2")).toBeTruthy();
+    expect(screen.queryByText(/Software License/i)).toBeNull();
   });
 
   it("renders Payment Details last", () => {

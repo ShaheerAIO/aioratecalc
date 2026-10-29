@@ -346,9 +346,9 @@ export type LineHardwareCommission = {
  * (`derivePricingForRole`); nobody asked for it to be hidden, but don't
  * later assume it is, because it visibly is not.
  */
-// The FIRST KIOSK (QuoteLine.firstKiosk — free by default, or whatever the rep
-// set it to) pays a flat, lower rate than the product's own, and is floored at
-// 0 like the service lines (product owner, 2026-10-29: "lower commission rate
+// The FIRST KIOSK (QuoteLine.firstKiosk — at list, or discounted by the rep,
+// up to 100%) pays a flat, lower rate than the product's own, and is floored
+// at 0 like the service lines (product owner, 2026-10-29: "lower commission rate
 // for the first kiosk, 45 & 5"; "discounting first kiosk does not remove
 // commission"). One unit only: any other kiosks on the same line (a discount
 // set across all of them) earn the product's own rates, unfloored, like any

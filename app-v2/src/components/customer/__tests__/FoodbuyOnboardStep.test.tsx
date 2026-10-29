@@ -56,11 +56,18 @@ function fillIn() {
 }
 
 describe("FoodbuyOnboardStep", () => {
-  it("pre-fills what AIO holds and leaves the EIN for the merchant", () => {
+  it("pre-fills what AIO holds, with the EIN blank when none is on file", () => {
     render(<FoodbuyOnboardStep app={APP} />);
     expect(screen.getByLabelText("Legal entity name")).toHaveProperty("value", "Torta Palace LLC");
     expect(screen.getByLabelText("Federal ID # (EIN)")).toHaveProperty("value", "");
     expect(screen.getByLabelText("Restaurant location name")).toHaveProperty("value", "Torta Palace");
+  });
+
+  it("pre-fills the EIN given on the confirmation step, and it stays editable", () => {
+    render(<FoodbuyOnboardStep app={{ ...APP, business: { ...BUSINESS, ein: "98-7654321" } }} />);
+    expect(screen.getByLabelText("Federal ID # (EIN)")).toHaveProperty("value", "98-7654321");
+    type("Federal ID # (EIN)", "12-3456789");
+    expect(screen.getByLabelText("Federal ID # (EIN)")).toHaveProperty("value", "12-3456789");
   });
 
   it("blocks review and marks what's missing", () => {

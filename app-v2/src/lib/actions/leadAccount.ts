@@ -16,7 +16,7 @@
 //     the merchant signs in normally — the lead link can never reset it.
 
 import { hash } from "bcryptjs";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { AuthError } from "next-auth";
 import { signIn } from "@/lib/auth";
 import { db } from "@/lib/db/client";
@@ -39,7 +39,9 @@ export async function createAccountFromLeadAction(
   if (!lookup.ok) return "This link is no longer valid. Ask your AIO representative for a new one.";
   const row = lookup.row;
 
-  const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  // Case-insensitive: a magic-link account keeps the rep's casing, and an exact
+  // match missed it and created a second, lowercased account beside it.
+  const [existing] = await db.select().from(users).where(sql`lower(${users.email}) = ${email}`).limit(1);
   const [linked] = row.customerUserId
     ? await db.select().from(users).where(eq(users.id, row.customerUserId)).limit(1)
     : [];

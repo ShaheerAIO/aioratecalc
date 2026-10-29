@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { PACKAGES } from "@/lib/quotePackages";
 import { SOFTWARE_LICENSE_PRODUCT, buildQuote, toQuoteLine } from "@/lib/quoting";
-import type { CatalogProduct, QuoteType } from "@/types/merchant";
+import type { CatalogProduct, QuoteAdjustments, QuoteType } from "@/types/merchant";
 
 // Steve's scenario sheet ("AIO pricing scenarios", updated 2026-10-23 with
 // Alex Holt), as the product owner mapped it onto the four plans on
@@ -50,9 +50,14 @@ const CATALOG: CatalogProduct[] = [
 // Install and training are both comped to $0 again since 2026-10-28.
 const INSTALL_AND_TRAINING = 0;
 
-function quote(plan: QuoteType, picks: Array<[string, number]>) {
+// The sheet's "first kiosk free": since 2026-10-29 the first kiosk goes on at
+// list and the REP discounts it, so the scenarios carry that discount — one
+// 27" unit at 100% (a no-op on a quote with no kiosk).
+const FIRST_KIOSK_FREE: QuoteAdjustments = { "222497165009": { discountPercent: 100, discountQty: 1 } };
+
+function quote(plan: QuoteType, picks: Array<[string, number]>, adjustments = FIRST_KIOSK_FREE) {
   const lines = picks.map(([name, qty]) => toQuoteLine(CATALOG.find(c => c.name === name)!, qty));
-  const built = buildQuote(plan, lines, [], CATALOG);
+  const built = buildQuote(plan, lines, [], CATALOG, adjustments);
   const installed = built.includedServices.lines.length > 0;
   return {
     built,
@@ -129,11 +134,17 @@ describe("pricing scenarios, Oct 23 sheet", () => {
     expect(orderPay.monthly).toBe(299);
   });
 
-  it("puts the free kiosk on as a line at list, 100% off — a discount, not the kit (2026-10-29)", () => {
+  it("puts the kiosk on at list unless the rep discounts it, never in the kit (2026-10-29)", () => {
     for (const [plan, picks] of [["all_in_one", [...QSR, KIOSK]], ["marketing_partial", [TABLET, KDS, KIOSK]]] as const) {
-      const kiosk = quote(plan, [...picks]).built.quoteLines.filter(l => l.name === KIOSK[0]);
-      expect(kiosk, plan).toEqual([expect.objectContaining({ qty: 1, unitPrice: 1495, discountPercent: 100, firstKiosk: true })]);
-      expect(kiosk[0].coveredByPackage, plan).toBeUndefined();
+      const listed = quote(plan, [...picks], {}).built.quoteLines.filter(l => l.name === KIOSK[0]);
+      expect(listed, plan).toEqual([expect.objectContaining({ qty: 1, unitPrice: 1495, firstKiosk: true })]);
+      expect(listed[0].discountPercent, plan).toBeUndefined();
+      expect(listed[0].coveredByPackage, plan).toBeUndefined();
+
+      const free = quote(plan, [...picks]);
+      expect(free.built.blockers, plan).toEqual([]);
+      expect(free.built.quoteLines.filter(l => l.name === KIOSK[0]), plan)
+        .toEqual([expect.objectContaining({ qty: 1, discountPercent: 100, firstKiosk: true })]);
     }
   });
 });

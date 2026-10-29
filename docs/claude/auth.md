@@ -64,6 +64,35 @@ missing → refused, so no stale bare-credentials caller can slip through. The a
 (`/login/breakglass`, unlisted) is the only staff password and exists solely so a broken or
 unreachable Entra tenant can't lock everyone out of `/admin`.
 
+**The password lookup is case-insensitive (2026-10-29).** The product owner reported "I set the password.
+The login doesn't work when trying to sign back in." The cause was a mismatch between how the email
+is written and how it was read. `createAccountFromLeadAction` stores it `trim().toLowerCase()`. The
+magic-link branch of `authorize()` stores the token's address exactly as the rep typed it.
+`authorize()`'s password branch then matched the raw typed value with a case-sensitive `=`, so a
+capital letter, or an autofill from a browser profile that capitalises, could never find the row.
+`authorize()` now matches `lower(users.email)` against the trimmed, lowercased input. That covers
+both kinds of row, and it applies to breakglass too.
+
+The other customer lookups by email had the same mismatch and now use the same predicate:
+- `authorize()`'s magic-link branch. A rep-cased token missed the existing account and created a
+  second one.
+- `requestCustomerLoginAction` ("email me a link"). It sent nothing for a differently-cased address.
+  It now also stores the token, and sends the mail, under the row's own email.
+- `/api/customer/verify`'s set-password check. It sent merchants who already have a password through
+  set-password again.
+- `createAccountFromLeadAction`'s "already exists" check. It created a lowercased duplicate beside a
+  magic-link account.
+
+Regression cover is `customerEmailCase.test.ts`. It runs the real code: the provider through
+`@auth/core`'s `Auth()`, plus the two actions and the verify route. It evaluates the compiled SQL with
+Postgres's case-sensitive `=`.
+
+Still open:
+- `users.email`'s unique index is case-sensitive, so `Ana@x.com` and `ana@x.com` can both exist. The
+  lookups take whichever row comes first.
+- Entra's email fallback in `resolveEntraStaffUser` is still an exact match. It is safe while
+  `createUserAction` lowercases every staff row.
+
 **The app registration exists.** `EasyOB Staff Sign-In`, created 2026-09-17 in the AIO tenant
 `e951f5b3-da6a-4b3d-9f40-993a88995573`, single-tenant (`signInAudience: AzureADMyOrg`). It carries
 both redirect URIs, `email` + `upn` as optional ID-token claims, implicit flows off, and tenant-wide

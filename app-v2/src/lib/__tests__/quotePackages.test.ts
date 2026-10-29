@@ -507,8 +507,9 @@ describe("buildQuote with the kit on it", () => {
     KIT.active = active;
   };
 
+  // No kiosk: it is not kit hardware (2026-10-29), and goes on at list.
   const picks = () => [
-    line(ID.pos), line(ID.kiosk27), line(ID.kds), line(ID.printer), line(ID.drawer), line(ID.menuboard), line(ID.wifi),
+    line(ID.pos), line(ID.kds), line(ID.printer), line(ID.drawer), line(ID.menuboard), line(ID.wifi),
   ];
 
   const build = (over: QuoteLine[] = picks(), adjustments = {}, quoteType: QuoteType = "all_in_one") =>
@@ -523,11 +524,13 @@ describe("buildQuote with the kit on it", () => {
       expect(l.coveredByPackage, id).toBe("QSR Kit");
       expect(l.discountPercent, id).toBe(100);
     }
-    // The kiosk beside them is the first kiosk: 100% off, but not the kit's.
-    const kiosk = built.quoteLines.find(x => x.hubspotProductId === ID.kiosk27)!;
-    expect(kiosk).toMatchObject({ qty: 1, discountPercent: 100, firstKiosk: true });
-    expect(kiosk.coveredByPackage).toBeUndefined();
     expect(built.blockers).toEqual([]);
+
+    // A kiosk beside them is the first kiosk: at list, and never the kit's.
+    const kiosk = build([...picks(), line(ID.kiosk27)]).quoteLines.find(x => x.hubspotProductId === ID.kiosk27)!;
+    expect(kiosk).toMatchObject({ qty: 1, firstKiosk: true });
+    expect(kiosk.discountPercent).toBeUndefined();
+    expect(kiosk.coveredByPackage).toBeUndefined();
   });
 
   it("puts no line of its own on the quote", () => {
@@ -583,11 +586,11 @@ describe("buildQuote with the kit on it", () => {
     const built = build([line(ID.pos, 2), line(ID.kiosk27, 2), line(ID.printer), line(ID.drawer), line(ID.menuboard)]);
     expect(built.quoteLines.find(l => l.hubspotProductId === ID.swapFee)).toBeUndefined();
     expect(built.quoteLines.filter(l => l.derived)).toEqual([]);
-    // Charged at list instead: the second POS and the second kiosk (the
-    // first is 100% off on its own line).
+    // Charged at list instead: the second POS, and both kiosks (out of the
+    // kit since 2026-10-29).
     expect(qtyOf(built.quoteLines.filter(l => !l.coveredByPackage), ID.pos)).toBe(1);
     expect(built.quoteLines.filter(l => l.hubspotProductId === ID.kiosk27).map(l => [l.qty, l.discountPercent ?? 0]))
-      .toEqual([[1, 100], [1, 0]]);
+      .toEqual([[2, 0]]);
     expect(built.blockers.filter(b => b.includes("Replacement"))).toEqual([]);
   });
 
@@ -629,7 +632,7 @@ describe("buildQuote with the kit on it", () => {
     const back = picksFromQuoteLines(build().quoteLines, "all_in_one");
 
     // The POS's AMS1 is a pick like any other now, so it comes back too.
-    for (const id of [ID.pos, ID.kiosk27, ID.kds, ID.printer, ID.drawer, ID.menuboard, ID.ams1]) {
+    for (const id of [ID.pos, ID.kds, ID.printer, ID.drawer, ID.menuboard, ID.ams1]) {
       expect(back).toContainEqual({ hubspotProductId: id, qty: 1 });
     }
     // WiFi is a pick since 2026-10-21, so it comes back with the rest.

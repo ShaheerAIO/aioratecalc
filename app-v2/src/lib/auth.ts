@@ -2,7 +2,7 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import { compare } from "bcryptjs";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { authConfig } from "./auth.config";
 import { db } from "@/lib/db/client";
 import { users, customerLoginTokens, merchantApplications } from "@/lib/db/schema";
@@ -79,7 +79,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             .set({ usedAt: new Date() })
             .where(eq(customerLoginTokens.id, tokenRow.id));
 
-          let [user] = await db.select().from(users).where(eq(users.email, tokenRow.email)).limit(1);
+          // Case-insensitive, like the password branch below: an exact match
+          // here missed an existing account and created a second one.
+          let [user] = await db.select().from(users)
+            .where(sql`lower(${users.email}) = ${tokenRow.email.trim().toLowerCase()}`).limit(1);
           if (!user) {
             [user] = await db
               .insert(users)
@@ -109,7 +112,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!email || !password) return null;
         if (scope !== "customer" && scope !== "breakglass") return null;
 
-        const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+        // Case-insensitive on both sides: the lead-link account form stores the
+        // email trimmed and lowercased, while magic-link rows keep whatever case
+        // the rep typed, and an exact `=` let either one fail on a capital
+        // letter (2026-10-29).
+        const [user] = await db.select().from(users)
+          .where(sql`lower(${users.email}) = ${email.trim().toLowerCase()}`).limit(1);
         if (!user || !user.passwordHash || user.disabledAt) return null;
 
         // Reps have no password path at all — they go through Entra. The

@@ -2,7 +2,7 @@
 
 import { randomUUID } from "crypto";
 import { hash } from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { AuthError } from "next-auth";
 import { signIn } from "@/lib/auth";
 import { getCustomerSession } from "@/lib/auth/getCustomerSession";
@@ -47,17 +47,20 @@ async function requireCustomer(): Promise<{ userId: string }> {
 // orphan accounts and email enumeration from a bare login screen. Always
 // responds the same way regardless of whether the email matched.
 export async function requestCustomerLoginAction(email: string): Promise<SendMagicLinkResult> {
-  const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  // Case-insensitive, like authorize(). The token carries the row's own email,
+  // so the link resolves to this account and not to whatever case was typed.
+  const [user] = await db.select().from(users)
+    .where(sql`lower(${users.email}) = ${email.trim().toLowerCase()}`).limit(1);
   if (!user || user.role !== "customer" || user.disabledAt) {
     return { sent: true, devUrl: null };
   }
 
   const token = randomUUID();
   const expiresAt = new Date(Date.now() + LOGIN_TOKEN_TTL_MINUTES * 60 * 1000);
-  await db.insert(customerLoginTokens).values({ email, token, expiresAt });
+  await db.insert(customerLoginTokens).values({ email: user.email, token, expiresAt });
 
   const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-  return sendMagicLinkEmail(email, `${base}/api/customer/verify?token=${token}`);
+  return sendMagicLinkEmail(user.email, `${base}/api/customer/verify?token=${token}`);
 }
 
 // Password sign-in for customers who've set one — skips the magic-link round

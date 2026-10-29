@@ -187,7 +187,7 @@ export default function QuoteSummary({ quote }: Props) {
           the rest of the configuration, on its own. */}
       {quote.orderPoints && quote.orderPoints.total > 0 && (
         <p className={styles.orderPointsNote}>
-          Configured for {quote.orderPoints.total} ordering point{quote.orderPoints.total === 1 ? "" : "s"}
+          Configured for {quote.orderPoints.total} license{quote.orderPoints.total === 1 ? "" : "s"}
           {channelLabels.length > 0 && ` (${channelLabels.join(", ")})`}.
         </p>
       )}

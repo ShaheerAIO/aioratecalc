@@ -254,6 +254,25 @@ export function isRetiredPick(hubspotProductId: string): boolean {
   return RETIRED_PICK_PRODUCT_IDS.includes(hubspotProductId);
 }
 
+/**
+ * Products not offered on a PARTICULAR plan's new quotes, the per-plan twin of
+ * RETIRED_PICK_PRODUCT_IDS and visibility only in the same way: a draft that
+ * already carries one still saves, and the row stays while it is on the quote.
+ *
+ * The Mega Kiosk Loaner is off the two POS plans (2026-10-29, product owner:
+ * hide it on Order & Pay and All-in-One); Marketing Only and Marketing
+ * Partial Ordering keep it.
+ */
+export const PLAN_HIDDEN_PICK_PRODUCT_IDS: Partial<Record<QuoteType, readonly string[]>> = {
+  order_pay_only: [MEGA_LOANER_PRODUCT_ID],
+  all_in_one: [MEGA_LOANER_PRODUCT_ID],
+};
+
+/** Whether the picker should stop offering this product on this plan. */
+export function isHiddenPick(hubspotProductId: string, quoteType: QuoteType): boolean {
+  return isRetiredPick(hubspotProductId) || (PLAN_HIDDEN_PICK_PRODUCT_IDS[quoteType] ?? []).includes(hubspotProductId);
+}
+
 /** The most of this product a quote may carry, or null when there's no limit. */
 export function maxQtyFor(
   hubspotProductId: string,
@@ -941,18 +960,19 @@ export function applyServiceComp(line: QuoteLine, adjustment?: LineAdjustment): 
 }
 
 /**
- * THE FIRST KIOSK IS A DISCOUNTED LINE, NOT A KIT SLOT (2026-10-29, product
- * owner: "Make the first free kiosk fully out of the package. It needs to
- * feel like a discount to the customer. Instead of the 'make it free' button
- * just have it added as a regular line item with the discount behaviour as
- * discussed."). On a plan that comes with a kit (`kitFor`: All-in-One, Order
- * & Pay, Marketing Partial Ordering), ONE kiosk unit — a 27" or a 15.6",
- * across both — goes on the quote at list, 100% off, and the merchant reads
- * "$999, 100% off" where they used to read "Included in the package".
+ * THE FIRST KIOSK IS OUT OF THE KIT (2026-10-29). On a plan that comes with a
+ * kit (`kitFor`: All-in-One, Order & Pay, Marketing Partial Ordering), ONE
+ * kiosk unit — a 27" or a 15.6", across both — is "the first kiosk". It went
+ * on 100% off by default for a few hours that day; the product owner then
+ * inverted it ("Make it charged normally, and then allow the discount to be
+ * 100 without affecting commission"): it goes on at LIST like any line, and
+ * what makes it the first kiosk is only that the rep may discount that one
+ * unit as far as 100% past the cap (`adjustmentBlockers`) and that it earns a
+ * flat commission floored at $0 (`lineHardwareCommission`).
  *
  * Which product it is, when the quote has both: the DEARER line (the 27" at
- * today's prices), the same "merchant gets the dearer one free" the kit's
- * slot used to give. A tie goes to the order of this list.
+ * today's prices), the same "merchant gets the dearer one" the kit's slot
+ * used to give. A tie goes to the order of this list.
  */
 export const FIRST_KIOSK_PRODUCT_IDS: readonly string[] = [
   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
@@ -968,24 +988,6 @@ export function firstKioskProductId(quoteType: QuoteType, lines: QuoteLine[]): s
     if (line && (!first || line.unitPrice > first.unitPrice)) first = line;
   }
   return first?.hubspotProductId ?? null;
-}
-
-/**
- * The first kiosk's standing comp, as the adjustment it amounts to: 100% off
- * ONE unit (`discountQty: 1`), so a second kiosk on the same line splits off
- * at list (`splitPartialDiscount`) rather than both sharing a blended 50%.
- *
- * A DEFAULT, not an override — the `applyServiceComp` rule: a rep who set
- * EITHER lever keeps it, and a discount of 0 is how a rep charges for the
- * kiosk (the configurator writes it when the box is cleared, and
- * `adjustmentsFromQuoteLines` reads a full-price first kiosk back as it).
- * Unlike the service comp it can't be applied to the finished line: the split
- * needs the quantity, so it goes in before `splitPartialDiscount` does.
- */
-export function applyFirstKioskComp(adjustment: LineAdjustment | undefined): LineAdjustment {
-  const repSet = adjustment?.discountPercent ?? adjustment?.discountAmount;
-  if (repSet !== undefined && repSet !== null) return adjustment!;
-  return { ...adjustment, discountPercent: 100, discountQty: 1 };
 }
 
 /**
@@ -1006,7 +1008,7 @@ export function applyFirstKioskComp(adjustment: LineAdjustment | undefined): Lin
  *
  * Nothing a rep can do keeps hardware out of a kit. (The QSR kiosk's
  * "Charge for kiosk" did, 2026-10-28; the kiosk left the kit the next day —
- * see `applyFirstKioskComp`.)
+ * see `FIRST_KIOSK_PRODUCT_IDS`.)
  */
 export function applyPackageComp(line: QuoteLine): QuoteLine {
   if (!line.coveredByPackage) return line;
@@ -2350,20 +2352,27 @@ export function adjustmentBlockers(
       );
     } else {
       const { cap: lineCap, isSpecific } = discountCapFor(line.hubspotProductId, discountCaps, cap);
+      const firstKioskUnit = line.firstKiosk === true && line.qty === 1;
 
       const pct = line.discountPercent;
       if (pct !== undefined && pct !== null) {
         if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
           blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
-        } else if (pct > lineCap && !((isCompedService(line) || line.coveredByPackage || (line.firstKiosk && line.qty === 1)) && pct === 100)) {
-          // A comped service, a package-covered line or the single first-kiosk
-          // unit sitting at exactly 100% is exempt: all three are AIO policy —
-          // off the price sheet, out of the package the merchant is already
-          // paying for, and the free first kiosk — and the cap exists to bound
-          // REP discretion. Without this every quote carrying one would refuse
-          // to send, since the default cap is 50%. Any other figure on those
-          // lines IS a rep's choice and is capped like anything else, and so is
-          // 100% across SEVERAL kiosks: only the first one is AIO's to give.
+        } else if (
+          pct > lineCap &&
+          !((isCompedService(line) || line.coveredByPackage) && pct === 100) &&
+          !firstKioskUnit
+        ) {
+          // A comped service or a package-covered line sitting at exactly 100%
+          // is exempt: both are AIO policy — off the price sheet, and out of the
+          // package the merchant is already paying for — and the cap exists to
+          // bound REP discretion. Without this every quote carrying either would
+          // refuse to send, since the default cap is 50%. Any other figure on
+          // those lines IS a rep's choice and is capped like anything else.
+          // The single first-kiosk unit is exempt at ANY figure (2026-10-29,
+          // "allow the discount to be 100"): a rep allowed to give it away
+          // can't sensibly be refused 30% off it. Several kiosks on the marked
+          // line are capped as usual — only the first one is AIO's to give.
           blockers.push(
             isSpecific
               ? `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit admin set for this product. ` +
@@ -2394,7 +2403,7 @@ export function adjustmentBlockers(
             `"${line.name}" is discounted ${fmt$(amount)}, which is more than the line's ${fmt$(list)}. ` +
             `A discount can't exceed the price.`
           );
-        } else if (list > 0 && (amount / list) * 100 > lineCap) {
+        } else if (list > 0 && (amount / list) * 100 > lineCap && !firstKioskUnit) {
           const asPct = Math.round((amount / list) * 1000) / 10;
           blockers.push(
             isSpecific
@@ -2571,28 +2580,6 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
     // no key and can't overwrite the half that does.
     if (Object.keys(adjustment).length) out[line.hubspotProductId] = adjustment;
   }
-  // The first kiosk (2026-10-29), whose default is no adjustment at all
-  // (`applyFirstKioskComp`). Its own 100% on the one unit IS that default, so
-  // it reopens as nothing — read back as a rep's 100% it would stop splitting,
-  // and a second kiosk added later would come out free too. One the rep
-  // CHARGED for carries no discount, which would reopen as that default 100%,
-  // so it comes back as an explicit 0 instead, which the comp leaves alone.
-  for (const line of lines ?? []) {
-    if (!line.firstKiosk) continue;
-    const id = line.hubspotProductId;
-    const reopened = out[id];
-    if (reopened?.units) continue;
-    if (reopened?.discountAmount) continue;
-    if (reopened?.discountPercent === 100 && line.qty === 1 && line.discountPercent === 100) {
-      const rest = { ...reopened };
-      delete rest.discountPercent;
-      delete rest.discountQty;
-      if (Object.keys(rest).length) out[id] = rest;
-      else delete out[id];
-    } else if (!reopened?.discountPercent) {
-      out[id] = { ...reopened, discountPercent: 0 };
-    }
-  }
   return out;
 }
 
@@ -2720,8 +2707,8 @@ export function buildQuote(
     quoteType,
   });
 
-  // The first kiosk is never in the kit (2026-10-29): its 100% is a default
-  // discount on its own line, applied with the rep's edits below.
+  // The first kiosk is never in the kit (2026-10-29): an ordinary line,
+  // marked below.
   const firstKiosk = firstKioskProductId(quoteType, picks);
 
   const unitCursor = new Map<string, number>();
@@ -2730,10 +2717,7 @@ export function buildQuote(
     ...softwareLicense.lines,
     ...packages.lines,
   ].flatMap(line => {
-    const adjustment = line.hubspotProductId === firstKiosk && !line.coveredByPackage
-      && !hasUnitAdjustments(adjustments[line.hubspotProductId])
-      ? applyFirstKioskComp(adjustments[line.hubspotProductId])
-      : adjustments[line.hubspotProductId];
+    const adjustment = adjustments[line.hubspotProductId];
     // "Adjust each unit" mode: the units are numbered across every chargeable
     // line of the product, so the cursor carries on from where the last one
     // stopped. Covered lines are skipped here and fall through to the package
@@ -2752,15 +2736,20 @@ export function buildQuote(
     return splitPartialDiscount(adjusted, adjustment);
   });
 
-  // Marked on the FIRST line of the product — the 100% unit, when the default
-  // split it — so the cap exemption, the commission rate and a reopen can find
-  // it on the saved lines, which are all a reopened quote has.
-  let kioskMarked = false;
-  const chargedLines = adjustedLines.map(line => {
-    if (kioskMarked || line.hubspotProductId !== firstKiosk) return line;
-    kioskMarked = true;
-    return { ...line, firstKiosk: true as const };
-  });
+  // Marked on ONE line of the product — the cheapest per unit, the first
+  // among equals — so the cap exemption and the commission rate land on the
+  // unit the rep discounted: "1 of 2 at 100%" splits into a 1-unit line at
+  // 100% and one at list, and the marker goes on the 100% one wherever the
+  // split (or "adjust each unit") put it. Read back off the saved lines, which
+  // are all the publish re-check has.
+  const kioskLines = adjustedLines.filter(l => l.hubspotProductId === firstKiosk);
+  const kioskLine = kioskLines.reduce<QuoteLine | null>(
+    (best, l) => (!best || lineNetAmount(l) / l.qty < lineNetAmount(best) / best.qty ? l : best),
+    null
+  );
+  const chargedLines = adjustedLines.map(line =>
+    line === kioskLine ? { ...line, firstKiosk: true as const } : line
+  );
 
   // The rate disclosure and the pre-authorization both come LAST and past
   // every adjustment, for the same two reasons: neither is the rep's to edit,

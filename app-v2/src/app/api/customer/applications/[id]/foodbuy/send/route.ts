@@ -71,8 +71,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const sentAt = new Date().toISOString();
   ids = { ...ids, sentAt, sentSha256: sha, form: toSavedForm(data) };
+  // An EIN first typed here is kept as the business's EIN, so the next visit
+  // pre-fills it. Only when none is held: a different one typed here doesn't
+  // replace the confirmed EIN (the one on the HubSpot Company).
+  const ein = app.business.ein?.trim() ? null : data.business.ein.trim();
   try {
-    await postgresStorage.updateApplicationAsCustomer(session.userId, id, { foodbuyIds: ids });
+    await postgresStorage.updateApplicationAsCustomer(session.userId, id, {
+      foodbuyIds: ids,
+      ...(ein ? { business: { ...app.business, ein } } : {}),
+    });
   } catch (err) {
     // The email is out; failing to record it only costs the duplicate guard.
     console.error(`Foodbuy send record failed (application ${id}):`, err instanceof Error ? err.message : err);

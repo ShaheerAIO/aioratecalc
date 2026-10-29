@@ -470,13 +470,12 @@ export type QuoteLine = {
   derived?: true;
   /**
    * Set on the line carrying the quote's FIRST KIOSK (2026-10-29, product
-   * owner: "Make the first free kiosk fully out of the package") — 100% off
-   * by default (`applyFirstKioskComp`), or whatever discount the rep set
-   * instead. `buildQuote` stamps it on the first line of that product. Three
-   * things read it: the discount cap's exactly-100% exemption, the flat
-   * first-kiosk commission rate, and `adjustmentsFromQuoteLines`, for which a
-   * marked line at full price is the rep's choice to charge — without it a
-   * reopened quote would quietly hand the kiosk back for free.
+   * owner: "Make it charged normally, and then allow the discount to be 100
+   * without affecting commission") — at list unless the rep discounts it.
+   * `buildQuote` stamps it on ONE line of that product, the one cheapest per
+   * unit, so a "1 of 2 at 100%" split marks the discounted unit. Two things
+   * read it: the discount cap, which a single marked unit is exempt from, and
+   * the flat first-kiosk commission rate.
    *
    * Never sent to HubSpot — `toLineItemProperties` names the properties it
    * emits, and this is not one of them.
@@ -562,8 +561,8 @@ export type LineAdjustment = {
    */
   units?: UnitAdjustment[] | null;
   // `outsideKit` (2026-10-28 to 2026-10-29, gone): "Charge for kiosk" on the
-  // QSR Kit's kiosk slot. The first kiosk is a discounted line of its own now,
-  // charged by setting its discount to 0 (see `applyFirstKioskComp`).
+  // QSR Kit's kiosk slot. The first kiosk is an ordinary line of its own now
+  // (see `QuoteLine.firstKiosk`).
   // `removed` (2026-10-21, gone): it took the derived WiFi package off a quote.
   // The package is an ordinary pick now, so a rep un-picks it instead. Saved
   // adjustments may still carry `removed: true`; nothing reads it any more.
@@ -871,12 +870,13 @@ export type BusinessInfo = {
    * this codebase, and the rest of that rule is UNCHANGED: AIO still never
    * collects an SSN, a bank account or a routing number, and Adyen and Check
    * still collect their own EIN on their own hosted pages — we neither send
-   * them this one nor read theirs back. Its only consumer is the HubSpot
-   * Company record (`updateCompanyEin`), so the sales org has it on file.
+   * them this one nor read theirs back. It goes to the HubSpot Company record
+   * (`updateCompanyEin`), so the sales org has it on file.
    *
-   * Deliberately NOT on the Foodbuy form: that document's "Federal ID #" line
-   * sits above a legal attestation the merchant signs themselves, so it stays
-   * a blank line for them to fill in (`foodbuyForm.ts`), and a test asserts it.
+   * It also pre-fills the Foodbuy form's "Federal ID #" line, still editable
+   * (2026-10-29, product owner: "the EIN should save after you input it the
+   * first time"; `foodbuyForm.ts`). An EIN first typed on the Foodbuy form is
+   * saved here when none was held (the Foodbuy send route).
    *
    * Optional, so every row written before this existed still parses —
    * `business` is a jsonb column, so there is no migration for it.
@@ -1074,8 +1074,9 @@ export type FoodbuyFormData = {
   signedDate: string; // MM/DD/YYYY, the customer's local date
 };
 // What is kept between visits so a corrected copy doesn't mean retyping every
-// location. Never the EIN or the signature: those are typed and drawn fresh
-// each time, on the document the customer is attesting to.
+// location. Never the signature: it is drawn fresh each time, on the document
+// the customer is attesting to. Never the EIN either: it lives on
+// `business.ein`, which pre-fills it.
 export type FoodbuySavedForm = Omit<FoodbuyFormData, "business" | "accept" | "signature" | "signedDate"> & {
   business: Omit<FoodbuyFormData["business"], "ein">;
 };
@@ -1101,8 +1102,8 @@ export type FoodbuyIds = {
   // press with the same PDF a no-op; a corrected export sends again.
   sentAt?: string;
   sentSha256?: string;
-  // The answers from the last send, minus the EIN and signature (see
-  // FoodbuySavedForm). Pre-fills the form on the next visit.
+  // The answers from the last send, minus the EIN (kept on business.ein) and
+  // signature (see FoodbuySavedForm). Pre-fills the form on the next visit.
   form?: FoodbuySavedForm;
 };
 

@@ -9,10 +9,12 @@
 // numbers, GPO affiliation, direct manufacturer agreements, their Sysco rep,
 // and the signature.
 //
-// The Federal ID # (EIN) always starts BLANK. EasyOB does hold one since
-// 2026-10-15 (`business.ein`), and it is still deliberately not pre-filled:
-// this line sits above a legal attestation the merchant signs, so the
-// merchant is the one who types it. It is also never saved (FoodbuySavedForm).
+// The Federal ID # (EIN) is pre-filled from `business.ein`, the one EIN
+// EasyOB holds (typed on the lead confirmation step), and stays editable
+// (2026-10-29, product owner: "the EIN should save after you input it the
+// first time"). It replaces the earlier rule that the merchant typed it here
+// every time. FoodbuySavedForm still leaves it out: `business.ein` is its one
+// home, and the send route fills that in when it was blank.
 import {
   locationAddress,
   type BusinessInfo, type FoodbuyContact, type FoodbuyDirectAgreement, type FoodbuyFormData,
@@ -58,7 +60,7 @@ export function defaultFoodbuyForm(app: Pick<MerchantApplication, "business" | "
   const fresh: FoodbuyFormData = {
     business: {
       legalName: b?.legalName ?? "",
-      ein: "",
+      ein: b?.ein ?? "",
       dba: b?.dba ?? "",
       bizType: b ? BIZ_TYPE_LABEL[b.bizType] ?? "" : "",
       address: b?.address ?? "",
@@ -88,7 +90,7 @@ export function defaultFoodbuyForm(app: Pick<MerchantApplication, "business" | "
   return {
     ...fresh,
     ...saved,
-    business: { ...saved.business, ein: "" },
+    business: { ...saved.business, ein: fresh.business.ein },
     accept: false,
     signature: "",
     signedDate: fresh.signedDate,

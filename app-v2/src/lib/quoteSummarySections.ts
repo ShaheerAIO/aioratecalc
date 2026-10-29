@@ -8,7 +8,7 @@ import { monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafeQuote, QuoteLine } from "@/types/merchant";
 
 // Display-only (product owner, 2026-10-29): the HubSpot product keeps its name.
-export const displayName = (l: QuoteLine) => l.name.replace(/Additional Software License/g, "Additional Ordering Point");
+export const displayName = (l: QuoteLine) => l.name.replace(/Additional Software License/g, "Additional License");
 
 export type RecurringTotals = {
   recurring: { frequency: QuoteLine["billingFrequency"]; amount: number }[];

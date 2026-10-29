@@ -24,6 +24,7 @@ import {
   deriveOrderPoints,
   groupProducts,
   isAllowedForQuoteType,
+  isHiddenPick,
   isPickable,
   isProcessingQuote,
   adjustmentsFromQuoteLines,
@@ -219,6 +220,21 @@ describe("quote types", () => {
     // The plan includes three of these free, but they are a PICK — a
     // merchant can want none, or want five and pay for the other two.
     expect(isAllowedForQuoteType(find("Menu Board Computer"), "marketing_only")).toBe(true);
+  });
+
+  it("hides the Mega Kiosk Loaner from the picker on the two POS plans only — still allowed, so a draft saves (2026-10-29)", () => {
+    const loaner = find("Mega Kiosk Loaner");
+    for (const plan of ["order_pay_only", "all_in_one"] as const) {
+      expect(isHiddenPick(loaner.hubspotProductId, plan), plan).toBe(true);
+      expect(isAllowedForQuoteType(loaner, plan), plan).toBe(true);
+    }
+    for (const plan of ["marketing_only", "marketing_partial"] as const) {
+      expect(isHiddenPick(loaner.hubspotProductId, plan), plan).toBe(false);
+      expect(isAllowedForQuoteType(loaner, plan), plan).toBe(true);
+    }
+    // The plan-wide retirements still hide everywhere; the Mega bought is still offered.
+    expect(isHiddenPick("332793212658", "marketing_only")).toBe(true);
+    expect(isHiddenPick(find("Marketing Kit - Mega Kiosk").hubspotProductId, "all_in_one")).toBe(false);
   });
 
   it("allows exactly the marketing products on a marketing-only quote", () => {

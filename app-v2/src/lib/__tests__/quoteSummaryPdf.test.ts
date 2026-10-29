@@ -77,7 +77,7 @@ describe("quoteSummarySections", () => {
   });
 
   it("carries the key lines and totals", () => {
-    expect(flat).toContain("Configured for 3 ordering points (Phone-AI ordering).");
+    expect(flat).toContain("Configured for 3 licenses (Phone-AI ordering).");
     expect(flat).toContain("All-in-One Platform");
     expect(flat).toContain("$399.00/mo");
     expect(flat).toContain("Monthly total");
@@ -147,9 +147,9 @@ describe("quoteSummarySections — payroll and display names (2026-10-29)", () =
     expect(noPayroll.find(s => s.title === "Software")!.rows.at(-1)!.value).toBe("$399.00/mo");
   });
 
-  it("shows an Additional Software License as an Additional Ordering Point", () => {
+  it("shows an Additional Software License as an Additional License", () => {
     const labels = section("Software").rows.map(r => r.label);
-    expect(labels).toContain("Additional Ordering Point ×2");
+    expect(labels).toContain("Additional License ×2");
     expect(labels.join("\n")).not.toContain("Software License");
   });
 
@@ -162,7 +162,7 @@ describe("quoteSummarySections — payroll and display names (2026-10-29)", () =
   it("draws the Payroll section and the renamed line into the PDF", async () => {
     const bytes = await renderQuoteSummaryPdf({ quote, businessName: "Torta Palace" });
     expect(containsText(bytes, "Payroll")).toBe(true);
-    expect(containsText(bytes, "Additional Ordering Point")).toBe(true);
+    expect(containsText(bytes, "Additional License")).toBe(true);
     expect(containsText(bytes, "Additional Software License")).toBe(false);
   });
 });

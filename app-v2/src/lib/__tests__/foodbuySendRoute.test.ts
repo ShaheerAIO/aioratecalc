@@ -5,7 +5,8 @@ import { BUSINESS, CONTACT, completeForm } from "./foodbuyFixtures";
 // api/customer/applications/[id]/foodbuy/send, exercised as a route handler.
 // What's pinned: the PDF is rendered here from the answers (never taken from
 // the browser), an unchanged resend is a no-op, incomplete answers never reach
-// email, and what's kept for next time leaves out the EIN and the signature.
+// email, what's kept for next time leaves out the EIN and the signature, and
+// an EIN first typed here becomes the business's EIN.
 
 const getCustomerSession = vi.fn();
 const getApplicationForCustomer = vi.fn();
@@ -61,6 +62,16 @@ describe("Foodbuy send route", () => {
     expect(saved.form.business).not.toHaveProperty("ein");
     expect(saved.form).not.toHaveProperty("signature");
     expect(attachFileToCompanyNote).toHaveBeenCalledWith(expect.objectContaining({ companyId: "co-1", fileId: "file-1" }));
+  });
+
+  it("keeps an EIN first typed here as the business's EIN, but never replaces one already held", async () => {
+    await post(completeForm());
+    expect(updateApplicationAsCustomer.mock.calls[0][2].business).toEqual({ ...BUSINESS, ein: "12-3456789" });
+
+    updateApplicationAsCustomer.mockClear();
+    getApplicationForCustomer.mockResolvedValue({ ...APP, business: { ...BUSINESS, ein: "98-7654321" } });
+    await post(completeForm());
+    expect(updateApplicationAsCustomer.mock.calls[0][2]).not.toHaveProperty("business");
   });
 
   it("does nothing on an unchanged resend", async () => {
