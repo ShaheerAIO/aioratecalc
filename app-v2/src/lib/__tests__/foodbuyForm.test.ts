@@ -1,99 +1,114 @@
 import { describe, it, expect } from "vitest";
-import { buildFoodbuyFormHtml, buildFoodbuyFormFileName } from "@/lib/foodbuyForm";
-import type { BusinessInfo, OwnerContact } from "@/types/merchant";
+import {
+  buildFoodbuyFormFileName, defaultFoodbuyForm, parseFoodbuyForm, toSavedForm, usesSysco, validateFoodbuyForm,
+} from "@/lib/foodbuyForm";
+import type { BusinessInfo } from "@/types/merchant";
+import { BUSINESS, CONTACT, completeForm } from "./foodbuyFixtures";
 
-const BUSINESS: BusinessInfo = {
-  legalName: "Torta Palace LLC",
-  dba: "Torta Palace",
-  bizType: "llc",
-  address: "123 Main St",
-  city: "Anaheim",
-  state: "CA",
-  zip: "92804",
-  phone: "555-0100",
-  website: "",
-  yearsInBusiness: "5",
-  annualRevenue: "500000",
-};
-
-const CONTACT: OwnerContact = {
-  firstName: "Jane",
-  lastName: "Doe",
-  title: "Owner",
-  email: "jane@tortapalace.com",
-  phone: "555-0101",
-};
-
-describe("buildFoodbuyFormHtml", () => {
-  it("fills in known business and contact fields", () => {
-    const html = buildFoodbuyFormHtml(BUSINESS, CONTACT);
-    expect(html).toContain("Torta Palace LLC");
-    expect(html).toContain("Torta Palace");
-    expect(html).toContain("123 Main St");
-    expect(html).toContain("Anaheim");
-    expect(html).toContain("Jane Doe");
-    expect(html).toContain("jane@tortapalace.com");
-    expect(html).toContain("LLC");
+describe("defaultFoodbuyForm", () => {
+  it("pre-fills the business, the main contact and a first location", () => {
+    const f = defaultFoodbuyForm({ business: BUSINESS, ownerContact: CONTACT, foodbuyIds: null });
+    expect(f.business).toMatchObject({ legalName: "Torta Palace LLC", dba: "Torta Palace", bizType: "LLC", city: "Anaheim" });
+    expect(f.contacts[0]).toMatchObject({ name: "Jane Doe", title: "Owner", email: "jane@tortapalace.com" });
+    expect(f.locations).toHaveLength(1);
+    expect(f.locations[0]).toMatchObject({ name: "Torta Palace", address: "123 Main St", distributor: "", acct: "" });
+    expect(f.printName).toBe("Jane Doe");
   });
 
-  it("never renders an EIN, signature, or GPO-affiliation answer — AIO doesn't collect those", () => {
-    const html = buildFoodbuyFormHtml(BUSINESS, CONTACT);
-    // The labels are expected to appear (they're on the form); the point is
-    // there is never a filled-in value next to them.
-    expect(html).toContain("Federal ID # (EIN)");
-    expect(html).toContain("Authorized Signature");
-    expect(html).not.toMatch(/class="filled">\d{2}-?\d{7}/); // no EIN-shaped value
+  it("puts the first location at the DBA address when there is one", () => {
+    const f = defaultFoodbuyForm({
+      business: { ...BUSINESS, dbaAddress: "9 Shop Rd", dbaCity: "Irvine", dbaState: "CA", dbaZip: "92618" },
+      ownerContact: CONTACT, foodbuyIds: null,
+    });
+    expect(f.locations[0]).toMatchObject({ address: "9 Shop Rd", city: "Irvine", zip: "92618" });
+    expect(f.business.address).toBe("123 Main St");
   });
 
-  it("escapes HTML-significant characters in business/contact fields", () => {
-    const html = buildFoodbuyFormHtml(
-      { ...BUSINESS, legalName: "Bob's <Burgers> & Co" },
-      CONTACT
+  it("never pre-fills the EIN, even when AIO holds one", () => {
+    const f = defaultFoodbuyForm({ business: { ...BUSINESS, ein: "98-7654321" } as BusinessInfo, ownerContact: CONTACT, foodbuyIds: null });
+    expect(f.business.ein).toBe("");
+  });
+
+  it("leaves an unspecified business type blank rather than asserting one", () => {
+    expect(defaultFoodbuyForm({ business: { ...BUSINESS, bizType: "" }, ownerContact: CONTACT, foodbuyIds: null }).business.bizType).toBe("");
+  });
+
+  it("restores the last send's answers, but never the EIN, acceptance or signature", () => {
+    const saved = toSavedForm({ ...completeForm(), locations: [{ ...completeForm().locations[0], acct: "999" }] });
+    expect(saved.business).not.toHaveProperty("ein");
+    expect(saved).not.toHaveProperty("signature");
+    const f = defaultFoodbuyForm({
+      business: BUSINESS, ownerContact: CONTACT,
+      foodbuyIds: { generatedAt: "2026-10-01T00:00:00Z", form: saved },
+    });
+    expect(f.locations[0].acct).toBe("999");
+    expect(f.business.ein).toBe("");
+    expect(f.accept).toBe(false);
+    expect(f.signature).toBe("");
+  });
+});
+
+describe("validateFoodbuyForm", () => {
+  it("accepts a finished form", () => {
+    expect(validateFoodbuyForm(completeForm())).toEqual({});
+  });
+
+  it("requires the EIN, GPO answer, acceptance and signature", () => {
+    const f = { ...completeForm(), business: { ...completeForm().business, ein: "" }, gpo: { participates: null, name: "" }, accept: false, signature: "" };
+    expect(Object.keys(validateFoodbuyForm(f))).toEqual(
+      expect.arrayContaining(["business.ein", "gpo.participates", "accept", "signature"]),
     );
-    expect(html).not.toContain("<Burgers>");
-    expect(html).toContain("&lt;Burgers&gt;");
-    expect(html).toContain("&amp;");
   });
 
-  it("maps every bizType to a readable label", () => {
-    const types: BusinessInfo["bizType"][] = ["llc", "corp", "s-corp", "sole-prop", "partnership", "non-profit"];
-    for (const bizType of types) {
-      const html = buildFoodbuyFormHtml({ ...BUSINESS, bizType }, CONTACT);
-      expect(html).not.toContain(">llc<");
-      expect(html).not.toContain(">sole-prop<");
-    }
+  it("requires the GPO's name only when they're in one", () => {
+    expect(validateFoodbuyForm({ ...completeForm(), gpo: { participates: true, name: "" } })).toHaveProperty(["gpo.name"]);
+    expect(validateFoodbuyForm({ ...completeForm(), gpo: { participates: true, name: "Avendra" } })).toEqual({});
   });
 
-  it("renders an unspecified bizType as a blank write-on line, never a default label", () => {
-    const html = buildFoodbuyFormHtml({ ...BUSINESS, bizType: "" }, CONTACT);
-    expect(html).not.toContain(">LLC<");
-    expect(html).not.toContain("Unspecified");
+  it("requires at least one fully filled distributor row", () => {
+    expect(validateFoodbuyForm({ ...completeForm(), locations: [] })).toHaveProperty(["locations"]);
+    const f = completeForm();
+    const errors = validateFoodbuyForm({ ...f, locations: [f.locations[0], { ...f.locations[0], acct: "" }] });
+    expect(errors).toEqual({ "locations.1.acct": "Account # is required" });
   });
 
-  it("makes every value editable before export — blanks and pre-filled values alike", () => {
-    const html = buildFoodbuyFormHtml(BUSINESS, CONTACT);
-    // The blanks are the point: EIN, suite, GPO answer, signature, date.
-    expect(html).toContain('<span class="blank" contenteditable="true">');
-    // A pre-filled value is editable too — AIO's copy of a legal name can be
-    // out of date, and this form has to match what the state has on file.
-    expect(html).toContain('<span class="filled" contenteditable="true">Torta Palace LLC</span>');
-    // And no checkbox ships ticked — the GPO answer and the acknowledgement
-    // are attestations only the merchant can make. (The ticked glyph appears
-    // once, in the toggle script; never as rendered content.)
-    expect(html).not.toContain(">☑<");
-    expect(html).toContain('<span class="cb" onclick="tog(this)">☐</span>');
+  it("requires the Sysco contact only when a distributor is Sysco", () => {
+    const f = { ...completeForm(), sysco: { name: "", phone: "", email: "" } };
+    expect(usesSysco(f)).toBe(true);
+    expect(Object.keys(validateFoodbuyForm(f))).toEqual(["sysco.name", "sysco.phone", "sysco.email"]);
+    const notSysco = { ...f, locations: [{ ...f.locations[0], distributor: "US Foods" }] };
+    expect(validateFoodbuyForm(notSysco)).toEqual({});
   });
 
-  it("embeds the html2pdf export script and a download button", () => {
-    const html = buildFoodbuyFormHtml(BUSINESS, CONTACT);
-    expect(html).toContain("html2pdf.js/0.10.1/html2pdf.bundle.min.js");
-    expect(html).toContain("exportPDF()");
+  it("checks a half-filled second contact", () => {
+    const f = completeForm();
+    const errors = validateFoodbuyForm({ ...f, contacts: [f.contacts[0], { name: "", title: "Manager", phone: "", fax: "", email: "" }] });
+    expect(Object.keys(errors)).toEqual(["contacts.1.name", "contacts.1.email"]);
+  });
+
+  it("requires every field of a listed direct agreement", () => {
+    const errors = validateFoodbuyForm({ ...completeForm(), directAgreements: [{ manufacturer: "Coca-Cola", category: "", start: "", end: "" }] });
+    expect(Object.keys(errors)).toEqual(["directAgreements.0.category", "directAgreements.0.start", "directAgreements.0.end"]);
+  });
+});
+
+describe("parseFoodbuyForm", () => {
+  it("round-trips a form", () => {
+    const f = completeForm();
+    expect(parseFoodbuyForm(JSON.parse(JSON.stringify(f)))).toEqual(f);
+  });
+
+  it("coerces junk into strings and refuses a non-object", () => {
+    expect(parseFoodbuyForm(null)).toBeNull();
+    const f = parseFoodbuyForm({ business: { legalName: 42 }, locations: "x", accept: "true" })!;
+    expect(f.business.legalName).toBe("");
+    expect(f.locations).toEqual([]);
+    expect(f.accept).toBe(false);
   });
 });
 
 describe("buildFoodbuyFormFileName", () => {
-  it("prefers the DBA, falls back to legal name, and strips non-alphanumerics", () => {
-    expect(buildFoodbuyFormFileName(BUSINESS)).toContain("Torta-Palace");
-    expect(buildFoodbuyFormFileName({ ...BUSINESS, dba: "" })).toContain("Torta-Palace-LLC");
+  it("uses the DBA and today's date", () => {
+    expect(buildFoodbuyFormFileName(BUSINESS)).toMatch(/^AIO-Foodbuy-Enrollment-Torta-Palace-\d{4}-\d{2}-\d{2}\.pdf$/);
   });
 });

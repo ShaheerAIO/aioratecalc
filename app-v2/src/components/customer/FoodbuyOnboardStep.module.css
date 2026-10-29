@@ -1,0 +1,101 @@
+/* Only what the Foodbuy agreement needs beyond CustomerOnboardStep.module.css,
+   whose form language it shares. */
+
+/* One location/distributor row, or one direct agreement: a quiet card so a
+   list of them reads as rows, not one long form. */
+.rowCard {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  padding: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+.rowCardHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: var(--space-sm);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.grid3 {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: var(--space-md);
+}
+
+.addRow {
+  margin-top: var(--space-md);
+}
+
+.radioGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.subhead {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  margin: var(--space-lg) 0 var(--space-sm);
+}
+
+.signaturePad {
+  display: block;
+  width: 100%;
+  height: 9rem;
+  background: var(--paper);
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-sm);
+  touch-action: none; /* a finger signs instead of scrolling the page */
+  cursor: crosshair;
+}
+
+.signaturePadInvalid {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.signatureBar {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-2xs);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+.linkBtnPlain {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* The rendered agreement, shown before it is sent. */
+.preview {
+  display: block;
+  width: 100%;
+  height: 75vh;
+  min-height: 30rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  margin-bottom: var(--space-md);
+}
+
+@media (max-width: 40rem) {
+  .grid3 {
+    grid-template-columns: 1fr;
+  }
+}

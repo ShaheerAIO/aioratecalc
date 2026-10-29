@@ -95,10 +95,10 @@ app-v2/src/
                                  got the link that creates their account.
     sms.ts                     ← sendLeadLinkSms() — Phase 4, Twilio HTTP API, no SDK. Same
                                  degrade-gracefully posture as email.ts; only called when a phone is given
-  lib/foodbuyForm.ts            ← buildFoodbuyFormHtml() — Foodbuy has NO API (it's a paper participation
-                                 agreement, AIO_Foodbuy_Enrollment_Form_V1). Pre-fills business/contact
-                                 fields into a printable HTML doc, exported client-side via html2pdf —
-                                 same pattern as ProposalStep.tsx's proposal PDF, no adapter/no HTTP call.
+  lib/foodbuyForm.ts            ← Foodbuy has NO API (it's a signed participation agreement,
+                                 AIO_Foodbuy_Enrollment_Form_V1). Form defaults/pre-fill, the shared
+                                 validator, and request-body parsing for the in-app agreement form.
+  lib/foodbuyPdf.ts             ← renderFoodbuyPdf() — pdf-lib redraw of the 5-page form, server-side.
   lib/billing/                  ← Phase E
     ensureDeal.ts             ← ensureDealForPublish() — fills a MISSING hubspotDealId before the
                                  preconditions ask for one (rows accepted before 511e019 have no deal,

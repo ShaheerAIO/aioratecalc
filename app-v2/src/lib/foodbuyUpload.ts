@@ -1,7 +1,7 @@
-// Pure half of filing the customer's exported Foodbuy PDF on their HubSpot
-// Company (the I/O half is the route at
-// api/customer/applications/[id]/foodbuy). Kept free of server-only imports so
-// the rules are testable on their own.
+// Pure half of emailing the customer's Foodbuy agreement and filing it on their
+// HubSpot Company (the I/O half is the route at
+// api/customer/applications/[id]/foodbuy/send). Kept free of server-only
+// imports so the rules are testable on their own.
 import { createHash } from "crypto";
 
 /** Vercel's function body limit is 4.5MB; stay under it. */
@@ -41,7 +41,7 @@ export function hubspotFoodbuyFileName(businessName: string, now: Date = new Dat
 
 /** What the note on the company reads. Names no internals. */
 export function foodbuyNoteBody(businessName: string): string {
-  return `Foodbuy enrollment form exported by the customer (${businessName || "business"}). Attached as a PDF.`;
+  return `Foodbuy enrollment agreement sent to Foodbuy by the customer (${businessName || "business"}). Attached as a PDF.`;
 }
 
 /** Same content already filed: skip, a re-download must not stack duplicates. */

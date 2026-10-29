@@ -558,14 +558,24 @@ describe("foodbuyModule (regression net)", () => {
     expect(m.ctaLabel).toBe("Get Started");
   });
 
-  it("is complete with a Download Again CTA once the form has been generated", () => {
+  it("is in_progress with a Continue CTA once an agreement has been previewed", () => {
     const m = foodbuy({
       ...BASE_APP,
       foodbuyIds: { generatedAt: "2026-08-02T00:00:00.000Z" },
     });
+    expect(m.status).toBe("in_progress");
+    expect(m.href).toBe("/customer/applications/app-1/foodbuy");
+    expect(m.ctaLabel).toBe("Continue");
+  });
+
+  it("is complete once the agreement has been sent to Foodbuy", () => {
+    const m = foodbuy({
+      ...BASE_APP,
+      foodbuyIds: { generatedAt: "2026-08-02T00:00:00.000Z", sentAt: "2026-08-03T00:00:00.000Z" },
+    });
     expect(m.status).toBe("complete");
     expect(m.href).toBe("/customer/applications/app-1/foodbuy");
-    expect(m.ctaLabel).toBe("Download Again");
+    expect(m.ctaLabel).toBe("View or Resend");
   });
 });
 

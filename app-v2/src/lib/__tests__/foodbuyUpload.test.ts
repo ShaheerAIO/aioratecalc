@@ -3,8 +3,6 @@ import {
   alreadyFiled, checkFoodbuyPdf, foodbuyNoteBody, hubspotFoodbuyFileName, sha256Hex, FOODBUY_PDF_MAX_BYTES,
 } from "@/lib/foodbuyUpload";
 import { attachFileToCompanyNote, uploadHubspotFile } from "@/lib/adapters/hubspot";
-import { buildFoodbuyFormHtml } from "@/lib/foodbuyForm";
-import type { BusinessInfo, OwnerContact } from "@/types/merchant";
 
 const pdf = (n = 100) => { const b = new Uint8Array(n); b.set([0x25, 0x50, 0x44, 0x46, 0x2d]); return b; };
 
@@ -72,16 +70,5 @@ describe("HubSpot calls", () => {
   it("throws on refusal so the route can log it", async () => {
     fetchMock.mockResolvedValue(new Response("{}", { status: 403 }));
     await expect(uploadHubspotFile({ fileName: "a.pdf", bytes: pdf(), contentType: "application/pdf" })).rejects.toThrow(/403/);
-  });
-});
-
-describe("form export hands the PDF back", () => {
-  const B = { legalName: "X LLC", dba: "X", bizType: "llc", address: "1", city: "c", state: "CA", zip: "9", phone: "1", website: "", yearsInBusiness: "", annualRevenue: "" } as BusinessInfo;
-  const C = { firstName: "A", lastName: "B", title: "", email: "a@b.co", phone: "1" } as OwnerContact;
-  it("posts to the opener on the same origin only", () => {
-    const html = buildFoodbuyFormHtml(B, C);
-    expect(html).toContain("window.opener.postMessage");
-    expect(html).toContain("window.location.origin");
-    expect(html).toContain("aio-foodbuy-pdf");
   });
 });

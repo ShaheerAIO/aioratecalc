@@ -469,18 +469,19 @@ export type QuoteLine = {
    */
   derived?: true;
   /**
-   * Set on a line the rep chose to CHARGE for although the plan's kit would
-   * have given it away — the QSR Kit's free first kiosk (2026-10-28, product
-   * owner: "if they want to charge for it they also should be able to").
-   * `buildQuote` stamps it from `LineAdjustment.outsideKit`, and it is what
-   * `adjustmentsFromQuoteLines` reads that choice back from: a line at full
-   * price says nothing about WHY it isn't covered, so without this a reopened
-   * quote would quietly hand the kiosk back for free.
+   * Set on the line carrying the quote's FIRST KIOSK (2026-10-29, product
+   * owner: "Make the first free kiosk fully out of the package") — 100% off
+   * by default (`applyFirstKioskComp`), or whatever discount the rep set
+   * instead. `buildQuote` stamps it on the first line of that product. Three
+   * things read it: the discount cap's exactly-100% exemption, the flat
+   * first-kiosk commission rate, and `adjustmentsFromQuoteLines`, for which a
+   * marked line at full price is the rep's choice to charge — without it a
+   * reopened quote would quietly hand the kiosk back for free.
    *
    * Never sent to HubSpot — `toLineItemProperties` names the properties it
    * emits, and this is not one of them.
    */
-  outsideKit?: true;
+  firstKiosk?: true;
   /**
    * Hardware commission inputs, SNAPSHOT from `CatalogProduct` at
    * `toQuoteLine` time — same rule as `unitPrice`/`billingFrequency` above: a
@@ -560,16 +561,9 @@ export type LineAdjustment = {
    * representation, and `adjustmentsFromQuoteLines` reads it back off them.
    */
   units?: UnitAdjustment[] | null;
-  /**
-   * Charge for this product instead of letting the kit's free slot take it
-   * (2026-10-28) — the "Charge for kiosk" button on the QSR Kit's kiosk. Only
-   * a slot marked `PackageSlot.chargeable` honours it, and it works by keeping
-   * the product OUT of that slot, not by discounting: a package-covered line's
-   * 100% is unconditional (`applyPackageComp`), so the line has to never be
-   * covered in the first place. Once charged it is an ordinary line, and the
-   * rep's discounts reach it like any other. Persisted as `QuoteLine.outsideKit`.
-   */
-  outsideKit?: true | null;
+  // `outsideKit` (2026-10-28 to 2026-10-29, gone): "Charge for kiosk" on the
+  // QSR Kit's kiosk slot. The first kiosk is a discounted line of its own now,
+  // charged by setting its discount to 0 (see `applyFirstKioskComp`).
   // `removed` (2026-10-21, gone): it took the derived WiFi package off a quote.
   // The package is an ordinary pick now, so a rep un-picks it instead. Saved
   // adjustments may still carry `removed: true`; nothing reads it any more.
@@ -1051,13 +1045,46 @@ export type CheckIds = {
   onboardStatusAt: string | null;
 };
 
+// The Foodbuy participation agreement as the customer fills it in on the
+// Foodbuy step (components/customer/FoodbuyOnboardStep.tsx). lib/foodbuyPdf.ts
+// renders it onto a copy of Foodbuy's 5-page form; lib/foodbuyForm.ts
+// validates it. Every value is a plain string so the PDF prints exactly what
+// was typed.
+export type FoodbuyContact = { name: string; title: string; phone: string; fax: string; email: string };
+export type FoodbuyLocation = {
+  name: string; address: string; city: string; state: string; zip: string;
+  distributor: string; // distributor name/location, e.g. "Sysco San Francisco"
+  acct: string;        // the customer's account number with that distributor
+};
+export type FoodbuyDirectAgreement = { manufacturer: string; category: string; start: string; end: string };
+export type FoodbuyFormData = {
+  business: {
+    legalName: string; ein: string; dba: string; bizType: string;
+    address: string; suite: string; city: string; state: string; zip: string;
+  };
+  contacts: [FoodbuyContact, FoodbuyContact]; // the second is optional
+  gpo: { participates: boolean | null; name: string };
+  locations: FoodbuyLocation[];
+  directAgreements: FoodbuyDirectAgreement[];
+  sysco: { name: string; phone: string; email: string }; // the customer's Sysco rep (page 5)
+  accept: boolean;
+  printName: string;
+  printTitle: string;
+  signature: string;  // drawn signature, a data:image/png;base64 URL
+  signedDate: string; // MM/DD/YYYY, the customer's local date
+};
+// What is kept between visits so a corrected copy doesn't mean retyping every
+// location. Never the EIN or the signature: those are typed and drawn fresh
+// each time, on the document the customer is attesting to.
+export type FoodbuySavedForm = Omit<FoodbuyFormData, "business" | "accept" | "signature" | "signedDate"> & {
+  business: Omit<FoodbuyFormData["business"], "ein">;
+};
+
 // Foodbuy enrollment: there is no API — it's a paper participation agreement
-// (AIO_Foodbuy_Enrollment_Form_V1) that asks for the Federal ID #, a wet
-// signature, GPO-affiliation disclosure, and per-location distributor account
-// numbers, none of which AIO ever collects. So there's nothing to poll for
-// status; this only records that the customer has generated their pre-filled
-// copy of the form (see lib/foodbuyForm.ts), and whether they then emailed it
-// to the Foodbuy rep from the Foodbuy step.
+// (AIO_Foodbuy_Enrollment_Form_V1). The customer fills it in on the Foodbuy
+// step, the server renders it as a PDF, and "Send to Foodbuy" emails that PDF
+// to the Foodbuy rep. So there's nothing to poll for status; this records
+// when the customer first previewed their agreement and when it was sent.
 export type FoodbuyIds = {
   generatedAt: string;
   // The customer's exported PDF, filed on their HubSpot Company (Files API
@@ -1074,6 +1101,9 @@ export type FoodbuyIds = {
   // press with the same PDF a no-op; a corrected export sends again.
   sentAt?: string;
   sentSha256?: string;
+  // The answers from the last send, minus the EIN and signature (see
+  // FoodbuySavedForm). Pre-fills the form on the next visit.
+  form?: FoodbuySavedForm;
 };
 
 // The HubSpot deal an application is currently backed by, captured at the

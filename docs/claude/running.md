@@ -114,7 +114,7 @@ TWILIO_AUTH_TOKEN           # Phase 4
 TWILIO_FROM_NUMBER          # Phase 4 — E.164, e.g. +15551234567
 NEXT_PUBLIC_BASE_URL        # Phase 1.5 — used to build the customer lead-link URL; keep in sync with actual dev port
 ```
-(Phase F — Foodbuy — needs no env vars: it has no API, see lib/foodbuyForm.ts.)
+(Phase F — Foodbuy — needs no env vars: it has no API, see lib/foodbuyForm.ts and lib/foodbuyPdf.ts.)
 
 ## Deploying
 

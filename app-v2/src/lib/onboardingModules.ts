@@ -237,7 +237,7 @@ function unpublishedQuoteRow(
     //    placeholders. No quote is ever built, so this row is done at the
     //    signature and must say so — a permanently-pending billing half
     //    would be a promise nobody is ever going to keep. (Re-viewing a
-    //    frozen quote is harmless, same as foodbuyModule's "Download Again".)
+    //    frozen quote is harmless, same as foodbuyModule's "View or Resend".)
     //  - Billable lines but no published quote yet: the publish is OURS to
     //    do, so this is a wait on AIO, not on the merchant.
     const hasBillableLines = !!app.quoteLines && app.quoteLines.length > 0;
@@ -641,14 +641,13 @@ export function payrollModule(app: MerchantApplication, basePath: string): Onboa
   };
 }
 
-// Foodbuy has no API — enrollment is a paper participation agreement that
-// asks for the Federal ID #, a wet signature, and per-location distributor
-// account numbers, none of which AIO collects (see lib/foodbuyForm.ts). So
-// there's no remote status to poll, unlike payrollModule/adyenModule: this
-// module just tracks whether the customer has generated their pre-filled
-// copy of the form (foodbuyIds.generatedAt). The href stays available even
-// once "complete" — re-downloading a static PDF is harmless, unlike
-// re-serving an expired Adyen/Check link.
+// Foodbuy has no API — enrollment is Foodbuy's participation agreement, which
+// the customer fills in, signs and sends from the Foodbuy step (see
+// lib/foodbuyForm.ts). So there's no remote status to poll, unlike
+// payrollModule/adyenModule: this module tracks whether the customer has
+// previewed a finished agreement (foodbuyIds.generatedAt) and sent it
+// (foodbuyIds.sentAt). The href stays available once "complete" — sending a
+// corrected copy is harmless, unlike re-serving an expired Adyen/Check link.
 function foodbuyModule(app: MerchantApplication, basePath: string): OnboardingModule {
   const label = "Foodbuy";
   const href = `${basePath}/foodbuy`;
@@ -662,14 +661,25 @@ function foodbuyModule(app: MerchantApplication, basePath: string): OnboardingMo
     };
   }
 
-  if (app.foodbuyIds?.generatedAt) {
+  if (app.foodbuyIds?.sentAt) {
     return {
       key: "foodbuy",
       label,
       status: "complete",
-      description: "You've downloaded your Foodbuy enrollment form. Sign it and send it to your AIO representative or Foodbuy account executive to finish enrolling.",
+      description: "You've sent your Foodbuy participation agreement. Foodbuy's account executive will contact you directly.",
       href,
-      ctaLabel: "Download Again",
+      ctaLabel: "View or Resend",
+    };
+  }
+
+  if (app.foodbuyIds?.generatedAt) {
+    return {
+      key: "foodbuy",
+      label,
+      status: "in_progress",
+      description: "Finish your Foodbuy participation agreement and send it to Foodbuy.",
+      href,
+      ctaLabel: "Continue",
     };
   }
 
@@ -677,7 +687,7 @@ function foodbuyModule(app: MerchantApplication, basePath: string): OnboardingMo
     key: "foodbuy",
     label,
     status: "not_started",
-    description: "Download your pre-filled Foodbuy enrollment form, sign it, and send it to your AIO representative or Foodbuy account executive.",
+    description: "Fill in and sign your Foodbuy participation agreement, then send it to Foodbuy. We've pre-filled what we know.",
     href,
     ctaLabel: "Get Started",
   };
