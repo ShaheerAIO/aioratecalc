@@ -268,6 +268,14 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         return;
       }
 
+      // Published, but HubSpot hasn't populated the quote's link yet (it can
+      // lag well past publish's one short wait). Nothing failed, so no error:
+      // the quote page re-reads the link on its own refresh.
+      if (data.error === "link_pending") {
+        window.location.href = `/lead/${token}/quote#documents`;
+        return;
+      }
+
       setSaving(false);
       setErr(
         "Your details are saved, but we couldn't open your quote just now. Please try again in a moment — your AIO representative has been notified."

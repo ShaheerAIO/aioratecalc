@@ -8,6 +8,7 @@ import { hasQuoteBasis } from "@/lib/leadQuote";
 import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
 import { buildOneTimeInvoiceForId } from "@/lib/billing/oneTimeInvoice";
+import { getQuoteSnapshot } from "@/lib/adapters/hubspot";
 import { EMPTY_HUBSPOT_IDS, type HubspotIds } from "@/types/merchant";
 
 // THE MERCHANT'S OWN DOOR TO BILLING — and the one-way door with it.
@@ -76,6 +77,35 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ to
       // A no-op once the invoice is built; otherwise this retries it.
       if (!app.hubspotInvoice?.openedAt) after(() => buildOneTimeInvoiceForId(app.id));
       return NextResponse.json({ url: app.hubspotIds.quoteLink });
+    }
+
+    // Published, but publish's read-after-write came back before HubSpot
+    // populated hs_quote_link — seen live at ~18s, well past its one 3s wait.
+    // Re-read here, or every retry falls through to the orchestrator, which
+    // answers `already_published` and never fetches the link: the merchant
+    // would be stuck until the quote page's refresh or the cron filled it in.
+    if (app.hubspotIds?.publishedAt && app.hubspotIds.quoteId) {
+      const hubspotIds = app.hubspotIds;
+      const snapshot = await getQuoteSnapshot(app.hubspotIds.quoteId).catch(() => null);
+      if (!snapshot?.quoteLink) {
+        return NextResponse.json({ error: "link_pending" }, { status: 503 });
+      }
+      await db
+        .update(merchantApplications)
+        .set({
+          hubspotIds: {
+            ...hubspotIds,
+            quoteLink: snapshot.quoteLink,
+            paymentStatus: snapshot.paymentStatus,
+            paymentDate: snapshot.paymentDate,
+            esignStatus: snapshot.esignStatus,
+            syncedAt: new Date().toISOString(),
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(merchantApplications.id, app.id));
+      if (!app.hubspotInvoice?.openedAt) after(() => buildOneTimeInvoiceForId(app.id));
+      return NextResponse.json({ url: snapshot.quoteLink });
     }
 
     if (!hasQuoteBasis(app)) {
