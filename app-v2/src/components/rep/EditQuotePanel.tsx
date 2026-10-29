@@ -186,7 +186,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         channels,
         // The per-line discounts and billing starts. Missing from this call
         // until 2026-10-18, so the server rebuilt every edited quote without
-        // them: the plan's 60-day start vanished and the save was refused for
+        // them: the plan's 45-day start vanished and the save was refused for
         // billing "at checkout", and any discount set here was dropped.
         adjustments,
         quoteRates,

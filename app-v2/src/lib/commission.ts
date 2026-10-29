@@ -346,6 +346,13 @@ export type LineHardwareCommission = {
  * (`derivePricingForRole`); nobody asked for it to be hidden, but don't
  * later assume it is, because it visibly is not.
  */
+// A CHARGED QSR-kit kiosk (QuoteLine.outsideKit, not covered) pays a flat,
+// lower rate than the product's own, and is floored at 0 like the service
+// lines (product owner, 2026-10-29: "lower commission rate for the first
+// kiosk, 45 & 5"; "discounting first kiosk does not remove commission").
+export const CHARGED_KIOSK_REP_BPS = 4500; // 45%
+export const CHARGED_KIOSK_RSM_BPS = 500; // 5%
+
 export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission {
   const none = (status: LineCommissionStatus): LineHardwareCommission => ({
     hubspotProductId: line.hubspotProductId,
@@ -365,14 +372,15 @@ export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission 
   const cost = line.costToRep ?? null;
   if (cost === null) return none("no_cost");
 
-  const repBps = line.repCommissionBps ?? null;
-  const rsmBps = line.rsmCommissionBps ?? null;
+  const chargedKiosk = line.outsideKit === true;
+  const repBps = chargedKiosk ? CHARGED_KIOSK_REP_BPS : (line.repCommissionBps ?? null);
+  const rsmBps = chargedKiosk ? CHARGED_KIOSK_RSM_BPS : (line.rsmCommissionBps ?? null);
   if (repBps === null && rsmBps === null) return none("no_rate");
 
   const marginTotal = lineNetAmount(line) - cost * line.qty;
 
   // Service lines (install/training) never go negative; hardware does.
-  const floor = INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === line.hubspotProductId) ? 0 : -Infinity;
+  const floor = chargedKiosk || INCLUDED_SERVICE_PRODUCTS.some(s => s.hubspotProductId === line.hubspotProductId) ? 0 : -Infinity;
 
   return {
     hubspotProductId: line.hubspotProductId,

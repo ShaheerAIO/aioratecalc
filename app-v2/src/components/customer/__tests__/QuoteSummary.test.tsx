@@ -72,7 +72,7 @@ describe("QuoteSummary — no rate/savings breakdown, on any basis", () => {
 describe("QuoteSummary — payment details card", () => {
   const card = () => screen.getByRole("region", { name: "Payment details" });
 
-  it("headlines the card-present rate and lists card-not-present beneath it", () => {
+  it("lists card present and card not present as equal rows, not a headline", () => {
     render(<QuoteSummary quote={CONFIG_QUOTE_NO_SAVINGS} />);
     const text = card().textContent ?? "";
     expect(text.indexOf("Card present")).toBeLessThan(text.indexOf("Card not present"));
@@ -376,5 +376,40 @@ describe("QuoteSummary — one-time lines are invoiced separately", () => {
   it("renders no package heading when nothing is package-covered", () => {
     render(<QuoteSummary quote={DISCOUNTED_QUOTE} />);
     expect(screen.queryByText(/Included in your/)).toBeNull();
+  });
+});
+
+describe("QuoteSummary — payroll box, ordering points, payment order", () => {
+  const MIXED: CustomerSafeQuote = {
+    ...CONFIG_QUOTE_NO_SAVINGS,
+    basis: "products",
+    lines: [
+      { hubspotProductId: "217526517443", name: "AIO Platform", qty: 1, unitPrice: 399, billingFrequency: "monthly", productType: "Software" },
+      { hubspotProductId: "223152695998", name: "Payroll", qty: 1, unitPrice: 39, billingFrequency: "monthly", productType: "Software" },
+      { hubspotProductId: "335280960199", name: "Additional Software License", qty: 2, unitPrice: 19, billingFrequency: "monthly", productType: "Software" },
+    ],
+    lineTotals: { oneTime: 0, recurring: [{ frequency: "monthly", amount: 476 }], monthlyEquivalent: 476 },
+  } as CustomerSafeQuote;
+
+  it("renders payroll in its own section with its own total, out of Software", () => {
+    render(<QuoteSummary quote={MIXED} />);
+    const payroll = screen.getByText("Payroll", { selector: "h2" }).closest("section")!;
+    const software = screen.getByText("Software", { selector: "h2" }).closest("section")!;
+    expect(payroll.textContent).toContain("$39.00/mo");
+    expect(software.textContent).not.toContain("Payroll");
+    expect(software.textContent).toContain("$437.00/mo");
+    expect(software.textContent).not.toContain("$476.00");
+  });
+
+  it("shows the license line as an ordering point", () => {
+    render(<QuoteSummary quote={MIXED} />);
+    expect(screen.getByText("Additional Ordering Point ×2")).toBeTruthy();
+    expect(screen.queryByText(/license/i)).toBeNull();
+  });
+
+  it("renders Payment Details last", () => {
+    render(<QuoteSummary quote={MIXED} />);
+    const headings = screen.getAllByRole("heading", { level: 2 }).map(h => h.textContent);
+    expect(headings[headings.length - 1]).toBe("Payment Details");
   });
 });

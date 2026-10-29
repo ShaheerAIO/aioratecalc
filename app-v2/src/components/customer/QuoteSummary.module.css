@@ -167,36 +167,3 @@
   margin-top: var(--space-3xs);
   font-variant-numeric: tabular-nums;
 }
-
-/* ---------- Payment details: the headline card rate ---------- */
-
-.rateHero {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2xs) var(--space-sm);
-  padding: var(--space-xs) 0 var(--space-sm);
-  border-bottom: 1px solid var(--rule);
-}
-
-.rateHeroLabel {
-  flex-basis: 100%;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-
-.rateHeroValue {
-  font-family: var(--font-display);
-  font-size: 2rem;
-  line-height: 1.1;
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-}
-
-.rateHeroFee {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
-}

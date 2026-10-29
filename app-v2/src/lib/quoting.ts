@@ -1228,7 +1228,7 @@ function withRequiredTerminals(picks: QuoteLine[], required: RequiredTerminalsRe
  * HubSpot won't publish a payment-enabled quote that collects under $0.50 at
  * checkout (see `MIN_CHECKOUT_AMOUNT`), and a delayed recurring line collects
  * nothing at checkout — so a quote whose hardware is comped and whose plan
- * starts billing in 60 days has NOTHING due, and can't be sent at all. This
+ * starts billing in 45 days has NOTHING due, and can't be sent at all. This
  * product is what makes that quote sendable: a real $0.50 charge at checkout,
  * which also proves the merchant's bank details work before the first real bill.
  *
@@ -1588,7 +1588,7 @@ export function amountInvoiced(lines: QuoteLine[]): number {
  * that stay on the quote (the pre-auth). A recurring line with a
  * `billingStart` takes nothing at checkout — HubSpot reported
  * `totalAmount: 0.00` for a quote whose only charge was a $299/mo plan delayed
- * 60 days, with its hardware comped by the plan. Invoiced lines
+ * 45 days, with its hardware comped by the plan. Invoiced lines
  * (`isInvoicedLine`) are billed after acceptance and take nothing here either.
  *
  * Distinct from `quoteTotals`, which is what the quote is WORTH. A quote can be
@@ -2021,18 +2021,19 @@ export const MAX_BILLING_DELAY_DAYS = 365;
 export const DEFAULT_MAX_APPROVED_DELAY_DAYS = 90;
 
 /**
- * The billing delay a plan starts with — 60 days on the two POS plans
- * (product owner, 2026-10-09: "automatically add in billing after 60 days for
+ * The billing delay a plan starts with — 45 days on the two POS plans
+ * (45 since 2026-10-29, product owner: "45 day default billing delay"; it was 60 when
+ * the product owner asked for it, 2026-10-09: "automatically add in billing after 60 days for
  * all-in-one and order/pay only, then let them adjust if needed").
  *
  * A SEEDED DEFAULT, not a derived value, and the distinction is the whole
  * design. It is written into `adjustments` when a plan is chosen, so it is an
  * ordinary rep edit from that moment on: the rep can change it, or set the
  * line back to "At checkout" and have it stay there. Derived in `buildQuote`
- * instead, clearing it would delete the adjustment and the 60 days would
+ * instead, clearing it would delete the adjustment and the default would
  * silently come back on the next render.
  */
-export const PLAN_DEFAULT_BILLING_DELAY_DAYS = 60;
+export const PLAN_DEFAULT_BILLING_DELAY_DAYS = 45;
 
 /** The billing start a newly chosen plan seeds onto its recurring lines, if any. */
 export function planDefaultBillingStart(quoteType: QuoteType): BillingStart | null {
@@ -2083,7 +2084,7 @@ export function longestBillingDelayDays(lines: Array<{ billingStart?: BillingSta
 
 /**
  * The one billing delay this plan's quotes carry silently: its own default.
- * 60 days on the two POS plans, "at checkout" on the marketing plans.
+ * 45 days on the two POS plans, "at checkout" on the marketing plans.
  */
 export function planDefaultBillingDelayDays(quoteType: QuoteType): number {
   return billingStartDelayDays(planDefaultBillingStart(quoteType));
@@ -2106,21 +2107,21 @@ export function planDefaultBillingDelayDays(quoteType: QuoteType): number {
  *
  * Three things are load-bearing about how it's measured:
  *
- *  - **It compares against the PLAN's default, not against 60.** A marketing
- *    quote has no 60-day default — `planDefaultBillingStart` returns null for
- *    one — so a flat "must be 60" would have demanded a note on every
+ *  - **It compares against the PLAN's default, not against 45.** A marketing
+ *    quote has no 45-day default — `planDefaultBillingStart` returns null for
+ *    one — so a flat "must be 45" would have demanded a note on every
  *    marketing quote ever sent, for billing exactly when its plan says to.
  *  - **It reads the LONGEST delay, the same scalar the rep-facing control and
  *    the HubSpot preamble read**, rather than asking each line separately. A
- *    rep who seeds the plan's 60 days and then adds a monthly line that bills
- *    at checkout has a quote whose longest delay is still 60 — and the global
+ *    rep who seeds the plan's 45 days and then adds a monthly line that bills
+ *    at checkout has a quote whose longest delay is still 45 — and the global
  *    "Billing starts" control, which is how a rep sets this, moves every
  *    recurring line together anyway.
  *  - **A quote with no RECURRING line is exempt.** A one-time line can't carry
  *    a billing start at all (HubSpot refuses to publish one that does — see
  *    `applyLineAdjustment`), so its delay is structurally 0; without this a
  *    rate-only quote, which has no lines whatsoever, would read as "bills at
- *    checkout, not 60 days" and demand a note about billing it never does.
+ *    checkout, not 45 days" and demand a note about billing it never does.
  */
 export function quoteNoteBlockers(
   lines: Array<{ billingFrequency?: BillingFrequency; billingStart?: BillingStart | null }>,

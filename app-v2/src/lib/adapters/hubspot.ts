@@ -2591,8 +2591,9 @@ export const INVOICE_TO_LINE_ITEM = 409;
  *
  * `installments` (payment plan, 2026-10-27): HubSpot has no installment API
  * scope, so those merchants get "Send invoice to request payment" with every
- * online method on, Affirm and Klarna included (`hs_allowed_commerce_payment_methods`,
- * the "Accept online payments" boxes). HubSpot rejects buy-now-pay-later together
+ * online method on, Affirm included (`hs_allowed_commerce_payment_methods`,
+ * the "Accept online payments" boxes). Klarna is off (product owner, 2026-10-29:
+ * "turn off klarna keep affirm"). HubSpot rejects buy-now-pay-later together
  * with `hs_allow_partial_payments`, so partial payments stays off.
  */
 export function draftInvoiceProperties(invoiceDate: string, opts: { installments?: boolean } = {}): Record<string, string> {
@@ -2605,7 +2606,7 @@ export function draftInvoiceProperties(invoiceDate: string, opts: { installments
     return {
       ...base,
       hs_allowed_payment_methods: "ach;credit_or_debit_card",
-      hs_allowed_commerce_payment_methods: "CARD;ACH;AFFIRM;KLARNA",
+      hs_allowed_commerce_payment_methods: "CARD;ACH;AFFIRM",
       hs_payment_collection_option: "request_payment",
     };
   }

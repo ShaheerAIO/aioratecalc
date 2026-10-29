@@ -104,11 +104,11 @@ beforeEach(() => {
 afterEach(() => { errorSpy.mockRestore(); logSpy.mockRestore(); });
 
 describe("buildOneTimeInvoice — payment methods", () => {
-  it("always requests payment online with card, ACH, Affirm and Klarna, billed at list", async () => {
+  it("always requests payment online with card, ACH and Affirm (no Klarna), billed at list", async () => {
     await run();
     expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({
       hs_allowed_payment_methods: "ach;credit_or_debit_card",
-      hs_allowed_commerce_payment_methods: "CARD;ACH;AFFIRM;KLARNA",
+      hs_allowed_commerce_payment_methods: "CARD;ACH;AFFIRM",
       hs_payment_collection_option: "request_payment",
     });
     expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_allow_partial_payments");
@@ -125,7 +125,7 @@ describe("buildOneTimeInvoice", () => {
     // POS, install and the comped terminal — never the plan or the pre-auth,
     // which are on the quote.
     expect(createQuoteLineItems).toHaveBeenCalledWith([POS, INSTALL, COMPED]);
-    // Card, ACH, Affirm and Klarna. Created as a draft; opened as its own step.
+    // Card, ACH and Affirm. Created as a draft; opened as its own step.
     expect(createDraftInvoice.mock.calls[0][0]).toMatchObject({ hs_currency: "USD", hs_allowed_payment_methods: "ach;credit_or_debit_card" });
     expect(createDraftInvoice.mock.calls[0][0]).not.toHaveProperty("hs_invoice_status");
     expect(openInvoice).toHaveBeenCalledWith("inv-1");

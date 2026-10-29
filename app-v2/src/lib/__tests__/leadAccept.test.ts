@@ -16,6 +16,7 @@ import type { QuoteLine } from "@/types/merchant";
 
 const syncDealFromApplication = vi.fn();
 const sendMagicLinkEmail = vi.fn();
+const attachQuoteSummaryToDeal = vi.fn();
 // The Phase E billing build is stubbed here and exercised for real in
 // publishBillingQuote.test.ts — this file is about the acceptance wiring, and a
 // real orchestrator would drag the whole HubSpot quote graph into every case.
@@ -55,6 +56,7 @@ vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   syncDealFromApplication,
 }));
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
+vi.mock("@/lib/billing/quoteSummaryAttachment", () => ({ attachQuoteSummaryToDeal }));
 
 const { POST } = await import("@/app/api/lead/[token]/accept/route");
 
@@ -130,6 +132,7 @@ beforeEach(() => {
   syncDealFromApplication.mockReset();
   sendMagicLinkEmail.mockReset();
   buildAndPublishBillingQuote.mockReset();
+  attachQuoteSummaryToDeal.mockReset();
   buildAndPublishBillingQuote.mockResolvedValue({ status: "skipped", reason: "nothing_to_bill" });
   patches.length = 0;
   loginTokens.length = 0;
@@ -155,6 +158,13 @@ describe("accepting a quote", () => {
     expect(syncDealFromApplication.mock.calls[0][0].stage).toBe("quote_accepted");
     // A PATCH can't change the id it's targeting — nothing to persist locally.
     expect(patches.some(p => "hubspotDealId" in p)).toBe(false);
+  });
+
+  it("files the quote summary PDF on the deal on the first acceptance (2026-10-29)", async () => {
+    await post();
+    expect(attachQuoteSummaryToDeal).toHaveBeenCalledTimes(1);
+    expect(attachQuoteSummaryToDeal.mock.calls[0][0]).toMatchObject({ id: "prospect-1", hubspotDealId: "deal-99" });
+    expect(attachQuoteSummaryToDeal.mock.calls[0][0].quoteAcceptedAt).toBeTruthy();
   });
 
   it("still logs the customer in when HubSpot is down", async () => {
@@ -221,6 +231,8 @@ describe("accepting a quote", () => {
     expect(loginTokens).toHaveLength(1);
     expect(syncDealFromApplication).not.toHaveBeenCalled();
     expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
+    // Nor a second copy of the quote summary PDF.
+    expect(attachQuoteSummaryToDeal).not.toHaveBeenCalled();
   });
 
   it("keeps the original acceptance timestamp and stage on a re-open", async () => {

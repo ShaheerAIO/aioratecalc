@@ -292,6 +292,7 @@
 }
 
 .docRateLabel { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.docRateLabelBold { font-weight: 800; color: var(--ink); }
 
 /* One row per lane — the lane named on the left, its whole price on the
    right — so neither rate can wrap into the other. */

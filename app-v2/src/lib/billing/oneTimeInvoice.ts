@@ -121,7 +121,7 @@ export async function buildOneTimeInvoice(app: MerchantApplication): Promise<One
   if (!app.hubspotIds?.publishedAt) return { status: "skipped", reason: "not_published" };
   if (!app.hubspotIds?.splitBilling) return { status: "skipped", reason: "not_split" };
 
-  // One invoice at list with online payments (incl. Klarna/Affirm) on — see draftInvoiceProperties.
+  // One invoice at list with online payments (incl. Affirm) on — see draftInvoiceProperties.
   const { invoiceLines, total } = invoiceLinesFor(app);
   // HubSpot can't take a payment under $0.50 (the quote's own floor), and a
   // fully comped kit owes nothing at all — no invoice is the right answer.

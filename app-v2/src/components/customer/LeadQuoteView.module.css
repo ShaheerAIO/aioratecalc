@@ -243,3 +243,23 @@
   color: var(--ink-3);
   font-size: 0.85rem;
 }
+
+/* ---------- Print summary (2026-10-29) ---------- */
+
+.printBtn {
+  margin-top: var(--space-md);
+  font-size: 0.8rem;
+  padding: var(--space-2xs) var(--space-md);
+}
+
+/* Only the summary on paper: no next-step panel, no document links, no
+   buttons, and no entrance animation caught mid-fade. */
+@media print {
+  .printBtn,
+  .panel,
+  .docLinks,
+  .footnote { display: none !important; }
+  .page { min-height: 0; }
+  .container { padding: 0; }
+  .quoteHead { animation: none; }
+}

@@ -4,6 +4,7 @@ import { lineDescription } from "@/lib/lineDescriptions";
 import {
   CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, isInvoicedLine, lineListAmount, lineNetAmount,
 } from "@/lib/quoting";
+import { displayName, splitRecurringLines } from "@/lib/quoteSummarySections";
 import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
 import type { CustomerSafePayment, CustomerSafeQuote, QuoteLine } from "@/types/merchant";
 import styles from "./QuoteSummary.module.css";
@@ -43,7 +44,12 @@ export default function QuoteSummary({ quote }: Props) {
   const checkoutLines = invoiced
     ? quote.lines.filter(l => l.billingFrequency === "one_time" && !isInvoicedLine(l) && lineNetAmount(l) > 0)
     : [];
-  const recurringLines = quote.lines.filter(l => l.billingFrequency !== "one_time");
+  // Payroll is its own box, not part of the Software subscription (product
+  // owner, 2026-10-29) — the split and both boxes' totals live in
+  // quoteSummarySections.ts, shared with the PDF filed on the deal.
+  const {
+    allRecurringLines, softwareLines: recurringLines, payrollLines, softwareTotals, payrollTotals,
+  } = splitRecurringLines(quote);
   const invoiceTotal = oneTimeLines.reduce((n, l) => n + lineNetAmount(l), 0);
 
   // Packages (and plan-included items) cover one-time lines only — never a
@@ -98,7 +104,7 @@ export default function QuoteSummary({ quote }: Props) {
       <div key={l.hubspotProductId} className={styles.lineRow}>
         <div>
           <div className={styles.lineName}>
-            {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
+            {displayName(l)}{l.qty > 1 ? ` ×${l.qty}` : ""}
           </div>
           {lineDescription(l.hubspotProductId) && (
             <div className={styles.lineDesc}>{lineDescription(l.hubspotProductId)}</div>
@@ -130,12 +136,46 @@ export default function QuoteSummary({ quote }: Props) {
     );
   };
 
+  const renderRecurringLine = (l: QuoteLine) => (
+      <div key={l.hubspotProductId} className={styles.lineRow}>
+        <div>
+          <div className={styles.lineName}>
+            {displayName(l)}{l.qty > 1 ? ` ×${l.qty}` : ""}
+          </div>
+          {lineDescription(l.hubspotProductId) && (
+            <div className={styles.lineDesc}>{lineDescription(l.hubspotProductId)}</div>
+          )}
+          {/* When the first charge lands. Stated on the line rather than
+              in the totals: it changes the timing, not the amount. */}
+          {l.billingStart && (
+            <div className={styles.lineNote} data-tone="good">
+              {describeBillingStart(l.billingStart)}
+            </div>
+          )}
+        </div>
+        <div className={styles.linePrice}>
+          <div className={styles.linePriceMain}>
+            {isDiscounted(l) && (
+              <span className={styles.lineStrike}>{fmt$(lineListAmount(l))}</span>
+            )}
+            {fmt$(lineTotal(l))}/{fmtCycle(l.billingFrequency)}
+          </div>
+          {/* A monthly line IS its own monthly figure, so the "~$X/mo"
+              restatement only appears for a line on another cycle. */}
+          {(isDiscounted(l) || l.billingFrequency !== "monthly") && (
+            <div className={styles.linePriceAlt}>
+              {isDiscounted(l) && <span className={styles.lineSaved}>{discountLabel(l)}</span>}
+              {isDiscounted(l) && l.billingFrequency !== "monthly" && " · "}
+              {l.billingFrequency !== "monthly" &&
+                `~${fmt$(monthlyEquivalent(lineTotal(l), l.billingFrequency))}/mo`}
+            </div>
+          )}
+        </div>
+      </div>
+  );
+
   return (
     <>
-      {/* First on the page (product owner, 2026-10-18): the rates are what a
-          processing merchant is signing up to, ahead of any line item. */}
-      {quote.payment && <PaymentDetails payment={quote.payment} />}
-
       {/* The ordering-point COUNT — a fact about what's being deployed, never
           the reason for any price. Order points stopped pricing anything on
           2026-10-05 (the platform fee is set by the plan now), so this is
@@ -158,61 +198,36 @@ export default function QuoteSummary({ quote }: Props) {
               quote only has one side, or when there isn't room. */}
           <div
             className={styles.columns}
-            data-split={invoiced && (recurringLines.length > 0 || checkoutLines.length > 0) && oneTimeLines.length > 0 || undefined}
+            data-split={invoiced && (allRecurringLines.length > 0 || checkoutLines.length > 0) && oneTimeLines.length > 0 || undefined}
           >
           <div className={styles.column}>
           {recurringLines.length > 0 && (
             <section className={styles.lineGroup}>
               <h2 className={styles.lineGroupTitle}>Software</h2>
-              {recurringLines.map(l => (
-                <div key={l.hubspotProductId} className={styles.lineRow}>
-                  <div>
-                    <div className={styles.lineName}>
-                      {l.name}{l.qty > 1 ? ` ×${l.qty}` : ""}
-                    </div>
-                    {lineDescription(l.hubspotProductId) && (
-                      <div className={styles.lineDesc}>{lineDescription(l.hubspotProductId)}</div>
-                    )}
-                    {/* When the first charge lands. Stated on the line rather than
-                        in the totals: it changes the timing, not the amount. */}
-                    {l.billingStart && (
-                      <div className={styles.lineNote} data-tone="good">
-                        {describeBillingStart(l.billingStart)}
-                      </div>
-                    )}
-                  </div>
-                  <div className={styles.linePrice}>
-                    <div className={styles.linePriceMain}>
-                      {isDiscounted(l) && (
-                        <span className={styles.lineStrike}>{fmt$(lineListAmount(l))}</span>
-                      )}
-                      {fmt$(lineTotal(l))}/{fmtCycle(l.billingFrequency)}
-                    </div>
-                    {/* A monthly line IS its own monthly figure, so the "~$X/mo"
-                        restatement only appears for a line on another cycle. */}
-                    {(isDiscounted(l) || l.billingFrequency !== "monthly") && (
-                      <div className={styles.linePriceAlt}>
-                        {isDiscounted(l) && <span className={styles.lineSaved}>{discountLabel(l)}</span>}
-                        {isDiscounted(l) && l.billingFrequency !== "monthly" && " · "}
-                        {l.billingFrequency !== "monthly" &&
-                          `~${fmt$(monthlyEquivalent(lineTotal(l), l.billingFrequency))}/mo`}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+              {recurringLines.map(renderRecurringLine)}
               {/* When everything recurring is monthly, the per-cycle total and
                   the monthly total are the same number — show it once. */}
-              {!quote.lineTotals.recurring.every(r => r.frequency === "monthly") &&
-                quote.lineTotals.recurring.map(r => (
+              {!softwareTotals!.recurring.every(r => r.frequency === "monthly") &&
+                softwareTotals!.recurring.map(r => (
                   <div key={r.frequency} className={styles.lineTotalRow}>
                     <span>Total per {fmtFrequency(r.frequency)}</span>
                     <span className={styles.lineTotalValue}>{fmt$(r.amount)}/{fmtCycle(r.frequency)}</span>
                   </div>
                 ))}
               <div className={styles.lineTotalRow} data-emphasis="true">
-                <span>{quote.lineTotals.recurring.every(r => r.frequency === "monthly") ? "Monthly total" : "Monthly equivalent"}</span>
-                <span className={styles.lineTotalValue}>{fmt$(quote.lineTotals.monthlyEquivalent)}/mo</span>
+                <span>{softwareTotals!.recurring.every(r => r.frequency === "monthly") ? "Monthly total" : "Monthly equivalent"}</span>
+                <span className={styles.lineTotalValue}>{fmt$(softwareTotals!.monthlyEquivalent)}/mo</span>
+              </div>
+            </section>
+          )}
+
+          {payrollLines.length > 0 && (
+            <section className={styles.lineGroup}>
+              <h2 className={styles.lineGroupTitle}>Payroll</h2>
+              {payrollLines.map(renderRecurringLine)}
+              <div className={styles.lineTotalRow} data-emphasis="true">
+                <span>{payrollTotals.recurring.every(r => r.frequency === "monthly") ? "Monthly total" : "Monthly equivalent"}</span>
+                <span className={styles.lineTotalValue}>{fmt$(payrollTotals.monthlyEquivalent)}/mo</span>
               </div>
             </section>
           )}
@@ -260,35 +275,34 @@ export default function QuoteSummary({ quote }: Props) {
         </div>
       )}
 
+      {/* Last on the page (product owner, 2026-10-29; it was first from
+          2026-10-18): the line items come first, the rates close the summary. */}
+      {quote.payment && <PaymentDetails payment={quote.payment} />}
     </>
   );
 }
 
-// The processing half of the quote, in a card of its own. The card-present
-// rate is the headline and card-not-present sits under it in smaller type
-// (product owner, 2026-10-18) — unless the merchant never takes a card in
-// person, in which case card-not-present is the only rate and takes its place.
-// Shown on every quote AIO processes for, with or without a known volume.
+// The processing half of the quote, in a card of its own. Both rates are the
+// same size and style (product owner, 2026-10-29: "make cp smaller"); card
+// present is listed first, and is left out for a merchant who never takes a
+// card in person. Shown on every quote AIO processes for, with or without a
+// known volume.
 function PaymentDetails({ payment }: { payment: CustomerSafePayment }) {
   const fee = `+ ${fmt$(payment.perTransactionFee)} per transaction`;
-  const headline = payment.cardPresentRate !== null
-    ? { label: "Card present", rate: payment.cardPresentRate }
-    : { label: "Card not present", rate: payment.cardNotPresentRate };
 
   return (
     <section className={styles.lineGroup} aria-label="Payment details">
       <h2 className={styles.lineGroupTitle}>Payment Details</h2>
-      <div className={styles.rateHero}>
-        <span className={styles.rateHeroLabel}>{headline.label}</span>
-        <span className={styles.rateHeroValue}>{fmtPct2(headline.rate)}</span>
-        <span className={styles.rateHeroFee}>{fee}</span>
-      </div>
       {payment.cardPresentRate !== null && (
         <div className={styles.lineRow}>
-          <span className={styles.lineDesc}>Card not present</span>
-          <span className={styles.lineDesc}>{fmtPct2(payment.cardNotPresentRate)} {fee}</span>
+          <span className={styles.lineDesc}>Card present</span>
+          <span className={styles.lineDesc}>{fmtPct2(payment.cardPresentRate)} {fee}</span>
         </div>
       )}
+      <div className={styles.lineRow}>
+        <span className={styles.lineDesc}>Card not present</span>
+        <span className={styles.lineDesc}>{fmtPct2(payment.cardNotPresentRate)} {fee}</span>
+      </div>
       {payment.monthlyVolume !== null && (
         <div className={styles.lineRow}>
           <span className={styles.lineName}>Monthly card volume</span>

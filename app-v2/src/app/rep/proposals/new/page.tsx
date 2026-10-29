@@ -98,7 +98,7 @@ function NewProposalFlow() {
   const [picks, setPicks]         = useState<ProductPick[]>([]);
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
   // The rep's note on this quote — required once a first charge is held past
-  // the plan's own 60 days, and mirrored onto the HubSpot deal on save.
+  // the plan's own 45 days, and mirrored onto the HubSpot deal on save.
   const [quoteNote, setQuoteNote] = useState(app.quoteNote ?? "");
   const [channels, setChannels]   = useState<string[]>([]);
   const [quote, setQuote]         = useState<ConfiguredQuote | null>(null);

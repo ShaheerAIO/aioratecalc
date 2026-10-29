@@ -142,7 +142,7 @@ export default function QuoteLimitsSettingsPage() {
               </span>
               <p className={styles.hint}>
                 The longest a rep may push a recurring line&apos;s first charge out. New All-in-One
-                and Order &amp; Pay quotes start at 60 days. HubSpot itself refuses a start more
+                and Order &amp; Pay quotes start at 45 days. HubSpot itself refuses a start more
                 than {MAX_BILLING_DELAY_DAYS} days out.
               </p>
             </div>

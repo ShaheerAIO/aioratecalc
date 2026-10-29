@@ -591,7 +591,7 @@ export default function ProductConfigurator({
   // so there is nothing to apply it to until the next render.
   //
   // Strictly one-shot — cleared the moment it is applied — which is what makes
-  // the 60 days an ordinary rep edit from then on. Re-deriving it instead
+  // the 45 days an ordinary rep edit from then on. Re-deriving it instead
   // would put it straight back every time a rep set a line to bill at
   // checkout, since clearing an adjustment deletes it.
   const [pendingStart, setPendingStart] = useState<BillingStart | null>(null);
@@ -644,7 +644,7 @@ export default function ProductConfigurator({
     // seeds — a comp meant for one quote silently applying to another.
     if (switching) onAdjustmentsChange?.({});
 
-    // The 60-day start the two POS plans bill from. Applied a render later
+    // The 45-day start the two POS plans bill from. Applied a render later
     // (see `pendingStart`) because the lines it applies to don't exist until
     // `buildQuote` has run against the new plan and its freshly seeded picks.
     if (onAdjustmentsChange) setPendingStart(planDefaultBillingStart(next));
@@ -1151,7 +1151,7 @@ export default function ProductConfigurator({
     // owner, 2026-10-15: "you cannot discount the plan") — so its drawer
     // hides the Discount block and the per-unit mode entirely. The
     // billing-start control stays: this is exactly the line that carries the
-    // 60-day delay, and taking the whole drawer away would break that.
+    // 45-day delay, and taking the whole drawer away would break that.
     const isPlanLine = platform.line?.hubspotProductId === id;
 
     return (

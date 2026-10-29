@@ -313,6 +313,32 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
       </p>
 
       <div className={styles.panel}>
+        <h2 className={styles.sectionTitle}>Billing Contact</h2>
+        <p className={styles.hint}>Where your invoices are emailed.</p>
+        <label className={styles.checkboxRow}>
+          <input
+            type="checkbox"
+            className={styles.checkbox}
+            checked={sameAsOwner}
+            onChange={e => setSameAsOwner(e.target.checked)}
+          />
+          <span className={styles.checkboxText}>Same as the owner below</span>
+        </label>
+        {!sameAsOwner && (
+          <>
+            <div className={`${styles.grid2} ${styles.row}`}>
+              {input("billingContact.firstName", billing.firstName || "", setBillingF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+              {input("billingContact.lastName", billing.lastName || "", setBillingF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+            </div>
+            <div className={`${styles.grid2} ${styles.row}`}>
+              {input("billingContact.email", billing.email || "", setBillingF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "billing@business.com")}
+              {input("billingContact.phone", billing.phone || "", setBillingF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className={styles.panel}>
         <h2 className={styles.sectionTitle}>Your Business</h2>
         <div className={styles.grid2}>
           {input("business.dba", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
@@ -397,32 +423,6 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
         <div className={styles.row}>
           {input("ownerContact.email", owner.email || "", setOwnerF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "owner@business.com")}
         </div>
-      </div>
-
-      <div className={styles.panel}>
-        <h2 className={styles.sectionTitle}>Billing Contact</h2>
-        <p className={styles.hint}>Where your invoices are emailed.</p>
-        <label className={styles.checkboxRow}>
-          <input
-            type="checkbox"
-            className={styles.checkbox}
-            checked={sameAsOwner}
-            onChange={e => setSameAsOwner(e.target.checked)}
-          />
-          <span className={styles.checkboxText}>Same as the owner above</span>
-        </label>
-        {!sameAsOwner && (
-          <>
-            <div className={`${styles.grid2} ${styles.row}`}>
-              {input("billingContact.firstName", billing.firstName || "", setBillingF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-              {input("billingContact.lastName", billing.lastName || "", setBillingF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-            </div>
-            <div className={`${styles.grid2} ${styles.row}`}>
-              {input("billingContact.email", billing.email || "", setBillingF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "billing@business.com")}
-              {input("billingContact.phone", billing.phone || "", setBillingF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
-            </div>
-          </>
-        )}
       </div>
 
       <div className={styles.panel}>

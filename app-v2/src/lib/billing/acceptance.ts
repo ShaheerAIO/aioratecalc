@@ -27,6 +27,7 @@ import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { syncDealFromApplication } from "@/lib/adapters/hubspot";
 import { writeCommissionToDeal } from "@/lib/billing/commissionWriteback";
 import { buildOneTimeInvoiceSafely } from "@/lib/billing/oneTimeInvoice";
+import { attachQuoteSummaryToDeal } from "@/lib/billing/quoteSummaryAttachment";
 import { hasBillingCompleted } from "@/lib/onboardingModules";
 import { shouldAdvance } from "@/lib/stages";
 import type { MerchantApplication } from "@/types/merchant";
@@ -173,6 +174,12 @@ export async function recordAcceptance(
   }
 
   await sendAccountLink(accepted);
+
+  // The quote summary PDF, filed on the deal (2026-10-29). After the account
+  // email so it never delays it; behind `syncDeal` so the DEBUG billing bypass
+  // never writes to HubSpot. Below the lost-race return above, so exactly one
+  // observer files it. Never throws.
+  if (opts.syncDeal) await attachQuoteSummaryToDeal(accepted);
   return accepted;
 }
 

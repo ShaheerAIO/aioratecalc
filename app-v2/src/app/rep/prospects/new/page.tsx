@@ -130,7 +130,7 @@ function NewProspectFlow() {
   const [picks, setPicks]       = useState<ProductPick[]>([]);
   const [adjustments, setAdjustments] = useState<QuoteAdjustments>({});
   // The rep's note on this quote — required once a first charge is held past
-  // the plan's own 60 days, and mirrored onto the HubSpot deal on save.
+  // the plan's own 45 days, and mirrored onto the HubSpot deal on save.
   const [quoteNote, setQuoteNote] = useState("");
   const [channels, setChannels] = useState<string[]>([]);
   const [channelsApplied, setChannelsApplied] = useState<string[]>([]);
@@ -735,7 +735,7 @@ function NewProspectFlow() {
 
   const documentRate = rated && (
     <div className={styles.docRate}>
-      <span className={styles.docRateLabel}>Card processing</span>
+      <span className={`${styles.docRateLabel} ${styles.docRateLabelBold}`}>Card processing</span>
       {/* "card present" / "card not present", never "in person" / "online"
           (2026-10-14): a cashier keying a card in by hand is standing in
           front of the customer and is still card-not-present, so the
@@ -941,7 +941,7 @@ function NewProspectFlow() {
         /* This is the only host that STARTS a quote, so it is the only one
            that can be sitting on no plan at all — everything else reopens one
            that was already chosen. Clicking a card is what seeds its kit, its
-           included hardware and the 60-day billing start. */
+           included hardware and the 45-day billing start. */
         quoteType={quoteType}
         picks={picks}
         channels={channels}

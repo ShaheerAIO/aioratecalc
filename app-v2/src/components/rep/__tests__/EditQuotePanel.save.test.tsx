@@ -3,7 +3,7 @@
 // 2026-10-18: "Save Quote" sent the plan, picks, channels and rates — and NOT
 // the per-line adjustments. The server re-derives the quote from what it is
 // sent, so every edited quote lost its billing starts and discounts: a POS
-// plan's 60-day start vanished, quoteNoteBlockers read the quote as billing
+// plan's 45-day start vanished, quoteNoteBlockers read the quote as billing
 // "at checkout", and every save was refused for want of a note.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
@@ -47,7 +47,7 @@ const CATALOG = [
   P("281354281678", "AIO Pre Auth", 0.5, "one_time", "Service"),
 ];
 
-const SIXTY = { mode: "days", days: 60 } as const;
+const SIXTY = { mode: "days", days: 45 } as const;
 const LINES: QuoteLine[] = [
   { hubspotProductId: "335283119838", name: "All-in-One Platform", qty: 1, unitPrice: 399, billingFrequency: "monthly", productType: "Software", billingStart: SIXTY },
   { hubspotProductId: "217445755632", name: "POS Unit", qty: 1, unitPrice: 949, billingFrequency: "one_time", productType: "inventory" },
@@ -55,7 +55,7 @@ const LINES: QuoteLine[] = [
 ];
 
 describe("EditQuotePanel — Save Quote", () => {
-  it("sends the line adjustments, so the plan's 60-day start survives the save", async () => {
+  it("sends the line adjustments, so the plan's 45-day start survives the save", async () => {
     listQuotableProductsAction.mockResolvedValue({ products: CATALOG, all: CATALOG, error: null });
     saveQuoteConfigurationAction.mockResolvedValue({});
     const app = {

@@ -40,6 +40,7 @@ verbatim-`quoteLines` hazard, both constraints above.
     - **`merchant_applications.detailsConfirmedAt` IS THE LOCK**, and it is the EARLIEST of the three freeze markers: confirm → `hubspotIds.publishedAt` (seconds later) → `quoteAcceptedAt` (days later, when they sign and pay). `saveQuoteConfigurationAction` and `EditQuotePanel` check it FIRST and refuse on it; `AccountsDashboard` hides "Edit Quote" on it. The older two markers stay beneath it rather than being replaced — rows published under the 10/13 rule have no confirmation at all and never will.
     - **BOTH public doors gate on it** — `/api/lead/[token]/checkout` (`not_confirmed`, 409) and `/api/lead/[token]/accept`. The accept gate is NOT inherited reasoning: a rate-only quote builds no HubSpot document, but accepting starts that merchant's onboarding and AIO's tenant create 400s outright on a blank phone, and those merchants never pass through a HubSpot checkout that would have collected anything. In both routes the gate sits BELOW the idempotent already-published / already-accepted return, so legacy rows are still served.
     - **EVERY BOX ON THE CONFIRMATION FORM IS REQUIRED, and those rules live in `leadConfirm.ts` ALONE** (2026-10-15, product owner). `confirmationOnlyErrors` adds the DBA, the entity type, the EIN (nine digits, shape-checked — nothing downstream verifies this one, since Adyen and Check each collect and verify their own), the owner's title, and the whole billing contact ON TOP of `validateOnboardingFields`. **They must never migrate into that function**: it is what `isReadyForAioProvisioning` runs, so a field added there is a field every ALREADY-PAID row is suddenly missing, held at `missing_business_details` forever for want of an EIN nobody had ever been asked for — and it is what the rep form checks through `stripBlanks`, where reps stay lenient by standing decision. These are requirements of the MOMENT: the merchant is in front of the form with every box on screen. Two consequences: ticking "same as the owner above" posts an all-blank billing contact, which reads as null and IS an answer (demanding four more boxes for a person already named would be asking them to type it twice); and the submit button is DISABLED until the form is complete, so `missingConfirmationFields` renders the outstanding list beneath it — a dead button on a form that cannot be submitted to find out why is the standing failure of submit-only validation. That list qualifies by panel (`SECTION_OF`) because the form asks for a city twice and a first name twice, while the boxes themselves keep the short label their heading already disambiguates.
+    - **Confirm-details panel order (2026-10-29, product owner: "billing contact first"):** Billing Contact is the FIRST panel, ahead of Your Business / Legal Address / Owner & Signer. Pure reorder; the checkbox copy now reads "Same as the owner below". No focus/scroll logic exists in `ConfirmDetailsForm.tsx` to keep in step.
   - **`lib/leadConfirm.ts` WIDENS what a public token may write, deliberately.** `applyLeadConfirmation` applies every allow-listed path **whatever its current value**, where `leadDetails.ts`'s `applyLeadDetails` applies only paths currently IN ERROR. That rule is right for a repair dialog and would make this step useless — a rep's typo of a billing email looks perfectly valid. So `CONFIRMABLE_PATHS` is the ONLY fence, and what it leaves out is the whole of the protection. Both modules survive: `leadDetails.ts` still covers rows that paid under the old rule and are holding on a blank.
     - **COPY IS A PLAIN "Continue" (2026-10-21, product owner).** The confirm form's old two-step "Ready to lock this in?" panel and the quote page's "Accept & Create Account" / "Review & Confirm Details" wording read as negotiable, so the form now has one "Continue" button that saves, builds and redirects; the "Creating your quote... 10-30 seconds" overlay is KEPT. The rep form calls the operating address "DBA address" too (one concept, still `business.dba*`). Entity labels come from `bizTypeLabel` (`LLC`, never `Llc`).
     - **VOLUME AND AVERAGE TICKET ARE SHOWN LOCKED, never editable.** They are the pricing basis — `/rep/prospects/new` derives `quoteConfig` straight from them — so they drive the rate matrix, `getMarginFloor` and `MIN_MONTHLY_PROCESSING_REVENUE`. A merchant who could move them would re-price a quote the rep had already cleared both floors on, seconds before an irreversible publish. Showing them is the point: the rep can still change them, because nothing is published until confirmation. Card rates, margin and products are absent entirely.
@@ -127,6 +128,47 @@ verbatim-`quoteLines` hazard, both constraints above.
   - Live-verified 2026-10-28 on company `357159545548`: the Company PATCH and the Business Owner association
     both landed. The Billing Contact label and the contact overwrite were not run live (they would have
     rewritten real staff contacts).
+
+## Quote summary: print button + PDF on the deal (2026-10-29)
+
+Product owner, 2026-10-29: "print summary, add it to deal attachment" (confirmed: a print button AND an
+automatic attachment).
+
+- **Print.** `/lead/[token]/quote` has a "Print summary" button under the business name
+  (`LeadQuoteView.tsx`, `window.print()`). `@media print` rules in `LeadQuoteView.module.css` and
+  `quote/quote.module.css` drop the button, the next-step panel, the document links, the footnote and
+  the back link, so the paper copy is the heading plus `QuoteSummary`. No route, no server code.
+- **PDF on the deal, at ACCEPTANCE.** `attachQuoteSummaryToDeal` (`lib/billing/quoteSummaryAttachment.ts`)
+  builds `buildCustomerSafeQuote(app)`, the same projection the quote page renders, so there is nothing
+  internal to leak: no Adyen cost, margin, floor or commission is in that shape. It renders it with
+  `lib/quoteSummaryPdf.ts`, uploads it PRIVATE to `/EasyOB/Quote Summaries` and notes it onto the deal
+  (`hs_attachment_ids`, note→deal association **214**) via `lib/adapters/hubspotFiles.ts`. Called from
+  exactly two places:
+  - `recordAcceptance` (`acceptance.ts`), after the account-link email, behind `opts.syncDeal`
+    (the DEBUG billing bypass passes `false`, so it never files anything), and below the lost-race
+    return, so only the observer that won the `quoteAcceptedAt` write files it.
+  - `/api/lead/[token]/accept` (rate-only quotes), on `firstAcceptance` only, so "Email Me a New Link"
+    never files a second copy.
+  So the one-shot acceptance guards are the dedupe. Nothing is persisted (no file id or note id on the
+  row, no migration), and a failed attachment is **not retried**: it is logged
+  (`[quote-summary] <appId>: ...`) and acceptance carries on. It is not written to `lastSyncError`
+  either, because a missing PDF should not trip the admin sync-error alarm.
+- **PDF library: `pdf-lib`.** Pure JS, no native binary, no font files (it uses the built-in Helvetica),
+  so it runs as-is in a Vercel Node function and in vitest. Headless Chromium was rejected: a ~50MB
+  binary and cold-start cost just to print a list of lines. The trade-off is that the PDF is laid out in
+  code rather than rendered from `QuoteSummary.tsx`. The sections match the screen (configuration,
+  software, payroll in its own box, due at checkout, one-time with package-covered items grouped,
+  payment details with card present and card not present at equal weight). The parts that could drift
+  (the payroll split and each box's totals, and `displayName`, which shows "Additional Software License"
+  as "Additional Ordering Point") are in `lib/quoteSummarySections.ts`, and both renderings call it.
+  **Any other change to what `QuoteSummary` shows will not reach the PDF on its own.** Standard fonts are WinAnsi-only, so unsupported characters (arrows, emoji) are mapped
+  or dropped rather than failing the document.
+- **Scopes. NOT live-tested.** The upload reuses `uploadHubspotFile`, which uses the general CRM token
+  and needs the **`files`** scope. As of 2026-10-21 neither private app had that scope (see the
+  Foodbuy note in `phase-status.md`), so until someone grants it, every attachment fails with a 403 and
+  is logged. The note uses the BILLING token, because the general app has no deals scope, and needs
+  `crm.objects.notes.write`. That scope worked on the billing app on 2026-10-13, when the old
+  `createDealNote` was live.
 
 ## The one-time invoice
 
@@ -242,6 +284,26 @@ Second test company / Deal - 8 — draft invoice `878578016996`, line items `352
 - **Still untested:** whether $0 or under-$0.50 invoices are refused (EasyOB never builds one, see
   `nothing_to_invoice`), and charging the stored ACH method.
 
+## Card surcharge: a portal setting, not code (researched 2026-10-29)
+
+Product owner, 2026-10-29: "5% cc charge ... a setting in hubspot invoice and quote creation." What a read-only
+probe of the portal found:
+- **The surcharge already exists, at 4%.** It is a HubSpot default checkout fee, "Credit Card Surcharge" (PERCENT, 4,
+  `hs_fee_type: checkout`). It is configured under Settings > Revenue > Payments > **Fees and policies**, with
+  "Apply fee to: credit or debit card purchases". HubSpot adds it at checkout on card payments only. ACH-paid quotes
+  carry no fee. Paid examples: invoice `883454721751` ($199.00 + $7.96) and invoice `880547367650` ($0.50 + $0.02).
+  Each card payment creates a CRM `fees` object (0-85) that snapshots the fee and is associated with the invoice or quote.
+- **EasyOB writes no fee property.** HubSpot stamps `hs_allowed_checkout_fee_ids: 30291358` onto new quotes and
+  invoices by itself. Every EasyOB quote since about 2026-10-15 has it. Invoices are inconsistent: one-time invoices
+  `884089230052` (10-28) and `883365392080` (10-27) have it, but `886167657159` (10-29) does not. The cause is unknown.
+- **The rate can't be set per object through the API.** `hs_card_fee_percentage`, `hs_card_fee_name`,
+  `hs_all_transactions_fee_*` and `hs_direct_debit_fee_*` on invoices are read-only snapshots. `hs_allowed_checkout_fee_ids`
+  (invoices and quotes) is writable, but it only references a fee defined in settings, and that definition has no
+  CRM endpoint. The CRM fees API creates "regular" fees, which apply whatever the payment method is, so they would
+  also charge ACH payers.
+- **Moving to 5% is an admin edit of that fee in settings.** HubSpot: "Changes to the fee only apply to future
+  transactions." See knowledge.hubspot.com/payment-processing/configure-your-buyer-checkout-experience.
+
 ## Payment plan: removed (2026-10-28)
 
 Product owner, 2026-10-28: "Remove the UI for 'how would you like to pay' because the payment plans for the
@@ -251,8 +313,10 @@ gone: the quote preview's Continue goes straight to `/confirm` again, and the `n
 
 - **Every** one-time invoice now behaves like the old "pay over time": billed at list (the 5% pay-in-full discount
   is gone), `hs_payment_collection_option: request_payment`, `hs_allowed_commerce_payment_methods:
-  CARD;ACH;AFFIRM;KLARNA` (`draftInvoiceProperties(date, { installments: true })`). Klarna/Affirm do the splitting at
-  HubSpot checkout (verified 2026-10-27). HubSpot rejects BNPL with `hs_allow_partial_payments`, so that stays off.
+  CARD;ACH;AFFIRM` (`draftInvoiceProperties(date, { installments: true })`). Affirm does the splitting at
+  HubSpot checkout (verified 2026-10-27). **Klarna is off** (product owner, 2026-10-29: "turn off klarna keep
+  affirm"); invoices built 2026-10-27..29 still offer it. Quotes never offered either: they are ACH-only and
+  never write `hs_allowed_commerce_payment_methods`. HubSpot rejects BNPL with `hs_allow_partial_payments`, so that stays off.
   Payroll invoices (`checkPayroll.ts`) still use the ACH-only default.
 - **DB:** `merchant_applications.payment_plan` / `payment_plan_at` and migration 0031 are left in place, unread and
   unwritten (no drop; local DATABASE_URL is production). The `MerchantApplication.paymentPlan` mapping was removed

@@ -23,7 +23,7 @@ export const LINE_DESCRIPTIONS: Record<string, string> = {
   "334139877086": "The AIO Marketing Platform on a 2-year term, with a 27\" kiosk and three menu board computers included.", // AIO Marketing Platform (2-year term)
 
   // ── Software ─────────────────────────────────────────────────────────────
-  "335280960199": "Software for each device running an AIO app beyond the three your plan includes.", // Additional Software License
+  "335280960199": "Software for each ordering point beyond the three your plan includes.", // Additional Software License
   "333275576048": "Your restaurant's website, built and hosted by AIO.", // Website
   "343374665412": "Online ordering for your customers, with payments processed by AIO.", // Online Ordering
   "343579168455": "AIO's marketing services, included with your ordering plan.", // Marketing (Partial Ordering)

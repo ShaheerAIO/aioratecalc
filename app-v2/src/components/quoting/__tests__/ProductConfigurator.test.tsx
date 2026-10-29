@@ -232,14 +232,14 @@ describe("the quote note", () => {
     />
   );
 
-  it("asks for a reason, naming the delay, once past the plan's own 60 days", async () => {
+  it("asks for a reason, naming the delay, once past the plan's own 45 days", async () => {
     render(withDelay(90, ""));
     await waitFor(() => expect(screen.getByText(/Why billing starts after 90 days/)).toBeTruthy());
     expect(screen.getByText(/Elizabeth Phillips/)).toBeTruthy();
   });
 
   it("is an optional box at the delay the plan itself seeds", async () => {
-    render(withDelay(60, ""));
+    render(withDelay(45, ""));
     await waitFor(() => expect(screen.getByText("Note (optional)")).toBeTruthy());
   });
 });

@@ -183,6 +183,12 @@ export default function LeadQuoteView({
         <div className={styles.quoteHead}>
           <div className={styles.quoteEyebrow}>Your Quote</div>
           <h1 className={styles.quoteBusiness}>{businessName || "Your Business"}</h1>
+          {/* The merchant's own copy (2026-10-29). The browser prints this
+              page; the print rules in the stylesheet drop the buttons, links
+              and panels so only the summary is left. */}
+          <button type="button" onClick={() => window.print()} className={`${styles.secondaryBtn} ${styles.printBtn}`}>
+            Print summary
+          </button>
         </div>
 
         <div className={styles.wide}>

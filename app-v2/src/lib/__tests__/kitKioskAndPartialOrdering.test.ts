@@ -169,8 +169,8 @@ describe("charging for the QSR Kit's kiosk (2026-10-28)", () => {
     expect(lineHardwareCommission(free)).toMatchObject({ status: "included", rep: null });
     const c = lineHardwareCommission(charged);
     expect(c.status).not.toBe("included");
-    // (999 − 600) × 10%
-    expect(c.rep).toBeCloseTo(39.9, 2);
+    // (999 − 600) × 45% — the charged-kiosk rate (2026-10-29)
+    expect(c.rep).toBeCloseTo(179.55, 2);
   });
 });
 

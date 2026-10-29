@@ -115,13 +115,13 @@ const PICKABLE = FULL_CATALOG.filter(
   c => ["217445755632", MENU_BOARD_ID, "338690209525"].includes(c.hubspotProductId)
 );
 
-// The 60-day billing start the two POS plans seed onto their recurring lines
+// The 45-day billing start the two POS plans seed onto their recurring lines
 // the moment a rep clicks the plan (planDefaultBillingStart, quoting.ts), on
 // the platform line it lands on here. Every save below that isn't ABOUT
 // billing starts carries it, because a quote billing anywhere other than its
 // plan's default now needs a note (quoteNoteBlockers, 2026-10-15) — these
 // tests are about re-derivation and the acceptance guard, not about that.
-const PLAN_START = { "335283119838": { billingStart: { mode: "days" as const, days: 60 } } };
+const PLAN_START = { "335283119838": { billingStart: { mode: "days" as const, days: 45 } } };
 
 const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
   ({
@@ -150,7 +150,7 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
     customerLinkToken: "tok-live",
     customerLinkPurpose: "lead_upload",
     customerLinkSentAt: "2026-08-01T00:00:00.000Z",
-    customerLinkExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    customerLinkExpiresAt: new Date(Date.now() + 7 * 24 * 45 * 45 * 1000).toISOString(),
     analysis: null,
     proposal: null,
     business: {
@@ -224,7 +224,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       // $0, derived, and on every quote AIO processes for (2026-10-14) — it
       // is how the rates reach the document the merchant signs.
       "AIO Processing Two Tiered Rate",
-      // The plan is delayed 60 days and the hardware is invoiced, so nothing
+      // The plan is delayed 45 days and the hardware is invoiced, so nothing
       // else is due at checkout.
       "AIO Pre Auth",
       "All-in-One Platform",
@@ -304,7 +304,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
         // Onsite Installation — derived, hidden from the picker, and the line
         // AIO comps more than any other.
         "223452690133": { discountPercent: 50 },
-        "335283119838": { billingStart: { mode: "days", days: 60 } },
+        "335283119838": { billingStart: { mode: "days", days: 45 } },
       },
       pricingModel: "2-tier",
     });
@@ -312,7 +312,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     const install = updated.quoteLines!.find(l => l.name === "Onsite Installation")!;
     expect(install.discountPercent).toBe(50);
     const platform = updated.quoteLines!.find(l => l.name === "All-in-One Platform")!;
-    expect(platform.billingStart).toEqual({ mode: "days", days: 60 });
+    expect(platform.billingStart).toEqual({ mode: "days", days: 45 });
   });
 
   it("refuses a discount over the SERVER's cap, whatever the browser believed", async () => {
@@ -491,7 +491,7 @@ describe("saveQuoteConfigurationAction — the margin floor", () => {
 
 // ── The note a long billing delay has to carry ──────────────────────────────
 // Elizabeth Phillips, 2026-10-12: a rep who holds a first charge past the
-// plan's own 60 days writes down why, and it lands on the HubSpot deal.
+// plan's own 45 days writes down why, and it lands on the HubSpot deal.
 describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
   const PLATFORM = "335283119838";
   const save = (quoteNote: string | undefined, days: number) =>
@@ -513,8 +513,8 @@ describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
     await expect(save("ok", 90)).rejects.toThrow(/write a note saying why/i);
   });
 
-  it("takes the 60 days the plan itself seeds without asking for anything", async () => {
-    await expect(save(undefined, 60)).resolves.toBeTruthy();
+  it("takes the 45 days the plan itself seeds without asking for anything", async () => {
+    await expect(save(undefined, 45)).resolves.toBeTruthy();
     expect(setDealBillingNotes).not.toHaveBeenCalled();
   });
 
@@ -535,7 +535,7 @@ describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
   // threshold the rep's sentence stands on its own.
   it("writes a sub-threshold note verbatim, with no preamble", async () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9" }));
-    await save("Just a note, no delay involved.", 60);
+    await save("Just a note, no delay involved.", 45);
     expect(setDealBillingNotes).toHaveBeenCalledTimes(1);
     const [, text] = setDealBillingNotes.mock.calls[0];
     expect(text).toBe("Just a note, no delay involved.");

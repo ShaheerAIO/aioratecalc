@@ -44,3 +44,9 @@
   line-height: 1.6;
   margin: 0 0 var(--space-xl);
 }
+
+@media print {
+  .backLink { display: none; }
+  .page { min-height: 0; }
+  .container { padding: 0; }
+}

@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const syncDealFromApplication = vi.fn();
 const sendMagicLinkEmail = vi.fn();
 const getApplication = vi.fn();
+const attachQuoteSummaryToDeal = vi.fn();
 const updates: Array<Record<string, unknown>> = [];
 
 const db = {
@@ -26,6 +27,7 @@ const db = {
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/hubspot", () => ({ syncDealFromApplication }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
+vi.mock("@/lib/billing/quoteSummaryAttachment", () => ({ attachQuoteSummaryToDeal }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { getApplication } }));
 vi.mock("@/lib/auth/getEffectiveRole", () => ({
   getEffectiveRole: async () => ({ userId: "rep-1", role: "rep" }),
@@ -74,6 +76,8 @@ describe("bypassBillingAction", () => {
     expect(updates[0].quoteAcceptedAt).toBeInstanceOf(Date);
     expect(sendMagicLinkEmail).toHaveBeenCalledTimes(1);
     expect(syncDealFromApplication).not.toHaveBeenCalled();
+    // Nor files the quote summary PDF on it.
+    expect(attachQuoteSummaryToDeal).not.toHaveBeenCalled();
   });
 
   it("refuses an already-accepted quote", async () => {

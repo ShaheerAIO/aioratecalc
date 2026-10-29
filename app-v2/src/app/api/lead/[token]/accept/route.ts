@@ -6,6 +6,7 @@ import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
 import { sendMagicLinkEmail } from "@/lib/adapters/email";
 import { shouldAdvance } from "@/lib/stages";
 import { syncDealFromApplication } from "@/lib/adapters/hubspot";
+import { attachQuoteSummaryToDeal } from "@/lib/billing/quoteSummaryAttachment";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { rowToApp } from "@/lib/storage/applicationRow";
 
@@ -132,6 +133,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       } catch (err) {
         console.error("HubSpot deal sync on acceptance failed:", err instanceof Error ? err.message : err);
       }
+      // The quote summary PDF on the deal (2026-10-29) — first acceptance
+      // only, so "Email Me a New Link" never files a second copy. Never throws.
+      await attachQuoteSummaryToDeal(rowToApp(accepted));
     }
 
     const loginToken = randomUUID();

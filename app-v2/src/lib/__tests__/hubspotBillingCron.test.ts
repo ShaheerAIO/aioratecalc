@@ -13,6 +13,7 @@ const sendMagicLinkEmail = vi.fn();
 const getInvoiceSnapshot = vi.fn();
 const buildOneTimeInvoice = vi.fn();
 const buildOneTimeInvoiceSafely = vi.fn();
+const attachQuoteSummaryToDeal = vi.fn();
 
 type Row = { id: string; hubspotIds: HubspotIds | null } & Record<string, unknown>;
 
@@ -73,6 +74,7 @@ vi.mock("@/lib/billing/oneTimeInvoice", async importOriginal => ({
   buildOneTimeInvoice, buildOneTimeInvoiceSafely,
 }));
 vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
+vi.mock("@/lib/billing/quoteSummaryAttachment", () => ({ attachQuoteSummaryToDeal }));
 
 const { GET } = await import("@/app/api/cron/hubspot-billing-sync/route");
 
@@ -132,6 +134,7 @@ beforeEach(() => {
   getInvoiceSnapshot.mockReset();
   buildOneTimeInvoice.mockReset();
   buildOneTimeInvoiceSafely.mockReset();
+  attachQuoteSummaryToDeal.mockReset();
   buildOneTimeInvoice.mockResolvedValue({ status: "skipped", reason: "not_split" });
   syncDealFromApplication.mockResolvedValue("deal-1");
   sendMagicLinkEmail.mockResolvedValue({ sent: true });
@@ -322,6 +325,11 @@ describe("the billing cron detects acceptance", () => {
     // The one-time invoice goes out the moment acceptance is recorded.
     expect(buildOneTimeInvoiceSafely).toHaveBeenCalledWith(
       expect.objectContaining({ id: "app-1", quoteAcceptedAt: expect.any(String) })
+    );
+    // And the quote summary PDF is filed on the deal, once (2026-10-29).
+    expect(attachQuoteSummaryToDeal).toHaveBeenCalledTimes(1);
+    expect(attachQuoteSummaryToDeal).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "app-1", hubspotDealId: "deal-9", quoteAcceptedAt: expect.any(String) })
     );
   });
 
