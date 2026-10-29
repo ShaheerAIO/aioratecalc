@@ -206,7 +206,7 @@ export default function LeadQuoteView({
                 <p className={styles.docLinkText}>
                   {quote.invoice?.paid
                     ? "Paid. Thank you."
-                    : "We'll charge it to the bank account you set up for your subscription — nothing to do."}
+                    : "Open it and fill in your payment details to pay it."}
                 </p>
                 {quote.invoice?.link ? (
                   <a href={quote.invoice.link} target="_blank" rel="noopener noreferrer" className={styles.docLinkCta}>

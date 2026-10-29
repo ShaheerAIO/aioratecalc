@@ -347,10 +347,10 @@ describe("QuoteSummary — one-time lines are invoiced separately", () => {
     billingFrequency: "one_time" as const, productType: "Service",
   };
 
-  it("labels the one-time section as a separate invoice, charged to the account on file", () => {
+  it("labels the one-time section as a separate invoice, paid by the merchant", () => {
     render(<QuoteSummary quote={PACKAGE_QUOTE} />);
     expect(screen.getByText("One-Time — invoiced separately")).toBeTruthy();
-    expect(screen.getByText(/bank account you set up at checkout/)).toBeTruthy();
+    expect(screen.getByText(/fill in your payment details to pay it/)).toBeTruthy();
   });
 
   // The pre-auth is the one one-time charge the quote's own checkout takes, so
@@ -362,7 +362,7 @@ describe("QuoteSummary — one-time lines are invoiced separately", () => {
     expect(screen.queryByText("One-Time — invoiced separately")).toBeNull();
     expect(screen.getByText("One-Time")).toBeTruthy();
     expect(screen.getByText("Total due once").closest("div")?.textContent).toContain("$300.00");
-    expect(screen.queryByText(/bank account you set up at checkout/)).toBeNull();
+    expect(screen.queryByText(/fill in your payment details to pay it/)).toBeNull();
   });
 
   it("shows the pre-auth as due at checkout, not on the invoice", () => {

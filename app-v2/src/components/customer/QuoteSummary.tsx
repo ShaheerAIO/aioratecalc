@@ -245,8 +245,7 @@ export default function QuoteSummary({ quote }: Props) {
               </div>
               {invoiced && (
                 <p className={styles.lineFootnote}>
-                  Charged separately after you sign up, to the bank account you set up at checkout — you
-                  won&apos;t need to enter anything again.
+                  Sent as a separate invoice — open it and fill in your payment details to pay it.
                 </p>
               )}
             </section>
