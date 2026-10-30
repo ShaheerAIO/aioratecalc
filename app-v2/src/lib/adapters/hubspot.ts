@@ -122,14 +122,17 @@ export function classifyDealStage(stageId: string | null): { label: string | nul
 // `stage_0` (Demo Meeting) is deliberately absent even though it's a real,
 // current stage: EasyOB never observes a demo, so nothing here (or anywhere
 // else) writes it — it stays listed in SALES_PIPELINE_STAGES only so
-// `dealStageRank` can rank a deal a rep parked there by hand.
-// `3634617027` (Quote Sent) is absent for a related reason: the HubSpot billing quote only ever publishes at acceptance, so a
-// `quote_sent`/`proposal_sent` write landing on "Quote Sent" here would be
-// superseded by "Signed/Awaiting Payment Info" in the same breath the
-// customer accepts — a stage that would flash for zero observable time.
-// HubSpot's "Quote Sent" stage, written when the quote is published
-// (publishBillingQuote.ts). Not in STAGE_MAP: EasyOB's `quote_sent` stage is
-// set when the lead link goes out, before any HubSpot quote exists.
+// `dealStageRank` can rank a deal a rep parked there by hand (and so
+// `shouldMoveToQuoteSentAtSend` below can recognise it).
+//
+// HubSpot's "Quote Sent" stage. Written at two moments, neither through
+// STAGE_MAP: (1) when the rep's lead link goes out with a quote on it, but
+// ONLY from Discovery Meeting or Demo Meeting (`moveDealToQuoteSentAtSend`,
+// product owner 2026-10-30), and (2) when the quote is published
+// (publishBillingQuote.ts), forward-only. It stays out of STAGE_MAP because
+// a STAGE_MAP write goes through the looser forward-only guard, which would
+// also move a deal sitting at an unknown or blank stage — the send-time rule
+// is deliberately narrower than that.
 export const QUOTE_SENT_DEAL_STAGE = "3634617027";
 
 export const STAGE_MAP = {
@@ -458,6 +461,43 @@ export function omitStageOnUnreadableDeal(props: Record<string, string>): Record
   delete rest.dealstage;
   delete rest.pipeline;
   return rest;
+}
+
+/**
+ * Pure: should sending the lead link (with a quote on it) move this deal to
+ * "Quote Sent"? Product owner, 2026-10-30: "When quote gets sent, move deal
+ * stage to 'Quote Sent' (if deal is in sales meeting 1 or 2)" — sales meeting
+ * 1 and 2 being Discovery Meeting and Demo Meeting.
+ *
+ * Deliberately STRICTER than `guardDealStageProps`: that guard lets an
+ * unknown or blank current stage move (rank -1, "behind everything"), and
+ * this one does not. Only those two exact stages move; anything else — null,
+ * an id this build doesn't recognise, Quote Sent itself, or any later stage —
+ * is left where the rep put it.
+ */
+export function shouldMoveToQuoteSentAtSend(currentStageId: string | null): boolean {
+  return currentStageId === "2717103849" || currentStageId === "stage_0";
+}
+
+/**
+ * Move a deal to "Quote Sent" at lead-link send time, if and only if
+ * `shouldMoveToQuoteSentAtSend` says so for its LIVE stage. Returns whether it
+ * wrote. Throws on a failed read (nothing is written — a read that failed says
+ * nothing about where the deal is) or a failed PATCH; every caller is
+ * fire-and-log.
+ */
+export async function moveDealToQuoteSentAtSend(dealId: string): Promise<boolean> {
+  const currentStageId = await getDealStage(dealId);
+  if (!shouldMoveToQuoteSentAtSend(currentStageId)) return false;
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/${dealId}`, {
+    method: "PATCH",
+    headers: billingHeaders(),
+    body: JSON.stringify({ properties: { pipeline: HUBSPOT_DEAL_PIPELINE_ID, dealstage: QUOTE_SENT_DEAL_STAGE } }),
+  });
+  if (!res.ok) {
+    throw hubspotErr(`HubSpot deal ${dealId} move to Quote Sent failed`, res.status, await res.text());
+  }
+  return true;
 }
 
 async function dropBackwardStage(dealId: string, props: Record<string, string>): Promise<Record<string, string>> {

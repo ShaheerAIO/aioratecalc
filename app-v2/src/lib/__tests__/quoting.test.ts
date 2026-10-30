@@ -880,18 +880,19 @@ describe("marketing plans", () => {
     expect(quoteTotals(boards).oneTime).toBe(0);
   });
 
-  it("holds them free on Marketing Partial Ordering only when the rep adds the marketing line", () => {
+  it("holds them free on Marketing Partial Ordering, whose marketing line is forced on (2026-10-30)", () => {
+    // It used to take the rep adding the marketing line; since 2026-10-30
+    // every MPO quote carries it, so picks without it come out the same.
     const base = picked([["Online Ordering", 1], ["Menu Board Computer", 3]]);
-    const without = buildQuote("marketing_partial", base, [], CATALOG);
-    expect(without.quoteLines.filter(l => l.name === "Menu Board Computer").map(l => l.discountPercent ?? null))
-      .toEqual([null]);
-
     const withMarketing = buildQuote(
       "marketing_partial", [...base, line("Marketing (Partial Ordering)", 1)], [], CATALOG
     );
-    expect(withMarketing.quoteLines.filter(l => l.name === "Menu Board Computer")
-      .map(l => [l.qty, l.discountPercent ?? null, l.coveredByPackage ?? null]))
-      .toEqual([[3, 100, PLATFORM_PRODUCTS.marketing_partial.name]]);
+    const without = buildQuote("marketing_partial", base, [], CATALOG);
+    for (const built of [withMarketing, without]) {
+      expect(built.quoteLines.filter(l => l.name === "Menu Board Computer")
+        .map(l => [l.qty, l.discountPercent ?? null, l.coveredByPackage ?? null]))
+        .toEqual([[3, 100, PLATFORM_PRODUCTS.marketing_partial.name]]);
+    }
     // $299 either way — the marketing line is $0.
     expect(withMarketing.totals.recurring).toEqual(without.totals.recurring);
   });
@@ -1028,8 +1029,9 @@ describe("the website and online ordering", () => {
     // Scenario C less the hardware: $299 plan + $50 website, $0 online ordering.
     const built = buildQuote("marketing_partial", picked([["Website", 1], ["Online Ordering", 1]]), [], CATALOG);
     expect(built.blockers).toEqual([]);
+    // The $0 marketing line is forced onto every MPO quote since 2026-10-30.
     expect(built.quoteLines.map(l => l.name)).toEqual([
-      "AIO Marketing Partial Ordering", "Website", "Online Ordering", RATE_LINE,
+      "AIO Marketing Partial Ordering", "Website", "Online Ordering", "Marketing (Partial Ordering)", RATE_LINE,
     ]);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 349 }]);
     // Nothing on site, so no install.
@@ -1066,8 +1068,11 @@ describe("the website and online ordering", () => {
   it("never hands the rate line back as a pick — no rep may put it on by hand", () => {
     const built = buildQuote("marketing_partial", picked([["Online Ordering", 1]]), [], CATALOG);
     expect(isPickable(find(RATE_LINE))).toBe(false);
-    expect(picksFromQuoteLines(built.quoteLines, "marketing_partial"))
-      .toEqual([{ hubspotProductId: find("Online Ordering").hubspotProductId, qty: 1 }]);
+    // The forced marketing line (2026-10-30) comes back as a pick; the rate line never does.
+    expect(picksFromQuoteLines(built.quoteLines, "marketing_partial")).toEqual([
+      { hubspotProductId: find("Online Ordering").hubspotProductId, qty: 1 },
+      { hubspotProductId: find("Marketing (Partial Ordering)").hubspotProductId, qty: 1 },
+    ]);
   });
 });
 

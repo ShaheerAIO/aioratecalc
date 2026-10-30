@@ -21,7 +21,9 @@ import type { CatalogProduct, QuoteAdjustments, QuoteLine, QuoteType } from "@/t
 //    100% past the cap, earning a flat 45/5 commission floored at $0;
 //  - 2026-10-28: Marketing Partial Ordering's Marketing chip puts the hidden $0
 //    "Marketing (Partial Ordering)" line on the quote, which is still a real
-//    line and still brings the three free menu boards.
+//    line and still brings the three free menu boards;
+//  - 2026-10-30: the chip is gone and the line is no longer optional —
+//    `buildQuote` forces it onto every MPO quote, whatever the picks say.
 
 beforeAll(() => { for (const pkg of PACKAGES) pkg.active = true; });
 
@@ -266,10 +268,50 @@ describe("Marketing Partial Ordering's marketing line (2026-10-28)", () => {
     expect(picks).toContainEqual({ hubspotProductId: MARKETING_ADDON_PRODUCT.hubspotProductId, qty: 1 });
   });
 
-  it("without the marketing chip there is no marketing line, and the boards bill", () => {
-    const built = build("marketing_partial", ALL_CHIPS.filter(([n]) => n !== "Marketing (Partial Ordering)"));
-    expect(built.quoteLines.some(l => l.hubspotProductId === MARKETING_ADDON_PRODUCT.hubspotProductId)).toBe(false);
-    expect(built.quoteLines.find(l => l.name === "Menu Board Computer")!.coveredByPackage).toBeUndefined();
+  // 2026-10-30, product owner: "remove marketing button from MPO (autoselect
+  // it, cannot be changed)". `buildQuote` runs server-side against the
+  // browser's picks, so this is where "cannot be changed" is enforced.
+  const WITHOUT_MARKETING = ALL_CHIPS.filter(([n]) => n !== "Marketing (Partial Ordering)");
+  const marketingLines = (built: { quoteLines: QuoteLine[] }) =>
+    built.quoteLines.filter(l => l.hubspotProductId === MARKETING_ADDON_PRODUCT.hubspotProductId);
+
+  it("is forced onto a pick list that leaves it off, and the boards stay free", () => {
+    const built = build("marketing_partial", WITHOUT_MARKETING);
+    expect(marketingLines(built)).toEqual([expect.objectContaining({ qty: 1, unitPrice: 0, billingFrequency: "monthly" })]);
+    expect(includesMarketing("marketing_partial", built.quoteLines)).toBe(true);
+    expect(built.quoteLines.filter(l => l.name === "Menu Board Computer"))
+      .toEqual([expect.objectContaining({ qty: 3, coveredByPackage: "AIO Marketing Partial Ordering" })]);
+    expect(built.blockers).toEqual([]);
+    // Exactly the quote the rep would have got by picking it.
+    expect(built.totals).toEqual(build("marketing_partial", ALL_CHIPS).totals);
+  });
+
+  it("is never doubled when the picks already carry it", () => {
+    expect(marketingLines(build("marketing_partial", ALL_CHIPS))).toHaveLength(1);
+  });
+
+  it("comes back on a quote saved before 2026-10-30 without it", () => {
+    // A pre-change MPO quote: no marketing line, boards billed at list.
+    const saved = build("marketing_partial", WITHOUT_MARKETING).quoteLines
+      .filter(l => l.hubspotProductId !== MARKETING_ADDON_PRODUCT.hubspotProductId);
+    expect(marketingLines(reopen("marketing_partial", saved))).toHaveLength(1);
+  });
+
+  it("refuses the quote when the product is missing from the catalog", () => {
+    const catalog = CATALOG.filter(c => c.hubspotProductId !== MARKETING_ADDON_PRODUCT.hubspotProductId);
+    const built = buildQuote(
+      "marketing_partial",
+      WITHOUT_MARKETING.map(([name, qty]) => toQuoteLine(catalog.find(c => c.name === name)!, qty)),
+      [], catalog
+    );
+    expect(marketingLines(built)).toEqual([]);
+    expect(built.blockers.join(" ")).toContain("always includes marketing");
+  });
+
+  it("stays off every other plan", () => {
+    for (const plan of ["all_in_one", "order_pay_only"] as const) {
+      expect(marketingLines(build(plan, QSR_WITH_KIOSK)), plan).toEqual([]);
+    }
   });
 
   it("either ordering chip alone satisfies the ordering-point rule", () => {

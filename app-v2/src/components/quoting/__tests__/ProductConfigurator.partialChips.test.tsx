@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
 // Two builder controls the product owner asked for:
-//  - Marketing Partial Ordering's Kiosk / Online Ordering / Marketing chips,
-//    with the "Marketing (Partial Ordering)" row hidden from the list
-//    (2026-10-28);
+//  - Marketing Partial Ordering's Kiosk / Online Ordering chips, with the
+//    "Marketing (Partial Ordering)" row hidden from the list (2026-10-28) —
+//    and since 2026-10-30 no Marketing chip: the plan always carries it;
 //  - the first kiosk as an ordinary line at list whose one unit the rep may
 //    discount up to 100%, replacing the "Charge for kiosk" button (2026-10-29).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -85,16 +85,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Marketing Partial Ordering chips", () => {
-  it("toggles the picks behind each chip, and the marketing line has no row of its own", async () => {
+  it("opens with marketing and its boards on, offers no Marketing chip, and toggles the other two", async () => {
     render(<Host />);
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: /Marketing Partial Ordering/ }));
     await waitFor(() => expect(chip("Kiosk")).toBeTruthy());
 
+    // Marketing isn't optional on MPO (2026-10-30): the plan opens with the
+    // line and the three boards it makes free, and there is no chip to take
+    // it off.
+    await waitFor(() => expect(picksText()).toContain(`${MARKETING}:1`));
+    expect(picksText()).toContain(`${BOARD}:3`);
+    expect(screen.queryByRole("button", { name: "Marketing" })).toBeNull();
+
     // Hidden from the list; Online Ordering keeps its row.
-    expect(screen.queryByText("Marketing (Partial Ordering)")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add one Marketing (Partial Ordering)" })).toBeNull();
     expect(screen.getByRole("button", { name: "Add one Online Ordering" })).toBeTruthy();
-    for (const name of ["Kiosk", "Online Ordering", "Marketing"]) {
+    for (const name of ["Kiosk", "Online Ordering"]) {
       expect(chip(name).getAttribute("aria-pressed"), name).toBe("false");
     }
 
@@ -107,26 +114,23 @@ describe("Marketing Partial Ordering chips", () => {
     fireEvent.click(chip("Online Ordering"));
     await waitFor(() => expect(picksText()).toContain(`${ONLINE}:1`));
 
-    fireEvent.click(chip("Marketing"));
-    await waitFor(() => expect(picksText()).toContain(`${MARKETING}:1`));
-    expect(picksText()).toContain(`${BOARD}:3`);
-    expect(chip("Marketing").getAttribute("aria-pressed")).toBe("true");
-    // Still hidden from the list once it is on the quote.
-    expect(screen.queryByRole("button", { name: "Add one Marketing (Partial Ordering)" })).toBeNull();
-
-    fireEvent.click(chip("Marketing"));
-    await waitFor(() => expect(picksText()).not.toContain(MARKETING));
-    expect(picksText()).not.toContain(BOARD);
-
     fireEvent.click(chip("Kiosk"));
     await waitFor(() => expect(picksText()).not.toContain(KIOSK));
     expect(picksText()).toContain(`${ONLINE}:1`);
+    expect(picksText()).toContain(`${MARKETING}:1`);
   });
 
   it("lights from the picks a reopened quote arrives with", async () => {
-    render(<Host initialType="marketing_partial" initialPicks={[{ hubspotProductId: MARKETING, qty: 1 }]} />);
-    await waitFor(() => expect(chip("Marketing").getAttribute("aria-pressed")).toBe("true"));
-    expect(chip("Kiosk").getAttribute("aria-pressed")).toBe("false");
+    render(<Host initialType="marketing_partial" initialPicks={[{ hubspotProductId: KIOSK, qty: 1 }]} />);
+    await waitFor(() => expect(chip("Kiosk").getAttribute("aria-pressed")).toBe("true"));
+    expect(chip("Online Ordering").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("puts marketing on a quote reopened from before 2026-10-30 without it", async () => {
+    // The picks carry no marketing line; buildQuote forces it onto the document.
+    render(<Host initialType="marketing_partial" initialPicks={[{ hubspotProductId: ONLINE, qty: 1 }]} />);
+    await screen.findByText("Marketing (Partial Ordering)");
+    expect(picksText()).not.toContain(MARKETING);
   });
 
   it("isn't shown on any other plan", async () => {

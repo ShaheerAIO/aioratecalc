@@ -23,12 +23,13 @@ const sendLeadLinkSms = vi.fn();
 const listQuotableProductsAction = vi.fn();
 const buildAndPublishBillingQuote = vi.fn();
 const resolveSender = vi.fn();
+const moveDealToQuoteSentAtSend = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { saveApplication } }));
 vi.mock("@/lib/adapters/hubspot", () => ({
   getCompanyProfile, listCompanyContacts, updateCompanyMerchantDetails,
-  ensureQuoteContact, getContactById, updateContactDetails,
+  ensureQuoteContact, getContactById, updateContactDetails, moveDealToQuoteSentAtSend,
 }));
 // The Company & Deal picker's resolution service — mocked so the real module
 // (which pulls in the server-only db client) is never loaded here.
@@ -125,6 +126,7 @@ beforeEach(() => {
   // a brand-new prospect: nothing to bill yet, so a quiet skip.
   buildAndPublishBillingQuote.mockResolvedValue({ status: "skipped", reason: "nothing_to_bill" });
   resolveSender.mockResolvedValue({ ok: false, code: "no_rep_email" });
+  moveDealToQuoteSentAtSend.mockResolvedValue(true);
 });
 
 describe("createProspectAction — hard blocks", () => {
@@ -323,6 +325,28 @@ describe("createProspectAction — publishes NOTHING at send time", () => {
     // The ordinary 3-argument call. The "go straight to billing" CTA carried
     // hs_quote_link, which cannot exist at this point any more.
     expect(sendLeadLinkEmail).toHaveBeenCalledWith(OWNER.email, expect.stringContaining("/lead/"), "Torta Palace");
+  });
+});
+
+// Product owner, 2026-10-30: "When quote gets sent, move deal stage to 'Quote
+// Sent' (if deal is in sales meeting 1 or 2)". The Discovery/Demo rule itself
+// is the adapter's (hubspotDeal.test.ts); this is the wiring.
+describe("createProspectAction — deal to Quote Sent at send", () => {
+  it("asks the adapter to move the resolved deal once the link has gone out", async () => {
+    await createProspectAction(baseInput());
+    expect(moveDealToQuoteSentAtSend).toHaveBeenCalledWith(DEAL.id);
+  });
+
+  it("moves nothing when neither the email nor the text went out", async () => {
+    sendLeadLinkEmail.mockResolvedValue({ sent: false, devUrl: "x" });
+    await createProspectAction(baseInput());
+    expect(moveDealToQuoteSentAtSend).not.toHaveBeenCalled();
+  });
+
+  it("a HubSpot failure never fails sending the link", async () => {
+    moveDealToQuoteSentAtSend.mockRejectedValue(new Error("HubSpot down"));
+    const result = await createProspectAction(baseInput());
+    expect(result.emailResult).toEqual({ sent: true });
   });
 });
 

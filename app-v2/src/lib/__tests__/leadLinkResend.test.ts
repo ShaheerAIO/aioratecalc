@@ -13,6 +13,7 @@ const saveApplication = vi.fn();
 const sendLeadLinkEmail = vi.fn();
 const sendLeadLinkSms = vi.fn();
 const resolveSender = vi.fn();
+const moveDealToQuoteSentAtSend = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({
@@ -24,6 +25,7 @@ vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction: vi.fn() })
 vi.mock("@/lib/adapters/hubspot", () => ({
   listCompanyContacts: vi.fn(),
   getCompanyProfile: vi.fn(),
+  moveDealToQuoteSentAtSend,
 }));
 // prospects.ts now imports getActivePaddingPolicy for the role-scoped floor
 // guard (assertMarginAboveFloor) — mocked so the real module (which pulls in
@@ -108,6 +110,55 @@ beforeEach(() => {
   sendLeadLinkEmail.mockResolvedValue({ sent: true, devUrl: null });
   sendLeadLinkSms.mockResolvedValue({ sent: true, devUrl: null });
   resolveSender.mockResolvedValue({ ok: false, code: "no_rep_email" });
+  moveDealToQuoteSentAtSend.mockResolvedValue(true);
+});
+
+// Product owner, 2026-10-30: the deal moves to "Quote Sent" when the link goes
+// out with a quote on it. The Discovery/Demo rule is the adapter's own
+// (hubspotDeal.test.ts); this is the wiring.
+describe("resendLeadLinkAction — deal to Quote Sent at send", () => {
+  it("asks the adapter to move the deal when a quote link is delivered", async () => {
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-7" }));
+    await resendLeadLinkAction("app-1");
+    expect(moveDealToQuoteSentAtSend).toHaveBeenCalledWith("deal-7");
+  });
+
+  it("moves nothing for a row with no deal", async () => {
+    await resendLeadLinkAction("app-1");
+    expect(moveDealToQuoteSentAtSend).not.toHaveBeenCalled();
+  });
+
+  it("moves nothing when the link has no quote on it (the lead_link_sent case)", async () => {
+    getApplication.mockResolvedValue(app({
+      hubspotDealId: "deal-7", stage: "lead_link_sent", quoteConfig: null, quoteLines: null, analysis: null,
+    }));
+    await resendLeadLinkAction("app-1");
+    expect(moveDealToQuoteSentAtSend).not.toHaveBeenCalled();
+  });
+
+  it("moves nothing when neither the email nor the text went out", async () => {
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-7" }));
+    sendLeadLinkEmail.mockResolvedValue({ sent: false, devUrl: "x" });
+    sendLeadLinkSms.mockResolvedValue({ sent: false, devUrl: "x" });
+    await resendLeadLinkAction("app-1");
+    expect(moveDealToQuoteSentAtSend).not.toHaveBeenCalled();
+  });
+
+  it("moves nothing when there's no email to send to", async () => {
+    getApplication.mockResolvedValue(app({
+      hubspotDealId: "deal-7",
+      ownerContact: { firstName: "Jane", lastName: "Doe", title: "Owner", email: "", phone: "555-0101" },
+    }));
+    await resendLeadLinkAction("app-1");
+    expect(moveDealToQuoteSentAtSend).not.toHaveBeenCalled();
+  });
+
+  it("a HubSpot failure never fails sending the link", async () => {
+    getApplication.mockResolvedValue(app({ hubspotDealId: "deal-7" }));
+    moveDealToQuoteSentAtSend.mockRejectedValue(new Error("HubSpot down"));
+    const result = await resendLeadLinkAction("app-1");
+    expect(result.emailResult).toEqual({ sent: true, devUrl: null });
+  });
 });
 
 describe("resendLeadLinkAction", () => {

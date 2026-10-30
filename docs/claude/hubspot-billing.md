@@ -73,6 +73,19 @@ verbatim-`quoteLines` hazard, both constraints above.
   `quote_sent` is set when the lead link goes out, before any HubSpot quote exists. Rate-only
   quotes never publish, so they keep the acceptance-time writes. Quotes published before this
   change get nothing until acceptance.
+  - **The stage ALSO moves to "Quote Sent" when the rep's lead link goes out with a quote on it
+    (product owner, 2026-10-30: "When quote gets sent, move deal stage to 'Quote Sent' (if deal is
+    in sales meeting 1 or 2)").** "Sent" = the lead link reaches the merchant; "sales meeting 1 or 2"
+    = Discovery Meeting `2717103849` and Demo Meeting `stage_0`. `moveDealToQuoteSentAtSend` reads
+    the live stage and PATCHes `pipeline` + `dealstage` ONLY when `shouldMoveToQuoteSentAtSend` says
+    the deal is at exactly one of those two — stricter than the forward-only guard, so a blank,
+    unknown, Quote Sent or later stage is never touched, and a failed read writes nothing. Called
+    from `createProspectAction` and `resendLeadLinkAction` right after `deliverLeadLink`, only when
+    the email or SMS reported `sent` and the row has a `hubspotDealId` (resend: also only when
+    `hasQuoteBasis`, i.e. the `quote_sent` case). Fire-and-log, same as the billing-notes push.
+    `issueCustomerQuoteLinkAction` (the proposal wizard's copy-the-link terminus) delivers nothing,
+    so it moves nothing. `STAGE_MAP.quote_sent` is unchanged; a later deal sync mapping it to
+    Discovery is dropped by the forward-only guard, so it can't drag Quote Sent back.
 - **Hardware Revenue / Total Hardware Discount / Hardware Cal are HubSpot CALCULATED deal properties**
   (`hardware_revenue`, `total_hardware_discount` = rollups; `hardware_cal` = `hardware_revenue`), read-only
   through the API. Verified 2026-10-30 against a pre-split deal: they sum the `amount` / discount of the

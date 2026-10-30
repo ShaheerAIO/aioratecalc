@@ -141,6 +141,8 @@ export const ONLINE_ORDERING_PRODUCT: NamedProduct = { name: "Online Ordering", 
  * Marketing on a Marketing Partial Ordering quote, $0/mo: the plan is $299
  * either way, and this line is what says the merchant took the marketing
  * half — and so the three free menu boards (product owner, 2026-10-27).
+ * Not optional since 2026-10-30: every MPO quote carries it, forced in by
+ * `buildQuote` (`resolvePartialOrderingMarketing`).
  */
 export const MARKETING_ADDON_PRODUCT: NamedProduct = { name: "Marketing (Partial Ordering)", hubspotProductId: "343579168455" };
 
@@ -456,7 +458,8 @@ export const MARKETING_PRODUCTS = [
  * What a Marketing Partial Ordering quote may carry by hand: ordering without
  * a POS (2026-10-27). The tablet and the KDS or printer receive the orders,
  * the kiosks and online ordering take them, and the marketing products come
- * along for a merchant who takes the marketing half. A POS of any kind is NOT
+ * along with the marketing half, which every quote on it carries since
+ * 2026-10-30. A POS of any kind is NOT
  * here — that is the line between this plan and Order & Pay, and
  * `partialOrderingPosBlockers` says so out loud for a payload that carries one.
  */
@@ -549,8 +552,10 @@ export const MARKETING_INCLUDED_HARDWARE = [
  * `applyPackageComp` holds it there however the rep edits the row.
  */
 export function applyPlanIncludedHardware(quoteType: QuoteType, lines: QuoteLine[]): QuoteLine[] {
-  // Marketing Only always; Marketing Partial Ordering when the rep added the
-  // marketing half. Not All-in-One, whose marketing comes with the kit's one.
+  // Marketing Only always; Marketing Partial Ordering when its marketing line
+  // is on the quote — always, since 2026-10-30, when `buildQuote` started
+  // forcing it in (`resolvePartialOrderingMarketing`). Not All-in-One, whose
+  // marketing comes with the kit's one.
   if (!includesMarketing(quoteType, lines)) return lines;
   const planName = PLATFORM_PRODUCTS[quoteType].name;
 
@@ -1274,6 +1279,34 @@ function withRequiredTerminals(picks: QuoteLine[], required: RequiredTerminalsRe
   const idx = picks.findIndex(l => l.hubspotProductId === extra.hubspotProductId);
   if (idx < 0) return [...picks, extra];
   return picks.map((l, i) => (i === idx ? { ...l, qty: l.qty + extra.qty } : l));
+}
+
+/**
+ * The marketing line every Marketing Partial Ordering quote carries — and with
+ * it, through `includesMarketing`, the three free menu boards (2026-10-30,
+ * product owner: "remove marketing button from MPO (autoselect it, cannot be
+ * changed)"; "if someone wants kiosk and online ordering without marketing
+ * they can select order and pay and just remove the POS, its still 299").
+ *
+ * FORCED IN rather than refused, the same posture as the AMS1 top-up: the
+ * browser only sends picks, so a stale tab, a hand-edited payload or a quote
+ * reopened from before this change arrives without it, and the plan carries
+ * it whatever they say — a blocker would only send the rep looking for a
+ * Marketing control that no longer exists. A pick that already carries it is
+ * left alone (it is capped at one). Missing from the catalog is a blocker:
+ * the plan can't be quoted without the line that says it includes marketing.
+ */
+export function resolvePartialOrderingMarketing(
+  quoteType: QuoteType,
+  pickedLines: QuoteLine[],
+  catalog: CatalogProduct[]
+): IncludedServicesResult {
+  if (!isPartialOrderingQuote(quoteType)) return { lines: [], missing: [] };
+  if (pickedLines.some(l => l.qty > 0 && isNamedProduct(MARKETING_ADDON_PRODUCT, l))) return { lines: [], missing: [] };
+  const product = catalog.find(p => isNamedProduct(MARKETING_ADDON_PRODUCT, p));
+  return product
+    ? { lines: [toQuoteLine(product, 1)], missing: [] }
+    : { lines: [], missing: [MARKETING_ADDON_PRODUCT.name] };
 }
 
 /**
@@ -2672,7 +2705,13 @@ export function buildQuote(
 
   // The license is derived from the screen count. A line of it arriving as a
   // pick (a stale tab, a hand-edited payload) would bill it a second time.
-  const picks = pickedLines.filter(l => !isSoftwareLicenseProduct(l.hubspotProductId, l.name));
+  const licensedPicks = pickedLines.filter(l => !isSoftwareLicenseProduct(l.hubspotProductId, l.name));
+  // Marketing Partial Ordering's marketing line is on whatever the picks say
+  // (2026-10-30). Joined to the picks BEFORE anything is derived from them, so
+  // the quote comes out exactly as if the rep had picked it — the menu boards
+  // it makes free included.
+  const partialMarketing = resolvePartialOrderingMarketing(quoteType, licensedPicks, catalog);
+  const picks = [...licensedPicks, ...partialMarketing.lines];
 
   const breakdown = deriveOrderPoints(picks, effectiveChannels);
   const platform = resolvePlatformLine(quoteType, picks, effectiveChannels, catalog);
@@ -2802,6 +2841,12 @@ export function buildQuote(
       `AIO processes card payments for this merchant, so the quote has to state their rates — but ` +
       `"${name}" isn't in the HubSpot catalog (renamed, archived, or the catalog didn't load). The ` +
       `merchant would be signed up for card processing with no rates written on the document.`
+    );
+  }
+  for (const name of partialMarketing.missing) {
+    blockers.push(
+      `Marketing Partial Ordering always includes marketing, so the quote needs the "${name}" line — ` +
+      `but it isn't in the HubSpot catalog (renamed, archived, or the catalog didn't load).`
     );
   }
   for (const name of requiredTerminals.missing) {

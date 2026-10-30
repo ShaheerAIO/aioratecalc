@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { KIT_DEFAULT_PRODUCTS, PACKAGES, kitFor, kitPicks } from "@/lib/quotePackages";
 import {
   AMS1_PRODUCT,
+  MARKETING_ADDON_PRODUCT,
   MARKETING_INCLUDED_HARDWARE,
   PLAN_DEFAULT_BILLING_DELAY_DAYS,
   PRE_AUTH_PRODUCT,
@@ -9,6 +10,7 @@ import {
   amountDueAtCheckout,
   buildQuote,
   isMarketingQuote,
+  isPartialOrderingQuote,
   minimumTerminalsFor,
   planDefaultBillingStart,
   planIncludesWebsite,
@@ -118,7 +120,8 @@ describe("what each plan opens with", () => {
       if (terminals > 0) out.set(AMS1_PRODUCT.hubspotProductId, terminals);
     }
     if (planIncludesWebsite(plan)) out.set(WEBSITE_PRODUCT_ID, 1);
-    if (isMarketingQuote(plan)) {
+    if (isPartialOrderingQuote(plan)) out.set(MARKETING_ADDON_PRODUCT.hubspotProductId, 1);
+    if (isMarketingQuote(plan) || isPartialOrderingQuote(plan)) {
       for (const h of MARKETING_INCLUDED_HARDWARE) out.set(h.hubspotProductId, h.qty);
     }
     return out;
@@ -133,9 +136,14 @@ describe("what each plan opens with", () => {
     expect(cart.has("222497165009")).toBe(false); // Kiosk 27"
   });
 
-  it("opens Marketing Partial Ordering with the order tablet and a KDS", () => {
+  it("opens Marketing Partial Ordering with the order tablet, a KDS, and its marketing with the three boards", () => {
+    // Marketing is no longer optional on MPO (2026-10-30), so it opens the
+    // way Marketing Only does: the line and the three boards it makes free.
     const cart = openingCart("marketing_partial");
-    expect([...cart]).toEqual([["276751313619", 1], ["223452690132", 1]]);
+    expect([...cart]).toEqual([
+      ["276751313619", 1], ["223452690132", 1],
+      [MARKETING_ADDON_PRODUCT.hubspotProductId, 1], ["223511653103", 3],
+    ]);
   });
 
   it("opens Order & Pay with the kit but no Website — it isn't in that plan", () => {

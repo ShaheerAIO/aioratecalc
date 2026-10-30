@@ -295,7 +295,9 @@ function PaymentDetails({ payment }: { payment: CustomerSafePayment }) {
 
   return (
     <section className={styles.lineGroup} aria-label="Payment details">
-      <h2 className={styles.lineGroupTitle}>Payment Details</h2>
+      <h2 className={`${styles.lineGroupTitle} ${styles.lineGroupTitleStrong}`}>
+        Payment Details
+      </h2>
       {payment.cardPresentRate !== null && (
         <div className={styles.lineRow}>
           <span className={`${styles.lineDesc} ${styles.lineDescCp}`}>Card present</span>

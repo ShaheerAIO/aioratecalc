@@ -17,7 +17,7 @@ import type { StorageScope } from "@/lib/storage/storageInterface";
 import { sendLeadLinkEmail, type ReplyToRep, type SendMagicLinkResult } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import {
-  deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot,
+  deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot, moveDealToQuoteSentAtSend,
   setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
 import { resolveSender } from "@/lib/billing/publishBillingQuote";
@@ -297,6 +297,29 @@ async function mirrorQuoteNote(
     await setDealBillingNotes(app.hubspotDealId, text);
   } catch (err) {
     console.error("HubSpot billing notes push failed", app.id, app.hubspotDealId, err);
+  }
+}
+
+/**
+ * Move the HubSpot deal to "Quote Sent" now that the lead link has gone out
+ * with a quote on it (product owner, 2026-10-30) — but only from Discovery
+ * Meeting or Demo Meeting; `shouldMoveToQuoteSentAtSend` owns that rule.
+ *
+ * Best-effort, like the billing-notes push above: the link has already been
+ * delivered, and a HubSpot failure must never turn a sent link into an error.
+ * Only when the merchant actually received it (email or SMS reported sent) —
+ * a link that only exists on the rep's screen hasn't been sent to anyone yet.
+ */
+async function moveDealToQuoteSentBestEffort(
+  app: Pick<MerchantApplication, "id" | "hubspotDealId">,
+  delivered: { emailResult: SendMagicLinkResult; smsResult: SendSmsResult | null },
+): Promise<void> {
+  if (!app.hubspotDealId) return;
+  if (!delivered.emailResult.sent && !delivered.smsResult?.sent) return;
+  try {
+    await moveDealToQuoteSentAtSend(app.hubspotDealId);
+  } catch (err) {
+    console.error("HubSpot deal move to Quote Sent at link send failed", app.id, app.hubspotDealId, err);
   }
 }
 
@@ -876,6 +899,8 @@ export async function createProspectAction(input: {
   const companySync = await syncCompanyDetails(input.hubspotCompanyId, app);
   await syncBillingContact(input.billingContact, input.billingContactId);
   await mirrorQuoteNote(app, null);
+  // Always the quote_sent case here: a link with no quote is refused above.
+  await moveDealToQuoteSentBestEffort(app, { emailResult, smsResult });
 
   return { app, linkUrl: link.url, emailResult, smsResult, companySync };
 }
@@ -1196,6 +1221,11 @@ export async function resendLeadLinkAction(
     updated.ownerContact?.altEmail,
     rep,
   );
+  // The quote_sent case only — the same predicate persistLeadLink picks
+  // quote_sent vs lead_link_sent by. A link with nothing on it moves nothing.
+  if (hasQuoteBasis(updated)) {
+    await moveDealToQuoteSentBestEffort(updated, { emailResult, smsResult });
+  }
 
   return { app: updated, linkUrl, emailResult, smsResult };
 }

@@ -26,6 +26,8 @@ const CATALOG: CatalogProduct[] = [
   p("335283119838", "All-in-One Platform", 399, "monthly", ""),
   p("343582047937", "AIO Marketing Partial Ordering", 299, "monthly", "Software"),
   p("343374665412", "Online Ordering", 0, "monthly", "Software"),
+  // On every MPO quote since 2026-10-30, forced in by buildQuote.
+  p("343579168455", "Marketing (Partial Ordering)", 0, "monthly", ""),
   p("333275576048", "Website", 50, "monthly", "Software"),
   p("343373224660", "Mega Kiosk Loaner", 100, "monthly"),
   p("332617109238", "Marketing Kit - Mega Kiosk", 1500, "one_time"),

@@ -17,6 +17,7 @@ import {
   POS_COMPANIONS,
   MAX_BILLING_DELAY_DAYS,
   ORDER_POINT_CHANNELS,
+  PAYROLL_PRODUCT_ID,
   PLAN_DEFAULT_BILLING_DELAY_DAYS,
   PLATFORM_PRODUCTS,
   PROCESSING_DISCLOSURE_PRODUCT,
@@ -348,10 +349,18 @@ export default function ProductConfigurator({
   const groups = useMemo(() => {
     // "Marketing (Partial Ordering)" has no row (2026-10-28, product owner:
     // "Hide the Marketing (Partial Ordering) line item, it will confuse
-    // people"): the Marketing chip is its only control. It stays in
+    // people"), and since 2026-10-30 no control at all: every MPO quote
+    // carries it (`resolvePartialOrderingMarketing`). It stays in
     // `selectable` — the picks are resolved against that, and the line still
     // goes on the quote and brings the three free menu boards.
-    const listed = selectable.filter(p => !isNamedProduct(MARKETING_ADDON_PRODUCT, p));
+    //
+    // Payroll has no row in its group either (2026-10-30, product owner:
+    // "move payroll line item to the top, as a toggle"): it is the toggle
+    // above the groups (`payrollToggle`), and stays in `selectable` for the
+    // same reason.
+    const listed = selectable.filter(
+      p => !isNamedProduct(MARKETING_ADDON_PRODUCT, p) && p.hubspotProductId !== PAYROLL_PRODUCT_ID
+    );
     if (!kit) return groupProducts(listed);
 
     // Pulled from WHEREVER they are, not just the Hardware group: HubSpot
@@ -434,7 +443,10 @@ export default function ProductConfigurator({
   } = built;
 
   // Whether this quote carries AIO's marketing — and with it the free menu boards.
-  const withMarketing = includesMarketing(planned, pickedLines);
+  // Read off the BUILT lines, not the picks: on Marketing Partial Ordering the
+  // marketing line is forced in by `buildQuote` (2026-10-30), so a quote
+  // reopened from before then carries it without its pick.
+  const withMarketing = includesMarketing(planned, quoteLines);
 
   // Each plan's monthly price, read off the live catalog entry for its
   // platform product rather than written into QUOTE_TYPES. The four notes used
@@ -677,14 +689,19 @@ export default function ProductConfigurator({
 
       // Everything else the plan includes and the rep would otherwise have to
       // add by hand: the Website on a plan listed for it, the three Menu Board
-      // Computers on Marketing Only. Both are held at $0 by the plan comps, so
-      // leaving them off doesn't save the merchant anything — it just omits
-      // what they were promised.
+      // Computers on Marketing Only — and on Marketing Partial Ordering, whose
+      // marketing line (and so the boards) is no longer optional (2026-10-30).
+      // All are held at $0 by the plan comps, so leaving them off doesn't save
+      // the merchant anything — it just omits what they were promised.
       const included: ProductPick[] = [];
       if (planIncludesWebsite(next) && allowed.has(WEBSITE_PRODUCT_ID)) {
         included.push({ hubspotProductId: WEBSITE_PRODUCT_ID, qty: 1 });
       }
-      if (isMarketingQuote(next)) {
+      if (isPartialOrderingQuote(next)) {
+        const marketing = catalog.find(p => allowed.has(p.hubspotProductId) && isNamedProduct(MARKETING_ADDON_PRODUCT, p));
+        if (marketing) included.push({ hubspotProductId: marketing.hubspotProductId, qty: 1 });
+      }
+      if (isMarketingQuote(next) || isPartialOrderingQuote(next)) {
         included.push(
           ...MARKETING_INCLUDED_HARDWARE
             .filter(h => allowed.has(h.hubspotProductId))
@@ -717,7 +734,8 @@ export default function ProductConfigurator({
   const terminalFloor = minimumTerminalsFor(planned, picks);
 
   const setQtyFor = (id: string, next: number) => {
-    const floor = id === AMS1_PRODUCT.hubspotProductId ? terminalFloor : 0;
+    // Payroll's stepper stops at one: off is its toggle's job (see `payrollToggle`).
+    const floor = id === AMS1_PRODUCT.hubspotProductId ? terminalFloor : id === PAYROLL_PRODUCT_ID ? 1 : 0;
     const qty = Math.max(floor, next);
     const wanted = new Map(picks.map(p => [p.hubspotProductId, p.qty]));
     if (qty > 0) wanted.set(id, qty);
@@ -751,13 +769,20 @@ export default function ProductConfigurator({
   const toggleChannel = (id: string) =>
     onChannelsChange(channels.includes(id) ? channels.filter(c => c !== id) : [...channels, id]);
 
-  // ── Marketing Partial Ordering's three chips (2026-10-28) ─────────────────
+  // ── Marketing Partial Ordering's chips (2026-10-28) ───────────────────────
   // Product owner: "When you select MPO, there should be big chips for kiosk,
   // online ordering, and marketing that will autoselect the stuff
   // accordingly." Each chip is only a shortcut onto the picks — it stores
   // nothing of its own, so it reads lit straight off them and a reopened
   // quote lights the right ones. Kiosk and Online Ordering keep their rows
-  // in the list; Marketing has none (see `groups`), so this is its control.
+  // in the list.
+  //
+  // The Marketing chip is GONE (2026-10-30, product owner: "remove marketing
+  // button from MPO (autoselect it, cannot be changed)" — "if someone wants
+  // kiosk and online ordering without marketing they can select order and
+  // pay and just remove the POS, its still 299"). The plan opens with the
+  // marketing line and its three boards (`changeType`), and `buildQuote`
+  // forces the line onto every MPO quote whatever the picks say.
   //
   // Several quantities change in one press, so this writes the picks once
   // rather than calling `setQtyFor` per product off a stale `picks`.
@@ -780,11 +805,6 @@ export default function ProductConfigurator({
     const kioskIds = FIRST_KIOSK_PRODUCT_IDS;
     const kiosk = selectable.find(p => p.hubspotProductId === FIRST_KIOSK_PRODUCT_IDS[0]);
     const online = selectable.find(p => isNamedProduct(ONLINE_ORDERING_PRODUCT, p));
-    const marketing = selectable.find(p => isNamedProduct(MARKETING_ADDON_PRODUCT, p));
-    const boards = MARKETING_INCLUDED_HARDWARE.flatMap(h => {
-      const product = selectable.find(p => p.hubspotProductId === h.hubspotProductId);
-      return product ? [{ product, qty: h.qty as number }] : [];
-    });
     return [
       {
         id: "kiosk", label: "Kiosk", product: kiosk,
@@ -797,22 +817,6 @@ export default function ProductConfigurator({
         id: "online", label: "Online Ordering", product: online,
         on: online ? qtyOf(online.hubspotProductId) > 0 : false,
         toggle: (on: boolean) => setPickQtys([[online!.hubspotProductId, on ? 1 : 0]]),
-      },
-      {
-        id: "marketing", label: "Marketing", product: marketing,
-        on: marketing ? qtyOf(marketing.hubspotProductId) > 0 : false,
-        // The marketing line is what makes the three menu boards free
-        // (`includesMarketing`), so the chip brings them too — the same three
-        // Marketing Only opens with — and takes those three back off again,
-        // leaving any the merchant is paying for beyond them.
-        toggle: (on: boolean) =>
-          setPickQtys([
-            [marketing!.hubspotProductId, on ? 1 : 0],
-            ...boards.map(b => {
-              const have = qtyOf(b.product.hubspotProductId);
-              return [b.product.hubspotProductId, on ? Math.max(have, b.qty) : Math.max(0, have - b.qty)] as [string, number];
-            }),
-          ]),
       },
     ];
   })();
@@ -1570,7 +1574,10 @@ export default function ProductConfigurator({
     // 0 unless the picks arrived short (a quote saved some other way).
     const toppedUp = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? built.requiredTerminals.qty : 0;
     const onQuote = n + toppedUp;
-    const min = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? terminalFloor : 0;
+    // Payroll's row only shows while its toggle is on, so its stepper stops at
+    // one — and a box typed empty can't take the row away mid-number.
+    const min = p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? terminalFloor
+      : p.hubspotProductId === PAYROLL_PRODUCT_ID ? 1 : 0;
     // Which POS products, if any, are currently carrying this one along. The
     // rep needs to see that the terminal, the display and the drawer arrived
     // with the POS rather than wondering who added them — and, for the AMS1,
@@ -1630,7 +1637,7 @@ export default function ProductConfigurator({
         <div className={styles.stepper}>
           <button
             type="button" className={styles.stepBtn} disabled={n <= min}
-            title={min > 0 && n <= min ? "One per POS unit" : undefined}
+            title={min > 0 && n <= min && p.hubspotProductId === AMS1_PRODUCT.hubspotProductId ? "One per POS unit" : undefined}
             onClick={() =>
               // Taking off a unit the kit is currently covering
               // gives hardware back — ask first, since it is
@@ -1695,6 +1702,37 @@ export default function ProductConfigurator({
       </div>
     );
   };
+
+  // ── Payroll, as a toggle at the top of the picker (2026-10-30) ────────────
+  // Product owner: "move payroll line item to the top, as a toggle". On adds
+  // one employee and opens the ordinary row beneath it — the same typed box
+  // and +/− as any line, and the same adjust control in each layout — for
+  // the real headcount; off takes payroll off the quote. Like the MPO chips
+  // it stores nothing: it reads on straight off the picks, so a reopened
+  // quote opens with it on. Only where the plan offers payroll at all.
+  // `payrollBlockers` (payroll needs a counter POS) is unchanged.
+  const payrollProduct = selectable.find(p => p.hubspotProductId === PAYROLL_PRODUCT_ID);
+  const payrollOn = qtyOf(PAYROLL_PRODUCT_ID) > 0;
+  const payrollToggle = (withAdjust: boolean) => payrollProduct ? (
+    <div className={styles.payrollBox} data-on={payrollOn}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={payrollOn}
+        className={styles.payrollSwitch}
+        onClick={() => setPickQtys([[PAYROLL_PRODUCT_ID, payrollOn ? 0 : 1]])}
+      >
+        <span className={styles.productMain}>
+          <span className={styles.productName}>Payroll</span>{" "}
+          <span className={styles.productPrice}>
+            {priceLabel(payrollProduct.price, payrollProduct.billingFrequency)} per employee
+          </span>
+        </span>
+        <span className={styles.switchTrack} aria-hidden="true" />
+      </button>
+      {payrollOn && productRow(payrollProduct, withAdjust)}
+    </div>
+  ) : null;
 
   if (layout === "document") {
     // Why a line is on the quote, said once beside the line rather than in a
@@ -1865,6 +1903,7 @@ export default function ProductConfigurator({
                 hardware later.
               </div>
             )}
+            {payrollToggle(false)}
             {partialChipRow}
             {groups.map(group => (
               <div key={group.type} className={styles.group}>
@@ -2127,6 +2166,7 @@ export default function ProductConfigurator({
             </div>
           )}
 
+          {payrollToggle(true)}
           {partialChipRow}
           {groups.map(group => (
             <div key={group.type} className={styles.group}>
@@ -2175,8 +2215,8 @@ export default function ProductConfigurator({
             compulsory, and a merchant who wants five can buy the other two —
             so it lives in the picker above, where its row already says "3 of 5
             included in the plan"; this only says so in words. Shown on
-            Marketing Only, and on Marketing Partial Ordering once the rep adds
-            the marketing line (2026-10-27). */}
+            Marketing Only, and on Marketing Partial Ordering, which always
+            carries the marketing line since 2026-10-30. */}
         {withMarketing && (
           <div className={styles.panel}>
             <div className={styles.sectionHead}>

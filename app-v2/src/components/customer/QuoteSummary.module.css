@@ -55,6 +55,13 @@
   margin: 0 0 var(--space-sm);
 }
 
+/* Payment Details header, bolder (product owner, 2026-10-30). */
+.lineGroupTitleStrong {
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
 .lineRow {
   display: flex;
   align-items: baseline;

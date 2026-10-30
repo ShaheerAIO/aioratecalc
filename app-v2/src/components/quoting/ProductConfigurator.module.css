@@ -1037,13 +1037,14 @@
 
 .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-/* Marketing Partial Ordering's Kiosk / Online Ordering / Marketing chips
-   (2026-10-28, product owner: "big chips"). The plan is sold on which of the
-   three a merchant takes, so they sit above the list at the plan cards'
-   weight rather than the channel chips'. */
+/* Marketing Partial Ordering's Kiosk / Online Ordering chips (2026-10-28,
+   product owner: "big chips"; the Marketing chip went 2026-10-30, when
+   marketing stopped being optional). The plan is sold on which ordering a
+   merchant takes, so they sit above the list at the plan cards' weight
+   rather than the channel chips'. */
 .bigChipRow {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-xs);
   margin-top: var(--space-sm);
 }
@@ -1070,6 +1071,67 @@
 .bigChip:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .bigChip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Payroll's on/off switch at the top of the picker (2026-10-30, product
+   owner: "move payroll line item to the top, as a toggle"). The employee
+   count is the ordinary row, shown under the switch only while it is on. */
+.payrollBox {
+  margin-top: var(--space-sm);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  padding: 0 var(--space-sm);
+}
+
+.payrollBox[data-on="true"] { border-color: var(--accent); }
+
+.payrollSwitch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  width: 100%;
+  padding: var(--space-xs) 0;
+  font-family: var(--font-body);
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.payrollSwitch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.switchTrack {
+  position: relative;
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 1.25rem;
+  border-radius: var(--radius-pill);
+  background: var(--rule);
+  transition: background 150ms var(--ease-out);
+}
+
+.switchTrack::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(1.25rem - 4px);
+  height: calc(1.25rem - 4px);
+  border-radius: 50%;
+  background: var(--paper);
+  transition: transform 150ms var(--ease-out);
+}
+
+.payrollSwitch[aria-checked="true"] .switchTrack { background: var(--accent); }
+.payrollSwitch[aria-checked="true"] .switchTrack::after { transform: translateX(1rem); }
+
+.payrollBox > .productRow {
+  border-top: 1px solid var(--rule);
+  border-radius: 0;
+  padding-inline: 0;
+  background: none;
+}
 
 /* The document reads as paper on the page, not as one more panel.
  *
@@ -1398,4 +1460,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .chip { transition-duration: 1ms; }
+  .switchTrack, .switchTrack::after { transition-duration: 1ms; }
 }

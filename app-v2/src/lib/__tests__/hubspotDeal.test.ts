@@ -9,6 +9,8 @@ import {
   classifyDealStage,
   guardDealStageProps,
   omitStageOnUnreadableDeal,
+  shouldMoveToQuoteSentAtSend,
+  QUOTE_SENT_DEAL_STAGE,
   buildDealProperties,
   buildDealAssociations,
   dedupeCompanyIds,
@@ -550,6 +552,40 @@ describe("omitStageOnUnreadableDeal (the dropBackwardStage degrade path)", () =>
   it("is a no-op when there's no dealstage to drop in the first place", () => {
     const props = buildDealProperties(appAt("pricing")); // unmapped — no dealstage/pipeline
     expect(omitStageOnUnreadableDeal(props)).toEqual(props);
+  });
+});
+
+describe("shouldMoveToQuoteSentAtSend (the lead-link send-time stage move)", () => {
+  // Product owner, 2026-10-30: only from "sales meeting 1 or 2".
+  it("moves a deal at Discovery Meeting", () => {
+    expect(shouldMoveToQuoteSentAtSend("2717103849")).toBe(true);
+  });
+
+  it("moves a deal at Demo Meeting", () => {
+    expect(shouldMoveToQuoteSentAtSend("stage_0")).toBe(true);
+  });
+
+  it("leaves a blank or unknown stage alone — stricter than the forward-only guard", () => {
+    expect(shouldMoveToQuoteSentAtSend(null)).toBe(false);
+    expect(shouldMoveToQuoteSentAtSend("")).toBe(false);
+    expect(shouldMoveToQuoteSentAtSend("some-retired-id")).toBe(false);
+    for (const dead of DEAD_STAGE_IDS) expect(shouldMoveToQuoteSentAtSend(dead)).toBe(false);
+  });
+
+  it("leaves Quote Sent itself and every later stage alone", () => {
+    expect(shouldMoveToQuoteSentAtSend(QUOTE_SENT_DEAL_STAGE)).toBe(false);
+    const quoteSentRank = dealStageRank(QUOTE_SENT_DEAL_STAGE);
+    for (const stage of SALES_PIPELINE_STAGES.slice(quoteSentRank)) {
+      expect(shouldMoveToQuoteSentAtSend(stage.id)).toBe(false);
+    }
+  });
+
+  it("a later STAGE_MAP.quote_sent sync can't drag a Quote Sent deal back to Discovery", () => {
+    const props = buildDealProperties(appAt("quote_sent"));
+    expect(props.dealstage).toBe(STAGE_MAP.quote_sent);
+    const guarded = guardDealStageProps(QUOTE_SENT_DEAL_STAGE, props);
+    expect(guarded).not.toHaveProperty("dealstage");
+    expect(guarded).not.toHaveProperty("pipeline");
   });
 });
 
