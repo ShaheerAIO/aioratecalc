@@ -73,6 +73,15 @@ verbatim-`quoteLines` hazard, both constraints above.
   `quote_sent` is set when the lead link goes out, before any HubSpot quote exists. Rate-only
   quotes never publish, so they keep the acceptance-time writes. Quotes published before this
   change get nothing until acceptance.
+- **Hardware Revenue / Total Hardware Discount / Hardware Cal are HubSpot CALCULATED deal properties**
+  (`hardware_revenue`, `total_hardware_discount` = rollups; `hardware_cal` = `hardware_revenue`), read-only
+  through the API. Verified 2026-10-30 against a pre-split deal: they sum the `amount` / discount of the
+  deal's `hs_product_type = inventory` line items. Split billing (2026-10-23) moved one-time lines onto the
+  one-time invoice, so HubSpot's quote→deal line copy stopped carrying hardware and the rollups went empty.
+  Fix (product owner, 2026-10-30): at publish, `createDealLineItems` creates copies of the invoiced lines
+  directly on the deal (association **20**, line item → deal). Once per row, fire-and-log. A product with no
+  `hs_product_type` (Customer Facing Display, 2026-10-30) is invisible to the rollups — that is HubSpot data.
+  Backfilled on the three split-billed deals published before the change.
 - **Hardware commission (`rep_commission` / `rsm_commission`, deal, dollars) defaults to 60% / 10% of
   the MARGIN** for a one-time hardware line whose product has no rate on file (product owner,
   2026-10-30). `DEFAULT_HARDWARE_*_BPS` in `commission.ts`; "hardware" = productType not Software or

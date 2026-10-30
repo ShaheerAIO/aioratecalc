@@ -2334,6 +2334,41 @@ export async function createQuoteLineItems(
   return created;
 }
 
+/**
+ * Copies of the one-time (invoiced) lines, created straight onto the DEAL
+ * (association 20, line item → deal). Under split billing those lines live on
+ * the one-time invoice, so HubSpot's quote→deal line copy never carries them
+ * and the deal's Hardware Revenue / Total Hardware Discount rollups (sums over
+ * the deal's `inventory` line items) stayed empty. Product owner, 2026-10-30.
+ * Cleans up after itself on a failed create, like createQuoteLineItems.
+ */
+export async function createDealLineItems(dealId: string, lines: QuoteLine[]): Promise<string[]> {
+  const created: string[] = [];
+  for (const line of lines) {
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/line_items`, {
+      method: "POST",
+      headers: billingHeaders(),
+      body: JSON.stringify({
+        properties: toLineItemProperties(line),
+        associations: [{
+          to: { id: dealId },
+          types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: LINE_ITEM_TO_DEAL }],
+        }],
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      await discardLineItems(created);
+      throw hubspotErr(`HubSpot deal line item create failed for '${line.name}'`, res.status, body);
+    }
+    created.push((await res.json() as { id: string }).id);
+  }
+  return created;
+}
+
+// Verified live 2026-10-30 (v4 associations/line_items/deals/labels).
+const LINE_ITEM_TO_DEAL = 20;
+
 // Best-effort cleanup of line items we created and are about to forget about.
 // Never throws — it runs on a path that is already failing, and the original
 // error is the one worth reporting.

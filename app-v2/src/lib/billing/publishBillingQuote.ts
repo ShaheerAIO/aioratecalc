@@ -31,6 +31,7 @@ import { merchantApplications, users } from "@/lib/db/schema";
 import {
   associateDealToContact,
   associateQuote,
+  createDealLineItems,
   createDraftQuote,
   createQuoteLineItems,
   deleteQuoteLineItem,
@@ -562,6 +563,17 @@ export async function buildAndPublishBillingQuote(
     // Both never throw.
     await writeCommissionToDeal({ ...publishedApp, hubspotIds: ids });
     await attachQuoteSummaryToDeal(publishedApp);
+    // The one-time lines onto the deal too, so its hardware rollups fill
+    // (see createDealLineItems). Reached once per row — a re-run skips as
+    // already_published — so this never duplicates; a failure is logged only.
+    const { invoiceLines } = splitQuoteLines(lines);
+    if (invoiceLines.length > 0) {
+      try {
+        await createDealLineItems(dealId, invoiceLines);
+      } catch (err) {
+        console.error(`[billing] ${app.id}: one-time lines onto deal ${dealId} failed`, err instanceof Error ? err.message : err);
+      }
+    }
 
     // The merchant's own copy of this quote is NOT sent by anything in this
     // codebase — there is no explicit "send quote" endpoint in HubSpot's v3/v4

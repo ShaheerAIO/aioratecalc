@@ -25,6 +25,7 @@ const createDraftQuote = vi.fn();
 const associateQuote = vi.fn();
 const associateDealToContact = vi.fn();
 const writeCommissionToDeal = vi.fn();
+const createDealLineItems = vi.fn();
 const attachQuoteSummaryToDeal = vi.fn();
 const publishQuote = vi.fn();
 const findOwnerByEmail = vi.fn();
@@ -102,6 +103,7 @@ vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   createDraftQuote,
   associateQuote,
   associateDealToContact,
+  createDealLineItems,
   publishQuote,
   findOwnerByEmail,
   listProducts,
@@ -247,6 +249,7 @@ beforeEach(() => {
     syncDealFromApplication, sendMagicLinkEmail, ensureQuoteContact, createQuoteLineItems, findOwnerByEmail,
     deleteQuoteLineItem, createDraftQuote, associateQuote, associateDealToContact,
     publishQuote, listProducts, resolveQuoteTemplate, writeCommissionToDeal, attachQuoteSummaryToDeal,
+    createDealLineItems,
   ]) fn.mockReset();
 
   patches.length = 0;
@@ -268,6 +271,7 @@ beforeEach(() => {
   createDraftQuote.mockResolvedValue({ quoteId: "quote-5", slug: "abc123" });
   associateQuote.mockResolvedValue(undefined);
   associateDealToContact.mockResolvedValue(undefined);
+  createDealLineItems.mockResolvedValue(["deal-li-1"]);
   publishQuote.mockResolvedValue({
     quoteId: "quote-5",
     status: "APPROVAL_NOT_NEEDED",
@@ -366,6 +370,15 @@ describe("publishing the billing quote", () => {
     expect(syncDealFromApplication.mock.invocationCallOrder[0]).toBeGreaterThan(publishQuote.mock.invocationCallOrder[0]);
     expect(writeCommissionToDeal).toHaveBeenCalledTimes(1);
     expect(attachQuoteSummaryToDeal).toHaveBeenCalledTimes(1);
+    // The one-time lines (here the POS) go onto the deal too, for its
+    // Hardware Revenue / Total Hardware Discount rollups.
+    expect(createDealLineItems).toHaveBeenCalledWith("deal-99", [line(POS)]);
+  });
+
+  it("still reports the publish when copying the one-time lines onto the deal fails", async () => {
+    createDealLineItems.mockRejectedValue(new Error("HubSpot 500"));
+    const result = await send();
+    expect(result.status).toBe("published");
   });
 
   it("still reports the publish when the deal sync fails, and records why", async () => {
