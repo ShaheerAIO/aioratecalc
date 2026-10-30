@@ -83,7 +83,11 @@ verbatim-`quoteLines` hazard, both constraints above.
   value hidden) has to be set to `true` by hand.
 - **`payment_processing_arr` is written once the quote is PUBLISHED** (gated on
   `hubspotIds.publishedAt`; was acceptance until 2026-10-30, product owner chose this knowing
-  `total_arr` will now include quotes that never close). It is
+  `total_arr` will now include quotes that never close), re-written at acceptance, and kept true by a
+  NIGHTLY BACKSTOP in `/api/cron/hubspot-billing-sync` (`syncProcessingArr` → `planProcessingArrWrites`):
+  every published deal whose HubSpot value is missing or differs from EasyOB's figure is batch-written
+  (product owner, 2026-10-30: "this needs to be standard"). Added because the two "Shaheer's 3rd Test"
+  deals had been accepted via the debug bypass, which never syncs the deal, and so never got it. It is
   `appliedTargetMargin × monthly volume × 12` (product owner, 2026-10-12), computed from the TRUE
   margin — this is AIO's own forecast of AIO's own revenue on a record reps already read, and
   padding it would make the number wrong rather than make a secret safe; the FLOOR is the secret and

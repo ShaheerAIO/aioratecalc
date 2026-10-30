@@ -21,11 +21,11 @@
 //
 // Three things are deliberate:
 //
-//   * It is written at ACCEPTANCE, not at publish. A quote nobody pays for
-//     would otherwise leave a forecast on the deal that nothing ever clears,
-//     and acceptance is the one moment EasyOB genuinely observes (see
-//     lib/billing/acceptance.ts — it is detected from the subscription, not
-//     asserted by a button).
+//   * It is written at PUBLISH (product owner, 2026-10-30 — was acceptance),
+//     re-written at acceptance, and kept true by the nightly billing sync
+//     (`planProcessingArrWrites` below), so a deal whose write was skipped or
+//     failed still gets it. A quote nobody pays for leaves its forecast on
+//     the deal — accepted knowingly.
 //   * The margin is AIO's own forecast of AIO's own revenue, on a CRM
 //     record reps already read — padding it would make the number wrong
 //     rather than make a secret safe. (The TRUE margin floor stays a
@@ -177,4 +177,27 @@ export function paymentProcessingArrBreakdown(app: MerchantApplication): Process
  */
 export function paymentProcessingArr(app: MerchantApplication): number | null {
   return paymentProcessingArrBreakdown(app).arr;
+}
+
+/**
+ * Pure: which published deals need `payment_processing_arr` (re)written —
+ * the nightly backstop behind the publish/acceptance writes. A deal is
+ * written when HubSpot's value is missing or differs from ours; one we can't
+ * compute a figure for (marketing-only, no volume) is left alone, never zeroed.
+ */
+export function planProcessingArrWrites(
+  apps: MerchantApplication[],
+  current: Map<string, string | null>,
+): Array<{ id: string; properties: { payment_processing_arr: string } }> {
+  const writes: Array<{ id: string; properties: { payment_processing_arr: string } }> = [];
+  for (const app of apps) {
+    const dealId = app.hubspotDealId;
+    if (!dealId || !app.hubspotIds?.publishedAt) continue;
+    const arr = paymentProcessingArr(app);
+    if (arr === null) continue;
+    const onDeal = current.get(dealId);
+    if (onDeal != null && onDeal !== "" && Number(onDeal) === arr) continue;
+    writes.push({ id: dealId, properties: { payment_processing_arr: String(arr) } });
+  }
+  return writes;
 }

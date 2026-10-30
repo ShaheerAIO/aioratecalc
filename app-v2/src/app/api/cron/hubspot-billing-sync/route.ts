@@ -3,11 +3,14 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import {
+  batchUpdateDeals,
   findSubscriptionsForQuote,
   getInvoiceSnapshot,
   listQuotesModifiedSince,
+  readDealsProcessingArr,
   type QuoteSnapshot,
 } from "@/lib/adapters/hubspot";
+import { planProcessingArrWrites } from "@/lib/billing/processingArr";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
 import { buildOneTimeInvoice, mergeInvoiceSnapshot } from "@/lib/billing/oneTimeInvoice";
 import { rowToApp, type ApplicationRow as FullApplicationRow } from "@/lib/storage/applicationRow";
@@ -77,11 +80,13 @@ export async function GET(req: NextRequest) {
     subscriptionsMatched: 0,
     invoicesBuilt: 0,
     invoicesRefreshed: 0,
+    arrWritten: 0,
     unmatched: [] as string[],
     failed: [] as { applicationId: string; error: string }[],
   };
   if (byQuoteId.size === 0) {
     await syncOneTimeInvoices(summary);
+    await syncProcessingArr(summary);
     return NextResponse.json(summary, { status: summary.failed.length > 0 ? 500 : 200 });
   }
 
@@ -170,8 +175,34 @@ export async function GET(req: NextRequest) {
   }
 
   await syncOneTimeInvoices(summary);
+  await syncProcessingArr(summary);
 
   return NextResponse.json(summary, { status: summary.failed.length > 0 ? 500 : 200 });
+}
+
+// Payment Processing ARR on every published deal, every night (product owner,
+// 2026-10-30: "this needs to be standard"). The publish and acceptance writes
+// are the normal path; this catches any deal they skipped or failed on —
+// including quotes published before ARR moved to publish, and acceptances
+// recorded without a deal sync. Only deals whose HubSpot value is missing or
+// differs are written.
+async function syncProcessingArr(summary: { arrWritten: number; failed: { applicationId: string; error: string }[] }): Promise<void> {
+  try {
+    const rows: ApplicationRow[] = await db
+      .select()
+      .from(merchantApplications)
+      .where(sql`${merchantApplications.hubspotIds}->>'publishedAt' IS NOT NULL`);
+    const apps = rows.map(rowToApp).filter(a => a.hubspotDealId);
+    if (apps.length === 0) return;
+    const current = await readDealsProcessingArr(apps.map(a => a.hubspotDealId!));
+    const writes = planProcessingArrWrites(apps, current);
+    if (writes.length === 0) return;
+    const { updated, failed } = await batchUpdateDeals(writes);
+    summary.arrWritten += updated;
+    if (failed > 0) summary.failed.push({ applicationId: "payment_processing_arr", error: `${failed} deal write(s) failed` });
+  } catch (err) {
+    summary.failed.push({ applicationId: "payment_processing_arr", error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 type InvoiceSummary = {

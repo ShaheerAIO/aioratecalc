@@ -341,28 +341,8 @@
   cursor: pointer;
 }
 
-.office {
-  margin-top: var(--space-xl);
-  border: 1px solid var(--fb-coral);
-}
-
-.officeHead {
-  background: #fff3f0;
-  padding: 0.1rem 0.4rem;
-  font-weight: 700;
-  color: var(--fb-coral);
-}
-
-.officeGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.4rem 2rem;
-  padding: 0.6rem 0.5rem;
-  color: var(--fb-gray);
-}
-
-.officeGrid .check {
-  vertical-align: -0.1rem;
+.officeSpace {
+  height: 9rem;
 }
 
 /* ---------- Page 5: Sysco's letter ---------- */
@@ -520,8 +500,7 @@
 
   .lines2,
   .signRow,
-  .syscoBody,
-  .officeGrid {
+  .syscoBody {
     grid-template-columns: 1fr;
   }
 

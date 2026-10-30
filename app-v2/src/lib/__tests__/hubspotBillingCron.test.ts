@@ -14,6 +14,8 @@ const getInvoiceSnapshot = vi.fn();
 const buildOneTimeInvoice = vi.fn();
 const buildOneTimeInvoiceSafely = vi.fn();
 const attachQuoteSummaryToDeal = vi.fn();
+const readDealsProcessingArr = vi.fn();
+const batchUpdateDeals = vi.fn();
 
 type Row = { id: string; hubspotIds: HubspotIds | null } & Record<string, unknown>;
 
@@ -66,6 +68,7 @@ const db = {
 vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/adapters/hubspot", () => ({
   listQuotesModifiedSince, findSubscriptionsForQuote, syncDealFromApplication, getInvoiceSnapshot,
+  readDealsProcessingArr, batchUpdateDeals,
 }));
 // The invoice build is tested on its own (oneTimeInvoice.test.ts); here only
 // that the cron calls it, and with what.
@@ -135,6 +138,10 @@ beforeEach(() => {
   buildOneTimeInvoice.mockReset();
   buildOneTimeInvoiceSafely.mockReset();
   attachQuoteSummaryToDeal.mockReset();
+  readDealsProcessingArr.mockReset();
+  batchUpdateDeals.mockReset();
+  readDealsProcessingArr.mockResolvedValue(new Map());
+  batchUpdateDeals.mockImplementation(async (u: unknown[]) => ({ updated: u.length, failed: 0 }));
   buildOneTimeInvoice.mockResolvedValue({ status: "skipped", reason: "not_split" });
   syncDealFromApplication.mockResolvedValue("deal-1");
   sendMagicLinkEmail.mockResolvedValue({ sent: true });
@@ -187,9 +194,25 @@ describe("the billing cron's window", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       quotesChecked: 0, applicationsUpdated: 0, accepted: 0, subscriptionsMatched: 0,
-      invoicesBuilt: 0, invoicesRefreshed: 0, unmatched: [], failed: [],
+      invoicesBuilt: 0, invoicesRefreshed: 0, arrWritten: 0, unmatched: [], failed: [],
     });
     expect(updates).toHaveLength(0);
+  });
+
+  it("writes Payment Processing ARR to a published deal that is missing it, even with no quote changes", async () => {
+    selectRows = [{
+      id: "app-arr", hubspotIds: HUBSPOT_IDS, hubspotDealId: "deal-arr",
+      quoteType: "all_in_one", pricingModel: "2-tier",
+      quoteRates: { cardPresentRate: 0.0249, cardNotPresentRate: 0.0349, perTransactionFee: 0.15 },
+      quoteConfig: { monthlyVolume: 100000, avgTicket: 30 },
+    }];
+    readDealsProcessingArr.mockResolvedValue(new Map([["deal-arr", null]]));
+    const res = await get();
+    expect(readDealsProcessingArr).toHaveBeenCalledWith(["deal-arr"]);
+    expect(batchUpdateDeals).toHaveBeenCalledWith([
+      { id: "deal-arr", properties: { payment_processing_arr: expect.stringMatching(/^\d+$/) } },
+    ]);
+    expect((await res.json()).arrWritten).toBe(1);
   });
 
   it("500s when the quote search itself fails", async () => {

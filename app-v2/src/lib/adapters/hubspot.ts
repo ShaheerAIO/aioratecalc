@@ -1677,6 +1677,50 @@ async function batchUpdateEasyobLinks(
   return { updated, failed };
 }
 
+/** `payment_processing_arr` as HubSpot holds it, per deal id, 100 per call. */
+export async function readDealsProcessingArr(dealIds: string[]): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  for (let i = 0; i < dealIds.length; i += 100) {
+    const chunk = dealIds.slice(i, i + 100);
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/batch/read`, {
+      method: "POST",
+      headers: billingHeaders(),
+      body: JSON.stringify({ properties: ["payment_processing_arr"], inputs: chunk.map(id => ({ id })) }),
+    });
+    if (!res.ok) throw hubspotErr("HubSpot deal ARR read failed", res.status, await res.text());
+    const body = await res.json() as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
+    for (const d of body.results ?? []) out.set(d.id, d.properties.payment_processing_arr ?? null);
+    if (i + 100 < dealIds.length) await sleep(REQUEST_SPACING_MS);
+  }
+  return out;
+}
+
+/** Batch-PATCHes deal properties, 100 per call. Partial failures are counted, not thrown. */
+export async function batchUpdateDeals(
+  updates: Array<{ id: string; properties: Record<string, string> }>,
+): Promise<{ updated: number; failed: number }> {
+  let updated = 0;
+  let failed = 0;
+  for (let i = 0; i < updates.length; i += 100) {
+    const chunk = updates.slice(i, i + 100);
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/deals/batch/update`, {
+      method: "POST",
+      headers: billingHeaders(),
+      body: JSON.stringify({ inputs: chunk }),
+    });
+    if (res.ok) {
+      const outcome = countBatchUpdateOutcome(await res.json() as HubspotBatchUpdateResponse, chunk.length);
+      updated += outcome.updated;
+      failed += outcome.failed;
+    } else {
+      failed += chunk.length;
+      console.error("deal batch update failed", res.status, await res.text());
+    }
+    if (i + 100 < updates.length) await sleep(REQUEST_SPACING_MS);
+  }
+  return { updated, failed };
+}
+
 // Deals are read and written on the billing app's token, like every other
 // deal call in this adapter (getDealById, createDeal, pushToHubSpot).
 export async function backfillEasyobDealLinks(): Promise<EasyobLinkBackfillSummary> {

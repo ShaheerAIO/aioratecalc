@@ -32,7 +32,6 @@ const GRAY = rgb(0.420, 0.447, 0.502);
 const GRID = rgb(0.898, 0.906, 0.922);
 const BLACK = rgb(0, 0, 0);
 const WHITE = rgb(1, 1, 1);
-const OFFICE_BG = rgb(1, 0.953, 0.941);
 const SYSCO_GREEN_BAR = rgb(0.553, 0.779, 0.239);
 const SYSCO_GREEN_TEXT = rgb(0.431, 0.705, 0.247);
 const SYSCO_NAVY = rgb(0, 0, 0.502);
@@ -261,22 +260,8 @@ function page3(ctx: Ctx, d: FoodbuyFormData) {
       value(ctx, p, v, DIRECT_COLS[i] + 6, y, DIRECT_COLS[i + 1] - DIRECT_COLS[i] - 10));
   });
 
-  // Office Use Only: Foodbuy's to tick, so it ships blank.
-  rect(p, 52.56, 249.89, 506.98, 10.44, OFFICE_BG);
-  rect(p, 52.08, 260.33, 507.94, 0.48, CORAL);
-  rect(p, 52.08, 249.89, 0.48, 10.44, CORAL);
-  rect(p, 559.54, 249.89, 0.48, 10.44, CORAL);
-  text(ctx, p, "Office Use Only", 54, 251.81, { font: ctx.bold, color: CORAL });
-  const office: [number, number, string][] = [
-    [60, 234.17, "Foodbuy Foodservice"], [294.05, 234.17, "Healthcare"],
-    [60, 218.21, "Resorts & Gaming"], [294.05, 218.21, "Golf Course"],
-    [60, 202.25, "Education"], [294.05, 202.25, "Clubs"],
-    [60, 186.14, "Other: _______________________"],
-  ];
-  for (const [x, y, label] of office) {
-    checkbox(p, x, y, INK, false);
-    text(ctx, p, label, x + 12.8, y);
-  }
+  // The original's Office Use Only box is left off (2026-10-30, product
+  // owner); its space below the table stays empty.
 }
 
 // ── Page 4 ───────────────────────────────────────────────────────────────────

@@ -431,14 +431,8 @@ export default function FoodbuyOnboardStep({ app }: Props) {
           </table>
         </div>
         {tableErrors("directAgreements")}
-        <div className={fb.office} aria-label="Office use only">
-          <div className={fb.officeHead}>Office Use Only</div>
-          <div className={fb.officeGrid}>
-            {["Foodbuy Foodservice", "Healthcare", "Resorts & Gaming", "Golf Course", "Education", "Clubs", "Other: ______________"].map(s => (
-              <span key={s}><input type="checkbox" className={fb.check} disabled tabIndex={-1} aria-hidden /> {s}</span>
-            ))}
-          </div>
-        </div>
+        {/* Where the original's Office Use Only box sat: removed, its space kept. */}
+        <div className={fb.officeSpace} />
       </section>
 
       {/* ── Page 4: Locations & distributor accounts ── */}

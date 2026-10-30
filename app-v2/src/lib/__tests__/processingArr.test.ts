@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { paymentProcessingArr, paymentProcessingArrBreakdown } from "@/lib/billing/processingArr";
+import { paymentProcessingArr, paymentProcessingArrBreakdown, planProcessingArrWrites } from "@/lib/billing/processingArr";
 import { buildDealProperties, isAtOrPastClosedWon, SALES_PIPELINE_STAGES } from "@/lib/adapters/hubspot";
 import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE } from "@/types/merchant";
 import { MARKETING_ADDON_PRODUCT, PAYROLL_PRODUCT_ID, WEBSITE_PRODUCT_ID } from "@/lib/quoting";
@@ -247,5 +247,27 @@ describe("isAtOrPastClosedWon", () => {
   it("lets an unknown or missing stage through", () => {
     expect(isAtOrPastClosedWon(null)).toBe(false);
     expect(isAtOrPastClosedWon("9999999999")).toBe(false);
+  });
+});
+
+describe("planProcessingArrWrites — the nightly ARR backstop", () => {
+  const arr = String(paymentProcessingArr(app()));
+  const plan = (apps: MerchantApplication[], current: Record<string, string | null>) =>
+    planProcessingArrWrites(apps, new Map(Object.entries(current)));
+
+  it("writes a published deal whose ARR is missing in HubSpot", () => {
+    expect(plan([app()], { "343689933538": null })).toEqual([
+      { id: "343689933538", properties: { payment_processing_arr: arr } },
+    ]);
+  });
+
+  it("rewrites a deal whose ARR differs, and leaves a matching one alone", () => {
+    expect(plan([app()], { "343689933538": "1" })).toHaveLength(1);
+    expect(plan([app()], { "343689933538": arr })).toEqual([]);
+  });
+
+  it("skips unpublished quotes and ones with no computable figure — never zeroes", () => {
+    expect(plan([app({ hubspotIds: null })], {})).toEqual([]);
+    expect(plan([app({ quoteType: "marketing_only" as StoredQuoteType })], { "343689933538": "500" })).toEqual([]);
   });
 });
