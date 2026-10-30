@@ -24,6 +24,8 @@ const deleteQuoteLineItem = vi.fn();
 const createDraftQuote = vi.fn();
 const associateQuote = vi.fn();
 const associateDealToContact = vi.fn();
+const writeCommissionToDeal = vi.fn();
+const attachQuoteSummaryToDeal = vi.fn();
 const publishQuote = vi.fn();
 const findOwnerByEmail = vi.fn();
 const listProducts = vi.fn();
@@ -89,6 +91,8 @@ vi.mock("@/lib/actions/pricing", () => ({
   getQuoteLimits: vi.fn().mockResolvedValue({ unitCaps: {}, maxBillingDelayDays: 90 }),
 }));
 // Partial mock: the pure builders stay real, only the network calls are stubbed.
+vi.mock("@/lib/billing/commissionWriteback", () => ({ writeCommissionToDeal }));
+vi.mock("@/lib/billing/quoteSummaryAttachment", () => ({ attachQuoteSummaryToDeal }));
 vi.mock("@/lib/adapters/hubspot", async importOriginal => ({
   ...(await importOriginal<typeof import("@/lib/adapters/hubspot")>()),
   syncDealFromApplication,
@@ -242,7 +246,7 @@ beforeEach(() => {
   for (const fn of [
     syncDealFromApplication, sendMagicLinkEmail, ensureQuoteContact, createQuoteLineItems, findOwnerByEmail,
     deleteQuoteLineItem, createDraftQuote, associateQuote, associateDealToContact,
-    publishQuote, listProducts, resolveQuoteTemplate,
+    publishQuote, listProducts, resolveQuoteTemplate, writeCommissionToDeal, attachQuoteSummaryToDeal,
   ]) fn.mockReset();
 
   patches.length = 0;
@@ -349,6 +353,29 @@ describe("publishing the billing quote", () => {
     expect(firstWithContact).toBeLessThan(firstWithLines);
     expect(firstWithLines).toBeLessThan(firstWithQuote);
     expect(firstWithQuote).toBeLessThan(firstPublished);
+  });
+
+  it("makes every deal write at publish, without waiting for acceptance", async () => {
+    await send();
+    // The deal sync carries name/amount, ARR, modules_used and commission;
+    // stage is forced to HubSpot's "Quote Sent".
+    expect(syncDealFromApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ id: row!.id, hubspotIds: expect.objectContaining({ publishedAt: expect.any(String) }) }),
+      { dealstage: "3634617027" },
+    );
+    expect(syncDealFromApplication.mock.invocationCallOrder[0]).toBeGreaterThan(publishQuote.mock.invocationCallOrder[0]);
+    expect(writeCommissionToDeal).toHaveBeenCalledTimes(1);
+    expect(attachQuoteSummaryToDeal).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports the publish when the deal sync fails, and records why", async () => {
+    syncDealFromApplication.mockRejectedValue(new Error("HubSpot 500"));
+    const result = await buildAndPublishBillingQuote(rowToApp(row as never));
+    expect(result.status).toBe("published");
+    const ids = storedIds()!;
+    expect(ids.publishedAt).not.toBeNull();
+    expect(ids.lastSyncError).toBe("HubSpot 500");
+    expect(attachQuoteSummaryToDeal).toHaveBeenCalledTimes(1);
   });
 
   it("creates nothing at all for a rate-only quote", async () => {

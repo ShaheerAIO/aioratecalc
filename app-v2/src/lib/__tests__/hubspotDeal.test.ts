@@ -452,21 +452,21 @@ describe("buildDealProperties", () => {
   // ── Regression: payment_processing_arr's acceptance gate is unchanged ─────
   // Guards against the hardware-commission change above accidentally loosening
   // (or the two blocks' logic getting merged into) the pre-existing gate.
-  describe("payment_processing_arr acceptance gate (regression)", () => {
+  describe("payment_processing_arr publish gate (regression)", () => {
     const PROCESSING_QUOTE = {
-      quoteAcceptedAt: "2026-10-13T00:00:00.000Z",
+      hubspotIds: { publishedAt: "2026-10-13T00:00:00.000Z" },
       analysis: { totalVolume: 50000, totalTransactions: 500 },
     };
 
-    it("omits payment_processing_arr when the quote has not been accepted, even with volume on file", () => {
+    it("omits payment_processing_arr when the quote has not been published, even with volume on file", () => {
       const props = buildDealProperties(appAt("merchant_filling", {
-        quoteAcceptedAt: null,
+        hubspotIds: null,
         analysis: PROCESSING_QUOTE.analysis,
       } as unknown as Partial<MerchantApplication>));
       expect(props).not.toHaveProperty("payment_processing_arr");
     });
 
-    it("writes payment_processing_arr once accepted, given a computable margin", () => {
+    it("writes payment_processing_arr once published, given a computable margin", () => {
       const props = buildDealProperties(appAt("quote_accepted", PROCESSING_QUOTE as unknown as Partial<MerchantApplication>));
       expect(props).toHaveProperty("payment_processing_arr");
     });

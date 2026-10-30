@@ -326,11 +326,8 @@ describe("the billing cron detects acceptance", () => {
     expect(buildOneTimeInvoiceSafely).toHaveBeenCalledWith(
       expect.objectContaining({ id: "app-1", quoteAcceptedAt: expect.any(String) })
     );
-    // And the quote summary PDF is filed on the deal, once (2026-10-29).
-    expect(attachQuoteSummaryToDeal).toHaveBeenCalledTimes(1);
-    expect(attachQuoteSummaryToDeal).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "app-1", hubspotDealId: "deal-9", quoteAcceptedAt: expect.any(String) })
-    );
+    // The quote summary PDF was filed at publish (2026-10-30) — not again here.
+    expect(attachQuoteSummaryToDeal).not.toHaveBeenCalled();
   });
 
   it("does NOT accept a published quote nobody has paid yet", async () => {

@@ -244,7 +244,7 @@ describe("lineHardwareCommission", () => {
 
   it("reports WHY there is no figure, so an unpriced product can't read as a zero one", () => {
     expect(lineHardwareCommission(hwLine({ costToRep: null })).status).toBe("no_cost");
-    expect(lineHardwareCommission(hwLine({ costToRep: 300 })).status).toBe("no_rate");
+    expect(lineHardwareCommission(hwLine({ costToRep: 300, productType: "Service" })).status).toBe("no_rate");
     expect(lineHardwareCommission(hwLine({ billingFrequency: "monthly" })).status).toBe("recurring");
     expect(lineHardwareCommission(hwLine({ costToRep: 0, repCommissionBps: 6000 })).status).toBe("computed");
   });
@@ -255,9 +255,23 @@ describe("lineHardwareCommission", () => {
     expect(result.rsm).toBeNull();
   });
 
-  it("contributes nothing (null) when the rate is missing, even with a cost set", () => {
+  it("defaults unrated hardware to 60/10 of the margin", () => {
+    // 2 × $500 = $1,000 net, cost 2 × $300 = $600, margin $400 → 60% / 10%.
     const result = lineHardwareCommission(hwLine({ costToRep: 300, repCommissionBps: null, rsmCommissionBps: null }));
+    expect(result.status).toBe("computed");
+    expect(result.rep).toBeCloseTo(240, 6);
+    expect(result.rsm).toBeCloseTo(40, 6);
+  });
+
+  it("does not default an unrated SERVICE line — no rate is still no commission", () => {
+    const result = lineHardwareCommission(hwLine({ costToRep: 300, productType: "Service" }));
     expect(result.rep).toBeNull();
+    expect(result.rsm).toBeNull();
+  });
+
+  it("keeps a product's own rate over the default", () => {
+    const result = lineHardwareCommission(hwLine({ costToRep: 300, repCommissionBps: 1000 }));
+    expect(result.rep).toBeCloseTo(40, 6);
     expect(result.rsm).toBeNull();
   });
 
@@ -306,8 +320,8 @@ describe("quoteHardwareCommission", () => {
     expect(result.perLine).toEqual([]);
   });
 
-  it("a plain one-time line with cost but no rate contributes nothing and isn't flagged as missingCost", () => {
-    const lines = [hwLine({ costToRep: 300, repCommissionBps: null, rsmCommissionBps: null })];
+  it("a one-time service line with cost but no rate contributes nothing and isn't flagged as missingCost", () => {
+    const lines = [hwLine({ costToRep: 300, productType: "Service", repCommissionBps: null, rsmCommissionBps: null })];
     const result = quoteHardwareCommission(lines);
     expect(result.missingCost).toEqual([]);
     expect(result.rep).toBe(0);

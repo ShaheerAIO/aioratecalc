@@ -61,13 +61,34 @@ verbatim-`quoteLines` hazard, both constraints above.
   - `DealPicker` still exists and is still used by `AccountsDashboard`, where the job is ADOPTING a deal onto an application that already exists. Its name search is scoped to ONE company, and `searchDealsByName` requires a `companyId` for that reason: it was once portal-wide, sitting directly under a list of the company's own deals, so typing a name there offered other restaurants' deals. It is NOT the escape hatch for a deal the index hasn't caught up with — it runs on the same lagging `deals/search` index the list does; `getDealById` is that escape hatch.
 - **HubSpot's `processing_volume` IS read into `processing.monthlyVolume` — and since 2026-10-18 also WRITTEN BACK (`COMPANY_WRITE_PROPS.processingVolume`, beside `average_ticket`), so a rep's typed volume replaces HubSpot's. Restored 2026-10-14, after one day out (product owner: "pull the monthly volume and avg ticket from hubspot. (ik i undid this before)").** This has now been reversed twice, so both sides are recorded. The DATA was never in doubt: `processing_volume` ("Processing Volume $") is real and genuinely populated — 27 companies on 2026-10-14, 24 on 2026-09-25, both checked against the live portal — and its near-namesake `monthly_card_volume` is the empty one (0 rows) and remains deliberately NOT read, because an empty property is worse than no property: it looks authoritative. The argument for removing it on 2026-10-13 also still stands on its own terms and is the thing to weigh if this comes up a third time: a prefilled figure is indistinguishable from an answer the rep actually gave, and `monthlyVolume` feeds both the rate matrix (picks the card-present rate) and the margin floor (can refuse the quote), so a stale value silently prices the deal. What makes it a prefill rather than a silent seed is `prefillMerge.ts`'s rule — the field is HubSpot's until the rep types in it, and the Review section badges it "from HubSpot" only while the value is still HubSpot's — so `processing.monthlyVolume` must stay in `REVIEW_FIELD_PATHS` and out of `UNKNOWABLE_REVIEW_FIELDS` (which would claim HubSpot has nothing, and that is false).
 - **SUPERSEDED 2026-10-18: average ticket now lives on the Company as `average_ticket`** (number, `companyinformation`, created by hand by the product owner). It is REQUIRED with monthly volume on every processing quote at prospect creation (form hard block + `createProspectAction`), written back by `syncCompanyDetails` via `COMPANY_WRITE_PROPS.averageTicket` (digits only — one bad value fails the whole PATCH), and prefilled from it on the next quote. History follows: **AVERAGE TICKET CANNOT BE PULLED FROM HUBSPOT — there is no such property.** Asked for alongside monthly volume on 2026-10-14 and checked live: no average-ticket property exists on COMPANY or on DEAL in portal 244508708, and the nearest candidate, "Average Orders per Day" (`migrated_00nfi000009tl34uaa`), is populated on **zero** companies — so deriving a ticket as volume ÷ orders would never produce a value either. Average ticket therefore still comes from the statement analysis or the rep's own entry, and stays in `UNKNOWABLE_REVIEW_FIELDS`. Closing this needs a new custom HubSpot property that somebody then fills in; it is not a code change.
-- **`payment_processing_arr` is written to the HubSpot deal at ACCEPTANCE, never at publish.** It is
+- **EVERY HubSpot deal write lands when the quote is PUBLISHED (product owner, 2026-10-30: acceptance
+  was "too late", "it should be uniform").** Right after the publish is persisted,
+  `buildAndPublishBillingQuote` runs `syncDealFromApplication(app, { dealstage: QUOTE_SENT_DEAL_STAGE })`
+  (name/amount on EasyOB-created deals, stage → HubSpot's **"Quote Sent"** `3634617027`, still
+  forward-only, `payment_processing_arr`, `modules_used`, hardware commission), then
+  `writeCommissionToDeal` and `attachQuoteSummaryToDeal`. All of it fire-and-log: a failed deal sync
+  goes to `lastSyncError` and the publish still reports `published`. Acceptance still runs the deal
+  sync (moves the stage on to Signed/Awaiting Payment Info and refreshes the rest) but no longer
+  files the PDF. `STAGE_MAP.quote_sent` deliberately still says Discovery Meeting: EasyOB's
+  `quote_sent` is set when the lead link goes out, before any HubSpot quote exists. Rate-only
+  quotes never publish, so they keep the acceptance-time writes. Quotes published before this
+  change get nothing until acceptance.
+- **Hardware commission (`rep_commission` / `rsm_commission`, deal, dollars) defaults to 60% / 10% of
+  the MARGIN** for a one-time hardware line whose product has no rate on file (product owner,
+  2026-10-30). `DEFAULT_HARDWARE_*_BPS` in `commission.ts`; "hardware" = productType not Software or
+  Service. A product's own rate still wins, services with no rate still earn nothing, and a line
+  with no `cost_to_rep` still earns nothing (`no_cost`) — POS Unit and Customer Facing Display had
+  no cost on 2026-10-30. Written only when `HARDWARE_COMMISSION_WRITEBACK_ENABLED` is exactly
+  `"true"`; the product owner asked for it on every deal on 2026-10-30, but the prod var (it exists,
+  value hidden) has to be set to `true` by hand.
+- **`payment_processing_arr` is written once the quote is PUBLISHED** (gated on
+  `hubspotIds.publishedAt`; was acceptance until 2026-10-30, product owner chose this knowing
+  `total_arr` will now include quotes that never close). It is
   `appliedTargetMargin × monthly volume × 12` (product owner, 2026-10-12), computed from the TRUE
   margin — this is AIO's own forecast of AIO's own revenue on a record reps already read, and
   padding it would make the number wrong rather than make a secret safe; the FLOOR is the secret and
   is not derivable from it. Marketing-only quotes and quotes with no volume are OMITTED, not zeroed:
-  this property feeds HubSpot's calculated `total_arr`, which the sales org reads as booked revenue,
-  and a 0 there reads as a measured zero. `saas_revenue` is deliberately not written.
+  this property feeds HubSpot's calculated `total_arr`, and a 0 there reads as a measured zero. `saas_revenue` is deliberately not written.
 - **`modules_used` ("Modules Used", deal checkbox) is OVERWRITTEN on every deal sync** (product
   owner, 2026-10-29) from `buildDealProperties`: Marketing = All-in-One, Marketing Only, or Partial
   Ordering with the marketing line; Website / Payroll = that line is on the quote; POS/Payments =
@@ -138,15 +159,15 @@ automatic attachment).
   (`LeadQuoteView.tsx`, `window.print()`). `@media print` rules in `LeadQuoteView.module.css` and
   `quote/quote.module.css` drop the button, the next-step panel, the document links, the footnote and
   the back link, so the paper copy is the heading plus `QuoteSummary`. No route, no server code.
-- **PDF on the deal, at ACCEPTANCE.** `attachQuoteSummaryToDeal` (`lib/billing/quoteSummaryAttachment.ts`)
+- **PDF on the deal, at PUBLISH since 2026-10-30 (was acceptance).** `attachQuoteSummaryToDeal` (`lib/billing/quoteSummaryAttachment.ts`)
   builds `buildCustomerSafeQuote(app)`, the same projection the quote page renders, so there is nothing
   internal to leak: no Adyen cost, margin, floor or commission is in that shape. It renders it with
   `lib/quoteSummaryPdf.ts`, uploads it PRIVATE to `/EasyOB/Quote Summaries` and notes it onto the deal
   (`hs_attachment_ids`, note→deal association **214**) via `lib/adapters/hubspotFiles.ts`. Called from
   exactly two places:
-  - `recordAcceptance` (`acceptance.ts`), after the account-link email, behind `opts.syncDeal`
-    (the DEBUG billing bypass passes `false`, so it never files anything), and below the lost-race
-    return, so only the observer that won the `quoteAcceptedAt` write files it.
+  - `buildAndPublishBillingQuote`, once the publish is persisted; a re-run skips as
+    `already_published`, so it files once. The note reads "as sent to" (vs "as accepted by" for
+    the rate-only route below). `recordAcceptance` no longer files it.
   - `/api/lead/[token]/accept` (rate-only quotes), on `firstAcceptance` only, so "Email Me a New Link"
     never files a second copy.
   So the one-shot acceptance guards are the dedupe. Nothing is persisted (no file id or note id on the

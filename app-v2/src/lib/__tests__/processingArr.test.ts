@@ -15,6 +15,7 @@ function app(over: Partial<MerchantApplication> = {}): MerchantApplication {
     hubspotDealId: "343689933538",
     quoteType: "all_in_one" as StoredQuoteType,
     quoteAcceptedAt: "2026-10-12T00:00:00.000Z",
+    hubspotIds: { publishedAt: "2026-10-11T00:00:00.000Z" },
     pricingModel: "2-tier",
     quoteRates: DEFAULT_QUOTE_RATES,
     quoteConfig: { monthlyVolume: 100000, avgTicket: 30 },
@@ -154,15 +155,15 @@ describe("paymentProcessingArrBreakdown — the implausible-rate guard", () => {
 });
 
 describe("buildDealProperties — payment_processing_arr", () => {
-  it("writes it once the merchant has accepted", () => {
-    const props = buildDealProperties(app());
+  it("writes it once the quote is published, before acceptance", () => {
+    const props = buildDealProperties(app({ quoteAcceptedAt: null }));
     expect(Number(props.payment_processing_arr)).toBeGreaterThan(0);
   });
 
-  // Before acceptance it is a hope, and this property feeds total_arr, which
-  // the sales org reads as booked revenue.
-  it("omits it before acceptance", () => {
-    expect(buildDealProperties(app({ quoteAcceptedAt: null }))).not.toHaveProperty("payment_processing_arr");
+  // Every HubSpot write lands when the quote is generated (2026-10-30), and
+  // not before: there is no HubSpot quote yet to forecast from.
+  it("omits it before the quote is published", () => {
+    expect(buildDealProperties(app({ hubspotIds: null }))).not.toHaveProperty("payment_processing_arr");
   });
 
   // Omitted rather than zeroed: a 0 would read as a measured zero.

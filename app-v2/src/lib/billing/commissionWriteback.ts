@@ -1,7 +1,7 @@
 // Writes `signing_commission` / `activation_commission` to the HubSpot deal,
 // alongside (never instead of) `payment_processing_arr` — same moment
-// (acceptance, see acceptance.ts), same "omit rather than zero, never for a
-// quote with no basis" rule.
+// (publish, see publishBillingQuote.ts; acceptance re-runs it), same "omit
+// rather than zero, never for a quote with no basis" rule.
 //
 // BEHIND AN ENV FLAG, DEFAULT OFF — `COMMISSION_WRITEBACK_ENABLED` must be
 // exactly "true" (same posture as `AIO_DASHBOARD_ENABLED`). The reason is the

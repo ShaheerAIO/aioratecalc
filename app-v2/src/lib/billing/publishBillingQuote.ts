@@ -40,9 +40,13 @@ import {
   listProducts,
   planLineItemReconciliation,
   publishQuote,
+  QUOTE_SENT_DEAL_STAGE,
+  syncDealFromApplication,
   tenantCompanyId,
   type QuoteAssociation,
 } from "@/lib/adapters/hubspot";
+import { writeCommissionToDeal } from "@/lib/billing/commissionWriteback";
+import { attachQuoteSummaryToDeal } from "@/lib/billing/quoteSummaryAttachment";
 import { resolveQuoteTemplate, type ResolvedQuoteTemplate } from "@/lib/actions/quoteTemplates";
 import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
 import {
@@ -540,6 +544,24 @@ export async function buildAndPublishBillingQuote(
       lastSyncErrorAt: null,
     };
     await persist(app.id, ids);
+
+    // 6. Every deal write, now (product owner, 2026-10-30: these used to wait
+    //    for acceptance, which was too late). Stage goes to "Quote Sent";
+    //    acceptance still moves it on and re-syncs the rest. None of this may
+    //    report a publish failure — the quote is already live — so a failed
+    //    deal sync is recorded in lastSyncError, the same as at acceptance.
+    const publishedApp: MerchantApplication = { ...app, hubspotIds: ids };
+    try {
+      await syncDealFromApplication(publishedApp, { dealstage: QUOTE_SENT_DEAL_STAGE });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[billing] ${app.id}: HubSpot deal sync at publish failed`, message);
+      ids = { ...ids, lastSyncError: message, lastSyncErrorAt: new Date().toISOString() };
+      await persist(app.id, ids).catch(() => {});
+    }
+    // Both never throw.
+    await writeCommissionToDeal({ ...publishedApp, hubspotIds: ids });
+    await attachQuoteSummaryToDeal(publishedApp);
 
     // The merchant's own copy of this quote is NOT sent by anything in this
     // codebase — there is no explicit "send quote" endpoint in HubSpot's v3/v4

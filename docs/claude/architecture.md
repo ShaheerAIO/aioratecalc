@@ -29,7 +29,7 @@ app-v2/src/
                                 live numbers are in `rate_matrix_policy`, admin-edited at
                                 /admin/settings/rate-matrix. SUGGESTS only — see the constraint below.
   lib/billing/processingArr.ts ← paymentProcessingArr() — margin × monthly volume × 12, written to the
-                                HubSpot deal's `payment_processing_arr` at ACCEPTANCE only
+                                HubSpot deal's `payment_processing_arr` once the quote is PUBLISHED
   lib/claude.ts              ← analyzeStatement(), generateProposal() — server-side only
   lib/utils.ts               ← fmt$, fmtPct, fmtPct2, fmtBps, parseJSON
   lib/defaults.ts            ← DEFAULT_PROCESSOR (shared between client settings UI and server adapter)

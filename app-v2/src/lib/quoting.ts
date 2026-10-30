@@ -1777,7 +1777,7 @@ export function orderPointsPerUnit(line: { hubspotProductId: string; name: strin
 // Product types that are never physical ordering hardware. A line with one of
 // these and no rule isn't "unclassified" — it simply doesn't carry points.
 // Anything else with no rule (inventory, or untyped) does get flagged.
-const NON_HARDWARE_PRODUCT_TYPES = ["Software", "Service"];
+export const NON_HARDWARE_PRODUCT_TYPES = ["Software", "Service"];
 
 // Ordering points that will never appear in an inventory system or on a
 // hardware line. A website USED to be declared here too, but moved to being

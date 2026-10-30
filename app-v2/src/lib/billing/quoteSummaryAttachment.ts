@@ -1,14 +1,14 @@
-// At acceptance, file the merchant's quote summary as a PDF on the HubSpot
-// deal (product owner, 2026-10-29). BEST-EFFORT and NEVER THROWS: the
-// acceptance is already committed when this runs, and a missing attachment
-// must never un-accept a merchant or hold up their account email. Every
-// failure is logged and nothing else.
+// File the merchant's quote summary as a PDF on the HubSpot deal (product
+// owner, 2026-10-29). Filed at PUBLISH since 2026-10-30, and at acceptance
+// only for a rate-only quote, which never publishes. BEST-EFFORT and NEVER
+// THROWS: the quote is already published (or accepted) when this runs, and a
+// missing attachment must never fail either. Every failure is logged and
+// nothing else.
 //
 // Not persisted, and not deduplicated here: both callers only reach it ONCE
-// per application — `recordAcceptance` after winning its conditional
-// `quoteAcceptedAt` write (a losing observer returns before this), and the
-// rate-only accept route on `firstAcceptance` only. A retried acceptance
-// therefore never files a second copy, and a failed one is not retried.
+// per application — `buildAndPublishBillingQuote` once the publish is
+// persisted (a re-run skips as already_published), and the rate-only accept
+// route on `firstAcceptance` only. A failed one is not retried.
 
 import { fileDealPdf } from "@/lib/adapters/hubspotFiles";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
@@ -39,7 +39,7 @@ export async function attachQuoteSummaryToDeal(app: MerchantApplication): Promis
       dealId,
       fileName: quoteSummaryFileName(businessName),
       bytes,
-      noteBody: `Quote summary as accepted by ${escapeHtml(businessName || "the customer")}. Attached as a PDF.`,
+      noteBody: `Quote summary as ${app.quoteAcceptedAt ? "accepted by" : "sent to"} ${escapeHtml(businessName || "the customer")}. Attached as a PDF.`,
     });
     return { attached: true, fileId, noteId };
   } catch (err) {

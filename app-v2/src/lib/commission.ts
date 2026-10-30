@@ -43,7 +43,7 @@
 // a number that pays people.
 
 import {
-  INCLUDED_SERVICE_PRODUCTS, isCompedService, isPreAuthProduct, lineNetAmount,
+  INCLUDED_SERVICE_PRODUCTS, isCompedService, isPreAuthProduct, lineNetAmount, NON_HARDWARE_PRODUCT_TYPES,
   PROCESSING_DISCLOSURE_PRODUCT, quoteTotals,
 } from "@/lib/quoting";
 import type { QuoteLine } from "@/types/merchant";
@@ -356,6 +356,13 @@ export type LineHardwareCommission = {
 export const FIRST_KIOSK_REP_BPS = 4500; // 45%
 export const FIRST_KIOSK_RSM_BPS = 500; // 5%
 
+// Hardware whose HubSpot product carries no rate at all earns the standard
+// hardware split (product owner, 2026-10-30: "its a 60/10 percent split").
+// Still a share of the MARGIN, so a product with no cost on file still earns
+// nothing ("no_cost") until someone fills it in.
+export const DEFAULT_HARDWARE_REP_BPS = 6000; // 60%
+export const DEFAULT_HARDWARE_RSM_BPS = 1000; // 10%
+
 export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission {
   const none = (status: LineCommissionStatus): LineHardwareCommission => ({
     hubspotProductId: line.hubspotProductId,
@@ -376,8 +383,10 @@ export function lineHardwareCommission(line: QuoteLine): LineHardwareCommission 
   if (cost === null) return none("no_cost");
 
   const firstKiosk = line.firstKiosk === true;
-  const repBps = line.repCommissionBps ?? null;
-  const rsmBps = line.rsmCommissionBps ?? null;
+  const unrated = (line.repCommissionBps ?? null) === null && (line.rsmCommissionBps ?? null) === null;
+  const hardware = !NON_HARDWARE_PRODUCT_TYPES.includes((line.productType || "").trim());
+  const repBps = unrated && hardware ? DEFAULT_HARDWARE_REP_BPS : line.repCommissionBps ?? null;
+  const rsmBps = unrated && hardware ? DEFAULT_HARDWARE_RSM_BPS : line.rsmCommissionBps ?? null;
   if (!firstKiosk && repBps === null && rsmBps === null) return none("no_rate");
 
   const marginTotal = lineNetAmount(line) - cost * line.qty;

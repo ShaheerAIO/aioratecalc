@@ -127,6 +127,11 @@ export function classifyDealStage(stageId: string | null): { label: string | nul
 // `quote_sent`/`proposal_sent` write landing on "Quote Sent" here would be
 // superseded by "Signed/Awaiting Payment Info" in the same breath the
 // customer accepts — a stage that would flash for zero observable time.
+// HubSpot's "Quote Sent" stage, written when the quote is published
+// (publishBillingQuote.ts). Not in STAGE_MAP: EasyOB's `quote_sent` stage is
+// set when the lead link goes out, before any HubSpot quote exists.
+export const QUOTE_SENT_DEAL_STAGE = "3634617027";
+
 export const STAGE_MAP = {
   lead_link_sent: "2717103849",     // Discovery Meeting
   quote_sent: "2717103849",         // Discovery Meeting
@@ -260,12 +265,13 @@ export function buildDealProperties(app: MerchantApplication): Record<string, st
     props.pipeline = HUBSPOT_DEAL_PIPELINE_ID;
     props.dealstage = dealstage;
   }
-  // Only once the merchant has actually accepted. Before that it is a hope,
-  // and this property feeds `total_arr`, which the sales org reads as booked
-  // revenue. Null for a marketing-only quote and for one with no volume
-  // behind it — see lib/billing/processingArr.ts — and omitted rather than
-  // zeroed, because a 0 here reads as a measured zero.
-  if (app.quoteAcceptedAt) {
+  // Only once the quote is published in HubSpot (product owner, 2026-10-30 —
+  // was acceptance; every HubSpot write now lands when the quote is
+  // generated). This feeds `total_arr`, so total_arr now includes published
+  // quotes that never close. Null for a marketing-only quote and for one with
+  // no volume behind it — see lib/billing/processingArr.ts — and omitted
+  // rather than zeroed, because a 0 here reads as a measured zero.
+  if (app.hubspotIds?.publishedAt) {
     const arr = paymentProcessingArr(app);
     if (arr !== null) props.payment_processing_arr = String(arr);
   }
@@ -483,7 +489,10 @@ async function dropBackwardStage(dealId: string, props: Record<string, string>):
  * function creating one on the fly. Throws rather than creating, so a stale
  * call site can't quietly mint an orphaned duplicate deal.
  */
-export async function syncDealFromApplication(app: MerchantApplication): Promise<string> {
+export async function syncDealFromApplication(
+  app: MerchantApplication,
+  opts?: { dealstage?: string },
+): Promise<string> {
   if (!app.hubspotDealId) {
     throw new Error(
       "Refusing to sync a HubSpot deal: this application has no hubspotDealId. " +
@@ -493,6 +502,12 @@ export async function syncDealFromApplication(app: MerchantApplication): Promise
   }
 
   const props = buildDealProperties(app);
+  // An explicit stage (the publish-time "Quote Sent") replaces the mapped one,
+  // still subject to the forward-only guard below.
+  if (opts?.dealstage) {
+    props.pipeline = HUBSPOT_DEAL_PIPELINE_ID;
+    props.dealstage = opts.dealstage;
+  }
 
   // Update existing deal. v3 PATCH takes properties only — associations are
   // set on create, or after the fact via the v4 PUT (verified live
