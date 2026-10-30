@@ -92,8 +92,8 @@ export const SHEET_ITEMS: Record<SheetKey, SheetItem> = {
   kiosk27:   { label: "Kiosk 27\"",                           msrp: 999, orders: true },
   // list / HubSpot / finalized $799 (Zia tab $720; no suggested MSRP)
   kiosk156:  { label: "Kiosk 15.6\"",                         msrp: 799, orders: true },
-  // suggested MSRP $2,700 (list and HubSpot $2,459)
-  mega:      { label: "Mega Kiosk",                           msrp: 2700, orders: true },
+  // $2,250 (2026-10-30, product owner: "the correct price for mega is 2250, find it in hs"); was suggested MSRP $2,700
+  mega:      { label: "Mega Kiosk",                           msrp: 2250, orders: true },
   // suggested MSRP $603 (finalized $399, list $330)
   tableside: { label: "AIO Tableside POS",                    msrp: 603, orders: true },
   // HubSpot $199. Not on the sheet. It is the partial-ordering plan's order

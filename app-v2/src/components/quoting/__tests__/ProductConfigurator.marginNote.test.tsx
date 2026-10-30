@@ -37,9 +37,10 @@ import styles from "@/components/quoting/ProductConfigurator.module.css";
 
 const CATALOG: CatalogProduct[] = [
   { hubspotProductId: "335283119838", name: "All-in-One Platform", price: 399, billingFrequency: "monthly", productType: "Software" },
+  { hubspotProductId: "333275576048", name: "Website", price: 50, billingFrequency: "monthly", productType: "Software" },
 ];
 
-function renderConfigurator(pricingPreview?: QuoteMarginPreview | null, channels: string[] = ["qr"]) {
+function renderConfigurator(pricingPreview?: QuoteMarginPreview | null, picks: Array<{ hubspotProductId: string; qty: number }> = [{ hubspotProductId: "333275576048", qty: 1 }]) {
   return render(
     <ProductConfigurator
       layout="document"
@@ -48,14 +49,14 @@ function renderConfigurator(pricingPreview?: QuoteMarginPreview | null, channels
       // unrelated to this margin note, but the host never has a preview to
       // show before a plan is picked either, so this matches how the prop is
       // actually supplied in practice. A processing quote with no picks AND no
-      // declared channels is rate-only and derives no platform line at all
-      // (`resolvePlatformLine` → `none_needed`), so one channel is declared
+      // declared picks is rate-only and derives no platform line at all
+      // (`resolvePlatformLine` → `none_needed`), so one pick is made
       // by default purely to give the quote a line — `.docTotals` is gated on
       // `quoteLines.length > 0`. The rate-only regression test below passes
-      // `channels={[]}` deliberately, to land on zero quote lines.
+      // no picks deliberately, to land on zero quote lines.
       quoteType="all_in_one"
-      picks={[]}
-      channels={channels}
+      picks={picks}
+      channels={[]}
       adjustments={{}}
       pricingPreview={pricingPreview}
       documentHeader={<h2 data-testid="mirror-heading">Live quote · what Test Co will see</h2>}

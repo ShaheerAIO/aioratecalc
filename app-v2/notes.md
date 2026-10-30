@@ -693,3 +693,13 @@ remove marketing button from MPO (autoselect it, cannot be changed) - the reason
 
 header for payment details should be bolder for customer facing quote prev
 when quote get sent, move deal stage to "quote sent" (if deal is in sales meeting 1 or 2)
+
+
+remove kiosk ordering and online ordering from all in one and order and pay
+remove adjustablity from online ordering line item for MPO
+remove the online ordering from the picker since the chip at the top already selects it
+kiosk ordering as a line item will be removed from hubspot
+the mega loaner should not be able to be discounted
+website cannot be discounted
+hide "ordering channels" from picker
+hide mega kiosk from O&P. the correct price for mega is 2250 find it in hs

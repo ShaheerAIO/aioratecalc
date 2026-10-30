@@ -16,7 +16,6 @@ import {
   ONLINE_ORDERING_PRODUCT,
   POS_COMPANIONS,
   MAX_BILLING_DELAY_DAYS,
-  ORDER_POINT_CHANNELS,
   PAYROLL_PRODUCT_ID,
   PLAN_DEFAULT_BILLING_DELAY_DAYS,
   PLATFORM_PRODUCTS,
@@ -50,6 +49,7 @@ import {
   FIRST_KIOSK_PRODUCT_IDS,
   maxQtyFor,
   minimumTerminalsFor,
+  NEVER_DISCOUNTED_PRODUCT_IDS,
   planDefaultBillingStart,
   planIncludesWebsite,
   toQuoteLine,
@@ -358,8 +358,16 @@ export default function ProductConfigurator({
     // "move payroll line item to the top, as a toggle"): it is the toggle
     // above the groups (`payrollToggle`), and stays in `selectable` for the
     // same reason.
+    //
+    // Online Ordering has no row on MPO either (2026-10-30, product owner:
+    // "remove the online ordering from the picker since the chip at the top
+    // already selects it"). It stays in `selectable` so the chip's pick isn't
+    // dropped.
     const listed = selectable.filter(
-      p => !isNamedProduct(MARKETING_ADDON_PRODUCT, p) && p.hubspotProductId !== PAYROLL_PRODUCT_ID
+      p =>
+        !isNamedProduct(MARKETING_ADDON_PRODUCT, p) &&
+        p.hubspotProductId !== PAYROLL_PRODUCT_ID &&
+        !(planned === "marketing_partial" && isNamedProduct(ONLINE_ORDERING_PRODUCT, p))
     );
     if (!kit) return groupProducts(listed);
 
@@ -766,9 +774,6 @@ export default function ProductConfigurator({
     );
   };
 
-  const toggleChannel = (id: string) =>
-    onChannelsChange(channels.includes(id) ? channels.filter(c => c !== id) : [...channels, id]);
-
   // ── Marketing Partial Ordering's chips (2026-10-28) ───────────────────────
   // Product owner: "When you select MPO, there should be big chips for kiosk,
   // online ordering, and marketing that will autoselect the stuff
@@ -1116,6 +1121,9 @@ export default function ProductConfigurator({
     // already says "in the package"; that's the honest answer.
     const l = lineFor.get(id);
     if (!onAdjustmentsChange || !l) return null;
+    // Online Ordering on MPO is not adjustable (2026-10-30, product owner): no
+    // Adjust / discount / billing-start control on any layout.
+    if (planned === "marketing_partial" && isNamedProduct(ONLINE_ORDERING_PRODUCT, l)) return null;
 
     const open = openAdjust.has(id);
     const start = l.billingStart;
@@ -1139,6 +1147,8 @@ export default function ProductConfigurator({
     // billing-start control stays: this is exactly the line that carries the
     // 45-day delay, and taking the whole drawer away would break that.
     const isPlanLine = platform.line?.hubspotProductId === id;
+    // Loaner and Website: no discount inputs either (2026-10-30), billing start stays.
+    const noDiscount = isPlanLine || NEVER_DISCOUNTED_PRODUCT_IDS.includes(id);
 
     return (
       <div className={styles.adjustWrap}>
@@ -1162,7 +1172,7 @@ export default function ProductConfigurator({
 
         {open && (
           <div className={styles.adjustDrawer}>
-            {unitMode && !isPlanLine && (
+            {unitMode && !noDiscount && (
               <div className={styles.unitList}>
                 {units.map((u, i) => {
                   const us = u.billingStart;
@@ -1234,7 +1244,7 @@ export default function ProductConfigurator({
                 after 60 days" looks like the discount is what starts in 60
                 days, which is the opposite of what a delayed start does. */}
             {!unitMode && (<>
-            {!isPlanLine && (
+            {!noDiscount && (
             <div className={styles.adjustBlock}>
               <span className={styles.adjustBlockTitle}>Discount</span>
             <label className={styles.adjustField}>
@@ -1361,7 +1371,7 @@ export default function ProductConfigurator({
                 with more than one unit, and always while already in the mode so
                 it can be left. Never on the plan line — it carries no discount
                 to scope per unit, and it is always qty 1 regardless. */}
-            {(l.qty > 1 || unitMode) && !isPlanLine && (
+            {(l.qty > 1 || unitMode) && !noDiscount && (
               <button
                 type="button"
                 className={styles.linkBtn}
@@ -1375,6 +1385,10 @@ export default function ProductConfigurator({
               <p className={styles.adjustNote}>
                 The plan price is fixed and can&apos;t be discounted — delay when billing starts
                 instead.
+              </p>
+            ) : noDiscount ? (
+              <p className={styles.adjustNote}>
+                This product can&apos;t be discounted.
               </p>
             ) : (
               <p className={styles.adjustNote}>
@@ -1918,23 +1932,8 @@ export default function ProductConfigurator({
           {rated && (
             <section>
               <div className={styles.buildHeadRow}>
-                <h3 className={styles.buildHead}>Ordering channels</h3>
+                <h3 className={styles.buildHead}>Licenses</h3>
                 <span className={styles.buildMeta}>{orderPoints.total} licenses</span>
-              </div>
-              <div className={styles.chipRow}>
-                {ORDER_POINT_CHANNELS.map(c => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={styles.chip}
-                    data-on={channels.includes(c.id)}
-                    aria-pressed={channels.includes(c.id)}
-                    title={c.note ?? undefined}
-                    onClick={() => toggleChannel(c.id)}
-                  >
-                    {c.label}
-                  </button>
-                ))}
               </div>
               {breakdown.needsReview.map(r => (
                 <div key={r.name} className={styles.reviewNote}>
@@ -2305,23 +2304,9 @@ export default function ProductConfigurator({
             <div className={styles.sectionHead}>
               <h2 className={styles.sectionTitle}>Licenses</h2>
               <p className={styles.sectionNote}>
-                Every place an order can be placed. Hardware is counted from the lines above; these
-                channels never appear on a hardware list, so they have to be declared here. Reported
+                Every place an order can be placed, counted from the hardware lines above. Reported
                 on the deal — the plan above is what sets the platform fee.
               </p>
-            </div>
-
-            <div className={styles.channelGrid}>
-              {ORDER_POINT_CHANNELS.map(c => (
-                <label key={c.id} className={styles.channel} data-on={channels.includes(c.id)}>
-                  <input
-                    type="checkbox" checked={channels.includes(c.id)}
-                    onChange={() => toggleChannel(c.id)} className={styles.channelBox}
-                  />
-                  <span className={styles.channelLabel}>{c.label}</span>
-                  {c.note && <span className={styles.channelNote}>{c.note}</span>}
-                </label>
-              ))}
             </div>
 
             <div className={styles.countRow}>

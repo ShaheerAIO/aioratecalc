@@ -250,6 +250,9 @@ export const DEFAULT_SHOW_TABLETS = false;
 export const RETIRED_PICK_PRODUCT_IDS: readonly string[] = [
   "332793212658", // Marketing Kit - 27" Kiosk
   "260674226888", // Mega Kiosk (ordering)
+  // Kiosk Ordering ($100/mo). Hidden everywhere (2026-10-30): the product owner
+  // says it will be deleted from HubSpot, and nothing else excluded it.
+  "343579167454",
 ];
 
 export function isRetiredPick(hubspotProductId: string): boolean {
@@ -264,10 +267,19 @@ export function isRetiredPick(hubspotProductId: string): boolean {
  * The Mega Kiosk Loaner is off the two POS plans (2026-10-29, product owner:
  * hide it on Order & Pay and All-in-One); Marketing Only and Marketing
  * Partial Ordering keep it.
+ *
+ * 2026-10-30 (product owner): "remove kiosk ordering and online ordering from
+ * all in one and order and pay" (Online Ordering on both POS plans) and "hide
+ * mega kiosk from O&P" (Marketing Kit - Mega Kiosk on Order & Pay). Online
+ * Ordering stays on MPO, where its chip selects it.
  */
 export const PLAN_HIDDEN_PICK_PRODUCT_IDS: Partial<Record<QuoteType, readonly string[]>> = {
-  order_pay_only: [MEGA_LOANER_PRODUCT_ID],
-  all_in_one: [MEGA_LOANER_PRODUCT_ID],
+  order_pay_only: [
+    MEGA_LOANER_PRODUCT_ID,
+    ONLINE_ORDERING_PRODUCT.hubspotProductId,
+    "332617109238", // Marketing Kit - Mega Kiosk
+  ],
+  all_in_one: [MEGA_LOANER_PRODUCT_ID, ONLINE_ORDERING_PRODUCT.hubspotProductId],
 };
 
 /** Whether the picker should stop offering this product on this plan. */
@@ -1837,7 +1849,8 @@ export type OrderPointsBreakdown = {
 
 /**
  * The QUOTED order-point count: order-point-bearing hardware lines plus the
- * non-hardware channels declared on the deal. (The DEPLOYED count is a
+ * channels argument, which is inert since 2026-10-30 (the "Ordering channels"
+ * picker was removed; declared channels contribute 0 points). (The DEPLOYED count is a
  * different thing entirely and comes from aioinventory — Phase H item 4/5.)
  */
 export function deriveOrderPoints(lines: QuoteLine[], channels: string[]): OrderPointsBreakdown {
@@ -1867,10 +1880,11 @@ export function deriveOrderPoints(lines: QuoteLine[], channels: string[]): Order
     }
   }
 
-  const declared = ORDER_POINT_CHANNELS.filter(c => channels.includes(c.id)).map(c => c.id);
-  total += declared.length;
+  // Channels are inert (2026-10-30, product owner: hide AND ignore): they add
+  // no points. `channels` stays in the signature so callers compile.
+  void channels;
 
-  return { orderPoints: { hardware, channels: declared, total }, needsReview, unclassified };
+  return { orderPoints: { hardware, channels: [], total }, needsReview, unclassified };
 }
 
 // ── The platform line (derived, not chosen) ─────────────────────────────────
@@ -1929,7 +1943,7 @@ export function isPlatformProduct(name: string, id?: string): boolean {
 export type PlatformLineResult =
   /** The platform line to put on the quote. */
   | { status: "resolved"; line: QuoteLine; productName: string }
-  /** A rate-only quote: nothing picked and no channel declared, so no plan is being sold yet. */
+  /** A rate-only quote: nothing picked, so no plan is being sold yet. */
   | { status: "none_needed"; line: null; productName: null }
   /** A platform line IS due but the catalog didn't yield it. Never quietly quote without it. */
   | { status: "unresolved"; line: null; productName: string };
@@ -1951,14 +1965,13 @@ export function resolvePlatformLine(
   catalog: CatalogProduct[]
 ): PlatformLineResult {
   // A RATE-ONLY quote — we're quoting a processing rate and nothing else, so
-  // there's no plan to charge for. Channels count here (unlike the install
-  // services, which need something physical on site): a website-ordering
-  // merchant with no hardware is still on the platform.
+  // there's no plan to charge for. Declared channels no longer count
+  // (2026-10-30, product owner: ignored), so only picks keep a quote off this.
   //
   // Only a PROCESSING quote can be rate-only. A marketing plan has no rate, so
   // an empty one isn't a rate quote — it's a subscription with nothing added
   // to it yet, and it still charges.
-  if (isProcessingQuote(quoteType) && pickedLines.length === 0 && channels.length === 0) {
+  if (isProcessingQuote(quoteType) && pickedLines.length === 0) {
     return { status: "none_needed", line: null, productName: null };
   }
 
@@ -2333,6 +2346,15 @@ function discountCapFor(
 }
 
 /**
+ * Products a rep may never discount (product owner, 2026-10-30: "the mega
+ * loaner should not be able to be discounted", "website cannot be
+ * discounted"). `adjustmentBlockers` refuses any rep discount on them; a
+ * `coveredByPackage` line is exempt, since the All-in-One free Website is
+ * AIO's own 100% comp, not a rep's choice.
+ */
+export const NEVER_DISCOUNTED_PRODUCT_IDS: readonly string[] = [MEGA_LOANER_PRODUCT_ID, WEBSITE_PRODUCT_ID];
+
+/**
  * Everything wrong with the rep's edits, in the language of the person who has
  * to fix it. Hard refusals, not warnings — these ride onto a document that
  * cannot be edited, deleted or voided once the merchant accepts it.
@@ -2378,7 +2400,9 @@ export function adjustmentBlockers(
     // derived comp: `COMPED_SERVICE_PRODUCT_IDS` and the package/plan-
     // inclusion comps never touch the platform line, so nothing here can
     // mistake AIO's own derivation for a rep's discount.
-    if (isPlanLine && hasDiscount) {
+    if (NEVER_DISCOUNTED_PRODUCT_IDS.includes(line.hubspotProductId) && hasDiscount && !line.coveredByPackage) {
+      blockers.push(`"${line.name}" can't be discounted. Remove the discount.`);
+    } else if (isPlanLine && hasDiscount) {
       blockers.push(
         `"${line.name}" is the plan's own subscription line, and the plan price can't be discounted. ` +
         `Remove the discount, or discount a different line.`

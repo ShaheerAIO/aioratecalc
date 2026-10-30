@@ -222,6 +222,24 @@ describe("quote types", () => {
     expect(isAllowedForQuoteType(find("Menu Board Computer"), "marketing_only")).toBe(true);
   });
 
+  it("hides Online Ordering and the Marketing Kit - Mega on Order & Pay, Online Ordering on All-in-One; MPO keeps Online Ordering (2026-10-30)", () => {
+    const online = find("Online Ordering");
+    const megaKit = find("Marketing Kit - Mega Kiosk");
+    expect(isHiddenPick(online.hubspotProductId, "order_pay_only")).toBe(true);
+    expect(isHiddenPick(megaKit.hubspotProductId, "order_pay_only")).toBe(true);
+    expect(isHiddenPick(online.hubspotProductId, "all_in_one")).toBe(true);
+    expect(isHiddenPick(megaKit.hubspotProductId, "all_in_one")).toBe(false);
+    expect(isHiddenPick(online.hubspotProductId, "marketing_partial")).toBe(false);
+    // Visibility only: a draft carrying one still saves.
+    expect(isAllowedForQuoteType(online, "order_pay_only")).toBe(true);
+  });
+
+  it("hides Kiosk Ordering (343579167454) on every plan", () => {
+    for (const plan of ["order_pay_only", "all_in_one", "marketing_only", "marketing_partial"] as QuoteType[]) {
+      expect(isHiddenPick("343579167454", plan), plan).toBe(true);
+    }
+  });
+
   it("hides the Mega Kiosk Loaner from the picker on the two POS plans only — still allowed, so a draft saves (2026-10-29)", () => {
     const loaner = find("Mega Kiosk Loaner");
     for (const plan of ["order_pay_only", "all_in_one"] as const) {
@@ -328,17 +346,13 @@ describe("always-included services", () => {
     ]);
   });
 
-  it("attaches to products, not to declared channels", () => {
-    // A QR-ordering merchant has no on-site anything for a $999 install or
-    // a $999 install to cover, even though the channel does carry a
-    // platform fee.
+  it("attaches to products, and declared channels are inert", () => {
+    // Channels are ignored since 2026-10-30: a no-picks quote with a channel
+    // is still rate-only, with no platform line and no services.
     const built = buildQuote("all_in_one", [], ["qr"], CATALOG);
-    expect(built.orderPoints.total).toBe(1);
-    expect(built.platform.status).toBe("resolved");
+    expect(built.orderPoints.total).toBe(0);
+    expect(built.platform.status).toBe("none_needed");
     expect(built.includedServices.lines).toEqual([]);
-    // The $0 rate disclosure rides along on every quote AIO processes for
-    // (2026-10-14). It bills nothing and installs nothing.
-    expect(built.quoteLines.map(l => l.name)).toEqual(["All-in-One Platform", RATE_LINE]);
   });
 
   it("is LOUD when a required service isn't in the catalog", () => {
@@ -603,13 +617,10 @@ describe("deriveOrderPoints", () => {
     expect(deriveOrderPoints([line("Mega Kiosk", 1)], []).orderPoints.total).toBe(1);
   });
 
-  it("counts each declared channel once and only the known ones — including the retired 'website' id", () => {
-    // "website" was retired as a channel 2026-10-13 (moved to the Website
-    // product instead), so a saved row still carrying it must be dropped
-    // exactly like any other unrecognised id, not crash and not count.
-    const { orderPoints } = deriveOrderPoints([], ["website", "qr", "not_a_channel"]);
-    expect(orderPoints.channels).toEqual(["qr"]);
-    expect(orderPoints.total).toBe(1);
+  it("declared channels contribute 0 points (inert since 2026-10-30)", () => {
+    const { orderPoints } = deriveOrderPoints([], ["website", "qr", "third_party_delivery", "not_a_channel"]);
+    expect(orderPoints.channels).toEqual([]);
+    expect(orderPoints.total).toBe(0);
   });
 
   it("excludes payment terminals and cash drawers — non-ordering hardware", () => {
@@ -682,12 +693,9 @@ describe("platform line selection", () => {
       .toEqual({ status: "none_needed", line: null, productName: null });
   });
 
-  it("still charges the plan when the only ordering point is a declared channel", () => {
-    // A QR-ordering merchant with no hardware is on the platform. Unlike
-    // the install services, which need something physical on site.
-    const platform = resolvePlatformLine("all_in_one", [], ["qr"], CATALOG);
-    expect(platform.status).toBe("resolved");
-    expect(platform.line!.unitPrice).toBe(399);
+  it("a no-picks processing quote with declared channels is still rate-only (channels ignored since 2026-10-30)", () => {
+    expect(resolvePlatformLine("all_in_one", [], ["qr"], CATALOG))
+      .toEqual({ status: "none_needed", line: null, productName: null });
   });
 
   it("a website-only merchant now expresses it by picking the Website PRODUCT, and that is NOT rate-only", () => {
@@ -767,7 +775,7 @@ describe("buildQuote — the one derivation", () => {
     const built = buildQuote("all_in_one", picked([["POS Unit", 2], ["Cash Drawer", 1]]), ["qr"], CATALOG);
 
     expect(built.blockers).toEqual([]);
-    expect(built.orderPoints.total).toBe(3); // 2 POS + the QR channel
+    expect(built.orderPoints.total).toBe(2); // 2 POS; the QR channel is ignored
     expect(built.quoteLines.map(l => l.name)).toEqual([
       "All-in-One Platform",
       "Onsite Installation",

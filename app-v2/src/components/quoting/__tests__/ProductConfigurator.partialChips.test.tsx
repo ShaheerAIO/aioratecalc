@@ -98,9 +98,9 @@ describe("Marketing Partial Ordering chips", () => {
     expect(picksText()).toContain(`${BOARD}:3`);
     expect(screen.queryByRole("button", { name: "Marketing" })).toBeNull();
 
-    // Hidden from the list; Online Ordering keeps its row.
+    // Both hidden from the list: Online Ordering has no row (2026-10-30), the chip selects it.
     expect(screen.queryByRole("button", { name: "Add one Marketing (Partial Ordering)" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Add one Online Ordering" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add one Online Ordering" })).toBeNull();
     for (const name of ["Kiosk", "Online Ordering"]) {
       expect(chip(name).getAttribute("aria-pressed"), name).toBe("false");
     }

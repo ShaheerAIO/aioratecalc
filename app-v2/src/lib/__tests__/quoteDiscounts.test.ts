@@ -5,6 +5,8 @@ import {
   DEFAULT_MAX_DISCOUNT_PERCENT,
   INCLUDED_SERVICE_PRODUCTS,
   MAX_BILLING_DELAY_DAYS,
+  MEGA_LOANER_PRODUCT_ID,
+  WEBSITE_PRODUCT_ID,
   WIFI_PRODUCT_ID,
   adjustmentBlockers,
   applyPackageComp,
@@ -209,6 +211,42 @@ describe("adjustmentBlockers", () => {
 
   it("defaults the cap below 100, so an unseeded policy can't authorize giving the quote away", () => {
     expect(DEFAULT_MAX_DISCOUNT_PERCENT).toBeLessThan(100);
+  });
+});
+
+describe("products a rep may never discount (2026-10-30)", () => {
+  const loaner = (over: Partial<QuoteLine> = {}) =>
+    line({ hubspotProductId: MEGA_LOANER_PRODUCT_ID, name: "Mega Kiosk Loaner", unitPrice: 100, ...over });
+  const website = (over: Partial<QuoteLine> = {}) =>
+    line({ hubspotProductId: WEBSITE_PRODUCT_ID, name: "Website", unitPrice: 50, billingFrequency: "monthly", ...over });
+
+  it("refuses a percent or cash discount on the Loaner", () => {
+    const [pct] = adjustmentBlockers([loaner({ discountPercent: 10 })], 100);
+    expect(pct).toContain("can't be discounted");
+    expect(adjustmentBlockers([loaner({ discountAmount: 20 })], 100)).toHaveLength(1);
+    expect(adjustmentBlockers([loaner()], 100)).toEqual([]);
+  });
+
+  it("refuses a discount on the Website on Order & Pay", () => {
+    const catalog = [...CATALOG, p(WEBSITE_PRODUCT_ID, "Website", 50, "monthly", "Service")];
+    const picked = [toQuoteLine(catalog.find(c => c.hubspotProductId === POS_ID)!, 1), toQuoteLine(catalog.find(c => c.hubspotProductId === WEBSITE_PRODUCT_ID)!, 1)];
+    const built = buildQuote("order_pay_only", picked, [], catalog, { [WEBSITE_PRODUCT_ID]: { discountPercent: 20 } }, 100);
+    expect(built.blockers.some(b => b.includes("can't be discounted"))).toBe(true);
+  });
+
+  it("does not refuse the All-in-One included Website (covered, 100%)", () => {
+    const catalog = [...CATALOG, p(WEBSITE_PRODUCT_ID, "Website", 50, "monthly", "Service")];
+    const picked = [toQuoteLine(catalog.find(c => c.hubspotProductId === POS_ID)!, 1), toQuoteLine(catalog.find(c => c.hubspotProductId === WEBSITE_PRODUCT_ID)!, 1)];
+    const built = buildQuote("all_in_one", picked, [], catalog);
+    const web = built.quoteLines.find(l => l.hubspotProductId === WEBSITE_PRODUCT_ID)!;
+    expect(web.coveredByPackage).toBeTruthy();
+    expect(web.discountPercent).toBe(100);
+    expect(built.blockers.filter(b => b.includes("can't be discounted"))).toEqual([]);
+    expect(adjustmentBlockers([web], 50)).toEqual([]);
+  });
+
+  it("leaves a normal product's discount alone", () => {
+    expect(adjustmentBlockers([line({ discountPercent: 30 })], 50)).toEqual([]);
   });
 });
 
