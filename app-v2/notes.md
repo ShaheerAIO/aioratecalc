@@ -648,3 +648,48 @@ we need to add the foodbuy form to hubspot. When someone fills it out it should 
 make the buckets match with the new doc
 
 /Users/shaheerhasnain/Downloads/10.2026_AIO-Restaurant-Payment-Pricing-Guide.pdf
+
+
+write the whole percent range instead of bps
+make the ui just silelenty locked to the range for adjusting the cp rate
+
+
+10/28
+
+installation should be automatically discounted to 100% off
+
+when u select MPO, there should be big chips for kiosk, online ordering, and marketing. that will autoselect the stuff accordingly. hide the marketing(partial ordering) line item it will confuse people. Just have it silently added if they click the marketing chip.
+
+cant get negative comission off discounting the onboarding and installation
+
+the rep should be able to give the kiosk away for free in the qsr package, but if they want to charge for it they also should be able to. add a little button that allows them to charge it
+
+need to remove the ui for "how would u like to pay" because the payment plans for the invoice come through klarna at checkout. Check if there is uncommitted work already fixing this.
+
+
+10/29
+45 day default billing delay
+bolden card processing header
+discounting first kiosk does not remove comission
+cannot loose money on discounting install and obt if they discount it to 0. but they get comission if they charge for it
+lower comission rate for the first kiosk, 45 & 5
+
+customer facing view:
+make cp smaller
+billing contact first for customer end (confirm details page)
+turn off klarna keep affirm
+5% cc charge
+print summary, add it to deal attatchment
+licenses => ordering points change terminology
+remove payroll from subscription box make it its own box
+move the payment details box to the bottom
+
+
+
+10/30
+quote picker:
+move payroll line item to the top, as a toggle
+remove marketing button from MPO (autoselect it, cannot be changed) - the reason for this is that if someone wants kiosk and online ordering without marketing they can select order and pay and just remove the POS its still 299
+
+header for payment details should be bolder for customer facing quote prev
+when quote get sent, move deal stage to "quote sent" (if deal is in sales meeting 1 or 2)
