@@ -37,6 +37,17 @@ const BIZ_TYPE_LABEL: Record<BusinessInfo["bizType"], string> = {
 export const FOODBUY_LOCATIONS_PER_PAGE = 22;
 export const FOODBUY_MAX_LOCATIONS = FOODBUY_LOCATIONS_PER_PAGE * 3;
 export const FOODBUY_MAX_DIRECT_AGREEMENTS = 8;
+// The Provider block on Sysco's page (page 5) is Foodbuy's own contact, fixed
+// on the original form.
+export const FOODBUY_PROVIDER = {
+  name: "Jill Rosenhouse",
+  title: "Sr. Director of Account Management",
+  company: "Foodbuy Foodservice",
+  address: "11470 N. 53rd Street",
+  cityStateZip: "Temple Terrace. FL 33617",
+  phone: "813-736-7589",
+  email: "jrosenhouse",
+};
 /** A drawn signature is a small PNG; anything near this is not one. */
 export const FOODBUY_SIGNATURE_MAX_CHARS = 300_000;
 const MAX_FIELD = 200;

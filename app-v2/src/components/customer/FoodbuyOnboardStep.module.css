@@ -1,73 +1,266 @@
-/* Only what the Foodbuy agreement needs beyond CustomerOnboardStep.module.css,
-   whose form language it shares. */
+/* The Foodbuy agreement drawn as paper, typed on in place. Page chrome comes
+   from CustomerOnboardStep.module.css; everything on a sheet copies Foodbuy's
+   printed form (lib/foodbuyPdf.ts) — Arial, coral headings, underlined blanks
+   — so it stays paper-white in dark mode too. */
 
-/* One location/distributor row, or one direct agreement: a quiet card so a
-   list of them reads as rows, not one long form. */
-.rowCard {
+.pageWide {
+  max-width: 54rem;
+}
+
+.sheet {
+  --fb-coral: #e8604a;
+  --fb-ink: #1a1a1a;
+  --fb-gray: #6b7280;
+  --fb-grid: #e5e7eb;
+  --fb-field: #eef3ff; /* the light blue a PDF form gives a fillable field */
+  --fb-error: #c62828;
+  --fb-error-bg: #fdecec;
+
+  background: #fff;
+  color: var(--fb-ink);
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  padding: 3rem 3.5rem;
+  margin-bottom: var(--space-lg);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-  background: var(--paper);
-  padding: var(--space-md);
-  margin-top: var(--space-md);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.08);
 }
 
-.rowCardHead {
+.logo {
+  display: block;
+  width: 7rem;
+  height: auto;
+}
+
+.headerRow {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: var(--space-sm);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--ink-3);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.grid3 {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
+  align-items: flex-end;
   gap: var(--space-md);
 }
 
-.addRow {
+.docTitle {
+  margin: var(--space-sm) 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--fb-ink);
+}
+
+.docTitleSmall {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.docSubtitle {
+  margin: 0.15rem 0 0;
+  color: var(--fb-gray);
+}
+
+.titleRule {
+  border: 0;
+  border-top: 1.5px solid var(--fb-coral);
+  margin: var(--space-md) 0;
+}
+
+.metaRow {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.sectionHeading {
+  margin: var(--space-lg) 0 var(--space-sm);
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--fb-coral);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--fb-coral);
+}
+
+/* ---------- Write-on blanks ---------- */
+
+.lines2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 2rem;
+  row-gap: 0.35rem;
+}
+
+.contactGap {
   margin-top: var(--space-md);
 }
 
-.radioGroup {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
+.line {
+  min-width: 0;
 }
 
-.subhead {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--ink-2);
-  margin: var(--space-lg) 0 var(--space-sm);
+.lineInner {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.lineLabel {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.blank,
+.cell {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 0.15rem 0.3rem;
+  border: 0;
+  border-bottom: 1px solid var(--fb-gray);
+  border-radius: 0;
+  background: var(--fb-field);
+  color: #000;
+  font: inherit;
+}
+
+.cell {
+  border-bottom: 0;
+  padding: 0.3rem;
+  font-size: 0.75rem;
+}
+
+.blank:focus-visible,
+.cell:focus-visible {
+  outline: 2px solid var(--fb-coral);
+  outline-offset: 0;
+  background: #fff;
+}
+
+.blank::placeholder,
+.cell::placeholder {
+  color: #9ca3af;
+}
+
+.blankError {
+  background: var(--fb-error-bg);
+  border-bottom: 2px solid var(--fb-error);
+}
+
+.lineError {
+  margin: 0.15rem 0 0;
+  font-size: 0.7rem;
+  color: var(--fb-error);
+}
+
+.fixed {
+  color: #000;
+}
+
+/* ---------- Checkboxes and notes ---------- */
+
+.option {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin-bottom: 0.6rem;
+  cursor: pointer;
+}
+
+.check {
+  flex: none;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin: 0.15rem 0 0;
+  accent-color: var(--fb-coral);
+}
+
+.note {
+  display: block;
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  color: var(--fb-gray);
+}
+
+.terms {
+  margin: 0 0 0.9rem;
+  text-align: justify;
+}
+
+.acceptRow {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.accept {
+  color: var(--fb-coral);
+}
+
+/* ---------- Signature block ---------- */
+
+.signRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+  margin-top: var(--space-lg);
+  align-items: end;
+}
+
+.signCell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.caption {
+  margin-top: 0.2rem;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--fb-gray);
+}
+
+.printLine {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.printLine .blank {
+  border-bottom-color: var(--fb-ink);
+}
+
+.fixedLine {
+  min-height: 1.4rem;
+  border-bottom: 1px solid var(--fb-ink);
+  text-align: center;
+  color: #000;
+}
+
+.onBehalf {
+  margin: var(--space-lg) 0 0;
 }
 
 .signaturePad {
   display: block;
   width: 100%;
-  height: 9rem;
-  background: var(--paper);
-  border: 1px dashed var(--rule);
-  border-radius: var(--radius-sm);
+  height: 5.5rem;
+  background: var(--fb-field, var(--paper));
+  border: 0;
+  border-bottom: 1px solid var(--fb-ink, var(--ink));
   touch-action: none; /* a finger signs instead of scrolling the page */
   cursor: crosshair;
 }
 
 .signaturePadInvalid {
-  border-color: var(--danger);
-  background: var(--danger-bg);
+  border-bottom: 2px solid var(--fb-error, var(--danger));
+  background: var(--fb-error-bg, var(--danger-bg));
 }
 
 .signatureBar {
   display: flex;
   justify-content: space-between;
-  margin-top: var(--space-2xs);
-  font-size: 0.75rem;
-  color: var(--ink-3);
+  margin-top: 0.15rem;
+  font-size: 0.7rem;
+  color: var(--fb-gray, var(--ink-3));
 }
 
 .linkBtnPlain {
@@ -76,11 +269,237 @@
   background: none;
   font: inherit;
   font-weight: 600;
-  color: var(--ink-2);
+  color: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
 }
+
+/* ---------- Tables (pages 3 and 4) ---------- */
+
+.tableTitle {
+  margin: var(--space-md) 0 var(--space-xs);
+  font-weight: 700;
+  color: var(--fb-coral);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.table th {
+  background: var(--fb-coral);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: left;
+  padding: 0.35rem 0.4rem;
+  vertical-align: middle;
+}
+
+.table td {
+  padding: 0;
+  border: 1px solid var(--fb-grid);
+}
+
+.tableLocations th {
+  text-align: center;
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+/* Column widths as page 4 sets them. */
+.tableLocations th:nth-child(1) { width: 16%; }
+.tableLocations th:nth-child(2) { width: 19%; }
+.tableLocations th:nth-child(3) { width: 13%; }
+.tableLocations th:nth-child(4) { width: 9%; }
+.tableLocations th:nth-child(5) { width: 9%; }
+.tableLocations th:nth-child(6) { width: 25%; }
+.tableLocations th:nth-child(7) { width: 9%; }
+
+.tableErrors {
+  margin: var(--space-xs) 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.72rem;
+  color: var(--fb-error);
+}
+
+.moreLines {
+  margin-top: var(--space-sm);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  color: var(--fb-coral);
+  cursor: pointer;
+}
+
+.office {
+  margin-top: var(--space-xl);
+  border: 1px solid var(--fb-coral);
+}
+
+.officeHead {
+  background: #fff3f0;
+  padding: 0.1rem 0.4rem;
+  font-weight: 700;
+  color: var(--fb-coral);
+}
+
+.officeGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem 2rem;
+  padding: 0.6rem 0.5rem;
+  color: var(--fb-gray);
+}
+
+.officeGrid .check {
+  vertical-align: -0.1rem;
+}
+
+/* ---------- Page 5: Sysco's letter ---------- */
+
+.sysco {
+  --sy-navy: #000080;
+  --sy-blue: #0082c8;
+  --sy-head: #003366;
+  position: relative;
+  padding-top: 3.25rem;
+  font-family: Verdana, Arial, Helvetica, sans-serif;
+}
+
+.syscoBar {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1.1rem;
+  background: #8dc73d;
+}
+
+.syscoTitle {
+  margin: 0;
+  text-align: center;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-stretch: condensed;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--sy-navy);
+}
+
+.syscoSub {
+  margin: 0.2rem 0 0;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #6eb43f;
+}
+
+.syscoRule {
+  border: 0;
+  border-top: 1.5px solid var(--sy-blue);
+  margin: var(--space-sm) -1.5rem;
+}
+
+.syscoLop {
+  margin: 0 0 var(--space-sm);
+  text-align: center;
+  font-weight: 700;
+  color: var(--sy-blue);
+}
+
+.syscoText {
+  margin: 0 0 0.8rem;
+}
+
+.syscoSection {
+  margin-top: var(--space-sm);
+  border: 1px solid var(--sy-blue);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.syscoHead {
+  padding: 0.2rem;
+  background: var(--sy-head);
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  font-size: 0.75rem;
+}
+
+.syscoFromP1 {
+  margin: 0.4rem 0 0;
+  text-align: center;
+  font-size: 0.68rem;
+  color: var(--fb-gray);
+}
+
+.syscoBody {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 1.25rem;
+  padding: 0.6rem 0.8rem;
+}
+
+.boxField {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.boxField .lineError {
+  grid-column: 2;
+}
+
+.boxWide {
+  grid-column: 1 / -1;
+}
+
+.boxLabel {
+  text-align: right;
+  font-size: 0.72rem;
+}
+
+.box {
+  display: block;
+  min-height: 1.35rem;
+  min-width: 0;
+  padding: 0.12rem 0.3rem;
+  border: 1px solid #999;
+  border-radius: 3px;
+  font-size: 0.78rem;
+  color: #000;
+  overflow-wrap: anywhere;
+}
+
+.boxInput {
+  width: 100%;
+  background: var(--fb-field);
+  font-family: inherit;
+}
+
+.boxInput:focus-visible {
+  outline: 2px solid var(--sy-blue);
+  outline-offset: 0;
+  background: #fff;
+}
+
+.sigImg {
+  display: block;
+  max-height: 2.2rem;
+  max-width: 100%;
+}
+
+/* ---------- Review ---------- */
 
 /* The rendered agreement, shown before it is sent. */
 .preview {
@@ -95,7 +514,40 @@
 }
 
 @media (max-width: 40rem) {
-  .grid3 {
+  .sheet {
+    padding: 1.75rem 1rem;
+  }
+
+  .lines2,
+  .signRow,
+  .syscoBody,
+  .officeGrid {
     grid-template-columns: 1fr;
+  }
+
+  .lineInner {
+    flex-wrap: wrap;
+  }
+
+  .boxField {
+    grid-template-columns: 1fr;
+  }
+
+  /* Seven columns don't fit a phone: the table scrolls sideways instead. */
+  .tableLocations {
+    min-width: 46rem;
+  }
+
+  .boxLabel {
+    text-align: left;
+  }
+
+  .headerRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .syscoRule {
+    margin-inline: 0;
   }
 }

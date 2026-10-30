@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// The Foodbuy step as one flow: fill in → Review (server-rendered PDF) → Send,
-// with the same answers going to both routes. The canvas is stubbed: jsdom
+// The Foodbuy step as one flow: type on the agreement → Review (server-rendered
+// PDF) → Send, with the same answers going to both routes. The canvas is stubbed: jsdom
 // has no 2D context, and the pad only needs to produce a PNG data URL.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -44,11 +44,11 @@ function fillIn() {
   type("Federal ID # (EIN)", "12-3456789");
   type("Distributor name/location", "Sysco Los Angeles");
   type("Account #", "168255");
-  fireEvent.click(screen.getByLabelText(/No, we don't currently participate/));
+  fireEvent.click(screen.getByLabelText(/NO, WE DO NOT CURRENTLY PARTICIPATE/));
   type("Contact name", "Miguel Perez", 2); // contacts 1 and 2 come first
   fireEvent.change(screen.getAllByLabelText("Phone")[2], { target: { value: "510-695-5147" } });
   fireEvent.change(screen.getAllByLabelText("Email")[2], { target: { value: "miguel@sysco.com" } });
-  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByLabelText("Accept the terms"));
   const pad = screen.getByLabelText(/Signature pad/);
   fireEvent.pointerDown(pad, { clientX: 5, clientY: 5 });
   fireEvent.pointerMove(pad, { clientX: 50, clientY: 20 });
@@ -60,7 +60,7 @@ describe("FoodbuyOnboardStep", () => {
     render(<FoodbuyOnboardStep app={APP} />);
     expect(screen.getByLabelText("Legal entity name")).toHaveProperty("value", "Torta Palace LLC");
     expect(screen.getByLabelText("Federal ID # (EIN)")).toHaveProperty("value", "");
-    expect(screen.getByLabelText("Restaurant location name")).toHaveProperty("value", "Torta Palace");
+    expect(screen.getAllByLabelText("Restaurant location name")[0]).toHaveProperty("value", "Torta Palace");
   });
 
   it("pre-fills the EIN given on the confirmation step, and it stays editable", () => {
@@ -75,17 +75,22 @@ describe("FoodbuyOnboardStep", () => {
     fireEvent.click(screen.getByText("Review Agreement →"));
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.getByText("Enter your 9-digit Federal ID # (EIN)")).toBeTruthy();
-    expect(screen.getByText("Account # is required")).toBeTruthy();
+    expect(screen.getByText("Line 1: Account # is required")).toBeTruthy();
     expect(screen.getByText("Sign the agreement")).toBeTruthy();
   });
 
-  it("adds a distributor row at the same location", () => {
+  it("shows the agreement's blank table lines, and checks a line typed further down as its own row", () => {
     render(<FoodbuyOnboardStep app={APP} />);
-    fireEvent.click(screen.getByText("+ Add Distributor or Location"));
     const names = screen.getAllByLabelText("Restaurant location name");
-    expect(names).toHaveLength(2);
-    expect(names[1]).toHaveProperty("value", "Torta Palace");
-    expect(screen.getAllByLabelText("Account #")[1]).toHaveProperty("value", "");
+    expect(names).toHaveLength(10);
+    expect(names[1]).toHaveProperty("value", "");
+    type("Account #", "555", 3);
+    fireEvent.click(screen.getByText("Review Agreement →"));
+    expect(screen.getAllByLabelText("Restaurant location name")[3].getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getAllByLabelText("Restaurant location name")[1].getAttribute("aria-invalid")).toBe("false");
+    expect(screen.getByText("Line 4: Location name is required")).toBeTruthy();
+    fireEvent.click(screen.getByText("+ More lines"));
+    expect(screen.getAllByLabelText("Restaurant location name")).toHaveLength(20);
   });
 
   it("reviews the server-rendered agreement, then sends the same answers", async () => {
@@ -101,7 +106,9 @@ describe("FoodbuyOnboardStep", () => {
     expect(previewUrl).toBe("/api/customer/applications/app-1/foodbuy/preview");
     const answers = JSON.parse(previewInit.body);
     expect(answers.business.ein).toBe("12-3456789");
+    expect(answers.locations).toHaveLength(1); // blank lines are left out
     expect(answers.locations[0]).toMatchObject({ distributor: "Sysco Los Angeles", acct: "168255" });
+    expect(answers.directAgreements).toEqual([]);
     expect(answers.signature).toBe(SIGNATURE);
 
     fireEvent.click(screen.getByText("Send to Foodbuy →"));

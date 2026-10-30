@@ -19,8 +19,9 @@ import {
   type PDFFont, type PDFImage, type PDFPage, type RGB,
 } from "pdf-lib";
 import type { FoodbuyFormData } from "@/types/merchant";
-import { FOODBUY_LOCATIONS_PER_PAGE } from "@/lib/foodbuyForm";
+import { FOODBUY_LOCATIONS_PER_PAGE, FOODBUY_PROVIDER } from "@/lib/foodbuyForm";
 import { FOODBUY_LOGO_JPEG_BASE64 } from "@/lib/foodbuyLogo";
+import { FOODBUY_TERMS } from "@/lib/foodbuyTerms";
 
 const W = 612;
 const H = 792;
@@ -38,18 +39,6 @@ const SYSCO_NAVY = rgb(0, 0, 0.502);
 const SYSCO_BLUE = rgb(0, 0.510, 0.783);
 const SYSCO_HEADER = rgb(0, 0.2, 0.4);
 const BOX_STROKE = rgb(0.6, 0.6, 0.6);
-
-// The Provider block on Sysco's page is Foodbuy's own contact, fixed on the
-// original form.
-const FOODBUY_PROVIDER = {
-  name: "Jill Rosenhouse",
-  title: "Sr. Director of Account Management",
-  company: "Foodbuy Foodservice",
-  address: "11470 N. 53rd Street",
-  cityStateZip: "Temple Terrace. FL 33617",
-  phone: "813-736-7589",
-  email: "jrosenhouse",
-};
 
 const WIN_ANSI_EXTRA = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ";
 /** The standard fonts only encode WinAnsi; anything else would throw mid-render. */
@@ -203,39 +192,12 @@ function formatEin(ein: string): string {
 
 // ── Page 2 ───────────────────────────────────────────────────────────────────
 
-// The terms, line for line as the original breaks them.
-const TERMS: [number, string][] = [
-  [569.26, "(“AIO”) and Foodbuy, LLC, to enroll the Business in the Foodbuy Foodservice (“FBFS”) purchasing program operated with AIO"],
-  [558.94, "AI For Restaurants (hereinafter referred to as AIO powered FBFS program). I further acknowledge and accept the terms of this"],
-  [548.62, "letter of participation and confirm that, to the best of its knowledge, all information provided is correct. If AIO or FBFS should"],
-  [538.18, "discover that the information provided is not correct, AIO or FBFS has the right to terminate the participation of Business in the"],
-  [527.83, "AIO powered FBFS program on written notice."],
-  [508.51, "Business shall disclose any current programs it desires to continue through a direct agreement with a manufacturer/vendor"],
-  [498.19, "and acknowledges that it will not be allowed to participate in any AIO powered FBFS programs relating to those direct"],
-  [487.75, "programs. Business agrees to provide information about direct agreements to AIO and FBFS as part of quarterly business"],
-  [477.43, "reviews for the AIO powered FBFS program to track changes in Business direct agreements. AIO or FBFS will notify you if it"],
-  [467.11, "discovers that a direct agreement exists that was not disclosed. Upon receipt of notification, Business agrees to notify AIO and"],
-  [456.79, "FBFS within five (5) business days as to which program will be retained and which will be cancelled. Business further agrees"],
-  [446.47, "to repay to AIO any amounts Business collects from AIO powered FBFS programs if a direct agreement exists for the same"],
-  [436.03, "products."],
-  [416.71, "The Business represents that it is a client of AIO and authorizes AIO and Foodbuy, LLC to share information about the"],
-  [406.39, "participation of Business in the AIO powered FBFS program, including purchasing data and allowance information as a result"],
-  [396.07, "of Business purchases."],
-  [376.63, "By signing this application, Business authorizes its distributors to release all purchase history, including price deviation, sales"],
-  [366.31, "dollars, and product-level data to AIO and Foodbuy LLC for the purpose of allowance tracking and opportunity analysis."],
-  [355.97, "Additionally, Business authorizes AIO powered FBFS to collect allowances, and other amounts, as a result of purchases"],
-  [345.65, "Business makes from manufacturers and distributors that have agreements with FBFS. Business acknowledges that FBFS will"],
-  [335.21, "incur expenses to operate the FBFS program and that FBFS will retain a portion of the allowances as part of its compensation"],
-  [324.89, "for program administration. The remaining allowances will be distributed by AIO as a credit to your AIO account or as a check."],
-  [314.57, "AIO will provide Business with reporting to show your earnings per location. Business agrees that those reports and content of"],
-  [304.25, "the reports, including, but not limited to, allowance information and rates, item prices, and allowance share arrangements with"],
-  [293.81, "AIO and FBFS (the “Foodbuy Data”) are the confidential and proprietary information of Foodbuy. Business may only use the"],
-  [283.49, "Foodbuy Data for internal business purposes associated with this letter of participation. Business agrees that it shall not"],
-  [273.17, "disclose the Foodbuy Data to any third party without Foodbuy’s prior written consent. Business agree to release, indemnify"],
-  [262.85, "and hold harmless distributors, AIO and Foodbuy from any and all claims and liability that may arise as a result of the"],
-  [252.41, "participation of Business in the AIO powered FBFS program. Both parties are free to cancel the agreement at any time with 90"],
-  [242.09, "days prior written notice. All rebates will be paid through the end of the cancellation period, based on the data received from"],
-  [231.77, "distributors."],
+// Where each line of the terms sits, after the first (which follows ACCEPT).
+const TERM_YS = [
+  569.26, 558.94, 548.62, 538.18, 527.83,
+  508.51, 498.19, 487.75, 477.43, 467.11, 456.79, 446.47, 436.03,
+  416.71, 406.39, 396.07,
+  376.63, 366.31, 355.97, 345.65, 335.21, 324.89, 314.57, 304.25, 293.81, 283.49, 273.17, 262.85, 252.41, 242.09, 231.77,
 ];
 
 function page2(ctx: Ctx, d: FoodbuyFormData) {
@@ -246,8 +208,9 @@ function page2(ctx: Ctx, d: FoodbuyFormData) {
 
   checkbox(p, 54, 580.18, CORAL, d.accept);
   text(ctx, p, "ACCEPT", 68.3, 580.18, { font: ctx.bold, size: 9.96, color: CORAL });
-  text(ctx, p, "I am an authorized agent, owner, or employee of the above Business and I authorize AIO AI For Restaurants", 114.74, 580.18);
-  for (const [y, line] of TERMS) text(ctx, p, line, 54, y);
+  const [lead, ...lines] = FOODBUY_TERMS.flat();
+  text(ctx, p, lead, 114.74, 580.18);
+  lines.forEach((line, i) => text(ctx, p, line, 54, TERM_YS[i]));
 
   // Signature and print name/title over the two upper lines.
   signature(ctx, p, 60, 181, 212, 30);
