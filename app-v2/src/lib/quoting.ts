@@ -184,7 +184,7 @@ export const DEFAULT_UNIT_CAPS: Record<string, number> = {
   "223452690130": 10, // POS Unit - With Customer Facing Display
   "318736467644": 10, // Customer Facing Display
   "223511653105": 20, // Payment Terminal - AMS1
-  "260674226888": 6,  // Mega Kiosk
+  "260674226888": 6,  // Mega Kiosk (Marketing Only)
   "222497165009": 6,  // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666": 6,  // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
   "335279520447": 20, // AIO Tableside POS
@@ -239,9 +239,10 @@ export const DEFAULT_SHOW_TABLETS = false;
 
 /**
  * Products no longer offered on NEW quotes (2026-10-27, product owner): the
- * 27" Marketing Kit ("remove the 27 inch kiosk from marketing entirely") and
- * the ordering Mega Kiosk (Mega taking payments is not sold to new customers;
- * a Mega is a display, bought as the Marketing Kit or on loan).
+ * 27" Marketing Kit ("remove the 27 inch kiosk from marketing entirely").
+ * The $1,500 "Marketing Kit - Mega Kiosk" followed 2026-10-30: the product
+ * owner confirmed "Mega Kiosk (Marketing Only)" (260674226888, $2,250) is the
+ * Mega to sell, as a marketing display (see PLAN_HIDDEN_PICK_PRODUCT_IDS).
  *
  * VISIBILITY ONLY, for the same reason as the tablet switch: a draft that
  * already carries one must still save, so the configurator keeps showing a
@@ -249,7 +250,7 @@ export const DEFAULT_SHOW_TABLETS = false;
  */
 export const RETIRED_PICK_PRODUCT_IDS: readonly string[] = [
   "332793212658", // Marketing Kit - 27" Kiosk
-  "260674226888", // Mega Kiosk (ordering)
+  "332617109238", // Marketing Kit - Mega Kiosk (retired 2026-10-30)
   // Kiosk Ordering ($100/mo). Hidden everywhere (2026-10-30): the product owner
   // says it will be deleted from HubSpot, and nothing else excluded it.
   "343579167454",
@@ -270,14 +271,15 @@ export function isRetiredPick(hubspotProductId: string): boolean {
  *
  * 2026-10-30 (product owner): "remove kiosk ordering and online ordering from
  * all in one and order and pay" (Online Ordering on both POS plans) and "hide
- * mega kiosk from O&P" (Marketing Kit - Mega Kiosk on Order & Pay). Online
- * Ordering stays on MPO, where its chip selects it.
+ * mega kiosk from O&P" (the Mega, "Mega Kiosk (Marketing Only)", on Order &
+ * Pay; All-in-One, MPO and Marketing Only offer it). Online Ordering stays on
+ * MPO, where its chip selects it.
  */
 export const PLAN_HIDDEN_PICK_PRODUCT_IDS: Partial<Record<QuoteType, readonly string[]>> = {
   order_pay_only: [
     MEGA_LOANER_PRODUCT_ID,
     ONLINE_ORDERING_PRODUCT.hubspotProductId,
-    "332617109238", // Marketing Kit - Mega Kiosk
+    "260674226888", // Mega Kiosk (Marketing Only)
   ],
   all_in_one: [MEGA_LOANER_PRODUCT_ID, ONLINE_ORDERING_PRODUCT.hubspotProductId],
 };
@@ -456,9 +458,11 @@ export function isPickable(product: CatalogProduct): boolean {
 // want none, and some want more and will pay for them. The rep sets the
 // quantity and `applyPlanIncludedHardware` holds the first three at $0.
 //
-// The 27" Marketing Kit stays listed so a draft carrying one still saves; it
-// is no longer OFFERED (RETIRED_PICK_PRODUCT_IDS).
+// Both Marketing Kits stay listed so a draft carrying one still saves; they
+// are no longer OFFERED (RETIRED_PICK_PRODUCT_IDS). The Mega sold since
+// 2026-10-30 is "Mega Kiosk (Marketing Only)", a marketing display.
 export const MARKETING_PRODUCTS = [
+  { name: "Mega Kiosk (Marketing Only)", hubspotProductId: "260674226888" },
   { name: "Marketing Kit - Mega Kiosk", hubspotProductId: "332617109238" },
   { name: "Marketing Kit - 27\" Kiosk", hubspotProductId: "332793212658" },
   { name: "Mega Kiosk Loaner", hubspotProductId: MEGA_LOANER_PRODUCT_ID },
@@ -484,7 +488,8 @@ const PARTIAL_ORDERING_PRODUCT_IDS: readonly string[] = [
   "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
   "223511653105", // Payment Terminal - AMS1
   "338690209525", // AIO Wifi Network Package - Unifi
-  "332617109238", // Marketing Kit - Mega Kiosk
+  "260674226888", // Mega Kiosk (Marketing Only)
+  "332617109238", // Marketing Kit - Mega Kiosk (retired; drafts still save)
   MEGA_LOANER_PRODUCT_ID,
   WEBSITE_PRODUCT_ID,
   "223511653103", // Menu Board Computer
@@ -719,12 +724,10 @@ export const POS_COMPANIONS = [
  * might need it"), so the terminal row says so rather than a quantity nobody
  * asked for appearing.
  *
- * The Mega Kiosk is the sharp end of it: unlike the other two it carries no
- * terminal at all (see PRODUCT_PARTS in quotePackages.ts), so a Mega sold for
- * ordering needs one bought beside it.
+ * NOT the Mega Kiosk (260674226888): since 2026-10-30 it is "Mega Kiosk
+ * (Marketing Only)", a marketing display that takes no orders or payments.
  */
 export const KIOSK_PRODUCT_IDS: readonly string[] = [
-  "260674226888", // Mega Kiosk — no terminal in the SKU
   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
 ];
@@ -747,7 +750,7 @@ export const SCREEN_PRODUCT_IDS = [
   "223452690130", // POS Unit - With Customer Facing Display
   "223511653101", // mPOS
   "223452690132", // KDS (Kitchen Display System)
-  "260674226888", // Mega Kiosk
+  "260674226888", // Mega Kiosk (Marketing Only)
   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
   // A Mega is a screen however it got there — bought or on loan (the sheet:
@@ -1742,7 +1745,6 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "POS Unit": { pointsPerUnit: 1, hubspotProductId: "217445755632" },
   "POS Unit - With Customer Facing Display": { pointsPerUnit: 1, hubspotProductId: "223452690130" },
   "mPOS": { pointsPerUnit: 1, hubspotProductId: "223511653101" },
-  "Mega Kiosk": { pointsPerUnit: 1, hubspotProductId: "260674226888" },
   "Kiosk 27\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "222497165009" },
   "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "223519571666" },
   // Steve's list counts a "Tableside AI Device"; this is that product.
@@ -1778,6 +1780,9 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   // Shaheer 2026-10-05. Typed `inventory`, so without an explicit 0 they'd
   // show the rep an "unclassified hardware" warning on every marketing quote.
   "Marketing Kit - Mega Kiosk": { pointsPerUnit: 0, hubspotProductId: "332617109238" },
+  // Was "Mega Kiosk" at 1 point; a marketing display since 2026-10-30
+  // (product owner), renamed in HubSpot to match.
+  "Mega Kiosk (Marketing Only)": { pointsPerUnit: 0, hubspotProductId: "260674226888" },
   "Marketing Kit - 27\" Kiosk": { pointsPerUnit: 0, hubspotProductId: "332793212658" },
   // Display only — the loaned Mega can't take an order or a payment.
   "Mega Kiosk Loaner": { pointsPerUnit: 0, hubspotProductId: MEGA_LOANER_PRODUCT_ID },

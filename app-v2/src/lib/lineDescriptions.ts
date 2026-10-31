@@ -51,7 +51,7 @@ export const LINE_DESCRIPTIONS: Record<string, string> = {
   // ── Kiosks and screens ───────────────────────────────────────────────────
   "222497165009": "A 27\" self-ordering kiosk with a built-in card terminal and a wall or floor mount.", // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666": "A compact 15.6\" self-ordering kiosk with a built-in card terminal and mount.", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
-  "260674226888": "A 65\" interactive kiosk for self-ordering and on-screen promotion.", // Mega Kiosk
+  "260674226888": "A 65\" Mega Kiosk that displays your marketing content in store.", // Mega Kiosk (Marketing Only)
   "332617109238": "A 65\" Mega Kiosk that displays your marketing content in store.", // Marketing Kit - Mega Kiosk
   "332793212658": "A 27\" kiosk that displays your marketing content in store.", // Marketing Kit - 27" Kiosk
   "343373224660": "A 65\" Mega Kiosk on loan that displays your marketing content in store, on a 2-year term.", // Mega Kiosk Loaner

@@ -92,8 +92,9 @@ export const SHEET_ITEMS: Record<SheetKey, SheetItem> = {
   kiosk27:   { label: "Kiosk 27\"",                           msrp: 999, orders: true },
   // list / HubSpot / finalized $799 (Zia tab $720; no suggested MSRP)
   kiosk156:  { label: "Kiosk 15.6\"",                         msrp: 799, orders: true },
-  // $2,250 (2026-10-30, product owner: "the correct price for mega is 2250, find it in hs"); was suggested MSRP $2,700
-  mega:      { label: "Mega Kiosk",                           msrp: 2250, orders: true },
+  // $2,250 (2026-10-30, product owner: "the correct price for mega is 2250, find it in hs"); was suggested MSRP $2,700.
+  // Not `orders` since the same day: "Mega Kiosk (Marketing Only)" is a marketing display.
+  mega:      { label: "Mega Kiosk",                           msrp: 2250 },
   // suggested MSRP $603 (finalized $399, list $330)
   tableside: { label: "AIO Tableside POS",                    msrp: 603, orders: true },
   // HubSpot $199. Not on the sheet. It is the partial-ordering plan's order
@@ -136,7 +137,9 @@ export const PRODUCT_PARTS: Record<string, SheetKey[]> = {
   // what makes a kit apply, see `QuotePackage.appliesWith`.)
   "222497165009": ["kiosk27"],            // Kiosk 27" + Payment Terminal (AMS1) and Mount
   "223519571666": ["kiosk156"],           // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
-  "260674226888": ["mega"],               // Mega Kiosk
+  // A display since 2026-10-30, so no slot takes it and it makes no kit
+  // apply; mapped only so the sheet keeps its price.
+  "260674226888": ["mega"],               // Mega Kiosk (Marketing Only)
   "335279520447": ["tableside"],          // AIO Tableside POS
   "223452690132": ["kds"],                // KDS (Kitchen Display System)
   "223511653104": ["printer"],            // Thermal Printer

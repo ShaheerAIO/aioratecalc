@@ -35,7 +35,7 @@ const ID = {
   ams1:      "223511653105", // Payment Terminal - AMS1
   kiosk27:   "222497165009", // Kiosk 27" + Payment Terminal (AMS1) and Mount
   kioskMini: "223519571666", // Kiosk Mini 15.6" + Payment Terminal (AMS1) and Mount
-  mega:      "260674226888", // Mega Kiosk
+  mega:      "260674226888", // Mega Kiosk (Marketing Only) — a display since 2026-10-30
   tableside: "335279520447", // AIO Tableside POS
   kds:       "223452690132", // KDS
   printer:   "223511653104", // Thermal Printer
@@ -329,6 +329,14 @@ describe("decomposePackages — the kiosk is out of the kit (2026-10-29)", () =>
     expect(out.applied).toEqual([]);
     expect(qtyOf(run([line(ID.pos), line(ID.mega)]).lines.filter(l => !l.coveredByPackage), ID.mega)).toBe(1);
   });
+
+  it("treats the Mega as a display, not an ordering device (2026-10-30)", () => {
+    expect(SHEET_ITEMS.mega.orders).toBeUndefined();
+    expect(sheetMsrpOf(ID.mega)).toBe(2250);
+    // Neither kit applies with a Mega and a KDS/printer alone.
+    expect(run([line(ID.mega), line(ID.kds), line(ID.printer)]).applied).toEqual([]);
+    expect(run([line(ID.mega), line(ID.kds)], { quoteType: "marketing_partial" }).applied).toEqual([]);
+  });
 });
 
 describe("decomposePackages — the partial-ordering kit", () => {
@@ -551,6 +559,14 @@ describe("buildQuote with the kit on it", () => {
     const built = build();
     expect(built.totals.oneTime).toBe(0);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
+  });
+
+  it("applies no kit to an All-in-One quote carrying only a Mega (2026-10-30)", () => {
+    const built = build([line(ID.mega)]);
+    expect(built.quoteLines.filter(l => l.coveredByPackage)).toEqual([]);
+    const mega = built.quoteLines.find(l => l.hubspotProductId === ID.mega)!;
+    expect(mega.qty).toBe(1);
+    expect(mega.discountPercent).toBeUndefined();
   });
 
   it("charges full price for what the kit doesn't cover", () => {

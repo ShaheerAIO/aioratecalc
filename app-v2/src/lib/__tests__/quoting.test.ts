@@ -80,7 +80,7 @@ const CATALOG: CatalogProduct[] = [
   p("335280960199", "Additional Software License", 19, "monthly", "Software"),
   p("217445755632", "POS Unit", 749, "one_time", "inventory"),
   p("223452690130", "POS Unit - With Customer Facing Display", 899, "one_time", "inventory"),
-  p("260674226888", "Mega Kiosk", 2459, "one_time", "inventory"),
+  p("260674226888", "Mega Kiosk (Marketing Only)", 2250, "one_time", "inventory"),
   p("222497165009", "Kiosk 27\" + Payment Terminal (AMS1) and Mount", 999, "one_time", "inventory"),
   p("223519571666", "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount", 1195, "one_time", "inventory"),
   p("223452690132", "KDS (Kitchen Display System)", 735, "one_time", "inventory"),
@@ -216,22 +216,43 @@ describe("quote types", () => {
     expect(isAllowedForQuoteType(find("Marketing Kit - 27\" Kiosk"), "all_in_one")).toBe(false);
     expect(isAllowedForQuoteType(find("QSR POS Hardware Bundle"), "all_in_one")).toBe(false);
     expect(isAllowedForQuoteType(find("POS Unit"), "marketing_only")).toBe(false);
-    expect(isAllowedForQuoteType(find("Mega Kiosk"), "marketing_only")).toBe(false);
+    // A marketing display since 2026-10-30, so Marketing Only carries it.
+    expect(isAllowedForQuoteType(find("Mega Kiosk (Marketing Only)"), "marketing_only")).toBe(true);
     // The plan includes three of these free, but they are a PICK — a
     // merchant can want none, or want five and pay for the other two.
     expect(isAllowedForQuoteType(find("Menu Board Computer"), "marketing_only")).toBe(true);
   });
 
-  it("hides Online Ordering and the Marketing Kit - Mega on Order & Pay, Online Ordering on All-in-One; MPO keeps Online Ordering (2026-10-30)", () => {
+  it("hides Online Ordering and the Mega on Order & Pay, Online Ordering on All-in-One; MPO keeps Online Ordering (2026-10-30)", () => {
     const online = find("Online Ordering");
-    const megaKit = find("Marketing Kit - Mega Kiosk");
+    const mega = find("Mega Kiosk (Marketing Only)");
     expect(isHiddenPick(online.hubspotProductId, "order_pay_only")).toBe(true);
-    expect(isHiddenPick(megaKit.hubspotProductId, "order_pay_only")).toBe(true);
+    expect(isHiddenPick(mega.hubspotProductId, "order_pay_only")).toBe(true);
     expect(isHiddenPick(online.hubspotProductId, "all_in_one")).toBe(true);
-    expect(isHiddenPick(megaKit.hubspotProductId, "all_in_one")).toBe(false);
+    expect(isHiddenPick(mega.hubspotProductId, "all_in_one")).toBe(false);
     expect(isHiddenPick(online.hubspotProductId, "marketing_partial")).toBe(false);
     // Visibility only: a draft carrying one still saves.
     expect(isAllowedForQuoteType(online, "order_pay_only")).toBe(true);
+  });
+
+  it("offers the Mega Kiosk (Marketing Only) on All-in-One, MPO and Marketing Only, not on Order & Pay (2026-10-30)", () => {
+    const mega = find("Mega Kiosk (Marketing Only)");
+    expect(mega.hubspotProductId).toBe("260674226888");
+    for (const plan of ["all_in_one", "marketing_only", "marketing_partial"] as const) {
+      expect(isHiddenPick(mega.hubspotProductId, plan), plan).toBe(false);
+      expect(isAllowedForQuoteType(mega, plan), plan).toBe(true);
+    }
+    expect(isHiddenPick(mega.hubspotProductId, "order_pay_only")).toBe(true);
+    // Visibility only, like every hidden pick: a draft carrying one still saves.
+    expect(isAllowedForQuoteType(mega, "order_pay_only")).toBe(true);
+  });
+
+  it("retires the Marketing Kit - Mega Kiosk (332617109238) on every plan, visibility only (2026-10-30)", () => {
+    const megaKit = find("Marketing Kit - Mega Kiosk");
+    for (const plan of ["order_pay_only", "all_in_one", "marketing_only", "marketing_partial"] as QuoteType[]) {
+      expect(isHiddenPick(megaKit.hubspotProductId, plan), plan).toBe(true);
+      expect(isAllowedForQuoteType(megaKit, plan), plan).toBe(true);
+    }
   });
 
   it("hides Kiosk Ordering (343579167454) on every plan", () => {
@@ -252,7 +273,7 @@ describe("quote types", () => {
     }
     // The plan-wide retirements still hide everywhere; the Mega bought is still offered.
     expect(isHiddenPick("332793212658", "marketing_only")).toBe(true);
-    expect(isHiddenPick(find("Marketing Kit - Mega Kiosk").hubspotProductId, "all_in_one")).toBe(false);
+    expect(isHiddenPick(find("Mega Kiosk (Marketing Only)").hubspotProductId, "all_in_one")).toBe(false);
   });
 
   it("allows exactly the marketing products on a marketing-only quote", () => {
@@ -280,6 +301,7 @@ describe("quote types", () => {
       "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount",
       "Marketing (Partial Ordering)",
       "Marketing Kit - Mega Kiosk",
+      "Mega Kiosk (Marketing Only)",
       "Mega Kiosk Loaner",
       "Menu Board Computer",
       "Online Ordering",
@@ -532,10 +554,10 @@ describe("deriveOrderPoints", () => {
   it("counts 3 POS + 2 kiosks + online ordering as 6, and the Website as nothing", () => {
     // Online ordering is the ordering point since 2026-10-27, not the Website
     // ("Website alone does not include online ordering").
-    const lines = [line("POS Unit", 3), line("Mega Kiosk", 2), line("Online Ordering", 1), line("Website", 1)];
+    const lines = [line("POS Unit", 3), line("Kiosk 27\" + Payment Terminal (AMS1) and Mount", 2), line("Online Ordering", 1), line("Website", 1)];
     const { orderPoints, unclassified } = deriveOrderPoints(lines, []);
 
-    expect(orderPoints.hardware).toEqual({ "POS Unit": 3, "Mega Kiosk": 2, "Online Ordering": 1 });
+    expect(orderPoints.hardware).toEqual({ "POS Unit": 3, "Kiosk 27\" + Payment Terminal (AMS1) and Mount": 2, "Online Ordering": 1 });
     expect(orderPoints.channels).toEqual([]);
     expect(orderPoints.total).toBe(6);
     expect(unclassified).toEqual([]);
@@ -544,7 +566,7 @@ describe("deriveOrderPoints", () => {
   it("no longer moves the platform fee — the count is reporting only", () => {
     // It used to select a 1-5 or 6+ tier, a $433/mo swing. Since 2026-10-05
     // the plan decides, so the same quote type prices the same at any count.
-    for (const lines of [[line("POS Unit", 1)], [line("POS Unit", 3), line("Mega Kiosk", 2)]]) {
+    for (const lines of [[line("POS Unit", 1)], [line("POS Unit", 3), line("Kiosk 27\" + Payment Terminal (AMS1) and Mount", 2)]]) {
       const platform = resolvePlatformLine("all_in_one", lines, [], CATALOG);
       expect(platform.status).toBe("resolved");
       expect(platform.line!.unitPrice).toBe(399);
@@ -568,6 +590,21 @@ describe("deriveOrderPoints", () => {
     expect(orderPoints.total).toBe(0);
     expect(unclassified).toEqual([]);
     expect(needsReview).toEqual([]);
+  });
+
+  it("counts the Mega Kiosk (Marketing Only) as 0 points but 1 screen — a display since 2026-10-30", () => {
+    expect(ORDER_POINT_RULES["Mega Kiosk (Marketing Only)"]).toEqual({ pointsPerUnit: 0, hubspotProductId: "260674226888" });
+    expect(ORDER_POINT_RULES["Mega Kiosk"]).toBeUndefined();
+    // A line saved under the old HubSpot name still matches on its id.
+    const oldName: QuoteLine = { ...line("Mega Kiosk (Marketing Only)", 1), name: "Mega Kiosk" };
+    for (const l of [line("Mega Kiosk (Marketing Only)", 2), oldName]) {
+      const { orderPoints, unclassified } = deriveOrderPoints([l], []);
+      expect(orderPoints.total).toBe(0);
+      expect(unclassified).toEqual([]);
+    }
+    const built = buildQuote("all_in_one", [line("Mega Kiosk (Marketing Only)", 1)], [], CATALOG);
+    expect(built.orderPoints.total).toBe(0);
+    expect(built.softwareLicense.screens).toBe(1);
   });
 
   it("ignores a stale 'website' channel on an old saved row", () => {
@@ -594,27 +631,27 @@ describe("deriveOrderPoints", () => {
     // or re-typed kiosk silently contributed 0 AND never showed up as
     // unclassified — 6 real points billed as 5.
     const untypedKiosk: QuoteLine = {
-      ...line("Mega Kiosk", 2), productType: "",
+      ...line("Kiosk 27\" + Payment Terminal (AMS1) and Mount", 2), productType: "",
     };
     const { orderPoints, unclassified } = deriveOrderPoints([untypedKiosk, line("POS Unit", 4)], []);
 
-    expect(orderPoints.hardware["Mega Kiosk"]).toBe(2);
+    expect(orderPoints.hardware["Kiosk 27\" + Payment Terminal (AMS1) and Mount"]).toBe(2);
     expect(orderPoints.total).toBe(6);
     expect(unclassified).toEqual([]);
   });
 
   it("matches the rule on product id, so a HubSpot rename can't drop the points", () => {
-    const renamed: QuoteLine = { ...line("Mega Kiosk", 1), name: "Mega Kiosk (2026 Edition)" };
+    const renamed: QuoteLine = { ...line("Kiosk 27\" + Payment Terminal (AMS1) and Mount", 1), name: "Kiosk 27\" (2026 Edition)" };
     const { orderPoints, unclassified } = deriveOrderPoints([renamed], []);
 
     expect(orderPoints.total).toBe(1);
-    expect(orderPoints.hardware["Mega Kiosk (2026 Edition)"]).toBe(1);
+    expect(orderPoints.hardware["Kiosk 27\" (2026 Edition)"]).toBe(1);
     expect(unclassified).toEqual([]);
   });
 
   it("counts a kiosk once, not once per lane", () => {
-    expect(ORDER_POINT_RULES["Mega Kiosk"].pointsPerUnit).toBe(1);
-    expect(deriveOrderPoints([line("Mega Kiosk", 1)], []).orderPoints.total).toBe(1);
+    expect(ORDER_POINT_RULES["Kiosk 27\" + Payment Terminal (AMS1) and Mount"].pointsPerUnit).toBe(1);
+    expect(deriveOrderPoints([line("Kiosk 27\" + Payment Terminal (AMS1) and Mount", 1)], []).orderPoints.total).toBe(1);
   });
 
   it("declared channels contribute 0 points (inert since 2026-10-30)", () => {
@@ -856,7 +893,7 @@ describe("buildQuote — the one derivation", () => {
   it("round-trips through picksFromQuoteLines without duplicating a derived line", () => {
     // Reopening a saved quote must not send the platform fee or the services
     // back as picks — they'd be quoted twice, or refused as unpickable.
-    const first = buildQuote("all_in_one", picked([["Mega Kiosk", 1]]), [], CATALOG);
+    const first = buildQuote("all_in_one", picked([["Mega Kiosk (Marketing Only)", 1]]), [], CATALOG);
     const reopened = picksFromQuoteLines(first.quoteLines, "all_in_one");
 
     expect(reopened).toEqual([{ hubspotProductId: "260674226888", qty: 1 }]);
@@ -1201,7 +1238,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
   it("does not count a Menu Board Computer as a screen — it drives a TV (2026-10-18)", () => {
     const built = buildQuote(
       "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1], ["Menu Board Computer", 3]]),
+      picked([["POS Unit", 2], ["Mega Kiosk (Marketing Only)", 1], ["mPOS", 1], ["Menu Board Computer", 3]]),
       [],
       CATALOG
     );
@@ -1212,7 +1249,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
   it("adds a software license only past three screens", () => {
     const three = buildQuote(
       "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1]]),
+      picked([["POS Unit", 2], ["Mega Kiosk (Marketing Only)", 1]]),
       [],
       CATALOG
     );
@@ -1222,7 +1259,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
 
     const four = buildQuote(
       "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1]]),
+      picked([["POS Unit", 2], ["Mega Kiosk (Marketing Only)", 1], ["mPOS", 1]]),
       [],
       CATALOG
     );
@@ -1236,7 +1273,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
       picked([
         ["POS Unit", 2],
         ["POS Unit - With Customer Facing Display", 1],
-        ["Mega Kiosk", 1],
+        ["Mega Kiosk (Marketing Only)", 1],
         ["Orders Hub Tablet", 1],
         ["mPOS", 1],
         ["Kiosk 27\" + Payment Terminal (AMS1) and Mount", 1],
@@ -1283,7 +1320,7 @@ describe("derived terminals, licenses, and the lines a processing quote no longe
     const noLicense = CATALOG.filter(c => c.name !== "Additional Software License");
     const license = buildQuote(
       "all_in_one",
-      picked([["POS Unit", 2], ["Mega Kiosk", 1], ["mPOS", 1], ["Orders Hub Tablet", 1]]),
+      picked([["POS Unit", 2], ["Mega Kiosk (Marketing Only)", 1], ["mPOS", 1], ["Orders Hub Tablet", 1]]),
       [],
       noLicense
     );
