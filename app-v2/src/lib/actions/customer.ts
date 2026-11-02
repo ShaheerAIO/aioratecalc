@@ -23,6 +23,7 @@ import {
 } from "@/lib/adapters/hubspot";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
 import { applyDetectedAcceptance } from "@/lib/billing/acceptance";
+import { kickAioProvisioning } from "@/lib/aio/kick";
 import {
   validateOnboardingFields,
   validateOnboardingSubmission,
@@ -237,6 +238,8 @@ export async function saveMyApplicationOnboardingAction(
   // details redirected straight to Adyen.
   app = await syncDealBestEffort(app);
   await syncLegalAddressBestEffort(app);
+  // A paid merchant whose details just became complete can be provisioned now.
+  kickAioProvisioning(app);
 
   return { app, fieldErrors: hasFieldErrors ? errors : null };
 }
@@ -282,6 +285,8 @@ export async function updateMyApplicationDetailsAction(
 
   app = await syncDealBestEffort(app);
   await syncLegalAddressBestEffort(app);
+  // Fixing a blank the gate was holding on unblocks provisioning right away.
+  kickAioProvisioning(app);
 
   return { app, fieldErrors: hasFieldErrors ? errors : null };
 }
@@ -458,7 +463,9 @@ export async function getMyApplicationWithBillingSyncAction(id: string): Promise
   const { userId } = await requireCustomer();
   const app = await postgresStorage.getApplicationForCustomer(userId, id);
   if (!app) return null;
-  return refreshHubspotBilling(userId, id, app);
+  const refreshed = await refreshHubspotBilling(userId, id, app);
+  kickAioProvisioning(refreshed);
+  return refreshed;
 }
 
 // What the application detail page calls: one load, both on-view refreshes.
@@ -482,5 +489,10 @@ export async function getMyApplicationWithSyncAction(id: string): Promise<Mercha
   const app = await postgresStorage.getApplicationForCustomer(userId, id);
   if (!app) return null;
   const afterPayroll = await refreshCheckOnboardStatus(userId, id, app);
-  return refreshHubspotBilling(userId, id, afterPayroll);
+  const refreshed = await refreshHubspotBilling(userId, id, afterPayroll);
+  // The page view is also the earliest moment a signed-in merchant can be
+  // provisioned: the refresh above may have just found their payment. No-op
+  // unless the gate passes. See lib/aio/kick.ts.
+  kickAioProvisioning(refreshed);
+  return refreshed;
 }

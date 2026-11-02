@@ -51,6 +51,18 @@ they wait:
   DETERMINISTIC alias (`easyob_{app.id}` — a random one would mint a second tenant on retry), a
   conditional-UPDATE lease, resume-from-persisted-ids, reconcile-by-alias before creating, and the
   `AIO_DASHBOARD_APP_ALLOWLIST` canary. Don't simplify any of those away.
+- **Provisioning starts on a signed-in page view, not just the cron (2026-11-02, product owner: "that's way too
+  long… it should be on click").** `lib/aio/kick.ts` `kickAioProvisioning(app)` runs the same gate and allowlist
+  as the cron and calls `provisionAioTenant` inside `after()`, so a page view never waits on AIO. Called from
+  `getMyApplicationWithSyncAction` / `getMyApplicationWithBillingSyncAction` (the application page; the refresh
+  just before it may have found the payment), `saveMyApplicationOnboardingAction` and
+  `updateMyApplicationDetailsAction`. **Never from the public lead link** (same reasoning as the repair dialog).
+  It skips inside the schema warm-up, so it does no writes there. The location still waits for
+  `SCHEMA_WARMUP_MS`; what fills that wait is the checklist: `adyenModule` sets `settingUp` while a tenant is
+  mid-flight or billing is paid, and `ApplicationTabs` calls `router.refresh()` every 20s on the checklist tab,
+  so the page view after the warm-up creates the location and link and the row flips to Continue Verification
+  by itself. A row with `aioTenant.lastError` gets the old "no action needed" copy and no refresh. The cron
+  (every 5 min) remains the backstop, and the shared lease keeps the two from colliding.
 - **A failed LOGIN never costs a merchant an attempt (2026-11-02).** The service account's password expired
   (AIO answers with 200, `success:true`, `data.passwordExpired: true` and no tokens), and every paid merchant
   started spending its five attempts on a login that could never succeed. Every login failure (missing creds,

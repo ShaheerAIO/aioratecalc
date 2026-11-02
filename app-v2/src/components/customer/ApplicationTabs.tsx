@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { CustomerSafeQuote, MerchantApplication } from "@/types/merchant";
 import { checklistNotice, type OnboardingModule } from "@/lib/onboardingModules";
 import OnboardingChecklistPanel from "@/components/customer/OnboardingChecklistPanel";
@@ -23,6 +24,20 @@ type Props = { app: MerchantApplication; modules: OnboardingModule[]; quote: Cus
 export default function ApplicationTabs({ app, modules, quote }: Props) {
   const [tab, setTab] = useState<"checklist" | "data" | "quote">("checklist");
   const [editing, setEditing] = useState(false);
+  const router = useRouter();
+
+  // While AIO provisioning is under way, re-render from the server every 20s.
+  // Each refresh is a page view, which is what creates the location once AIO's
+  // warm-up has passed (lib/aio/kick.ts), so the row flips to "Continue
+  // Verification" without the merchant reloading.
+  // Only on the checklist tab, so nothing re-renders under a merchant editing
+  // their data.
+  const settingUp = tab === "checklist" && modules.some(m => m.settingUp);
+  useEffect(() => {
+    if (!settingUp) return;
+    const timer = setInterval(() => router.refresh(), 20_000);
+    return () => clearInterval(timer);
+  }, [settingUp, router]);
 
   const hasData = Boolean(app.business || app.ownerContact || app.processing);
 

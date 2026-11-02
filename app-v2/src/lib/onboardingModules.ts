@@ -32,6 +32,10 @@ export type OnboardingModule = {
   // this the row would say "Create account to continue", which is both a dead
   // end and the thing they are least willing to do.
   publicCta?: boolean;
+  // AIO provisioning is under way and the row will change by itself within
+  // minutes. The authenticated checklist re-renders on a timer while this is
+  // set, so the merchant sees "Continue Verification" without reloading.
+  settingUp?: boolean;
 };
 
 /**
@@ -550,14 +554,23 @@ function adyenModule(
     };
   }
 
-  // Claimed but not finished. Nothing for the customer to do, and no href —
-  // the provisioning cron is mid-flight or retrying.
-  if (app.aioTenant) {
+  // Claimed but not finished, or paid and about to be claimed. Nothing for the
+  // customer to do, and no href: provisioning starts on their next page view
+  // (lib/aio/kick.ts) or the next cron tick. Paid used to fall through to the
+  // branch below and tell a merchant who HAD paid that verification starts
+  // "once your billing is set up".
+  // A recorded error may need a human (see the admin banner), so that state
+  // makes no time promise and doesn't keep the page refreshing.
+  if (app.aioTenant?.lastError) {
+    return { key, label, status: "in_progress", description: "We're setting up your account — no action needed." };
+  }
+  if (app.aioTenant || hasBillingCompleted(app.hubspotIds)) {
     return {
       key,
       label,
       status: "in_progress",
-      description: "We're setting up your account — no action needed.",
+      description: "We're setting up your account. This usually takes about five minutes — this page updates by itself.",
+      settingUp: true,
     };
   }
 

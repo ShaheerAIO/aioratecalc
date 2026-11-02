@@ -411,6 +411,38 @@ describe("adyenModule (regression net)", () => {
     expect(m.description).toMatch(/setting up your account/i);
   });
 
+  // The checklist re-renders on a timer while `settingUp` is set, which is
+  // what creates the location once AIO's warm-up passes (lib/aio/kick.ts).
+  it("flags the mid-flight state so the checklist refreshes itself", () => {
+    const m = adyen({ ...BASE_APP, aioTenant: { provisionedAt: null, locationId: null, attempts: 1 } as never });
+    expect(m.settingUp).toBe(true);
+    expect(m.description).toMatch(/updates by itself/i);
+  });
+
+  // A merchant who HAS paid used to read "Verification starts once your
+  // billing is set up" until the cron claimed the row.
+  it("says we're setting up as soon as billing is paid, before anything is claimed", () => {
+    const paid = {
+      ...EMPTY_HUBSPOT_IDS,
+      quoteId: "q-1",
+      publishedAt: "2026-11-02T05:54:00.124Z",
+      subscriptions: [sub({ status: "scheduled", paymentMethod: "ACH - 7058" })],
+      subscriptionStatus: "scheduled",
+    } as HubspotIds;
+    const m = adyen({ ...BASE_APP, hubspotIds: paid });
+    expect(m.settingUp).toBe(true);
+    expect(m.description).not.toMatch(/once your billing is set up/i);
+  });
+
+  it("makes no time promise and doesn't keep refreshing once provisioning has recorded an error", () => {
+    const m = adyen({
+      ...BASE_APP,
+      aioTenant: { provisionedAt: null, locationId: null, attempts: 5, lastError: "boom" } as never,
+    });
+    expect(m.settingUp).toBeUndefined();
+    expect(m.description).toMatch(/no action needed/i);
+  });
+
   // 2026-10-14. isReadyForAioProvisioning now HOLDS on anything
   // validateOnboardingFields would refuse, so a row with a blank owner phone
   // waits indefinitely — and every other branch of this module would tell the

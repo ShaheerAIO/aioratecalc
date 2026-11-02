@@ -5,6 +5,7 @@ import { rowToApp } from "@/lib/storage/applicationRow";
 import { aioDashboardEnabled } from "@/lib/adapters/aioDashboard";
 import { isReadyForAioProvisioning } from "@/lib/aio/provisioningGate";
 import { provisionAioTenant } from "@/lib/aio/provision";
+import { aioAllowlisted } from "@/lib/aio/kick";
 
 // Creates the merchant's AIO platform tenant once their billing has actually
 // been paid, and mints the Adyen KYC link from AIO's own API. EasyOB no longer
@@ -45,14 +46,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ skipped: "disabled" });
   }
 
-  // Canary list. Every create burns a globally-unique alias that is never
-  // freed, in a database shared with other AIO teams, so the first real runs
-  // are pinned to named applications rather than "everything eligible".
-  const allowlist = (process.env.AIO_DASHBOARD_APP_ALLOWLIST ?? "")
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean);
-
   const summary = {
     considered: 0,
     provisioned: 0,
@@ -80,7 +73,10 @@ export async function GET(req: NextRequest) {
   }
 
   for (const row of rows) {
-    if (allowlist.length > 0 && !allowlist.includes(row.id)) continue;
+    // Canary list. Every create burns a globally-unique alias that is never
+    // freed, in a database shared with other AIO teams, so the first real runs
+    // can be pinned to named applications rather than "everything eligible".
+    if (!aioAllowlisted(row.id)) continue;
 
     const app = rowToApp(row);
     const gate = isReadyForAioProvisioning(app);
