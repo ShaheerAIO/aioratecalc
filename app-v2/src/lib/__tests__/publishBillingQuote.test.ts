@@ -312,7 +312,7 @@ describe("publishing the billing quote", () => {
       hs_title: "Torta Palace — AIO Platform Quote",
       hs_billing_enabled: true,
       hs_payment_enabled: true,
-      hs_allowed_payment_methods: "ACH",
+      hs_allowed_payment_methods: "ACH;CREDIT_OR_DEBIT_CARD",
     });
 
     // 67 per line item, then deal 64, contact 69, signer 702, template 286.

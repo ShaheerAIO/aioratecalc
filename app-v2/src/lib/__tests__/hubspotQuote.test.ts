@@ -136,7 +136,7 @@ describe("draftQuoteProperties", () => {
   });
 
   it("restricts payment to ACH", () => {
-    expect(props.hs_allowed_payment_methods).toBe("ACH");
+    expect(props.hs_allowed_payment_methods).toBe("ACH;CREDIT_OR_DEBIT_CARD");
   });
 
   it("never writes the derived properties", () => {

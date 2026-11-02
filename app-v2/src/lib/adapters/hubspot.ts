@@ -1999,10 +1999,12 @@ export function draftQuoteProperties(input: DraftQuoteInput): Record<string, str
     // print_and_sign (the default) is incompatible with hs_payment_enabled, and
     // forcing esignature is what makes the signer association (702) mandatory.
     hs_acceptance_method: "esignature",
-    // enumeration/checkbox: ACH|CREDIT_OR_DEBIT_CARD|SEPA|BACS|PADS. ACH is the
-    // live value on all 46 paid quotes in the portal. Never write the sibling
-    // hs_allowed_commerce_payment_methods — it is derived.
-    hs_allowed_payment_methods: "ACH",
+    // enumeration/checkbox: ACH|CREDIT_OR_DEBIT_CARD|SEPA|BACS|PADS. ACH was the
+    // only value until 2026-11-02, when the product owner allowed cards too
+    // (HubSpot's 4% "Credit Card Surcharge" checkout fee applies to card
+    // payments only). Never write the sibling hs_allowed_commerce_payment_methods
+    // — it is derived.
+    hs_allowed_payment_methods: "ACH;CREDIT_OR_DEBIT_CARD",
   };
 }
 

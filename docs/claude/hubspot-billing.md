@@ -13,7 +13,7 @@ the record to compare against when the publish path next changes:
 | contact | `540176122579` |
 | `hs_quote_amount` | `3811.00` = $3,712 one-time + $99 first weekly |
 | `hs_quote_link` | `https://customers.aioapp.com/0f2hv0e1fjzk9q` (voided by hand afterwards, per `PAYMENT-TEST-PLAN.md` §2.2) |
-| flags | `hs_payment_enabled: true`, `hs_esign_enabled: true`, `hs_allowed_payment_methods: ACH`, `hs_acceptance_method: esignature` |
+| flags | `hs_payment_enabled: true`, `hs_esign_enabled: true`, `hs_allowed_payment_methods: ACH` (ACH-only at the time; cards added 2026-11-02, see below), `hs_acceptance_method: esignature` |
 | associations | **67** ×9 line items · **64/1393** deal (1393 added by HubSpot at publish, as documented) · **702/69** contact · **286** template `817263673055` (AIO Quote v3) · subscriptions **none** (correct until checkout) |
 
 Confirmed by this run: the deliberate-NULL `hs_recurring_billing_period` behaviour, the template
@@ -368,3 +368,12 @@ gone: the quote preview's Continue goes straight to `/confirm` again, and the `n
 - **DB:** `merchant_applications.payment_plan` / `payment_plan_at` and migration 0031 are left in place, unread and
   unwritten (no drop; local DATABASE_URL is production). The `MerchantApplication.paymentPlan` mapping was removed
   from `types/merchant.ts` / `applicationRow.ts`; the Drizzle schema fields remain. Old values are ignored.
+
+## Cards on subscription quotes (2026-11-02)
+
+Product owner, 2026-11-02: "allow credit card payments for subscription quotes." `draftQuoteProperties` now writes
+`hs_allowed_payment_methods: "ACH;CREDIT_OR_DEBIT_CARD"` (was `ACH`). Card payers pay the existing 4% "Credit Card
+Surcharge" checkout fee (see above); ACH payers pay none. Quotes still never write `hs_allowed_commerce_payment_methods`.
+- **Applies to quotes published from now on.** Published quotes can't be edited, so earlier ones stay ACH-only.
+- **UNVERIFIED live:** the `;`-joined value on a quote, and that HubSpot bills the recurring subscription against a card stored
+  at checkout. Check on the first real card checkout. Payroll invoices (`checkPayroll.ts`) are still ACH-only.
