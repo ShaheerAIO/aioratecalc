@@ -118,6 +118,14 @@ describe("pricing scenarios, Oct 23 sheet", () => {
     }
   );
 
+  it("quotes Marketing Only with every menu board taken off (2026-11-02)", () => {
+    const q = quote("marketing_only", []);
+    expect(q.built.blockers).toEqual([]);
+    expect(q.monthly).toBe(199);
+    expect(q.hardware).toBe(0);
+    expect(q.built.quoteLines.map(l => l.name)).toEqual(["AIO Marketing Platform"]);
+  });
+
   it("refuses a POS on partial ordering — that's Order & Pay", () => {
     const q = quote("marketing_partial", [TABLET, KDS, KIOSK, ["POS Unit", 1]]);
     expect(q.built.blockers.join(" ")).toContain("ordering without a POS");

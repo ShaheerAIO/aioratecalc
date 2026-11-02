@@ -171,7 +171,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   // are needed"), where it used to be a note the rep could read past. Below
   // COST stays a warning: it is the sharper of the two, but it is measured
   // against the processor tier on file, which a rep can't fix from here.
-  const disabled = saving || blockers.length > 0 || belowMin || belowRevenueFloor || (!rated && !picks.length);
+  const disabled = saving || blockers.length > 0 || belowMin || belowRevenueFloor || (!rated && !quote?.quoteLines.length);
 
   const save = async () => {
     if (disabled) return;

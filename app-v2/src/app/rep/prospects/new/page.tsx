@@ -464,10 +464,6 @@ function NewProspectFlow() {
       setError(hardBlocks.join(" "));
       return;
     }
-    if (!rated && !picks.length) {
-      setError("A marketing-only quote needs at least one marketing product on it.");
-      return;
-    }
     setSaving(true);
     setError(null);
     try {
@@ -516,9 +512,11 @@ function NewProspectFlow() {
   // Matches the server's gate (hasQuoteBasis): no volume/ticket on a rated
   // quote is not a basis for a rate, so don't promise the customer one. On a
   // marketing-only quote the lines are the quote — there's no rate to have.
+  // Read off the built lines, not the picks: Marketing Only carries its $199
+  // platform line with nothing picked, so a rep may take every menu board off.
   const hasQuote = rated
     ? (ticket > 0 && volume > 0)
-    : picks.length > 0;
+    : (quote?.quoteLines.length ?? 0) > 0;
 
   const merchantName = business.dba || business.legalName;
   const altEmail = ownerContact.altEmail?.trim() ?? "";
