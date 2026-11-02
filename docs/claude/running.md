@@ -122,3 +122,8 @@ Production deploys go out from the CLI, **from the repo root, not `app-v2/`**: t
 Directory is `app-v2`, so a deploy started inside it fails with `The specified Root Directory "app-v2" does not
 exist`. From anywhere: `vercel --prod --yes --cwd "<repo root>"`. It uploads the working tree, so uncommitted
 edits ship too.
+
+**The CLI does not read `.gitignore`** (checked in the CLI source, 2026-11-02). It has its own default list
+(`.next`, `node_modules`, `.env.local`, `.env.*.local`, …) plus whatever the repo-root `.vercelignore` adds.
+`.env.local.bak-*` backups match none of the defaults, so until `.vercelignore` (`.env*`) was added they went
+up with every CLI deploy and sit in those deployments' source. Keep `.vercelignore` at the repo root.

@@ -107,11 +107,31 @@ export function __resetAioSession(): void {
 // invocation would accumulate a device per call.
 const DEFAULT_BROWSER_ID = "ad267d0e-52d1-4da2-a351-ec52be592fbc";
 
+/**
+ * The service account itself couldn't log in: an expired or changed password,
+ * missing credentials, or AIO's auth endpoint refusing us. That's EasyOB's
+ * problem, not the merchant's, so the provisioner holds the row instead of
+ * spending one of its five attempts (see `hold` in lib/aio/provision.ts).
+ * Learned 2026-11-02, when the password expired and every paid merchant
+ * started burning attempts on a login that could never succeed.
+ */
+export class AioLoginError extends Error {
+  readonly aioLogin = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "AioLoginError";
+  }
+}
+
+export function isAioLoginError(err: unknown): boolean {
+  return err instanceof AioLoginError;
+}
+
 async function login(): Promise<AioSession> {
   const username = process.env.AIO_DASHBOARD_USERNAME;
   const password = process.env.AIO_DASHBOARD_PASSWORD;
   if (!username || !password) {
-    throw new Error("AIO_DASHBOARD_USERNAME and AIO_DASHBOARD_PASSWORD are required");
+    throw new AioLoginError("AIO_DASHBOARD_USERNAME and AIO_DASHBOARD_PASSWORD are required");
   }
 
   // Content-Type matters here: without it the body is parsed as form-encoded
@@ -127,14 +147,21 @@ async function login(): Promise<AioSession> {
     }),
   });
   if (!res.ok) {
-    throw new Error(`AIO dashboard login failed (${res.status}): ${await res.text()}`);
+    throw new AioLoginError(`AIO dashboard login failed (${res.status}): ${await res.text()}`);
   }
   const json: any = await res.json();
   const auth = json?.data?.authChallengeResponse?.AuthenticationResult;
   const accessToken = auth?.AccessToken;
   const idToken = auth?.IdToken;
   if (!accessToken || !idToken) {
-    throw new Error(`AIO dashboard login returned no tokens: ${JSON.stringify(json?.message ?? json)}`);
+    // AIO answers an expired password with 200 `success:true` and no tokens.
+    if (json?.data?.passwordExpired) {
+      throw new AioLoginError(
+        `The AIO dashboard password for ${username} has expired. Reset it at dashboard.aioapp.com, ` +
+          `then update AIO_DASHBOARD_PASSWORD in Vercel and redeploy.`
+      );
+    }
+    throw new AioLoginError(`AIO dashboard login returned no tokens: ${JSON.stringify(json?.message ?? json)}`);
   }
   // Five-minute safety margin so a token can't expire midway through the
   // three-step provisioning chain.

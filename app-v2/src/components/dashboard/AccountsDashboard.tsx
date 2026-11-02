@@ -189,6 +189,17 @@ export function AccountsDashboard({
     setSelected(prev => (prev?.id === updated.id ? updated : prev));
   };
 
+  // Accounts whose AIO provisioning cron has recorded an error and not since
+  // succeeded. The detail panel already says why, but only for the account a
+  // human happens to open; an expired service-account password (2026-11-02)
+  // stalls every paid merchant at once, so admins see the count up front.
+  const provisioningStuck = isAdmin
+    ? apps.filter(a => a.aioTenant?.lastError && !a.aioTenant.provisionedAt)
+    : [];
+  const latestProvisioningError = provisioningStuck
+    .map(a => a.aioTenant!)
+    .sort((x, y) => (y.lastErrorAt ?? "").localeCompare(x.lastErrorAt ?? ""))[0]?.lastError;
+
   const filteredApps = apps.filter(a => {
     if (repFilter && a.ownerUserId !== repFilter) return false;
     if (!search.trim()) return true;
@@ -483,6 +494,23 @@ export function AccountsDashboard({
           {/* Full table — shown when nothing is selected */}
           {!selected && (
             <>
+              {provisioningStuck.length > 0 && (
+                <div className={styles.warningBanner} role="alert">
+                  <strong>
+                    AIO provisioning is stuck for {provisioningStuck.length}{" "}
+                    {provisioningStuck.length === 1 ? "account" : "accounts"}.
+                  </strong>{" "}
+                  Latest error: {latestProvisioningError}{" "}
+                  {provisioningStuck.map((a, i) => (
+                    <span key={a.id}>
+                      {i > 0 && ", "}
+                      <button type="button" className={styles.bannerLink} onClick={() => setSelected(a)}>
+                        {a.business?.dba || a.business?.legalName || a.id}
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className={styles.tableSearch} style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <input
                   type="search"

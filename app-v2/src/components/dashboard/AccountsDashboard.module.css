@@ -823,6 +823,16 @@ details[open] > .disclosureSummary::before { transform: rotate(90deg); }
   line-height: 1.55;
 }
 
+.bannerLink {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ---------- Reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {

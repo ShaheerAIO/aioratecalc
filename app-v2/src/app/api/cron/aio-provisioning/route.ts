@@ -64,6 +64,10 @@ export async function GET(req: NextRequest) {
     skipped: {} as Record<string, number>,
     needsAttention: [] as { applicationId: string; error: string }[],
     failed: [] as { applicationId: string; error: string }[],
+    // Set when EasyOB's own AIO login failed. The rest of the run is skipped:
+    // the next row would fail the same login, and repeated bad logins can get
+    // the service account locked out.
+    blocked: null as string | null,
   };
 
   let rows;
@@ -88,6 +92,11 @@ export async function GET(req: NextRequest) {
     summary.considered++;
     const outcome = await provisionAioTenant(app);
 
+    if (outcome.status === "blocked") {
+      summary.blocked = outcome.error;
+      console.error("[cron aio-provisioning] AIO login failed; skipping the rest of this run", outcome.error);
+      break;
+    }
     if (outcome.status === "provisioned") {
       summary.provisioned++;
     } else if (outcome.status === "waiting") {
@@ -104,5 +113,5 @@ export async function GET(req: NextRequest) {
     // "not_claimed" means another run has it — silent, not an error.
   }
 
-  return NextResponse.json(summary, { status: summary.failed.length > 0 ? 500 : 200 });
+  return NextResponse.json(summary, { status: summary.failed.length > 0 || summary.blocked ? 500 : 200 });
 }

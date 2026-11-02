@@ -51,6 +51,16 @@ they wait:
   DETERMINISTIC alias (`easyob_{app.id}` — a random one would mint a second tenant on retry), a
   conditional-UPDATE lease, resume-from-persisted-ids, reconcile-by-alias before creating, and the
   `AIO_DASHBOARD_APP_ALLOWLIST` canary. Don't simplify any of those away.
+- **A failed LOGIN never costs a merchant an attempt (2026-11-02).** The service account's password expired
+  (AIO answers with 200, `success:true`, `data.passwordExpired: true` and no tokens), and every paid merchant
+  started spending its five attempts on a login that could never succeed. Every login failure (missing creds,
+  non-2xx, no tokens) now throws `AioLoginError`; `provisionAioTenant`'s `hold` gives the attempt and backoff
+  clock back like `defer`, but DOES write `lastError` (an expired password gets a message saying what to do).
+  The cron stops the run on the first `blocked` outcome (one bad login per run, not one per row, so the
+  account doesn't get locked out) and returns 500. Admins see a banner over the accounts table listing every
+  account with an unprovisioned `lastError`. The fix itself is human: reset the password at
+  dashboard.aioapp.com, update `AIO_DASHBOARD_PASSWORD` in Vercel (`vercel env update … --value`; piping
+  stdin needs a target and branch), redeploy.
 - **PASSING `validateOnboardingFields` IS THE PRECONDITION FOR PROVISIONING, and the gate runs that
   exact function** (2026-10-14). `isReadyForAioProvisioning` used to check a business name and an
   owner email and nothing else, while AIO's `business/create` validates the whole point-of-contact

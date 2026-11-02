@@ -1,0 +1,4 @@
+# The Vercel CLI does NOT read .gitignore. Its built-in list skips .env.local
+# and .env.*.local, but not backups like .env.local.bak-*, which went up with
+# every CLI deploy until this file existed. Rules here ADD to that list.
+.env*

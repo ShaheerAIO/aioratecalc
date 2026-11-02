@@ -8,6 +8,7 @@ import {
   createAioBusiness,
   createAioLocation,
   createAioAdyenOnboardingLink,
+  isAioLoginError,
   isTenantSchemaNotReady,
   __resetAioSession,
 } from "@/lib/adapters/aioDashboard";
@@ -188,6 +189,21 @@ describe("session handling", () => {
 
     const logins = fetchMock.mock.calls.filter(c => String(c[0]).includes("user-login"));
     expect(logins).toHaveLength(1);
+  });
+
+  // The shape AIO really returned on 2026-11-02: 200, success:true, no tokens.
+  it("reports an expired password as a login error that says what to do", async () => {
+    aio.mockResolvedValueOnce(res({ success: true, data: { passwordExpired: true, email: "svc@aioapp.com" }, error: null }));
+
+    const err = await createAioBusiness(APP, { alias: "a1" }).catch(e => e);
+    expect(isAioLoginError(err)).toBe(true);
+    expect(err.message).toMatch(/password for svc@aioapp.com has expired.*AIO_DASHBOARD_PASSWORD/);
+  });
+
+  it("treats a refused login as a login error, not a merchant failure", async () => {
+    aio.mockResolvedValueOnce(res("bad credentials", 400));
+    const err = await createAioBusiness(APP, { alias: "a1" }).catch(e => e);
+    expect(isAioLoginError(err)).toBe(true);
   });
 
   it("re-logs-in once on a 401, then gives up rather than looping", async () => {

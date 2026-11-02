@@ -33,6 +33,7 @@ import {
   createAioLocation,
   findAioBusinessByAlias,
   adyenEnvironmentFromOnboardingUrl,
+  isAioLoginError,
   isTenantSchemaNotReady,
 } from "@/lib/adapters/aioDashboard";
 import { shouldAdvance } from "@/lib/stages";
@@ -44,6 +45,8 @@ export type ProvisionOutcome =
   | { status: "needs_attention"; error: string }
   /** Waiting on AIO's tenant schema. NOT a failure — see `defer` below. */
   | { status: "waiting"; until: string }
+  /** EasyOB couldn't log in to AIO. Not the merchant's fault — see `hold`. */
+  | { status: "blocked"; error: string }
   | { status: "failed"; error: string };
 
 /**
@@ -173,6 +176,29 @@ export async function provisionAioTenant(app: MerchantApplication): Promise<Prov
     return { status: "waiting", until: until.toISOString() } as ProvisionOutcome;
   };
 
+  /**
+   * Stop because EasyOB itself can't reach AIO (its service account can't log
+   * in), not because of anything about this merchant.
+   *
+   * Like `defer`, it gives back this run's attempt and leaves the backoff
+   * clock where it was, so every paid merchant doesn't march towards
+   * `too_many_attempts` while a password is expired. Unlike `defer`, it DOES
+   * record `lastError`: this needs a human, and the admin dashboard reads
+   * `lastError` to say so.
+   */
+  const hold = async (error: string) => {
+    tenant = {
+      ...tenant,
+      claimedAt: null,
+      attempts: app.aioTenant?.attempts ?? 0,
+      lastAttemptAt: app.aioTenant?.lastAttemptAt ?? null,
+      lastError: error,
+      lastErrorAt: new Date().toISOString(),
+    };
+    await patch(app.id, tenant);
+    return { status: "blocked", error } as ProvisionOutcome;
+  };
+
   try {
     // ── Step 1: the tenant ────────────────────────────────────────────────
     if (!tenant.businessId) {
@@ -288,6 +314,7 @@ export async function provisionAioTenant(app: MerchantApplication): Promise<Prov
 
     return { status: "provisioned", businessId: tenant.businessId, locationId };
   } catch (err) {
+    if (isAioLoginError(err)) return await hold(err instanceof Error ? err.message : String(err));
     return await fail(err instanceof Error ? err.message : String(err), "failed");
   }
 }

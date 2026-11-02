@@ -42,6 +42,7 @@ vi.mock("@/lib/adapters/aioDashboard", () => ({
   adyenEnvironmentFromOnboardingUrl: () => "test",
   isTenantSchemaNotReady: (e: unknown) =>
     Boolean((e as { tenantSchemaNotReady?: boolean })?.tenantSchemaNotReady),
+  isAioLoginError: (e: unknown) => Boolean((e as { aioLogin?: boolean })?.aioLogin),
 }));
 
 const { provisionAioTenant } = await import("@/lib/aio/provision");
@@ -347,6 +348,23 @@ describe("failure handling", () => {
     createAioLocation.mockRejectedValue(new Error("nope"));
     await provisionAioTenant(app());
     expect(lastTenant()?.claimedAt).toBeNull();
+  });
+
+  // 2026-11-02: the service account's password expired, and every paid
+  // merchant spent an attempt on a login that could never succeed.
+  it("holds on an AIO login failure without spending the merchant's attempt, and records why", async () => {
+    findAioBusinessByAlias.mockRejectedValue(
+      Object.assign(new Error("The AIO dashboard password has expired"), { aioLogin: true })
+    );
+    const before = { attempts: 2, lastAttemptAt: "2026-11-01T00:00:00.000Z" };
+
+    const out = await provisionAioTenant(app({ aioTenant: { alias: "easyob_prospect_1", ...before } as never }));
+
+    expect(out).toMatchObject({ status: "blocked" });
+    const t = lastTenant();
+    expect(t).toMatchObject({ ...before, claimedAt: null, provisionedAt: null });
+    expect(t?.lastError).toMatch(/password has expired/);
+    expect(t?.lastErrorAt).toBeTruthy();
   });
 
   it("never throws — one bad merchant must not abort the cron batch", async () => {
