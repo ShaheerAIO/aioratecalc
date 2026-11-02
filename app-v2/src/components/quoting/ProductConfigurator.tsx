@@ -29,6 +29,7 @@ import {
   describeBillingStart,
   groupProducts,
   isAllowedForQuoteType,
+  isCompedService,
   isPosRequiringTerminal,
   isPreAuthProduct,
   includesMarketing,
@@ -890,7 +891,12 @@ export default function ProductConfigurator({
         }
       }
       if (!merged.units) delete merged.units;
-      if (!merged.discountPercent) delete merged.discountPercent;
+      // An explicit 0 survives on a comped service line only: it is how a rep
+      // turns the standing 100% off (see `setDiscount`). Anywhere else 0 is
+      // just no discount.
+      if (!merged.discountPercent && !(merged.discountPercent === 0 && isCompedService({ hubspotProductId: id }))) {
+        delete merged.discountPercent;
+      }
       if (!merged.discountAmount) delete merged.discountAmount;
       if (!merged.discountQty) delete merged.discountQty;
       if (!merged.billingStart) delete merged.billingStart;
@@ -930,7 +936,11 @@ export default function ProductConfigurator({
     //
     // `discountAmount: null` on every write: the two levers are mutually
     // exclusive, so typing in this box is also how a rep abandons the other.
-    setAdjustment(id, next
+    //
+    // A typed 0 on a comped service (install, onboarding) is KEPT: those lines
+    // default to 100% off, and an empty discount would hand them straight back
+    // to the comp (`applyServiceComp`), so "0" is the only way to charge them.
+    setAdjustment(id, next || (next === 0 && isCompedService({ hubspotProductId: id }))
       ? { discountPercent: next, discountAmount: null }
       : { discountPercent: null, discountAmount: null, discountQty: null });
   };
@@ -1255,7 +1265,7 @@ export default function ProductConfigurator({
                 <input
                   type="number" min={0} max={100} step={0.1}
                   className={styles.adjustInput}
-                  value={cashDiscount !== null ? "" : l.discountPercent ?? ""}
+                  value={cashDiscount !== null ? "" : l.discountPercent ?? adjustments[id]?.discountPercent ?? ""}
                   placeholder="0"
                   onChange={e => setDiscount(id, e.target.value)}
                   aria-label={`Discount percent for ${l.name}`}
@@ -1902,7 +1912,7 @@ export default function ProductConfigurator({
 
           <section>
             <div className={styles.buildHeadRow}>
-              <h3 className={styles.buildHead}>{rated ? "Hardware" : "Products"}</h3>
+              <h3 className={styles.buildHead}>Products</h3>
               {rated && built.softwareLicense.screens > 0 && (
                 <span className={styles.buildMeta}>
                   {built.softwareLicense.screens} screens · {INCLUDED_SCREEN_COUNT} included

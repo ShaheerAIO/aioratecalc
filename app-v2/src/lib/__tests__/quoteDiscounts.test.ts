@@ -444,6 +444,20 @@ describe("buildQuote with adjustments", () => {
     expect(install.discountPercent).toBe(100);
     expect(lineNetAmount(install)).toBe(0);
   });
+
+  // An explicit 0 is how a rep charges a comped service at list; an empty
+  // discount would hand it straight back to the comp.
+  it("charges a comped line at list when the rep sets 0%, and reopens it that way", () => {
+    const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 0 } };
+    const saved = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 100).quoteLines;
+    const install = saved.find(l => l.hubspotProductId === INSTALL_ID)!;
+    expect(install.discountPercent).toBeUndefined();
+    expect(lineNetAmount(install)).toBe(999);
+
+    const reopened = adjustmentsFromQuoteLines(saved);
+    expect(reopened[INSTALL_ID]).toEqual({ discountPercent: 0 });
+    expect(buildQuote("all_in_one", picked, [], CATALOG, reopened, 100).quoteLines).toEqual(saved);
+  });
 });
 
 describe("reopening a saved quote", () => {

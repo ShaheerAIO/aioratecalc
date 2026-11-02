@@ -2636,6 +2636,10 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
     } else if (line.discountPercent) {
       adjustment.discountPercent = line.discountPercent;
       if (line.qty < (chargeable.get(line.hubspotProductId) ?? 0)) adjustment.discountQty = line.qty;
+    } else if (isCompedService(line)) {
+      // A comped service saved at list was a rep's explicit 0 — without it the
+      // reopened quote would quietly comp the line back to 100% off.
+      adjustment.discountPercent = 0;
     }
     if (line.billingStart) adjustment.billingStart = line.billingStart;
     // The undiscounted half of a split carries nothing of its own, so it adds

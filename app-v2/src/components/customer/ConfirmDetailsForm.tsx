@@ -339,6 +339,25 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
       </div>
 
       <div className={styles.panel}>
+        <h2 className={styles.sectionTitle}>Owner &amp; Signer</h2>
+        <p className={styles.hint}>
+          Whoever is authorised to sign for the business — your quote is sent to this address for
+          signature.
+        </p>
+        <div className={styles.grid2}>
+          {input("ownerContact.firstName", owner.firstName || "", setOwnerF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+          {input("ownerContact.lastName", owner.lastName || "", setOwnerF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
+        </div>
+        <div className={`${styles.grid2} ${styles.row}`}>
+          {input("ownerContact.title", owner.title || "", setOwnerF("title") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Owner")}
+          {input("ownerContact.phone", owner.phone || "", setOwnerF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
+        </div>
+        <div className={styles.row}>
+          {input("ownerContact.email", owner.email || "", setOwnerF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "owner@business.com")}
+        </div>
+      </div>
+
+      <div className={styles.panel}>
         <h2 className={styles.sectionTitle}>Your Business</h2>
         <div className={styles.grid2}>
           {input("business.dba", biz.dba || "", setBizF("dba") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
@@ -404,25 +423,6 @@ export default function ConfirmDetailsForm({ token, initial, businessName, month
             </div>
           </>
         )}
-      </div>
-
-      <div className={styles.panel}>
-        <h2 className={styles.sectionTitle}>Owner &amp; Signer</h2>
-        <p className={styles.hint}>
-          Whoever is authorised to sign for the business — your quote is sent to this address for
-          signature.
-        </p>
-        <div className={styles.grid2}>
-          {input("ownerContact.firstName", owner.firstName || "", setOwnerF("firstName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-          {input("ownerContact.lastName", owner.lastName || "", setOwnerF("lastName") as (e: React.ChangeEvent<HTMLInputElement>) => void)}
-        </div>
-        <div className={`${styles.grid2} ${styles.row}`}>
-          {input("ownerContact.title", owner.title || "", setOwnerF("title") as (e: React.ChangeEvent<HTMLInputElement>) => void, "Owner")}
-          {input("ownerContact.phone", owner.phone || "", setOwnerF("phone") as (e: React.ChangeEvent<HTMLInputElement>) => void, "555-000-0000")}
-        </div>
-        <div className={styles.row}>
-          {input("ownerContact.email", owner.email || "", setOwnerF("email") as (e: React.ChangeEvent<HTMLInputElement>) => void, "owner@business.com")}
-        </div>
       </div>
 
       <div className={styles.panel}>
