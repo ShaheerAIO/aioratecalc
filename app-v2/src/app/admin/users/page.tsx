@@ -10,7 +10,11 @@ import {
   unlinkEntraAction,
   setBreakglassPasswordAction,
   clearBreakglassPasswordAction,
+  deleteStaffUserAction,
+  listCustomerUsersAction,
+  deleteCustomerUserAction,
   type AdminUserSummary,
+  type CustomerAccountSummary,
   type StaffRole,
 } from "@/lib/actions/users";
 import { listApplicationsAction, listRepsAction, type RepSummary } from "@/lib/actions/applications";
@@ -30,6 +34,7 @@ export default function AdminUsersPage() {
   const [staff, setStaff]         = useState<AdminUserSummary[]>([]);
   const [apps, setApps]           = useState<MerchantApplication[]>([]);
   const [reps, setReps]           = useState<RepSummary[]>([]);
+  const [customers, setCustomers] = useState<CustomerAccountSummary[]>([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState("");
 
@@ -42,6 +47,8 @@ export default function AdminUsersPage() {
   const [resetPassword, setResetPassword] = useState("");
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId]       = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [reassignTo, setReassignTo] = useState("");
 
   // The Foodbuy drawer: where customers' "Send to Foodbuy" emails go.
   const [foodbuyOpen, setFoodbuyOpen]   = useState(false);
@@ -57,6 +64,7 @@ export default function AdminUsersPage() {
       listStaffUsersAction().then(setStaff),
       listApplicationsAction().then(setApps),
       listRepsAction().then(setReps),
+      listCustomerUsersAction().then(setCustomers),
     ]).catch(e => setError(e.message)).finally(() => setLoading(false));
   }, []);
 
@@ -108,6 +116,9 @@ export default function AdminUsersPage() {
   }), [repClients]);
 
   const selectedApp = apps.find(a => a.id === selectedAppId) || null;
+  const selectedCustomer = selectedApp?.customerUserId
+    ? customers.find(c => c.id === selectedApp.customerUserId) || null
+    : null;
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -193,6 +204,45 @@ export default function AdminUsersPage() {
       await refreshStaff();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to clear password");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDeleteStaff = async (id: string) => {
+    setError("");
+    setNotice("");
+    setBusyId(id);
+    try {
+      await deleteStaffUserAction(id, reassignTo || null);
+      const movedTo = staff.find(u => u.id === reassignTo);
+      setApps(as => as.map(a => (a.ownerUserId === id && reassignTo ? { ...a, ownerUserId: reassignTo } : a)));
+      setStaff(us => us.filter(u => u.id !== id));
+      setSelectedRepId(null);
+      setDeleteTarget(null);
+      setReassignTo("");
+      setNotice(movedTo && repClients.length > 0
+        ? `Account deleted. Its ${repClients.length} application(s) now belong to ${movedTo.name || movedTo.email}.`
+        : "Account deleted.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete account");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDeleteCustomer = async (id: string) => {
+    setError("");
+    setNotice("");
+    setBusyId(id);
+    try {
+      await deleteCustomerUserAction(id);
+      setCustomers(cs => cs.filter(c => c.id !== id));
+      setApps(as => as.map(a => (a.customerUserId === id ? { ...a, customerUserId: null } : a)));
+      setDeleteTarget(null);
+      setNotice("Customer login deleted. The application stays; the customer would need a new lead link to sign in again.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete customer login");
     } finally {
       setBusyId(null);
     }
@@ -397,7 +447,44 @@ export default function AdminUsersPage() {
                         Clear password
                       </button>
                     )}
+                    <button
+                      disabled={busyId === selectedRep.id}
+                      onClick={() => { setDeleteTarget(deleteTarget === selectedRep.id ? null : selectedRep.id); setReassignTo(""); }}
+                      className={styles.btnGhost}
+                      data-danger
+                    >
+                      Delete account
+                    </button>
                   </div>
+
+                  {deleteTarget === selectedRep.id && (
+                    <div className={styles.resetRow}>
+                      {repClients.length > 0 && (
+                        <select
+                          value={reassignTo}
+                          onChange={e => setReassignTo(e.target.value)}
+                          className={styles.input}
+                          aria-label="Reassign applications to"
+                        >
+                          <option value="">Move {repClients.length} application(s) to…</option>
+                          {staff.filter(u => u.id !== selectedRep.id).map(u => (
+                            <option key={u.id} value={u.id}>{u.name || u.email}</option>
+                          ))}
+                        </select>
+                      )}
+                      <button
+                        disabled={busyId === selectedRep.id || (repClients.length > 0 && !reassignTo)}
+                        onClick={() => handleDeleteStaff(selectedRep.id)}
+                        className={styles.btnGhost}
+                        data-danger
+                      >
+                        Permanently delete {selectedRep.name || selectedRep.email}
+                      </button>
+                      <button onClick={() => setDeleteTarget(null)} className={styles.btnGhost}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
 
                   <div className={styles.linkState}>
                     {selectedRep.entraLinkedAt
@@ -532,6 +619,7 @@ export default function AdminUsersPage() {
                       { label: "Onboarding URL", val: selectedApp.adyenOnboardingUrl ? "Set" : "Not generated" },
                       { label: "Merchant Contact", val: selectedApp.ownerContact ? `${selectedApp.ownerContact.firstName} ${selectedApp.ownerContact.lastName}` : "—" },
                       { label: "Merchant Email", val: selectedApp.ownerContact?.email || "—" },
+                      { label: "Customer Login", val: selectedCustomer?.email || "No account yet" },
                     ].map(f => (
                       <div key={f.label}>
                         <div className={styles.detailFieldLabel}>{f.label}</div>
@@ -539,6 +627,34 @@ export default function AdminUsersPage() {
                       </div>
                     ))}
                   </div>
+
+                  {selectedCustomer && (
+                    <div className={styles.resetRow}>
+                      {deleteTarget === selectedCustomer.id ? (
+                        <>
+                          <button
+                            disabled={busyId === selectedCustomer.id}
+                            onClick={() => handleDeleteCustomer(selectedCustomer.id)}
+                            className={styles.btnGhost}
+                            data-danger
+                          >
+                            Permanently delete {selectedCustomer.email}
+                          </button>
+                          <button onClick={() => setDeleteTarget(null)} className={styles.btnGhost}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteTarget(selectedCustomer.id)}
+                          className={styles.btnGhost}
+                          data-danger
+                        >
+                          Delete customer login
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

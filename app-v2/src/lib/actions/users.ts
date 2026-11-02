@@ -1,9 +1,21 @@
 "use server";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { hash } from "bcryptjs";
 import { db } from "@/lib/db/client";
-import { users } from "@/lib/db/schema";
+import {
+  users,
+  merchantApplications,
+  customerLoginTokens,
+  marginPolicy,
+  quoteTemplatePolicy,
+  quoteLimitPolicy,
+  rateMatrixPolicy,
+  marginReqsPolicy,
+  commissionPolicy,
+  foodbuyPolicy,
+} from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 
 // Staff role — the only roles an admin can assign through user management.
@@ -133,4 +145,79 @@ export async function clearBreakglassPasswordAction(id: string): Promise<void> {
     .update(users)
     .set({ passwordHash: null })
     .where(and(eq(users.id, id), inArray(users.role, ["rep", "admin"])));
+}
+
+// Every policy table stamps updated_by_user_id with a plain FK to users, so a
+// user who ever saved a policy can't be deleted until those stamps are cleared.
+const POLICY_TABLES = [
+  marginPolicy,
+  quoteTemplatePolicy,
+  quoteLimitPolicy,
+  rateMatrixPolicy,
+  marginReqsPolicy,
+  commissionPolicy,
+  foodbuyPolicy,
+];
+
+function clearPolicyStamps(id: string) {
+  return POLICY_TABLES.map(t => db.update(t).set({ updatedByUserId: null }).where(eq(t.updatedByUserId, id)));
+}
+
+// Hard-deletes a rep/admin row. merchant_applications.owner_user_id is a
+// required FK, so any applications they own move to `reassignToId` first.
+// Local DB only — HubSpot deals/owners and AIO dashboard records are untouched.
+// One db.batch, so a failure part-way leaves nothing half-done.
+export async function deleteStaffUserAction(id: string, reassignToId: string | null): Promise<void> {
+  const effective = await requireAdmin();
+  if (id === effective.userId) throw new Error("Cannot delete your own account");
+
+  const [target] = await db.select({ role: users.role }).from(users).where(eq(users.id, id)).limit(1);
+  if (!target || target.role === "customer") throw new Error("User not found");
+
+  const owned = await db
+    .select({ id: merchantApplications.id })
+    .from(merchantApplications)
+    .where(eq(merchantApplications.ownerUserId, id));
+  if (owned.length > 0) {
+    if (!reassignToId || reassignToId === id) {
+      throw new Error(`This user owns ${owned.length} application(s). Pick someone to reassign them to.`);
+    }
+    const [to] = await db.select({ role: users.role }).from(users).where(eq(users.id, reassignToId)).limit(1);
+    if (!to || to.role === "customer") throw new Error("Reassign target must be a rep or admin");
+  }
+
+  const steps: BatchItem<"pg">[] = [];
+  if (owned.length > 0) {
+    steps.push(db.update(merchantApplications).set({ ownerUserId: reassignToId as string }).where(eq(merchantApplications.ownerUserId, id)));
+  }
+  steps.push(...clearPolicyStamps(id), db.delete(users).where(eq(users.id, id)));
+  await db.batch(steps as [BatchItem<"pg">, ...BatchItem<"pg">[]]);
+}
+
+export type CustomerAccountSummary = { id: string; email: string; name: string };
+
+// Customer login accounts, keyed by id, so the Customers tab can show which
+// login (if any) is linked to each application.
+export async function listCustomerUsersAction(): Promise<CustomerAccountSummary[]> {
+  await requireAdmin();
+  return db
+    .select({ id: users.id, email: users.email, name: users.name })
+    .from(users)
+    .where(eq(users.role, "customer"));
+}
+
+// Hard-deletes a customer login. Their applications stay (they belong to the
+// rep) but are unlinked, and every login token for the email is dropped so an
+// outstanding magic link can't quietly recreate the account.
+export async function deleteCustomerUserAction(id: string): Promise<void> {
+  await requireAdmin();
+  const [target] = await db.select({ email: users.email, role: users.role }).from(users).where(eq(users.id, id)).limit(1);
+  if (!target || target.role !== "customer") throw new Error("Customer account not found");
+
+  await db.batch([
+    db.update(merchantApplications).set({ customerUserId: null }).where(eq(merchantApplications.customerUserId, id)),
+    db.delete(customerLoginTokens).where(sql`lower(${customerLoginTokens.email}) = ${target.email.trim().toLowerCase()}`),
+    ...clearPolicyStamps(id),
+    db.delete(users).where(eq(users.id, id)),
+  ]);
 }
