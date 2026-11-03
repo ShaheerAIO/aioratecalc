@@ -277,3 +277,37 @@ describe("accepting a quote", () => {
   });
 });
 
+// THE DRAFT LOCK (2026-11-02), for the merchants who accept here.
+describe("a quote that isn't live", () => {
+  for (const status of ["draft", "pending_approval", "approved"]) {
+    it(`refuses quote_locked while the status is ${status}, recording nothing`, async () => {
+      row = baseRow({ quoteStatus: status });
+      const res = await post();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "quote_locked" });
+      expect(patches).toHaveLength(0);
+      expect(row!.quoteAcceptedAt).toBeNull();
+      expect(loginTokens).toHaveLength(0);
+      expect(sendMagicLinkEmail).not.toHaveBeenCalled();
+      expect(syncDealFromApplication).not.toHaveBeenCalled();
+    });
+  }
+
+  it("accepts as before when the status is null", async () => {
+    row = baseRow({ quoteStatus: null });
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(row!.quoteAcceptedAt).toEqual(NOW);
+  });
+
+  // "Email Me a New Link" acts on nothing on the quote, and an accepted quote
+  // can't be edited back into a draft — so a merchant already through the door
+  // keeps their way back in, exactly like the confirmation gate.
+  it("still re-issues an already-accepted merchant's login", async () => {
+    row = baseRow({ quoteStatus: "pending_approval", quoteAcceptedAt: NOW, stage: "adyen_kyc_pending" });
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(loginTokens).toHaveLength(1);
+    expect(syncDealFromApplication).not.toHaveBeenCalled();
+  });
+});

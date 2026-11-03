@@ -116,7 +116,7 @@ export default function PricingStep({ analysis, activeProcessor, activeTier, onB
   // The $10-a-month minimum on AIO's own processing revenue (2026-10-15). It
   // refuses the proposal here for the same reason `belowMin` does: a proposal
   // is a document handed to a merchant, and a rate this step let through is
-  // one `assertRateAboveFloor` will refuse to save afterwards.
+  // one the proposal route will refuse afterwards (the quote builder treats it as an admin override instead).
   //
   // The standing revenue/ARR readout the other two rep surfaces now carry is
   // deliberately NOT here (product owner, 2026-10-15): this is the step a rep

@@ -1142,19 +1142,21 @@ describe("one website per merchant", () => {
     expect(maxQtyFor(find("POS Unit").hubspotProductId, { [find("POS Unit").hubspotProductId]: 2 })).toBe(2);
   });
 
-  it("refuses a quantity over an admin-set cap, naming where to raise it", () => {
+  it("flags a quantity over an admin-set cap as an override for admin approval", () => {
     const id = find("POS Unit").hubspotProductId;
     const built = buildQuote(
       "all_in_one", picked([["POS Unit", 3]]), [], CATALOG, {}, 50,
       { unitCaps: { [id]: 2 }, discountCaps: {}, maxBillingDelayDays: 90, showTablets: false }
     );
-    expect(built.blockers.some(b => b.includes("over the limit of 2"))).toBe(true);
-    expect(built.blockers.some(b => b.includes("Admin → Quote limits"))).toBe(true);
+    expect(built.overrides).toContainEqual(
+      expect.objectContaining({ kind: "unit_cap", productId: id, value: 3, limit: 2 })
+    );
+    expect(built.blockers.some(b => b.includes("over the limit"))).toBe(false);
   });
 
-  it("refuses a quote carrying two of them", () => {
+  it("flags a quote carrying two of them", () => {
     const built = buildQuote("all_in_one", picked([[WEBSITE, 2]]), [], CATALOG);
-    expect(built.blockers.some(b => b.includes("over the limit of 1"))).toBe(true);
+    expect(built.overrides).toContainEqual(expect.objectContaining({ kind: "unit_cap", value: 2, limit: 1 }));
   });
 
   it("allows exactly one", () => {
@@ -1173,7 +1175,9 @@ describe("one website per merchant", () => {
       { [id]: { discountPercent: 50, discountQty: 1 } }, 100
     );
     expect(built.quoteLines.filter(l => l.hubspotProductId === id)).toHaveLength(2);
-    expect(built.blockers.some(b => b.includes("over the limit of 1"))).toBe(true);
+    expect(built.overrides).toContainEqual(
+      expect.objectContaining({ kind: "unit_cap", productId: id, value: 2, limit: 1 })
+    );
   });
 });
 

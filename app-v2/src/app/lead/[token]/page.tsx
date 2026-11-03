@@ -3,7 +3,7 @@ import { db } from "@/lib/db/client";
 import { users } from "@/lib/db/schema";
 import { canClaimLeadAccount } from "@/lib/leadAccount";
 import { rowToApp } from "@/lib/storage/applicationRow";
-import { getLeadApplicationByToken } from "@/lib/leadToken";
+import { getLeadApplicationByToken, isQuoteLocked } from "@/lib/leadToken";
 import { checklistNotice, getOnboardingModules } from "@/lib/onboardingModules";
 import { canRepairFromLead, missingTenantFields } from "@/lib/leadDetails";
 import { hasQuoteBasis } from "@/lib/leadQuote";
@@ -30,6 +30,20 @@ export default async function LeadPage({ params, searchParams }: {
         <div className={styles.centeredInner}>
           <h1 className={styles.title}>{lookup.reason === "expired" ? "Link Expired" : "Invalid Link"}</h1>
           <p className={styles.subtitle}>Ask your AIO representative for a new link.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // A draft, or a live quote a rep has since edited past a limit and sent back
+  // for an admin's approval (2026-11-02). Nothing on it is final, so no
+  // figures and nothing to act on — just the reason, in the link-error style.
+  if (isQuoteLocked(lookup.row)) {
+    return (
+      <div className={styles.centered}>
+        <div className={styles.centeredInner}>
+          <h1 className={styles.title}>Your Quote Is Being Updated</h1>
+          <p className={styles.subtitle}>Your AIO rep will let you know when it&apos;s ready.</p>
         </div>
       </div>
     );

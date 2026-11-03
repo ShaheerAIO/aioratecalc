@@ -24,9 +24,11 @@ const listQuotableProductsAction = vi.fn();
 const buildAndPublishBillingQuote = vi.fn();
 const resolveSender = vi.fn();
 const moveDealToQuoteSentAtSend = vi.fn();
+const getApplication = vi.fn();
+const sendQuoteApprovalRequestEmail = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
-vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { saveApplication } }));
+vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { saveApplication, getApplication } }));
 vi.mock("@/lib/adapters/hubspot", () => ({
   getCompanyProfile, listCompanyContacts, updateCompanyMerchantDetails,
   ensureQuoteContact, getContactById, updateContactDetails, moveDealToQuoteSentAtSend,
@@ -34,7 +36,7 @@ vi.mock("@/lib/adapters/hubspot", () => ({
 // The Company & Deal picker's resolution service — mocked so the real module
 // (which pulls in the server-only db client) is never loaded here.
 vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany }));
-vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail }));
+vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail, sendQuoteApprovalRequestEmail }));
 vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms }));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
 // The publish-at-send orchestrator (10/13) — mocked so the real module (which
@@ -68,7 +70,27 @@ vi.mock("@/lib/actions/pricing", () => ({
   }),
 }));
 
-const { createProspectAction } = await import("@/lib/actions/prospects");
+// Draft quotes + admin override approval (2026-11-02): the overrides are
+// judged against the live rate card and margin table, and the admins are
+// emailed — all three read the db, so they are stubbed. The rate card here is
+// FLAT at the fixtures' own 2.49% card-present and card-not-present, so a
+// quote on the default rates carries no rate override unless a test says so.
+const getRateMatrix = vi.fn();
+const listActiveAdminRecipients = vi.fn();
+const getStaffRecipient = vi.fn();
+vi.mock("@/lib/actions/rateMatrix", () => ({ getRateMatrix }));
+vi.mock("@/lib/marginReqsLoader", () => ({
+  loadMarginReqs: vi.fn(async () => (await import("@/lib/pricing")).MARGIN_REQS),
+}));
+vi.mock("@/lib/staff", () => ({ listActiveAdminRecipients, getStaffRecipient }));
+const FLAT_RATE_CARD = {
+  cardPresentBps: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 249)),
+  cardNotPresentBps: 249,
+  perTransactionFeeCents: 15,
+};
+
+const { createProspectAction, sendDraftAction } = await import("@/lib/actions/prospects");
+const { overrideFingerprint } = await import("@/lib/quoteOverrides");
 
 const BUSINESS: BusinessInfo = {
   legalName: "Torta Palace LLC", dba: "Torta Palace", bizType: "llc",
@@ -115,6 +137,12 @@ function baseInput(over: Partial<Input> = {}): Input {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
+  listActiveAdminRecipients.mockResolvedValue([
+    { id: "admin-1", email: "admin1@aioapp.com", name: "Ada Admin" },
+    { id: "admin-2", email: "admin2@aioapp.com", name: "Abe Admin" },
+  ]);
+  getStaffRecipient.mockImplementation(async (id: string) => ({ id, email: `${id}@aioapp.com`, name: `Name ${id}` }));
   getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
   getCompanyProfile.mockResolvedValue({ id: COMPANY_ID, name: "Torta Palace", tenantRef: null, adyenAccountHolderId: null });
   resolveDealForCompany.mockResolvedValue({ ok: true, deal: DEAL, created: false });
@@ -127,6 +155,7 @@ beforeEach(() => {
   buildAndPublishBillingQuote.mockResolvedValue({ status: "skipped", reason: "nothing_to_bill" });
   resolveSender.mockResolvedValue({ ok: false, code: "no_rep_email" });
   moveDealToQuoteSentAtSend.mockResolvedValue(true);
+  sendQuoteApprovalRequestEmail.mockResolvedValue({ sent: 2, failed: 0 });
 });
 
 describe("createProspectAction — hard blocks", () => {
@@ -243,43 +272,239 @@ describe("createProspectAction — success", () => {
   });
 });
 
-// The server-side mirror of the rep form's own floor check — see
-// assertRateAboveFloor / marginFloorBlockers (prospects.ts / pricing.ts) and
-// the 2026-10-09 decision ("card rate minimums are needed"). Before this, a
-// stale client or a direct Server Action call could create a prospect priced
-// under AIO's minimum — the UI's own refusal (rep/prospects/new/page.tsx's
-// hardBlocks) was never backed up here.
-describe("createProspectAction — the margin floor", () => {
-  // $10,000/month, $50 ticket — MARGIN_REQS' first tier (minMargin 0.0085).
-  // Both rates below assume a 2-tier quote
-  // with no per-transaction fee, so interchange alone decides the margin.
-  const BASIS = { monthlyVolume: 10000, avgTicket: 50 };
+// Draft quotes + admin override approval (2026-11-02). The margin and revenue
+// floors used to refuse here (assertRateAboveFloor, 2026-10-09); they are now
+// overrides an admin approves on the one quote, as is a card-present rate off
+// the rate card's range and ANY card-not-present rate off policy.
+const RATES = (cp: number, cnp: number = cp) => ({
+  cardPresentRate: cp, cardNotPresentRate: cnp, amexCardPresentRate: cp, amexCardNotPresentRate: cnp, perTransactionFee: 0,
+});
+// $10,000/month, $50 ticket — MARGIN_REQS' first tier (minMargin 0.0085).
+const BASIS = { monthlyVolume: 10000, avgTicket: 50 };
 
-  it("refuses to create a prospect at a rate below AIO's floor, and names no number or admin escape hatch", async () => {
-    const attempt = createProspectAction(baseInput({
-      quoteConfig: BASIS,
-      quoteRates: { cardPresentRate: 0.005, cardNotPresentRate: 0.005, amexCardPresentRate: 0.005, amexCardNotPresentRate: 0.005, perTransactionFee: 0 },
+/** Nothing reached HubSpot as a write, and nothing reached the merchant. */
+function expectNoSend() {
+  expect(resolveDealForCompany).not.toHaveBeenCalled();
+  expect(sendLeadLinkEmail).not.toHaveBeenCalled();
+  expect(sendLeadLinkSms).not.toHaveBeenCalled();
+  expect(updateCompanyMerchantDetails).not.toHaveBeenCalled();
+  expect(ensureQuoteContact).not.toHaveBeenCalled();
+  expect(updateContactDetails).not.toHaveBeenCalled();
+  expect(moveDealToQuoteSentAtSend).not.toHaveBeenCalled();
+}
+
+describe("createProspectAction — overrides wait for an admin", () => {
+  it("saves a rep's under-floor quote as pending_approval, emails the admins, and sends nothing", async () => {
+    const result = await createProspectAction(baseInput({
+      quoteConfig: BASIS, quoteRates: RATES(0.005), billingContact: { ...OWNER, email: "bill@x.com" },
     }));
 
-    // Pinned verbatim — see marginFloorBlockers' doc comment on why the
-    // wording must not promise an admin review that doesn't exist (the
-    // margin-policy editor was deleted 2026-10-12). Raising the rate is the
-    // only recovery, and that's what the message says.
-    await expect(attempt).rejects.toThrow(
-      "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote."
-    );
-    expect(saveApplication).not.toHaveBeenCalled();
+    expect(result.quoteStatus).toBe("pending_approval");
+    expect(result.linkUrl).toBeNull();
+    expect(result.notified).toEqual({ sent: 2, failed: 0 });
+    expect(result.overrides.map(o => o.kind)).toEqual(expect.arrayContaining(["cp_rate", "cnp_rate"]));
+    expectNoSend();
 
-    const message = await attempt.catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
-    expect(message).not.toMatch(/0\.0085|0\.85\s*%/);
-    expect(message).not.toMatch(/admin/i);
+    expect(saveApplication).toHaveBeenCalledTimes(1);
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved.quoteStatus).toBe("pending_approval");
+    expect(saved.customerLinkToken).toBeNull();
+    expect(saved.hubspotDealId).toBeNull();
+    expect(saved.pendingDealChoice).toEqual({ mode: "existing", dealId: DEAL.id });
+    expect(saved.quoteApproval).toMatchObject({ requestedByUserId: "rep-1", overrides: result.overrides });
+    expect(saved.quoteApproval?.approvedAt).toBeUndefined();
+    // Over exactly what was persisted, normalised as the publish gate does.
+    expect(saved.quoteApproval?.fingerprint).toBe(
+      overrideFingerprint(saved.quoteLines ?? [], saved.quoteRates ?? null, saved.quoteApproval!.overrides)
+    );
+
+    expect(sendQuoteApprovalRequestEmail).toHaveBeenCalledTimes(1);
+    const email = sendQuoteApprovalRequestEmail.mock.calls[0][0];
+    expect(email.to).toEqual(["admin1@aioapp.com", "admin2@aioapp.com"]);
+    expect(email.repName).toBe("Name rep-1");
+    expect(email.url).toBe(`http://localhost:3000/admin?view=accounts&account=${saved.id}`);
+  });
+
+  it("never names the margin floor in an override a rep (or the email) reads", async () => {
+    const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005) }));
+    for (const o of result.overrides) {
+      expect(o.message).not.toMatch(/0\.0085|0\.85\s*%/);
+    }
+  });
+
+  it("holds a rep's quote even in draft mode, and leaves the requester out of the email", async () => {
+    getEffectiveRole.mockResolvedValue({ userId: "admin-2", role: "rep" });
+    const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005), mode: "draft" }));
+    expect(result.quoteStatus).toBe("pending_approval");
+    expect(sendQuoteApprovalRequestEmail.mock.calls[0][0].to).toEqual(["admin1@aioapp.com"]);
+    expectNoSend();
+  });
+
+  it("treats ANY card-not-present rate off policy as an override", async () => {
+    const result = await createProspectAction(baseInput({ quoteRates: RATES(0.0249, 0.0299) }));
+    expect(result.quoteStatus).toBe("pending_approval");
+    expect(result.overrides).toEqual([expect.objectContaining({ kind: "cnp_rate", value: 299, limit: 249 })]);
+  });
+
+  it("still refuses an implausible rate outright, and saves nothing", async () => {
+    await expect(createProspectAction(baseInput({ quoteRates: RATES(0.08, 0.0249) })))
+      .rejects.toThrow(/between 0% and 5\.00%/);
+    expect(saveApplication).not.toHaveBeenCalled();
   });
 
   it("does not refuse a rate-only quote with no volume behind it — there is nothing to clear", async () => {
-    // baseInput() carries no quoteConfig/analysis at all — the normal shape
-    // of a brand-new prospect before a statement or a typed volume exists.
     await createProspectAction(baseInput());
     expect(saveApplication).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createProspectAction — an admin approves their own overrides", () => {
+  beforeEach(() => getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" }));
+
+  it("stamps the approval with the admin and sends, with no approval email", async () => {
+    const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005) }));
+    expect(result.quoteStatus).toBeNull();
+    expect(result.linkUrl).toContain("/lead/");
+    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved.quoteStatus).toBeNull();
+    expect(saved.quoteApproval).toMatchObject({ requestedByUserId: "admin-1", approvedByUserId: "admin-1" });
+    expect(saved.quoteApproval?.approvedAt).toEqual(expect.any(String));
+    expect(saved.quoteApproval?.fingerprint).toBe(
+      overrideFingerprint(saved.quoteLines ?? [], saved.quoteRates ?? null, saved.quoteApproval!.overrides)
+    );
+    expect(saved.hubspotDealId).toBe(DEAL.id);
+    expect(saved.pendingDealChoice).toBeNull();
+  });
+
+  it("saves an admin's draft as approved, with nothing sent", async () => {
+    const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005), mode: "draft" }));
+    expect(result.quoteStatus).toBe("approved");
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved.quoteApproval?.approvedByUserId).toBe("admin-1");
+    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expectNoSend();
+  });
+});
+
+describe("createProspectAction — save as draft", () => {
+  it("saves the account and quote with no link, no deal and no HubSpot writes", async () => {
+    const result = await createProspectAction(baseInput({
+      mode: "draft", deal: { mode: "create", dealName: "Torta Palace" },
+      billingContact: { ...OWNER, email: "bill@x.com" }, billingContactId: "contact-5",
+    }));
+    expect(result).toMatchObject({ quoteStatus: "draft", overrides: [], linkUrl: null, companySync: { synced: false } });
+    expect(result.notified).toBeUndefined();
+    expectNoSend();
+    expect(getContactById).not.toHaveBeenCalled();
+    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved).toMatchObject({
+      quoteStatus: "draft", quoteApproval: null, hubspotDealId: null, dealLink: null,
+      customerLinkToken: null, stage: "prospect_created",
+      // The "new deal" choice is kept for the send — never acted on here.
+      pendingDealChoice: { mode: "create", dealName: "Torta Palace" },
+    });
+  });
+
+  it("defaults to send: the link goes out exactly as before", async () => {
+    const result = await createProspectAction(baseInput());
+    expect(result.quoteStatus).toBeNull();
+    expect(result.overrides).toEqual([]);
+    expect(resolveDealForCompany).toHaveBeenCalledTimes(1);
+    expect(sendLeadLinkEmail).toHaveBeenCalledTimes(1);
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved).toMatchObject({ quoteStatus: null, quoteApproval: null, pendingDealChoice: null, stage: "quote_sent" });
+  });
+});
+
+// "Send to merchant": a saved draft goes live through the same send step.
+describe("sendDraftAction", () => {
+  /** The row a draft create saved. */
+  async function savedDraft(over: Partial<Input> = {}, role: "rep" | "admin" = "rep") {
+    getEffectiveRole.mockResolvedValue({ userId: role === "rep" ? "rep-1" : "admin-1", role });
+    await createProspectAction(baseInput({ mode: "draft", ...over }));
+    const row = saveApplication.mock.calls[0][1] as MerchantApplication;
+    vi.clearAllMocks();
+    getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
+    getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
+    resolveDealForCompany.mockResolvedValue({ ok: true, deal: DEAL, created: true });
+    getApplication.mockResolvedValue(row);
+    return row;
+  }
+
+  it("sends a plain draft: resolves the stored deal choice, mints the link, delivers and syncs", async () => {
+    await savedDraft({ deal: { mode: "create", dealName: "Torta Palace" } });
+    const result = await sendDraftAction("whatever");
+
+    expect(resolveDealForCompany).toHaveBeenCalledWith({
+      companyId: COMPANY_ID, choice: { mode: "create", dealName: "Torta Palace" },
+    });
+    expect(result).toMatchObject({ quoteStatus: null, delivered: true, overrides: [] });
+    expect(result.linkUrl).toContain("/lead/");
+    expect(sendLeadLinkEmail).toHaveBeenCalledTimes(1);
+    expect(updateCompanyMerchantDetails).toHaveBeenCalledWith(COMPANY_ID, expect.anything());
+    expect(moveDealToQuoteSentAtSend).toHaveBeenCalledWith(DEAL.id);
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved).toMatchObject({
+      quoteStatus: null, pendingDealChoice: null, hubspotDealId: DEAL.id, stage: "quote_sent",
+      dealLink: expect.objectContaining({ origin: "created" }),
+    });
+  });
+
+  it("refuses a quote that is waiting on an admin", async () => {
+    getApplication.mockResolvedValue({ id: "a", quoteStatus: "pending_approval" });
+    await expect(sendDraftAction("a")).rejects.toThrow(/waiting on an admin/);
+    expect(saveApplication).not.toHaveBeenCalled();
+  });
+
+  it("refuses a rep's overrides without a valid approval", async () => {
+    const row = await savedDraft({ quoteConfig: BASIS, quoteRates: RATES(0.005) }, "admin");
+    // Approved for a different quote than the one on the row.
+    getApplication.mockResolvedValue({ ...row, quoteApproval: { ...row.quoteApproval!, fingerprint: "stale" } });
+    await expect(sendDraftAction(row.id)).rejects.toThrow(/approval doesn't cover/);
+    // ...and with no approvedAt at all.
+    getApplication.mockResolvedValue({ ...row, quoteApproval: { ...row.quoteApproval!, approvedAt: null } });
+    await expect(sendDraftAction(row.id)).rejects.toThrow(/approval doesn't cover/);
+    expect(saveApplication).not.toHaveBeenCalled();
+    expectNoSend();
+  });
+
+  it("sends an approved quote whose approval still covers it", async () => {
+    const row = await savedDraft({ quoteConfig: BASIS, quoteRates: RATES(0.005) }, "admin");
+    expect(row.quoteStatus).toBe("approved");
+    const result = await sendDraftAction(row.id);
+    expect(result.delivered).toBe(true);
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved.quoteStatus).toBeNull();
+    expect(saved.quoteApproval).toEqual(row.quoteApproval);
+  });
+
+  it("lets an admin send over a stale approval by approving it themselves", async () => {
+    const row = await savedDraft({ quoteConfig: BASIS, quoteRates: RATES(0.005) }, "admin");
+    getApplication.mockResolvedValue({ ...row, quoteApproval: { ...row.quoteApproval!, fingerprint: "stale" } });
+    getEffectiveRole.mockResolvedValue({ userId: "admin-2", role: "admin" });
+    await sendDraftAction(row.id);
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved.quoteApproval?.approvedByUserId).toBe("admin-2");
+  });
+
+  it("makes an already-sent quote live again without re-sending it", async () => {
+    const row = await savedDraft();
+    getApplication.mockResolvedValue({ ...row, quoteStatus: "approved", customerLinkToken: "tok-live" });
+    const result = await sendDraftAction(row.id);
+    expect(result).toMatchObject({ delivered: false, quoteStatus: null });
+    expect(result.linkUrl).toContain("/lead/tok-live");
+    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    expect(saved.quoteStatus).toBeNull();
+    expect(saved.customerLinkToken).toBe("tok-live");
+    expectNoSend();
+  });
+
+  it("refuses a quote that is already live", async () => {
+    getApplication.mockResolvedValue({ id: "a", quoteStatus: null, customerLinkToken: "tok" });
+    await expect(sendDraftAction("a")).rejects.toThrow(/already been sent/);
   });
 });
 

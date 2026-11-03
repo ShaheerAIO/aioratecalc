@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, timestamp, boolean, integer, numeric, jsonb, serial, date, index, uniqueIndex } from "drizzle-orm/pg-core";
+import type { DealChoice } from "@/lib/hubspotDeal";
 import type { ReportAnomalies } from "@/lib/adyen/paymentsAccountingParser";
 import type {
   StatementAnalysis,
@@ -10,6 +11,7 @@ import type {
   Processor,
   AppSettings,
   MerchantApplication,
+  QuoteApproval,
   CustomerSubmission,
 } from "@/types/merchant";
 
@@ -285,6 +287,11 @@ export const merchantApplications = pgTable("merchant_applications", {
   // invoice offers Affirm). Column kept: no migration — see hubspot-billing.md.
   paymentPlan: text("payment_plan"),
   paymentPlanAt: timestamp("payment_plan_at", { withTimezone: true }),
+  // Draft quotes + admin override approval (migration 0032). quote_status null
+  // = live (every pre-existing row). pending_deal_choice is the deferred deal pick.
+  quoteStatus: text("quote_status"),
+  quoteApproval: jsonb("quote_approval").$type<QuoteApproval>(),
+  pendingDealChoice: jsonb("pending_deal_choice").$type<DealChoice>(),
   // The rep's note on this quote, mirrored onto the HubSpot deal. Nullable:
   // most quotes have nothing to say. It becomes REQUIRED only when a first
   // charge doesn't sit on the plan's own default — see `quoteNoteBlockers`.

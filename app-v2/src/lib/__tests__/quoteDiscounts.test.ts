@@ -393,10 +393,11 @@ describe("buildQuote with adjustments", () => {
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
-  it("blocks the whole quote when a discount is over the cap", () => {
+  it("flags a discount over the cap as an override for admin approval, not a blocker", () => {
     const built = buildQuote("all_in_one", picked, [], CATALOG, { [POS_ID]: { discountPercent: 90 } }, 50);
-    expect(built.blockers).toHaveLength(1);
-    expect(built.blockers[0]).toContain("POS Unit");
+    expect(built.blockers).toEqual([]);
+    expect(built.overrides).toHaveLength(1);
+    expect(built.overrides[0].message).toContain("POS Unit");
   });
 
   it("applies no REP adjustment when none is passed — only the standing comp", () => {
@@ -415,6 +416,35 @@ describe("buildQuote with adjustments", () => {
   it("never blocks a quote on the standing comp, even at a low discount cap", () => {
     const built = buildQuote("all_in_one", picked, [], CATALOG, {}, 10);
     expect(built.blockers).toEqual([]);
+    // …nor asks for an approval of it.
+    expect(built.overrides).toEqual([]);
+  });
+
+  // 2026-11-02: over the cap is an admin-approvable override; everything else
+  // about a bad discount or delay is still a hard blocker.
+  it("flags an over-cap CASH discount as an override in percent of list, not a blocker", () => {
+    const built = buildQuote("all_in_one", picked, [], CATALOG, { [POS_ID]: { discountAmount: 600 } }, 50);
+    expect(built.blockers).toEqual([]);
+    expect(built.overrides).toEqual([expect.objectContaining({
+      kind: "discount", productId: POS_ID, productName: "POS Unit", limit: 50,
+    })]);
+    expect(built.overrides[0].value).toBeCloseTo((600 / 749) * 100, 6);
+  });
+
+  it("keeps the 0–100, more-than-the-line and delay-ceiling refusals as blockers", () => {
+    const pct = buildQuote("all_in_one", picked, [], CATALOG, { [POS_ID]: { discountPercent: 140 } }, 50);
+    expect(pct.blockers.join(" ")).toMatch(/isn't a percentage between 0 and 100/);
+    expect(pct.overrides).toEqual([]);
+
+    const cash = buildQuote("all_in_one", picked, [], CATALOG, { [POS_ID]: { discountAmount: 800 } }, 50);
+    expect(cash.blockers.join(" ")).toMatch(/more than the line/);
+    expect(cash.overrides).toEqual([]);
+
+    const delay = buildQuote(
+      "all_in_one", picked, [], CATALOG, { [PLATFORM_ID]: { billingStart: { mode: "days", days: 120 } } }, 50
+    );
+    expect(delay.blockers.join(" ")).toMatch(/past the 90-day limit/);
+    expect(delay.overrides).toEqual([]);
   });
 
   it("lets a rep's explicit discount win over the standing comp", () => {
@@ -429,7 +459,7 @@ describe("buildQuote with adjustments", () => {
   it("still caps a rep's own over-limit discount on a comped line", () => {
     const adjustments: QuoteAdjustments = { [INSTALL_ID]: { discountPercent: 80 } };
     const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 50);
-    expect(built.blockers.join(" ")).toMatch(/Onsite Installation.*80%/);
+    expect(built.overrides.map(o => o.message).join(" ")).toMatch(/Onsite Installation.*80%/);
   });
 
   // The failure this is here to prevent: a rep touches an unrelated control on
@@ -700,9 +730,9 @@ describe("a scoped discount through buildQuote", () => {
     expect(split.platform.productName).toBe(whole.platform.productName);
   });
 
-  it("refuses a scoped discount over the cap, same as any other", () => {
+  it("flags a scoped discount over the cap, same as any other", () => {
     const built = buildQuote("all_in_one", picked, [], CATALOG, adjustments, 50);
-    expect(built.blockers.join(" ")).toMatch(/POS Unit.*100%/);
+    expect(built.overrides.map(o => o.message).join(" ")).toMatch(/POS Unit.*100%/);
   });
 
   it("round-trips: the quantity is recovered, not widened to the whole line", () => {
@@ -790,7 +820,7 @@ describe("adjusting each unit separately", () => {
     const over = buildQuote("all_in_one", subQty(2), [], catalog, {
       [SUB_ID]: { units: [{ discountPercent: 80 }, {}] },
     }, 50);
-    expect(over.blockers.join(" ")).toMatch(/Kitchen Display Subscription.*80%/);
+    expect(over.overrides.map(o => o.message).join(" ")).toMatch(/Kitchen Display Subscription.*80%/);
 
     const badDate = buildQuote("all_in_one", subQty(2), [], catalog, {
       [SUB_ID]: { units: [{}, { billingStart: { mode: "date", date: "2026-02-31" } }] },

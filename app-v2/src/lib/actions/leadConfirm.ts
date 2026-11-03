@@ -22,7 +22,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
-import { getLeadApplicationByToken } from "@/lib/leadToken";
+import { getLeadApplicationByToken, isQuoteLocked } from "@/lib/leadToken";
 import { applyLeadConfirmation, confirmationErrors } from "@/lib/leadConfirm";
 import {
   associateContactToCompany,
@@ -53,6 +53,16 @@ export async function confirmLeadDetailsAction(
     };
   }
   const row = lookup.row;
+
+  // The quote is a draft or back with an admin (2026-11-02). Confirming is
+  // the step that opens the publish, so it waits until the rep makes the quote
+  // live again — the page shows the same notice instead of this form.
+  if (isQuoteLocked(row)) {
+    return {
+      ok: false,
+      formError: "Your quote is being updated. Your AIO rep will let you know when it's ready.",
+    };
+  }
 
   // Already confirmed: say so rather than re-stamping. The merchant is on a
   // stale tab or came back through their own history, and moving the

@@ -14,26 +14,31 @@ import { resolveLeadLinkIssue } from "@/lib/customerLink";
 import { resolveDealForCompany, type DealChoice, type DealRefusalCode, type DealResolution } from "@/lib/hubspotDeal";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import type { StorageScope } from "@/lib/storage/storageInterface";
-import { sendLeadLinkEmail, type ReplyToRep, type SendMagicLinkResult } from "@/lib/adapters/email";
+import {
+  sendLeadLinkEmail, sendQuoteApprovalRequestEmail, type ReplyToRep, type SendMagicLinkResult,
+} from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import {
   deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot, moveDealToQuoteSentAtSend,
   setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
 import { resolveSender } from "@/lib/billing/publishBillingQuote";
-import { analysisFromQuoteConfig, marginFloorBlockers, monthlyRevenueFloorBlockers } from "@/lib/pricing";
-import { getMaxDiscountPercent, getPricingPreviewAction, getQuoteLimits } from "@/lib/actions/pricing";
+import { analysisFromQuoteConfig } from "@/lib/pricing";
+import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
+import { appBaseUrl, approvalCovers, evaluateQuoteOverrides, quoteFingerprint } from "@/lib/quoteEvaluation";
+import { getStaffRecipient, listActiveAdminRecipients } from "@/lib/staff";
 import {
   buildQuote, describeDelayDeviation, isAllowedForQuoteType, isProcessingQuote,
   longestBillingDelayDays, planDefaultBillingDelayDays,
-  processesCardNotPresentOnly, quoteHasProcessing,
+  quoteHasProcessing,
   quoteNoteBlockers, quoteTypeOf, toQuoteLine,
 } from "@/lib/quoting";
 import { shouldAdvance } from "@/lib/stages";
-import { DEFAULT_QUOTE_RATES } from "@/types/merchant";
+import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE } from "@/types/merchant";
 import type {
-  BusinessInfo, DealLink, MerchantApplication, OrderPoints, OwnerContact, PricingModel, ProcessingInfo,
-  QuoteAdjustments, QuoteConfig, QuoteLine, QuoteRates, QuoteType, StatementAnalysis, TenantLink,
+  BusinessInfo, MerchantApplication, OrderPoints, OwnerContact, PricingModel, ProcessingInfo,
+  QuoteAdjustments, QuoteApproval, QuoteConfig, QuoteLine, QuoteOverride, QuoteRates, QuoteStatus, QuoteType,
+  StatementAnalysis, TenantLink,
 } from "@/types/merchant";
 
 const LINK_TTL_DAYS = 14;
@@ -487,77 +492,95 @@ function tenantLinkFromCompany(company: TenantCompany, linkedByUserId: string): 
 /** What the rep picked. Prices and the derived tier are the server's business. */
 export type QuotePick = { hubspotProductId: string; qty: number };
 
-// ── Floor enforcement: ON, server-side, as of this change ───────────────────
-// Deleted 2026-10-06 along with the margin target it checked — rates became
-// the pricing input (see QuoteRates), a rep types 2.49% and whatever margin
-// that leaves is whatever it leaves, and nothing refused a quote for being
-// under one. That stood until 2026-10-09 ("card rate minimums are needed"),
-// which reversed it — but only the CLIENT side was ever reconnected
-// (rep/prospects/new/page.tsx's hardBlocks, EditQuotePanel's `disabled`). The
-// write paths here were never updated to match, so a stale client, a direct
-// Server Action call, or any caller that skips the browser entirely could
-// still save a rate under AIO's minimum. This closes that gap.
-//
-// `marginFloorBlockers` (pricing.ts) is the one check, called from both
-// `createProspectAction` and `saveQuoteConfigurationAction` below against a
-// `RoleScopedPricing` fetched through `getPricingPreviewAction` — the exact
-// function both rep-facing forms already call for their own (now redundant,
-// but harmless) client-side check. Nothing here derives a second number.
-//
-// Reps and admins are held to the same tier minimum: the rep padding that
-// used to sit on top of it was removed 2026-10-23 (product owner: "there is no
-// need for padding if the admin can just adjust the min and max anyways").
-
-// No fee overrides are persisted on an application (they only ever lived in
-// the wizard's ephemeral PricingStep state — see EditQuotePanel's identical
-// ZERO_FEES), so the floor is checked against zero rather than guessing at
-// what the original proposal used.
-const ZERO_FEE_OVERRIDES = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, cnpPerTxnFee: 0 };
+// ── Rate limits: overrides, not refusals (2026-11-02) ───────────────────────
+// The margin floor and the $10/mo revenue floor used to be hard refusals here
+// (`assertRateAboveFloor`, 2026-10-09 / 2026-10-15). They are now
+// admin-approvable overrides on one quote, as are a card-present rate outside
+// the rate card's ± range and ANY card-not-present rate off policy: see
+// `evaluateQuoteOverrides` (quoteEvaluation.ts) and `rateOverrides`
+// (quoteOverrides.ts), which keeps the floor's figure out of every message.
+// What stays hard is a rate that isn't a rate at all.
 
 /**
- * Refuses when `quoteRates` don't clear AIO's margin floor for this volume,
- * leave AIO under `MIN_MONTHLY_PROCESSING_REVENUE` a month on this merchant
- * (2026-10-15), OR undercut AIO's wholesale cost by less than the admin-set
- * minimum (2026-10-15, "add floor for rate (wholesale + minimum), editable in
- * settings") — the shared guard both `createProspectAction` and
- * `saveQuoteConfigurationAction` call. Three independent tests off ONE
- * preview: each is measured on a different margin and none implies another,
- * so a quote has to pass all three. All three are reported together rather
- * than one at a time, so a rep raising a rate to clear one doesn't then
- * discover the next.
- *
- * A no-op with no basis to check (no statement, no rep-entered
- * volume/ticket): the same `hasFloorBasis`/`hasVolumeBasis` condition the two
- * client forms already gate their own preview on, because there is no floor to
- * clear until there's a volume to clear it against — a config-less or
- * rate-less quote goes out as a rate the customer's own statement will later
- * be priced against.
+ * Refuses a card rate no admin could sensibly approve: not a number, below
+ * zero, or past `MAX_PLAUSIBLE_CARD_RATE` (the 5% ceiling the rate fields
+ * already hold a rep to, and past which pricing.ts treats the inputs as a
+ * typo and stops projecting revenue at all — so no floor could judge it).
  */
-async function assertRateAboveFloor(
-  rated: boolean,
-  analysis: StatementAnalysis | null,
-  quoteConfig: QuoteConfig | null,
-  quoteRates: QuoteRates | null | undefined,
-  pricingModel: PricingModel,
-  cardNotPresentOnly: boolean = false
-): Promise<void> {
-  if (!rated || !(analysis || quoteConfig)) return;
-  const pricing = await getPricingPreviewAction({
-    analysis,
-    quoteConfig: analysis ? null : quoteConfig,
-    quoteRates: quoteRates ?? DEFAULT_QUOTE_RATES,
-    pricingModel,
-    feeOverrides: ZERO_FEE_OVERRIDES,
-    activeTier: null,
-    // All card-not-present when they only take orders online, so the floor is
-    // cleared against the rate being quoted rather than against a 95%
-    // card-present blend that can never happen.
-    cardPresentPct: cardNotPresentOnly ? 0 : null,
-  });
-  const blockers = [
-    ...marginFloorBlockers(pricing), ...monthlyRevenueFloorBlockers(pricing),
-  ];
-  if (blockers.length) throw new Error(blockers.join(" "));
+function assertRatePlausible(rated: boolean, quoteRates: QuoteRates | null | undefined): void {
+  if (!rated || !quoteRates) return;
+  const bad = (rate: number) => !Number.isFinite(rate) || rate < 0 || rate > MAX_PLAUSIBLE_CARD_RATE;
+  if (bad(quoteRates.cardPresentRate) || bad(quoteRates.cardNotPresentRate)) {
+    throw new Error(
+      `A card rate has to be between 0% and ${(MAX_PLAUSIBLE_CARD_RATE * 100).toFixed(2)}%. Check the rates and try again.`
+    );
+  }
+}
+
+/** The approval request a rep's overrides start, before anyone has approved it. */
+function requestApproval(
+  app: Pick<MerchantApplication, "quoteLines" | "quoteRates">,
+  overrides: QuoteOverride[],
+  userId: string,
+  now: Date
+): QuoteApproval {
+  return {
+    overrides,
+    fingerprint: quoteFingerprint(app, overrides),
+    requestedAt: now.toISOString(),
+    requestedByUserId: userId,
+  };
+}
+
+/** An admin's own overrides: requested and approved by them in the same moment. */
+function selfApproval(
+  app: Pick<MerchantApplication, "quoteLines" | "quoteRates">,
+  overrides: QuoteOverride[],
+  userId: string,
+  now: Date
+): QuoteApproval {
+  return { ...requestApproval(app, overrides, userId, now), approvedAt: now.toISOString(), approvedByUserId: userId };
+}
+
+/**
+ * Email every active admin but the requester that this quote needs approval.
+ * Best-effort: a failure is logged and reported as nothing sent, never thrown —
+ * the row is already saved as `pending_approval`, and the admin dashboard
+ * lists it whether or not the email arrived.
+ */
+async function notifyAdminsOfApprovalRequest(
+  app: Pick<MerchantApplication, "id" | "business" | "analysis">,
+  overrides: QuoteOverride[],
+  requestedByUserId: string
+): Promise<{ sent: number; failed: number }> {
+  try {
+    const admins = (await listActiveAdminRecipients()).filter(a => a.id !== requestedByUserId && a.email);
+    if (!admins.length) return { sent: 0, failed: 0 };
+    const rep = await getStaffRecipient(requestedByUserId);
+    const result = await sendQuoteApprovalRequestEmail({
+      to: admins.map(a => a.email),
+      merchantName: app.business?.dba || app.business?.legalName || app.analysis?.merchantName || "",
+      repName: rep?.name || rep?.email || "A rep",
+      overrides,
+      url: `${appBaseUrl()}/admin?view=accounts&account=${encodeURIComponent(app.id)}`,
+    });
+    return { sent: result.sent, failed: result.failed };
+  } catch (err) {
+    console.error("quote approval request email failed", app.id, err);
+    return { sent: 0, failed: 0 };
+  }
+}
+
+/**
+ * Why a quote that isn't live can't have its link sent or re-sent. The lead
+ * page shows "being updated" and refuses confirm/checkout for exactly these
+ * rows, so a link that went out now would lead nowhere.
+ */
+function notLiveMessage(status: QuoteStatus): string {
+  return status === "pending_approval"
+    ? "This quote has pricing overrides waiting on an admin's approval, so its link can't go out yet. " +
+      "Once it's approved, open the account and send it to the merchant."
+    : "This quote is saved as a draft. Open the account and use \"Send to merchant\" to send it.";
 }
 
 async function deriveQuoteLines(
@@ -633,6 +656,134 @@ async function deriveQuoteLines(
   };
 }
 
+/** What the merchant was sent, when they were sent something. */
+type SentToMerchant = {
+  app: MerchantApplication;
+  linkUrl: string;
+  emailResult: SendMagicLinkResult;
+  smsResult: SendSmsResult | null;
+  /** Whether the legal name / previous processor / MCC reached the HubSpot Company. */
+  companySync: { synced: boolean };
+};
+
+export type CreateProspectResult = {
+  id: string;
+  app: MerchantApplication;
+  /** null = sent: the link is live. Otherwise the row was saved and nothing went out. */
+  quoteStatus: QuoteStatus | null;
+  /** Every override on the quote (empty when none). On an admin's quote, already self-approved. */
+  overrides: QuoteOverride[];
+  /** Only on `pending_approval`: the approval-request emails to the admins. */
+  notified?: { sent: number; failed: number };
+  /** null when nothing was sent. */
+  linkUrl: string | null;
+  /** `{ sent: false, devUrl: null }` when nothing was sent. */
+  emailResult: SendMagicLinkResult;
+  smsResult: SendSmsResult | null;
+  /** `{ synced: false }` when nothing was sent. */
+  companySync: { synced: boolean };
+};
+
+/**
+ * The half of quote creation that reaches the merchant and HubSpot, in the
+ * order `createProspectAction` has always done it: resolve the deal (from the
+ * stored `pendingDealChoice`, when the row has no deal yet), mint the link,
+ * save, deliver it, then the best-effort HubSpot writes. Shared by
+ * `createProspectAction` (send mode) and `sendDraftAction`.
+ *
+ * The row is saved ONCE, after the deal resolves — so a deal refusal (closed,
+ * adopted by another application, HubSpot down) throws with nothing written,
+ * exactly as it did when this all lived inline.
+ *
+ * NOTHING IS PUBLISHED HERE (2026-10-15, product owner). A published HubSpot
+ * quote cannot be edited, replaced or voided, so publishing before the
+ * merchant has confirmed their own details froze the rep's typo of a billing
+ * contact or an address onto a document nobody can amend. The merchant
+ * confirms at `/lead/[token]/confirm`, and THAT is what opens the door
+ * (`/api/lead/[token]/checkout`).
+ */
+async function sendProspectToMerchant(
+  scope: StorageScope,
+  app: MerchantApplication,
+  opts: {
+    now: Date;
+    actorUserId: string;
+    /**
+     * The HubSpot contact the rep picked as billing contact, when they picked
+     * one. Not stored on the row, so a draft sent later find-or-creates the
+     * billing contact by email instead of patching the picked record.
+     */
+    billingContactId?: string | null;
+  },
+): Promise<SentToMerchant> {
+  const { now } = opts;
+  let hubspotDealId = app.hubspotDealId ?? null;
+  let dealLink = app.dealLink ?? null;
+  if (!hubspotDealId && app.pendingDealChoice) {
+    const companyId = app.tenantLink?.hubspotCompanyId;
+    if (!companyId) throw new Error("This quote has no HubSpot company on it, so its deal can't be resolved.");
+    const dealResolution = await resolveDealForCompany({ companyId, choice: app.pendingDealChoice });
+    if (!dealResolution.ok) throw new Error(dealResolution.message);
+    hubspotDealId = dealResolution.deal.id;
+    // Stamped from resolveDealForCompany's own `created` answer — the
+    // authoritative signal for whether this deal was just minted or already
+    // existed — never guessed from the choice's mode alone. This is what
+    // buildDealProperties gates the dealname/amount writes on: an adopted deal
+    // must never have either overwritten.
+    dealLink = {
+      origin: dealResolution.created ? "created" : "adopted",
+      dealName: dealResolution.deal.name,
+      pipelineStageAtLink: dealResolution.deal.stageId,
+      linkedAt: now.toISOString(),
+      linkedByUserId: opts.actorUserId,
+    };
+  }
+
+  const link = mintLeadLink(now);
+  const updated: MerchantApplication = {
+    ...app,
+    // A link with no quote is refused before this point, so always quote_sent.
+    stage: shouldAdvance(app.stage, "quote_sent") ? "quote_sent" : app.stage,
+    hubspotDealId,
+    dealLink,
+    pendingDealChoice: null,
+    quoteStatus: null,
+    customerLinkToken: link.token,
+    customerLinkPurpose: "lead_upload",
+    customerLinkSentAt: link.sentAt,
+    customerLinkExpiresAt: link.expiresAt,
+    updatedAt: now.toISOString(),
+  };
+  await postgresStorage.saveApplication(scope, updated);
+
+  // Best-effort from here — the row is already saved, so a Resend or Twilio
+  // hiccup must not undo it or block the response. The rep always has the raw
+  // link to send by hand regardless of how these come back.
+  const email = updated.ownerContact?.email?.trim();
+  let delivered: { emailResult: SendMagicLinkResult; smsResult: SendSmsResult | null } = {
+    emailResult: { sent: false, devUrl: link.url }, smsResult: null,
+  };
+  if (email) {
+    // Best-effort — a failed resolution just means the email goes out without
+    // the rep's name on it.
+    const rep = await resolveReplyToRep(updated.ownerUserId);
+    delivered = await deliverLeadLink(
+      updated.ownerContact!.email,
+      link.url,
+      updated.business?.dba || updated.business?.legalName,
+      updated.ownerContact!.phone,
+      updated.ownerContact!.altEmail,
+      rep,
+    );
+  }
+  const companySync = await syncCompanyDetails(updated.tenantLink?.hubspotCompanyId, updated);
+  await syncBillingContact(updated.billingContact, opts.billingContactId ?? null);
+  await mirrorQuoteNote(updated, null);
+  await moveDealToQuoteSentBestEffort(updated, delivered);
+
+  return { app: updated, linkUrl: link.url, ...delivered, companySync };
+}
+
 export async function createProspectAction(input: {
   // Required — the rep now reviews and edits these directly on
   // /rep/prospects/new's "Review What We Know" section (prefilled from
@@ -700,14 +851,15 @@ export async function createProspectAction(input: {
   // must still be caught here.
   hubspotCompanyId: string;
   deal: DealChoice;
-}): Promise<{
-  app: MerchantApplication;
-  linkUrl: string;
-  emailResult: SendMagicLinkResult;
-  smsResult: SendSmsResult | null;
-  /** Whether the legal name / previous processor / MCC reached the HubSpot Company. */
-  companySync: { synced: boolean };
-}> {
+  /**
+   * "send" (the default, and every caller before 2026-11-02): the link goes
+   * out now, exactly as it always has — unless a rep's quote carries
+   * overrides, which hold it as `pending_approval` either way. "draft": save
+   * the account and quote with no link and no HubSpot writes; "Send to
+   * merchant" (`sendDraftAction`) does the rest later.
+   */
+  mode?: "send" | "draft";
+}): Promise<CreateProspectResult> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
 
@@ -723,7 +875,6 @@ export async function createProspectAction(input: {
   if (malformedMessages.length) throw new Error(malformedMessages.join(" "));
 
   const now = new Date();
-  const link = mintLeadLink(now);
 
   // A failed company read is a hard error, not the old soft warning: the deal
   // hangs off this company (resolveDealForCompany needs a real companyId),
@@ -732,21 +883,10 @@ export async function createProspectAction(input: {
   if (!company) throw new Error(`HubSpot company ${input.hubspotCompanyId} wasn't found.`);
   const tenantLink = tenantLinkFromCompany(company, effective.userId);
 
-  const dealResolution = await resolveDealForCompany({ companyId: input.hubspotCompanyId, choice: input.deal });
-  if (!dealResolution.ok) throw new Error(dealResolution.message);
-
-  // Stamped from resolveDealForCompany's own `created` answer — the
-  // authoritative signal for whether this deal was just minted or already
-  // existed — never guessed from `input.deal.mode` alone. This is what
-  // buildDealProperties gates the dealname/amount writes on: an adopted deal
-  // must never have either overwritten.
-  const dealLink: DealLink = {
-    origin: dealResolution.created ? "created" : "adopted",
-    dealName: dealResolution.deal.name,
-    pipelineStageAtLink: dealResolution.deal.stageId,
-    linkedAt: now.toISOString(),
-    linkedByUserId: effective.userId,
-  };
+  // The deal is NOT resolved here (2026-11-02). Resolving a `create` choice
+  // creates the HubSpot deal, and a draft or a quote waiting on approval must
+  // make no HubSpot writes — so the choice is stored as `pendingDealChoice`
+  // and resolved by `sendProspectToMerchant`, only when the quote goes out.
 
   // A quote with no processing behind it drops the whole rate half rather than
   // storing-but-ignoring it: a statement, a ticket/volume basis or a margin
@@ -773,13 +913,9 @@ export async function createProspectAction(input: {
     throw new Error("Enter the monthly volume and average ticket — the card rate is priced off both.");
   }
 
-  // Server-side mirror of the rep form's own floor check — see the comment
-  // above `assertRateAboveFloor` and the 2026-10-09 decision recorded above
-  // `ZERO_FEE_OVERRIDES`.
-  await assertRateAboveFloor(
-    rated, analysis, quoteConfig, input.quoteRates, input.pricingModel,
-    processesCardNotPresentOnly(quoteType, input.picks ?? [])
-  );
+  // The floors are overrides now (see `evaluateQuoteOverrides` below); only
+  // an implausible rate is still refused outright.
+  assertRatePlausible(rated, input.quoteRates);
 
   const quoteNote = (input.quoteNote ?? "").trim() || null;
   const { quoteLines, orderPoints } = await deriveQuoteLines(
@@ -821,12 +957,14 @@ export async function createProspectAction(input: {
     customerUserId: null,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
-    // The link goes out with a quote already on it when the rep supplied a
-    // basis or priced any lines; otherwise it opens on "your rep is preparing
-    // your quote" — there is nothing for the customer to do until there is.
-    stage: hasQuote ? "quote_sent" : "lead_link_sent",
-    hubspotDealId: dealResolution.deal.id,
-    dealLink,
+    // Moved to quote_sent by `sendProspectToMerchant` when the link goes out.
+    stage: "prospect_created",
+    // Resolved at send, never before — see the note where the deal used to be.
+    hubspotDealId: null,
+    dealLink: null,
+    pendingDealChoice: input.deal,
+    quoteStatus: null,
+    quoteApproval: null,
     tenantLink,
     adyenIds: null,
     adyenOnboardingUrl: null,
@@ -852,10 +990,11 @@ export async function createProspectAction(input: {
     // row; the column stays for the rows that have one. See QuoteRates.
     targetMargin: null,
     pricingModel: rated ? input.pricingModel : null,
-    customerLinkToken: link.token,
-    customerLinkPurpose: "lead_upload",
-    customerLinkSentAt: link.sentAt,
-    customerLinkExpiresAt: link.expiresAt,
+    // Minted by `sendProspectToMerchant`. A draft has no link at all.
+    customerLinkToken: null,
+    customerLinkPurpose: null,
+    customerLinkSentAt: null,
+    customerLinkExpiresAt: null,
     analysis,
     proposal: null,
     // The rep's own reviewed values — no server-side HubSpot merge here
@@ -869,40 +1008,39 @@ export async function createProspectAction(input: {
     agreement: null,
   };
 
-  await postgresStorage.saveApplication({ userId: effective.userId, role: effective.role }, app);
+  const scope = { userId: effective.userId, role: effective.role };
+  const mode = input.mode ?? "send";
+  const isAdmin = effective.role === "admin";
+  const overrides = await evaluateQuoteOverrides(app);
+  const held = (quoteStatus: QuoteStatus, notified?: { sent: number; failed: number }): CreateProspectResult => ({
+    id: app.id, app, quoteStatus, overrides, ...(notified ? { notified } : {}),
+    linkUrl: null, emailResult: { sent: false, devUrl: null }, smsResult: null, companySync: { synced: false },
+  });
 
-  // NOTHING IS PUBLISHED HERE (2026-10-15, product owner). The 10/13 reversal
-  // that published the HubSpot quote at this exact point has itself been
-  // reversed: a published quote cannot be edited, replaced or voided, so
-  // publishing before the merchant has confirmed their own details froze the
-  // rep's typo of a billing contact or an address onto a document nobody can
-  // amend — and froze the rep out of their own quote the instant they sent
-  // the link. The merchant now confirms at `/lead/[token]/confirm`, and THAT
-  // is what opens the door (`/api/lead/[token]/checkout`). Until they do, this
-  // quote stays editable, which is the point.
+  if (overrides.length && !isAdmin) {
+    // A rep's overrides wait for an admin, whatever mode they asked for.
+    app.quoteStatus = "pending_approval";
+    app.quoteApproval = requestApproval(app, overrides, effective.userId, now);
+    await postgresStorage.saveApplication(scope, app);
+    const notified = await notifyAdminsOfApprovalRequest(app, overrides, effective.userId);
+    return held("pending_approval", notified);
+  }
+  // An admin approves their own overrides: stamped with them, no email.
+  if (overrides.length) app.quoteApproval = selfApproval(app, overrides, effective.userId, now);
 
-  // Best-effort — a failed resolution just means the email goes out without
-  // the rep's name on it.
-  const rep = await resolveReplyToRep(app.ownerUserId);
+  if (mode === "draft") {
+    app.quoteStatus = overrides.length ? "approved" : "draft";
+    await postgresStorage.saveApplication(scope, app);
+    return held(app.quoteStatus);
+  }
 
-  // Best-effort from here — the prospect row is already saved, so a Resend or
-  // Twilio hiccup must not undo it or block the response. The rep always has
-  // the raw link to send by hand regardless of how these come back.
-  const { emailResult, smsResult } = await deliverLeadLink(
-    app.ownerContact!.email,
-    link.url,
-    app.business?.dba || app.business?.legalName,
-    app.ownerContact!.phone,
-    app.ownerContact!.altEmail,
-    rep,
-  );
-  const companySync = await syncCompanyDetails(input.hubspotCompanyId, app);
-  await syncBillingContact(input.billingContact, input.billingContactId);
-  await mirrorQuoteNote(app, null);
-  // Always the quote_sent case here: a link with no quote is refused above.
-  await moveDealToQuoteSentBestEffort(app, { emailResult, smsResult });
-
-  return { app, linkUrl: link.url, emailResult, smsResult, companySync };
+  // NOTHING IS PUBLISHED HERE (2026-10-15, product owner) — see
+  // `sendProspectToMerchant`. The row is saved once, by the send step, so a
+  // deal refusal there still saves nothing.
+  const sent = await sendProspectToMerchant(scope, app, {
+    now, actorUserId: effective.userId, billingContactId: input.billingContactId ?? null,
+  });
+  return { id: sent.app.id, quoteStatus: null, overrides, ...sent };
 }
 
 // ── The proposal wizard writes through the same derivation ──────────────────
@@ -1033,11 +1171,8 @@ export async function saveQuoteConfigurationAction(input: {
   // (only the wizard's upload step sets it), so `app.analysis` is the basis,
   // same as `EditQuotePanel`'s `previewAnalysis`.
   const rated = quoteHasProcessing(quoteType, input.picks ?? []);
-  await assertRateAboveFloor(
-    rated, app.analysis ?? null, quoteConfig ?? null,
-    input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES, input.pricingModel,
-    processesCardNotPresentOnly(quoteType, input.picks ?? [])
-  );
+  const quoteRates = input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES;
+  assertRatePlausible(rated, quoteRates);
 
   const quoteNote = input.quoteNote === undefined
     ? app.quoteNote ?? null
@@ -1085,6 +1220,7 @@ export async function saveQuoteConfigurationAction(input: {
     hubspotIds = { ...hubspotIds, quoteId: null, quoteTemplateId: null, lineItemIds: null, lastSyncError: null, lastSyncErrorAt: null };
   }
 
+  const now = new Date();
   const updated: MerchantApplication = {
     ...app,
     hubspotIds,
@@ -1093,13 +1229,80 @@ export async function saveQuoteConfigurationAction(input: {
     quoteLines,
     orderPoints,
     quoteNote,
-    quoteRates: input.quoteRates ?? app.quoteRates ?? DEFAULT_QUOTE_RATES,
+    quoteRates,
     pricingModel: input.pricingModel,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now.toISOString(),
   };
+
+  // Overrides are recomputed on EVERY save, off exactly what is about to be
+  // persisted (2026-11-02). See `nextApprovalState` for the rules.
+  const overrides = await evaluateQuoteOverrides(updated);
+  const next = nextApprovalState(updated, overrides, effective, now);
+  updated.quoteStatus = next.quoteStatus;
+  updated.quoteApproval = next.quoteApproval;
+
   await postgresStorage.saveApplication(scope, updated);
-  await mirrorQuoteNote(updated, app.quoteNote ?? null);
+  if (next.notify) await notifyAdminsOfApprovalRequest(updated, overrides, effective.userId);
+  // A quote that has never gone out makes no HubSpot writes: its note reaches
+  // the deal when it is sent (`sendProspectToMerchant`). One whose link is
+  // already out keeps mirroring, as it always has.
+  if (updated.quoteStatus === null || updated.customerLinkToken) {
+    await mirrorQuoteNote(updated, app.quoteNote ?? null);
+  }
   return updated;
+}
+
+/**
+ * Where a re-saved quote's approval stands, given the overrides it now
+ * carries. `app` is the row about to be saved (its status and approval still
+ * the stored ones); "has a sent link" is `customerLinkToken` being set.
+ *
+ *  - Rep, overrides: an approval given for exactly this quote (same
+ *    fingerprint) is kept, status and all. A row already waiting on the same
+ *    quote stays waiting without a second round of emails. Anything else goes
+ *    to `pending_approval` with a fresh request, and the admins are emailed —
+ *    including a quote whose link is live, which the lead page then shows as
+ *    "being updated" until an admin approves it.
+ *  - Admin, overrides: self-approved (an existing approval for this exact
+ *    quote is kept). Live if the link has gone out; otherwise `approved` —
+ *    unless the row was already live-without-a-link (`null`, the proposal
+ *    wizard's rows), which stays `null` so the wizard can still issue it.
+ *  - No overrides: the approval is cleared. `pending_approval`/`approved` go
+ *    live with a sent link, else back to `draft`. `draft` and `null` stay.
+ */
+function nextApprovalState(
+  app: MerchantApplication,
+  overrides: QuoteOverride[],
+  effective: { userId: string; role: "rep" | "admin" },
+  now: Date
+): { quoteStatus: QuoteStatus | null; quoteApproval: QuoteApproval | null; notify: boolean } {
+  const status = app.quoteStatus ?? null;
+  const linkSent = !!app.customerLinkToken;
+
+  if (!overrides.length) {
+    const quoteStatus = status === "pending_approval" || status === "approved" ? (linkSent ? null : "draft") : status;
+    return { quoteStatus, quoteApproval: null, notify: false };
+  }
+
+  if (effective.role === "admin") {
+    const quoteApproval = approvalCovers(app, overrides)
+      ? app.quoteApproval!
+      : selfApproval(app, overrides, effective.userId, now);
+    const quoteStatus = linkSent || status === null ? null : "approved";
+    return { quoteStatus, quoteApproval, notify: false };
+  }
+
+  if (approvalCovers(app, overrides)) {
+    return { quoteStatus: status, quoteApproval: app.quoteApproval!, notify: false };
+  }
+  if (status === "pending_approval" && app.quoteApproval?.fingerprint === quoteFingerprint(app, overrides)) {
+    return { quoteStatus: status, quoteApproval: app.quoteApproval, notify: false };
+  }
+  return {
+    quoteStatus: "pending_approval",
+    quoteApproval: requestApproval(app, overrides, effective.userId, now),
+    notify: true,
+  };
 }
 
 /**
@@ -1137,7 +1340,11 @@ export async function saveApplicationDetailsAction(input: {
     updatedAt: new Date().toISOString(),
   };
   await postgresStorage.saveApplication(scope, updated);
-  await syncCompanyDetails(updated.tenantLink?.hubspotCompanyId, updated);
+  // A quote that has never gone out makes no HubSpot writes (2026-11-02):
+  // `sendProspectToMerchant` syncs the company when it is sent.
+  if (updated.quoteStatus == null || updated.customerLinkToken) {
+    await syncCompanyDetails(updated.tenantLink?.hubspotCompanyId, updated);
+  }
   return updated;
 }
 
@@ -1163,6 +1370,9 @@ export async function issueCustomerQuoteLinkAction(
 
   const app = await postgresStorage.getApplication(scope, applicationId);
   if (!app) throw new Error("Application not found");
+  // A draft, or a quote waiting on (or holding) an approval, isn't live: its
+  // link goes out through `sendDraftAction`, never from here.
+  if (app.quoteStatus) throw new Error(notLiveMessage(app.quoteStatus));
 
   return persistLeadLink(scope, app, new Date());
 }
@@ -1194,6 +1404,7 @@ export async function resendLeadLinkAction(
 
   const app = await postgresStorage.getApplication(scope, applicationId);
   if (!app) throw new Error("Application not found");
+  if (app.quoteStatus) throw new Error(notLiveMessage(app.quoteStatus));
 
   const { app: updated, linkUrl } = await persistLeadLink(scope, app, new Date());
   const email = updated.ownerContact?.email;
@@ -1228,6 +1439,93 @@ export async function resendLeadLinkAction(
   }
 
   return { app: updated, linkUrl, emailResult, smsResult };
+}
+
+export type SendDraftResult = {
+  id: string;
+  app: MerchantApplication;
+  /** Always null: the quote is live. */
+  quoteStatus: null;
+  /** The overrides the quote went out with (empty when none), covered by its approval. */
+  overrides: QuoteOverride[];
+  /**
+   * False when the row already had a link out (an edited quote that went back
+   * through approval): it is simply live again, and nothing was re-sent —
+   * `resendLeadLinkAction` re-sends it if the merchant needs it again.
+   */
+  delivered: boolean;
+  linkUrl: string;
+  /** `{ sent: false, devUrl: null }` when `delivered` is false. */
+  emailResult: SendMagicLinkResult;
+  smsResult: SendSmsResult | null;
+  /** `{ synced: false }` when `delivered` is false. */
+  companySync: { synced: boolean };
+};
+
+/**
+ * "Send to merchant": take a saved draft (or an approved quote) live. Open to
+ * the owning rep and to any admin — storage already keeps a rep off someone
+ * else's row.
+ *
+ * The overrides are recomputed from the SAVED row — its persisted lines and
+ * rates against today's limits, never a re-derivation from the picks, which
+ * would quietly reprice it against today's catalog — and the quote is refused
+ * while it is waiting on an admin, or carries overrides its approval doesn't
+ * cover (a limit tightened or the rate card moved since). An admin sending it
+ * approves their own.
+ *
+ * A row whose link has already gone out (a live quote edited back through
+ * approval) is just made live again, without re-sending: the merchant already
+ * has that URL, and a second email for an unchanged link is noise.
+ */
+export async function sendDraftAction(applicationId: string): Promise<SendDraftResult> {
+  const effective = await getEffectiveRole();
+  if (!effective) throw new Error("Not authenticated");
+  const scope = { userId: effective.userId, role: effective.role };
+
+  const app = await postgresStorage.getApplication(scope, applicationId);
+  if (!app) throw new Error("Application not found");
+
+  if (app.quoteStatus === "pending_approval") {
+    throw new Error("This quote is waiting on an admin's approval, so it can't be sent yet.");
+  }
+  if (!app.quoteStatus) {
+    throw new Error("This quote has already been sent to the merchant. Use resend to send the link again.");
+  }
+
+  const now = new Date();
+  const overrides = await evaluateQuoteOverrides(app);
+  let quoteApproval: QuoteApproval | null = null;
+  if (overrides.length) {
+    if (approvalCovers(app, overrides)) quoteApproval = app.quoteApproval!;
+    else if (effective.role === "admin") quoteApproval = selfApproval(app, overrides, effective.userId, now);
+    else {
+      throw new Error(
+        "This quote has pricing overrides its approval doesn't cover — something changed since it was " +
+        "approved. Open the quote and save it again to ask an admin to approve it."
+      );
+    }
+  }
+
+  if (app.customerLinkToken) {
+    const live: MerchantApplication = { ...app, quoteStatus: null, quoteApproval, updatedAt: now.toISOString() };
+    await postgresStorage.saveApplication(scope, live);
+    return {
+      id: live.id, app: live, quoteStatus: null, overrides, delivered: false,
+      linkUrl: leadLinkUrl(app.customerLinkToken),
+      emailResult: { sent: false, devUrl: null }, smsResult: null, companySync: { synced: false },
+    };
+  }
+
+  // A LINK WITHOUT A QUOTE IS NOT SENDABLE (2026-10-15) — the same rule
+  // createProspectAction enforces, re-checked on what was saved.
+  if (!hasQuoteBasis(app)) {
+    throw new Error(
+      "This quote has nothing on it yet — pick the products or enter a monthly volume and average ticket before sending the link."
+    );
+  }
+  const sent = await sendProspectToMerchant(scope, { ...app, quoteApproval }, { now, actorUserId: effective.userId });
+  return { id: sent.app.id, quoteStatus: null, overrides, delivered: true, ...sent };
 }
 
 /**

@@ -84,6 +84,26 @@ export async function sendQuoteAction(applicationId: string): Promise<SendQuoteR
     };
   }
 
+  // Not live yet (2026-11-02): a draft, one waiting on an admin's approval,
+  // or one approved but not yet made live. A draft makes NO HubSpot writes,
+  // so this refuses before the deal fill-in below can create one, and records
+  // no sync error — the rep is looking at the answer. `canPublishBillingQuote`
+  // refuses the same state for every other caller.
+  if (app.quoteStatus != null) {
+    return {
+      ok: false,
+      reasons: [{
+        code: "quote_not_approved",
+        message:
+          app.quoteStatus === "pending_approval"
+            ? "This quote is waiting for an admin to approve what it goes past a limit on. It can be sent once it's approved and live."
+            : app.quoteStatus === "approved"
+              ? "This quote's overrides are approved, but it hasn't been made live yet. Make it live before sending it."
+              : "This quote is still a draft, so it isn't live for the merchant yet. Finish it and make it live before sending it.",
+      }],
+    };
+  }
+
   // Fill in a missing deal first — see lib/billing/ensureDeal.ts for why some
   // rows have none and why `canPublishBillingQuote` would otherwise refuse
   // them `no_deal` forever. Shared with the merchant's own checkout route, so

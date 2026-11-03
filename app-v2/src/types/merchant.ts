@@ -1,3 +1,25 @@
+import type { DealChoice } from "@/lib/hubspotDeal";
+/** A quote value past an admin-set limit that an admin may approve for this one quote. Units: cp_rate/cnp_rate in whole bps; discount in percent (cash discounts converted against the line's list amount); unit_cap in units. */
+export type QuoteOverrideKind = "cp_rate" | "cnp_rate" | "discount" | "unit_cap";
+export interface QuoteOverride {
+  kind: QuoteOverrideKind;
+  productId?: string;
+  productName?: string;
+  message: string;
+  value: number;
+  limit: number;
+}
+/** null on a row = live (every pre-existing row). */
+export type QuoteStatus = "draft" | "pending_approval" | "approved";
+export interface QuoteApproval {
+  overrides: QuoteOverride[];
+  fingerprint: string;
+  requestedAt: string;        // ISO
+  requestedByUserId: string;
+  approvedAt?: string | null; // ISO
+  approvedByUserId?: string | null;
+}
+
 export type PricingModel = "flat-rate" | "2-tier" | "interchange-plus";
 
 /**
@@ -1167,6 +1189,11 @@ export type MerchantApplication = {
   // The one-time invoice — null until one is built after acceptance. Optional
   // because only rowToApp populates it; see HubspotInvoice.
   hubspotInvoice?: HubspotInvoice | null;
+  // Draft quotes + admin override approval. quoteStatus null = live.
+  quoteStatus?: QuoteStatus | null;
+  quoteApproval?: QuoteApproval | null;
+  // The deal choice a draft quote deferred until it goes live.
+  pendingDealChoice?: DealChoice | null;
   // Which plan this quote is on. Frozen with the rest of the quote, because
   // it's what the lines were derived UNDER: re-reading a marketing-only quote
   // as an All-in-One one would imply a platform fee that was never quoted.

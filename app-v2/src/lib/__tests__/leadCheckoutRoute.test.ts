@@ -22,7 +22,12 @@ const buildOneTimeInvoiceForId = vi.fn();
 // `after()` only works inside a real request scope; here it just records.
 const afterCallbacks: (() => unknown)[] = [];
 
-vi.mock("@/lib/leadToken", () => ({ getLeadApplicationByToken }));
+// Only the lookup is stubbed; `isQuoteLocked` stays real, so the lock is read
+// off the row fixture exactly as the route reads it.
+vi.mock("@/lib/leadToken", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/leadToken")>()),
+  getLeadApplicationByToken,
+}));
 vi.mock("@/lib/billing/ensureDeal", () => ({ ensureDealForPublish }));
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote }));
 vi.mock("@/lib/billing/oneTimeInvoice", () => ({ buildOneTimeInvoiceForId }));
@@ -238,5 +243,50 @@ describe("the merchant's checkout door", () => {
     const res = await post();
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "no_quote" });
+  });
+});
+
+// THE DRAFT LOCK (2026-11-02). A draft, a quote back with an admin, or an
+// approved one the rep hasn't made live is not the merchant's to publish — and
+// a rep can push a quote the merchant already holds a link to into approval.
+describe("a quote that isn't live", () => {
+  for (const status of ["draft", "pending_approval", "approved"]) {
+    it(`refuses quote_locked while the status is ${status}, before any publish work`, async () => {
+      getLeadApplicationByToken.mockResolvedValue({ ok: true, row: row({ quoteStatus: status }) });
+
+      const res = await post();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "quote_locked" });
+      expect(ensureDealForPublish).not.toHaveBeenCalled();
+      expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
+      expect(buildOneTimeInvoiceForId).not.toHaveBeenCalled();
+      // Not a failure to chase — the rep put it there, and knows.
+      expect(update).not.toHaveBeenCalled();
+    });
+  }
+
+  it("publishes as before when the status is null", async () => {
+    getLeadApplicationByToken.mockResolvedValue({ ok: true, row: row({ quoteStatus: null }) });
+    buildAndPublishBillingQuote.mockResolvedValue({
+      status: "published", quoteId: "q-1", quoteLink: QUOTE_LINK, alreadyPublished: false,
+    });
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(buildAndPublishBillingQuote).toHaveBeenCalledTimes(1);
+  });
+
+  // Below the published return on purpose: a published quote is a finished,
+  // unamendable document, and withholding its link would only strand the
+  // merchant in front of a quote they are already bound by.
+  it("still hands back an already-published link, locked or not", async () => {
+    getLeadApplicationByToken.mockResolvedValue({
+      ok: true, row: row({ quoteStatus: "pending_approval", hubspotIds: published }),
+    });
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ url: QUOTE_LINK });
+    expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
   });
 });

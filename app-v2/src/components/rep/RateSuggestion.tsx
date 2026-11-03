@@ -80,6 +80,9 @@ export default function RateSuggestion({
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const adopted = useRef(!adoptSaved);
   const lastRanged = useRef<Suggestion | null>(null);
+  // The policy CNP of the previous suggestion; a CNP that differs from it is
+  // a rep's (or a saved quote's) deliberate figure and must survive.
+  const lastPolicyCnp = useRef<number | null>(null);
 
   useEffect(() => {
     if (!(monthlyVolume > 0) || !(avgTicket > 0)) { setSuggestion(null); onAdjustRangeChange?.(null); return; }
@@ -99,6 +102,10 @@ export default function RateSuggestion({
     if (!suggestion) return;
     const cardBps = Math.round(suggestion.rates.cardPresentRate * 10000);
     let adj = adjustmentBps;
+    const policy = suggestion.rates.cardNotPresentRate;
+    const keepCnp = !adopted.current ||
+      (lastPolicyCnp.current !== null && value.cardNotPresentRate !== lastPolicyCnp.current);
+    lastPolicyCnp.current = policy;
     if (!adopted.current) {
       adopted.current = true;
       adj = Math.round(value.cardPresentRate * 10000) - cardBps;
@@ -113,7 +120,11 @@ export default function RateSuggestion({
       onAdjustRangeChange?.(suggestion.adjustBpsRange ?? null);
     }
     const cp = (cardBps + adj) / 10000;
-    const target = { ...suggestion.rates, cardPresentRate: cp, amexCardPresentRate: cp };
+    const cnp = keepCnp ? value.cardNotPresentRate : policy;
+    const target = {
+      ...suggestion.rates, cardPresentRate: cp, amexCardPresentRate: cp,
+      cardNotPresentRate: cnp, amexCardNotPresentRate: cnp,
+    };
     if (sameRates(value, target)) return;
     onChange(target);
     // `value` is read, not depended on: this fires when a SUGGESTION arrives

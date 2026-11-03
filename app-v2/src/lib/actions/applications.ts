@@ -40,9 +40,24 @@ export async function getApplicationAction(id: string): Promise<MerchantApplicat
 // Never trusts the client's ownerUserId for a brand-new application — the
 // server stamps it from the session on first save. Returns the persisted
 // record so the caller's local state stays in sync with what was written.
+//
+// Nor its quote approval state (2026-11-02): `quoteStatus`, `quoteApproval`
+// and `pendingDealChoice` are only ever moved by the quote actions
+// (prospects.ts, quoteApproval.ts). This is a blind upsert of whatever the
+// browser holds, so a stale tab — the proposal wizard calls it — would
+// otherwise un-lock a quote that went to `pending_approval` elsewhere, or
+// re-lock one an admin just approved. They are carried over from the stored
+// row, and start null on a new one.
 export async function saveApplicationAction(app: MerchantApplication): Promise<MerchantApplication> {
   const scope = await requireScope();
-  const toSave: MerchantApplication = { ...app, ownerUserId: app.ownerUserId || scope.userId };
+  const stored = await postgresStorage.getApplication(scope, app.id);
+  const toSave: MerchantApplication = {
+    ...app,
+    ownerUserId: app.ownerUserId || scope.userId,
+    quoteStatus: stored?.quoteStatus ?? null,
+    quoteApproval: stored?.quoteApproval ?? null,
+    pendingDealChoice: stored?.pendingDealChoice ?? null,
+  };
   await postgresStorage.saveApplication(scope, toSave);
   return toSave;
 }

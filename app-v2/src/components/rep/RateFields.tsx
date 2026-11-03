@@ -115,6 +115,12 @@ export type RateFieldsProps = {
    * margin"). Null/omitted — no volume or ticket yet — falls back to ±500.
    */
   adjustRange?: { min: number; max: number } | null;
+  /**
+   * Reports AIO's policy card-not-present rate (a fraction) once fetched, so
+   * the host can tell whether the quote's CNP needs admin approval. Any CNP
+   * different from policy is an override an admin has to approve.
+   */
+  onPolicyCnp?: (policyCnp: number) => void;
 };
 
 /**
@@ -126,22 +132,22 @@ export type RateFieldsProps = {
 const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
 export default function RateFields({
-  value, onChange, hideNote, freshQuote, cardNotPresentOnly, adjustBps = 0, onAdjustBps, adjustRange,
+  value, onChange, hideNote, freshQuote, cardNotPresentOnly, adjustBps = 0, onAdjustBps, adjustRange, onPolicyCnp,
 }: RateFieldsProps) {
-  const lo = adjustRange?.min ?? -500;
-  const hi = adjustRange?.max ?? 500;
+  // Past the range is allowed (an admin approves it); only a +-500 bps sanity
+  // clamp remains.
+  const lo = -500;
+  const hi = 500;
+  const rangeLo = adjustRange?.min ?? -500;
+  const rangeHi = adjustRange?.max ?? 500;
+  const [policyCnp, setPolicyCnp] = useState<number | null>(null);
   const setCardPresent = (pct: number) => onChange({ ...value, cardPresentRate: pct / 100 });
   // The card's own figure, recovered from the rate the host already applied
   // the adjustment to (RateSuggestion: cardPresentRate = card + adjustBps).
   const cardBps = Math.round(value.cardPresentRate * 10000) - adjustBps;
-  // Clamped here rather than by DecimalField's min/max so we can tell a rep
-  // who typed past the limit from one who typed the limit itself — only the
-  // former sees "Limit reached".
-  const [limitHit, setLimitHit] = useState(false);
   const setCardPresentAdjusted = (pct: number) => {
     const typed = Math.round(pct * 100) - cardBps;
     const adj = Math.max(lo, Math.min(hi, typed));
-    setLimitHit(adj !== typed);
     onAdjustBps?.(adj);
     setCardPresent((cardBps + adj) / 100);
   };
@@ -155,6 +161,8 @@ export default function RateFields({
   // cnpLocked starts true and nothing below ever runs for it. A fresh quote
   // starts UNCONFIRMED and editable; see freshQuote's doc comment above for
   // why that matters.
+  // CNP is editable everywhere now (any change from policy needs approval);
+  // `cnpLocked` only tracks whether a fresh quote's policy seed has landed.
   const [cnpLocked, setCnpLocked] = useState(!freshQuote);
   const [cnpFetchFailed, setCnpFetchFailed] = useState(false);
   const initialCnp = useRef(value.cardNotPresentRate);
@@ -162,11 +170,13 @@ export default function RateFields({
   useEffect(() => { valueRef.current = value; });
 
   useEffect(() => {
-    if (!freshQuote) return;
     let cancelled = false;
     getCnpPolicyRateAction()
       .then(cnp => {
         if (cancelled) return;
+        setPolicyCnp(cnp);
+        onPolicyCnp?.(cnp);
+        if (!freshQuote) return; // a saved CNP is never rewritten on reopen
         setCnpLocked(true);
         if (valueRef.current.cardNotPresentRate === initialCnp.current) {
           onChange({ ...valueRef.current, cardNotPresentRate: cnp, amexCardNotPresentRate: cnp });
@@ -176,7 +186,7 @@ export default function RateFields({
       // doc comment on `freshQuote`) — the box just stays editable, same as
       // it was before the 2026-10-13 lock, so a rep still has a way to get
       // the right number in.
-      .catch(() => { if (!cancelled) setCnpFetchFailed(true); });
+      .catch(() => { if (!cancelled && freshQuote) setCnpFetchFailed(true); });
     return () => { cancelled = true; };
     // Deliberately once-per-mount: this is a fallback SEED, not a live sync —
     // RateSuggestion is what keeps CNP current after this point.
@@ -215,8 +225,8 @@ export default function RateFields({
               </span>
               <span className={styles.suffix}>per transaction</span>
             </div>
-            {onAdjustBps && limitHit && (
-              <span className={styles.cnpStatus} data-testid="rate-limit-reached">Limit reached</span>
+            {onAdjustBps && (adjustBps < rangeLo || adjustBps > rangeHi) && (
+              <span className={styles.cnpStatus} data-testid="rate-outside-limits">Outside limits: needs admin approval</span>
             )}
           </div>
         )}
@@ -233,13 +243,9 @@ export default function RateFields({
                 className={styles.input}
                 value={Number(pctText(value.cardNotPresentRate))}
                 max={MAX_PLAUSIBLE_CARD_RATE * 100}
-                onChange={cnpLocked ? () => {} : setCardNotPresent}
-                disabled={cnpLocked}
-                aria-label={
-                  cnpLocked
-                    ? "Card not present rate, percent — set by AIO's rate card, not editable"
-                    : "Card not present rate, percent — could not confirm AIO's rate card yet, enter it directly"
-                }
+                onChange={setCardNotPresent}
+                aria-label="Card not present rate, percent"
+
               />
               <span className={styles.unit}>%</span>
             </span>
@@ -259,6 +265,9 @@ export default function RateFields({
             </span>
             <span className={styles.suffix}>per transaction</span>
           </div>
+          {policyCnp !== null && Math.round(value.cardNotPresentRate * 10000) !== Math.round(policyCnp * 10000) && (
+            <span className={styles.cnpStatus} data-testid="cnp-outside-policy">Outside limits: needs admin approval</span>
+          )}
           {freshQuote && !cnpLocked && (
             <span className={styles.cnpStatus}>
               {cnpFetchFailed
@@ -280,8 +289,7 @@ export default function RateFields({
 
       {!hideNote && !cardNotPresentOnly && (
         <p className={styles.note}>
-          Card-not-present &mdash; rate and per-transaction fee &mdash; is set by AIO&rsquo;s rate card and
-          isn&rsquo;t rep-editable. Default is{" "}
+          Card-not-present defaults to AIO&rsquo;s rate card; a different rate needs admin approval. Default is{" "}
           {pctText(DEFAULT_QUOTE_RATES.cardPresentRate)}% + ${DEFAULT_QUOTE_RATES.perTransactionFee.toFixed(2)} until
           the ticket-size and volume matrix has a basis to quote from.
         </p>

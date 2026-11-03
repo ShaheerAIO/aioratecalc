@@ -19,10 +19,13 @@
 
 import { toLineItemProperties } from "@/lib/adapters/hubspot";
 import {
-  adjustmentBlockers, checkoutAmountBlockers, deriveOrderPoints,
+  adjustmentBlockers, checkoutAmountBlockers, deriveOrderPoints, maxQtyFor,
   quoteTotals, resolvePlatformLine, quoteTypeOf, splitQuoteLines,
 } from "@/lib/quoting";
-import type { CatalogProduct, MerchantApplication, QuoteTotals } from "@/types/merchant";
+import { overrideFingerprint } from "@/lib/quoteOverrides";
+import type {
+  CatalogProduct, MerchantApplication, QuoteLine, QuoteOverride, QuoteOverrideKind, QuoteStatus, QuoteTotals,
+} from "@/types/merchant";
 
 /** One thing that has to be fixed, in the language of the person who has to fix it. */
 export type PublishRefusal = { code: string; message: string };
@@ -113,7 +116,46 @@ export type CanPublishInput = {
    * unchallenged.
    */
   maxBillingDelayDays?: number;
+  /**
+   * Per-product unit caps in force NOW (`quote_limit_policy.unit_caps`).
+   * Over a cap stopped refusing the SAVE on 2026-11-02 (it became an
+   * admin-approvable override), so publish refuses it unless the quote's
+   * approval still holds and covers it. Absent → not checked.
+   */
+  unitCaps?: Record<string, number>;
 };
+
+/** Rep-facing (sendQuoteAction shows them); never reaches a merchant. */
+const NOT_LIVE_MESSAGES: Record<QuoteStatus, string> = {
+  draft: "This quote is still a draft, so it isn't live for the merchant yet. Finish it and make it live before sending it.",
+  pending_approval: "This quote is waiting for an admin to approve what it goes past a limit on. It can be sent once it's approved and live.",
+  approved: "This quote's overrides are approved, but it hasn't been made live yet. Make it live before sending it.",
+};
+
+/**
+ * The overrides an admin approved on this quote, as a lookup — or a lookup
+ * that approves nothing when the approval doesn't hold.
+ *
+ * An approval holds only while it is signed off (`approvedAt`) AND its
+ * fingerprint still matches the quote's lines, rates and overrides as saved.
+ * Any edit since — a quantity, a rate, a discount — breaks the match, and a
+ * stale approval approves nothing. Within a holding approval a breach passes
+ * only for the same kind and product, at no more than the approved value: a
+ * bigger discount than the one approved, or a product the approval never
+ * named, still refuses.
+ */
+function approvedOverrides(
+  app: MerchantApplication,
+  lines: QuoteLine[],
+): (kind: QuoteOverrideKind, productId: string | undefined, value: number) => boolean {
+  const approval = app.quoteApproval;
+  const holds =
+    !!approval?.approvedAt &&
+    approval.fingerprint === overrideFingerprint(lines, app.quoteRates ?? null, approval.overrides);
+  if (!holds) return () => false;
+  return (kind, productId, value) =>
+    approval.overrides.some(o => o.kind === kind && o.productId === productId && o.value >= value);
+}
 
 /**
  * Whether this application may be built into a HubSpot quote and published.
@@ -126,7 +168,7 @@ export type CanPublishInput = {
 export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult {
   const {
     app, catalog, sender, signerEmail, templateId, templateActive,
-    maxDiscountPercent, maxBillingDelayDays, discountCaps,
+    maxDiscountPercent, maxBillingDelayDays, discountCaps, unitCaps,
   } = input;
 
   // 1. Already published — short-circuit before anything else. This is the
@@ -147,6 +189,16 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
 
   const reasons: PublishRefusal[] = [];
   const add = (code: string, message: string) => reasons.push({ code, message });
+
+  // 1b. The quote is live (2026-11-02). A draft, one waiting on an admin's
+  //     approval, and one approved but not yet made live by the rep are all
+  //     still the rep's — the merchant's link shows none of them — so none of
+  //     them may become an unamendable document. Below the already-published
+  //     return: a published quote's answer is "nothing to do", whatever its
+  //     status says.
+  if (app.quoteStatus != null) {
+    add("quote_not_approved", NOT_LIVE_MESSAGES[app.quoteStatus] ?? NOT_LIVE_MESSAGES.draft);
+  }
 
   // 2. A deal to hang the quote off. Association 64 (quote → deal) is a hard
   //    publish requirement, so a deal push that just failed leaves nothing to
@@ -214,8 +266,40 @@ export function canPublishBillingQuote(input: CanPublishInput): CanPublishResult
   //     run, so a rep cannot be shown a sendable quote that refuses here — but
   //     the cap it is measured against is today's, which is what makes this a
   //     real check rather than a restatement.
-  for (const message of adjustmentBlockers(lines, maxDiscountPercent, maxBillingDelayDays, discountCaps ?? {})) {
+  //     A discount over its cap comes back as an override, which an admin
+  //     may approve for this one quote (2026-11-02). It publishes only when
+  //     that approval still holds (see `isApproved`); anything else over a
+  //     cap refuses exactly as before. The hard blockers — a malformed
+  //     discount, a discounted plan line, a delay past the ceiling — are never
+  //     approvable and always refuse.
+  const isApproved = approvedOverrides(app, lines);
+  const overCap: QuoteOverride[] = [];
+  for (const message of adjustmentBlockers(lines, maxDiscountPercent, maxBillingDelayDays, discountCaps ?? {}, null, overCap)) {
     add("discount_over_policy", message);
+  }
+  for (const override of overCap) {
+    if (isApproved("discount", override.productId, override.value)) continue;
+    add(
+      "discount_over_policy",
+      `${override.message}: over the discount limit. Lower it, or ask an admin to raise the limit in Admin → Quote limits.`
+    );
+  }
+  //     Same for a product over its unit cap, summed per product as buildQuote does.
+  if (unitCaps) {
+    const qtyByProduct = new Map<string, { name: string; qty: number }>();
+    for (const line of lines) {
+      const prev = qtyByProduct.get(line.hubspotProductId);
+      qtyByProduct.set(line.hubspotProductId, { name: line.name, qty: (prev?.qty ?? 0) + line.qty });
+    }
+    for (const [productId, { name, qty }] of qtyByProduct) {
+      const max = maxQtyFor(productId, unitCaps);
+      if (max != null && qty > max && !isApproved("unit_cap", productId, qty)) {
+        add(
+          "unit_cap_over_policy",
+          `This quote has ${qty} × "${name}" on it, over the limit of ${max}. Drop the extras, or ask an admin to raise it in Admin → Quote limits.`
+        );
+      }
+    }
   }
 
   // 4c. Something is actually due at checkout. HubSpot answers a publish with

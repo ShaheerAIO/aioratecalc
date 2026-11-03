@@ -230,3 +230,26 @@ describe("invalid / expired links", () => {
     expect(JSON.stringify(el)).toContain("Link Expired");
   });
 });
+
+// THE DRAFT LOCK (2026-11-02). A draft, or a quote a rep has sent back for an
+// admin's approval after the merchant already had the link: nothing on it is
+// final, so the page shows only a calm notice — no checklist, no quote row,
+// no CTA that leads to checkout.
+describe("a quote that isn't live", () => {
+  for (const status of ["draft", "pending_approval", "approved"]) {
+    it(`shows only the being-updated notice while the status is ${status}`, async () => {
+      row = baseRow({ quoteStatus: status, quoteLines: [{ name: "POS", hubspotProductId: "1", qty: 1, unitPrice: 100, billingFrequency: "one_time" }] });
+      const el = await page();
+      expect(findModules(el)).toBeNull();
+      const json = JSON.stringify(el);
+      expect(json).toContain("Your Quote Is Being Updated");
+      expect(json).toContain("Your AIO rep will let you know when it");
+      expect(json).not.toContain("$");
+    });
+  }
+
+  it("renders the checklist as before when the status is null", async () => {
+    row = baseRow({ quoteStatus: null });
+    expect(findModules(await page())).not.toBeNull();
+  });
+});

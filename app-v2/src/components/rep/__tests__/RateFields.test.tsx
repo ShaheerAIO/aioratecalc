@@ -14,7 +14,7 @@
 //      fuller lookup needs both). `freshQuote` closes that — see the describe
 //      block below — by confirming AIO's flat CNP policy directly, and
 //      leaving the box EDITABLE (not locked) until that's confirmed.
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { DEFAULT_QUOTE_RATES, type QuoteRates } from "@/types/merchant";
@@ -41,11 +41,20 @@ function Harness({ initial }: { initial: QuoteRates }) {
 }
 
 describe("RateFields", () => {
+  beforeEach(() => { getCnpPolicyRateAction.mockResolvedValue(0.033); });
   afterEach(() => { cleanup(); getCnpPolicyRateAction.mockReset(); });
 
-  it("never calls the CNP policy fetch for a saved quote (no freshQuote)", () => {
-    render(<Harness initial={STORED} />);
-    expect(getCnpPolicyRateAction).not.toHaveBeenCalled();
+  it("fetches the policy CNP for a saved quote only to show the note, never rewriting it", async () => {
+    getCnpPolicyRateAction.mockResolvedValue(0.0299);
+    let changes = 0;
+    function Spy() {
+      const [value, setValue] = useState(STORED);
+      return <RateFields value={value} onChange={next => { changes++; setValue(next); }} />;
+    }
+    render(<Spy />);
+    await waitFor(() => expect(screen.getByTestId("cnp-outside-policy")).toBeTruthy());
+    expect(changes).toBe(0);
+    expect(screen.getByLabelText(/Card not present rate, percent/)).toHaveProperty("value", "3.30");
   });
 
   it("shows no AMEX row — two rate boxes, not four", () => {
@@ -55,10 +64,10 @@ describe("RateFields", () => {
     expect(screen.getByLabelText(/Card not present rate, percent/)).toBeTruthy();
   });
 
-  it("renders the card-not-present rate disabled", () => {
+  it("renders the card-not-present rate editable", () => {
     render(<Harness initial={STORED} />);
     const cnp = screen.getByLabelText(/Card not present rate, percent/) as HTMLInputElement;
-    expect(cnp.disabled).toBe(true);
+    expect(cnp.disabled).toBe(false);
   });
 
   it("displays a SAVED quote's own CNP value rather than substituting a different one", () => {
@@ -69,16 +78,21 @@ describe("RateFields", () => {
     expect(cnp.value).toBe("3.30");
   });
 
-  it("never fires onChange from the locked CNP box", () => {
-    let changes = 0;
+  it("lets a rep type a different CNP (flat) and flags it as needing approval", async () => {
+    let last: QuoteRates = STORED;
     function Spy() {
       const [value, setValue] = useState(STORED);
-      return <RateFields value={value} onChange={next => { changes++; setValue(next); }} />;
+      return <RateFields value={value} onChange={next => { last = next; setValue(next); }} />;
     }
     render(<Spy />);
+    await waitFor(() => expect(getCnpPolicyRateAction).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 0));
+    expect(screen.queryByTestId("cnp-outside-policy")).toBeNull();
     const cnp = screen.getByLabelText(/Card not present rate, percent/) as HTMLInputElement;
-    fireEvent.change(cnp, { target: { value: "9.99" } });
-    expect(changes).toBe(0);
+    fireEvent.change(cnp, { target: { value: "3.00" } });
+    fireEvent.blur(cnp);
+    expect(last.cardNotPresentRate).toBeCloseTo(0.03, 6);
+    expect(screen.getByTestId("cnp-outside-policy").textContent).toBe("Outside limits: needs admin approval");
   });
 
   it("leaves the card-present rate editable and never touches the AMEX fields when it changes", () => {
@@ -96,13 +110,13 @@ describe("RateFields", () => {
     // not re-derived from the new card-present rate.
     expect(last.amexCardPresentRate).toBe(STORED.amexCardPresentRate);
     expect(last.amexCardNotPresentRate).toBe(STORED.amexCardNotPresentRate);
-    // And the locked CNP rate is untouched too.
+    // And the CNP rate is untouched too.
     expect(last.cardNotPresentRate).toBe(STORED.cardNotPresentRate);
   });
 
-  it("shows the flat default note mentioning the lock, unless hideNote is set", () => {
+  it("shows the flat default note, unless hideNote is set", () => {
     render(<Harness initial={DEFAULT_QUOTE_RATES} />);
-    expect(screen.getByText(/isn.t rep-editable/)).toBeTruthy();
+    expect(screen.getByText(/needs admin approval\. Default is/)).toBeTruthy();
   });
 
   // 2026-10-14, "remove the ability to edit transaction fee on cnp". The fee
@@ -184,7 +198,6 @@ describe("RateFields — freshQuote (closing the no-basis CNP gap)", () => {
     render(<FreshHarness />);
     await waitFor(() => {
       const cnp = screen.getByLabelText(/Card not present rate, percent/) as HTMLInputElement;
-      expect(cnp.disabled).toBe(true);
       expect(cnp.value).toBe("3.30");
     });
   });
@@ -241,26 +254,26 @@ describe("RateFields — freshQuote (closing the no-basis CNP gap)", () => {
       const [bps, setBps] = useState(0);
       return <RateFields value={value} onChange={setValue} adjustBps={bps} onAdjustBps={setBps} adjustRange={range} />;
     }
+    beforeEach(() => { getCnpPolicyRateAction.mockResolvedValue(0.033); });
     const box = () => screen.getByLabelText("Card present rate, percent") as HTMLInputElement;
     const type = (v: string) => { fireEvent.change(box(), { target: { value: v } }); fireEvent.blur(box()); };
 
-    it("keeps the rate editable, clamps it to the range, and says when the limit is hit", () => {
+    it("stays editable past the range, showing the approval note instead of clamping", () => {
       render(<Adj range={{ min: -12, max: 40 }} />);
       expect(box().disabled).toBe(false);
-      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
+      expect(screen.queryByTestId("rate-outside-limits")).toBeNull();
       type("2.30");
       expect(box().value).toBe("2.30");
-      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
-      type("9.00");
-      expect(box().value).toBe("2.57");
-      expect(screen.getByTestId("rate-limit-reached").textContent).toBe("Limit reached");
+      expect(screen.queryByTestId("rate-outside-limits")).toBeNull();
+      type("3.50");
+      expect(box().value).toBe("3.50");
+      expect(screen.getByTestId("rate-outside-limits").textContent).toBe("Outside limits: needs admin approval");
       type("1.00");
-      expect(box().value).toBe("2.05");
-      expect(screen.getByTestId("rate-limit-reached")).toBeTruthy();
-      // Typing the limit itself isn't trying to go past it.
+      expect(box().value).toBe("1.00");
+      expect(screen.getByTestId("rate-outside-limits")).toBeTruthy();
       type("2.57");
       expect(box().value).toBe("2.57");
-      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
+      expect(screen.queryByTestId("rate-outside-limits")).toBeNull();
     });
 
     it("falls back to +/-500 bps without a range", () => {
@@ -269,7 +282,7 @@ describe("RateFields — freshQuote (closing the no-basis CNP gap)", () => {
       // high but plausible rate goes through untouched.
       type("4.80");
       expect(box().value).toBe("4.80");
-      expect(screen.queryByTestId("rate-limit-reached")).toBeNull();
+      expect(screen.queryByTestId("rate-outside-limits")).toBeNull();
     });
   });
 });

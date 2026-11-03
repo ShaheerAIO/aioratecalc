@@ -18,7 +18,7 @@ import {
   type AppliedReviewFields,
 } from "@/lib/prefillMerge";
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
-import { getPricingPreviewAction } from "@/lib/actions/pricing";
+import { getMyRoleAction, getPricingPreviewAction } from "@/lib/actions/pricing";
 // Type-only — erased at build, never bundles pricing.ts's runtime code (the
 // true MARGIN_REQS table) into this client page. See the comment on
 // `floorCheck` below and the one on `marginFloorBlockers`'s hand-copied
@@ -112,6 +112,13 @@ function NewProspectFlow() {
     | "monthlyProcessingRevenue" | "processingArr" | "belowMonthlyRevenueFloor"
   > | null>(null);
   const [linkUrl, setLinkUrl]           = useState<string | null>(null);
+  // Set once a save lands. `status` null = sent to the merchant as before.
+  const [outcome, setOutcome] = useState<{ status: "draft" | "pending_approval" | "approved" | null } | null>(null);
+  // AIO's policy card-not-present rate, reported by RateFields; any other CNP needs approval.
+  const [policyCnp, setPolicyCnp] = useState<number | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => { getMyRoleAction().then(r => setIsAdmin(r === "admin")).catch(() => {}); }, []);
+  const [confirmMode, setConfirmMode] = useState<"send" | "draft" | null>(null);
   const [emailSent, setEmailSent]       = useState(false);
   const [smsSent, setSmsSent]           = useState(false);
   const [companySynced, setCompanySynced] = useState(true);
@@ -351,38 +358,9 @@ function NewProspectFlow() {
     hardBlocks.push("Enter the monthly volume and average ticket — the card rate is priced off both.");
   }
   hardBlocks.push(...quoteBlockers);
-  if (floorCheck?.belowMarginFloor) {
-    // Kept as the SAME SENTENCE as the server refusal
-    // (marginFloorBlockers, lib/pricing.ts) by hand, not by a shared call —
-    // checked, not assumed: pricing.ts carries no "use server" directive, so
-    // unlike the Server Actions this file already imports (createProspectAction,
-    // getPricingPreviewAction, which compile down to an RPC stub), calling
-    // marginFloorBlockers directly would bundle pricing.ts's plain module code
-    // — MARGIN_REQS, the true minMargin table, included — into this client
-    // page. That's exactly what DEFAULT_CARD_PRESENT_PCT and
-    // MAX_PLAUSIBLE_CARD_RATE were moved out of pricing.ts to avoid (see their
-    // doc comments in types/merchant.ts). So this is a literal, not a call —
-    // if marginFloorBlockers' wording changes, this one has to change by hand
-    // to match, and it must never imply an admin can do anything about it:
-    // the margin-padding editor was deleted 2026-10-12 and there is no
-    // override today (see marginFloorBlockers' doc comment).
-    hardBlocks.push(
-      "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote."
-    );
-  }
-  // The $10-a-month minimum (2026-10-15). A SECOND refusal, independent of the
-  // one above — different margin, neither implies the other, and the server
-  // re-runs both (`assertRateAboveFloor`). Unlike that one this message can
-  // name its own figures: see `monthlyRevenueFloorBlockers` in pricing.ts for
-  // why stating this number is safe, and why the sentence has to allow that
-  // raising the rate may not be enough.
-  if (floorCheck?.belowMonthlyRevenueFloor) {
-    hardBlocks.push(
-      `At this rate AIO earns ${fmt$(floorCheck.monthlyProcessingRevenue ?? 0)} a month on this ` +
-      `merchant's processing, under the ${fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} minimum. Raise the ` +
-      `card rate, or this merchant is too small to process for.`
-    );
-  }
+  // The margin floor and the $10/mo revenue floor are NOT hard blocks any
+  // more (2026-11-02): they are overrides an admin approves on this quote.
+  // See `approvalReasons` below. The server re-derives all of it.
   // A LINK WITHOUT A QUOTE IS NOT SENDABLE (2026-10-15, product owner: "there
   // is no situation where the rep hasnt made the quote because they cant send
   // the initial link without making it"). Nothing enforced that before — an
@@ -459,15 +437,42 @@ function NewProspectFlow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rated, cnpOnly, volume, ticket, quoteRates, pricingModel]);
 
-  const submit = async () => {
+  // Why this quote needs an admin. Rep-safe: server flags and the rep's own
+  // typed numbers only, never a floor figure. The server is the authority.
+  const approvalReasons: string[] = [];
+  for (const o of quote?.overrides ?? []) approvalReasons.push(o.message);
+  if (rated) {
+    if (floorCheck?.belowMarginFloor) approvalReasons.push("Card-present rate is below the minimum margin");
+    if (floorCheck?.belowMonthlyRevenueFloor) approvalReasons.push("AIO's monthly revenue on this merchant is under the minimum");
+    if (!cnpOnly && cpAdjustRange && (cpAdjustBps < cpAdjustRange.min || cpAdjustBps > cpAdjustRange.max)) {
+      approvalReasons.push("Card-present rate adjustment is outside the allowed range");
+    }
+    if (policyCnp !== null && Math.round(quoteRates.cardNotPresentRate * 10000) !== Math.round(policyCnp * 10000)) {
+      approvalReasons.push("Card-not-present rate differs from AIO's standard rate");
+    }
+  }
+  const needsApproval = approvalReasons.length > 0;
+
+  const requestSave = (mode: "send" | "draft") => {
     if (hardBlocks.length) {
       setError(hardBlocks.join(" "));
       return;
     }
+    if (needsApproval) { setConfirmMode(mode); return; }
+    void submit(mode);
+  };
+
+  const submit = async (mode: "send" | "draft") => {
+    if (hardBlocks.length) {
+      setError(hardBlocks.join(" "));
+      return;
+    }
+    setConfirmMode(null);
     setSaving(true);
     setError(null);
     try {
-      const { linkUrl, emailResult, smsResult, companySync } = await createProspectAction({
+      const { linkUrl, quoteStatus, emailResult, smsResult, companySync } = await createProspectAction({
+        mode,
         business, ownerContact, processing: rated ? processing : null,
         // Only sent when an email is actually on it — a blank "New contact"
         // section the rep never touched means no billing contact at all,
@@ -489,9 +494,10 @@ function NewProspectFlow() {
         deal: { mode: "existing", dealId: deal!.id },
       });
       setLinkUrl(linkUrl);
-      setEmailSent(emailResult.sent);
+      setOutcome({ status: quoteStatus });
+      setEmailSent(emailResult?.sent ?? false);
       setSmsSent(smsResult?.sent ?? false);
-      setCompanySynced(companySync.synced);
+      setCompanySynced(companySync?.synced ?? true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create prospect");
     }
@@ -502,7 +508,7 @@ function NewProspectFlow() {
     setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier");
     setQuoteType(null); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
-    setLinkUrl(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
+    setLinkUrl(null); setOutcome(null); setConfirmMode(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
     clearDeal();
     setBusiness(BLANK_BUSINESS); setOwnerContact(BLANK_OWNER); setProcessing(BLANK_PROCESSING);
     setBillingContactId(null); setBillingContact(BLANK_OWNER); setBillingContactLoaded(null);
@@ -525,6 +531,24 @@ function NewProspectFlow() {
     id => ORDER_POINT_CHANNELS.find(c => c.id === id)?.label ?? id
   );
 
+
+  if (outcome && outcome.status !== null) {
+    const copy = {
+      draft: "Saved as a draft. Nothing was sent to the merchant.",
+      pending_approval: "Saved as a draft and sent to the admins for approval. You'll get an email when it's approved.",
+      approved: "Saved and approved. Open it from your dashboard to send it.",
+    }[outcome.status];
+    return (
+      <div className={styles.successWrap}>
+        <div className={styles.successMark}>✓</div>
+        <h1 className={styles.successTitle}>Quote Saved</h1>
+        <p className={styles.successBody} data-testid="save-outcome">{copy}</p>
+        <button onClick={reset} className={styles.btnGhost}>
+          Create Another
+        </button>
+      </div>
+    );
+  }
 
   if (linkUrl) {
     return (
@@ -679,7 +703,7 @@ function NewProspectFlow() {
       {/* freshQuote: this page always starts a new quote at the flat
           standard rate, often before a volume/ticket basis exists — see
           RateFields.tsx's doc comment on that prop. */}
-      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} />
+      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} />
       {/* Sits under the boxes rather than above them: the rep reads the rate
           they're quoting first, and what the card would have said second. It
           now ALWAYS applies what it suggests (2026-10-13, "get rid of the
@@ -790,9 +814,34 @@ function NewProspectFlow() {
         </div>
       )}
       {error && <div className={styles.error}>{error}</div>}
-      <button onClick={submit} disabled={saving || hardBlocks.length > 0} className={`${styles.btnPrimary} ${styles.btnBlock}`}>
+      <button onClick={() => requestSave("send")} disabled={saving || hardBlocks.length > 0} className={`${styles.btnPrimary} ${styles.btnBlock}`}>
         {saving ? "Creating…" : hasQuote ? "Create Quote Link →" : "Create Link →"}
       </button>
+      <button
+        type="button" onClick={() => requestSave("draft")} disabled={saving || hardBlocks.length > 0}
+        className={`${styles.btnGhost} ${styles.btnBlock}`}
+      >
+        Save as draft
+      </button>
+      {confirmMode && (
+        <div
+          role="dialog" aria-modal="true" aria-label="Needs admin approval"
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+        >
+          <div className={styles.panel} style={{ maxWidth: 480, width: "100%", background: "var(--paper, #fff)" }}>
+            <p>
+              {isAdmin
+                ? "This quote goes past AIO's limits. As an admin, saving it approves it."
+                : "This quote goes past AIO's limits. If you continue, it will be saved as a draft and an admin will need to approve it before it can be sent."}
+            </p>
+            <ul>{approvalReasons.map(r => <li key={r}>{r}</li>)}</ul>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button type="button" className={styles.btnGhost} onClick={() => setConfirmMode(null)}>Cancel</button>
+              <button type="button" className={styles.btnPrimary} onClick={() => void submit(confirmMode)}>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
       {ownerContact.email.trim() && (
         <p className={styles.sendNote}>
           Emailed to {recipients}

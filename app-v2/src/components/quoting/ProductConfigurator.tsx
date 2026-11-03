@@ -48,7 +48,6 @@ import {
   lineNetAmount,
   companionsFor,
   FIRST_KIOSK_PRODUCT_IDS,
-  maxQtyFor,
   minimumTerminalsFor,
   NEVER_DISCOUNTED_PRODUCT_IDS,
   planDefaultBillingStart,
@@ -76,6 +75,9 @@ import type {
 import styles from "./ProductConfigurator.module.css";
 
 /** What the rep picked. Prices and the derived lines are the server's business. */
+/** Sanity bound on a typed quantity; the unit caps are overrides, not limits. */
+const MAX_PICK_QTY = 99;
+
 export type ProductPick = { hubspotProductId: string; qty: number };
 
 // Frozen and module-level on purpose. It is the default for the `adjustments`
@@ -1587,10 +1589,11 @@ export default function ProductConfigurator({
 
   const productRow = (p: CatalogProduct, withAdjust: boolean) => {
     const n = qtyOf(p.hubspotProductId);
-    // Capped in the picker AND refused by buildQuote. The cap is
-    // the courtesy; the blocker is the authority, since the server
-    // re-derives from the picks and never trusts the browser.
-    const max = maxQtyFor(p.hubspotProductId, limits.unitCaps);
+    // Past a unit cap is an admin-approvable override, not a UI clamp
+    // (2026-11-02); only a sanity bound remains. The server re-derives
+    // `overrides` from the picks and never trusts the browser.
+    const max = MAX_PICK_QTY;
+    const needsApproval = built.overrides.some(o => o.productId === p.hubspotProductId);
     const covered = coveredQty.get(p.hubspotProductId) ?? 0;
     const planCovered = planCoveredQty.get(p.hubspotProductId) ?? 0;
     // Terminals topped up server-side sit on the quote but not in the
@@ -1627,6 +1630,9 @@ export default function ProductConfigurator({
           <div className={styles.productPrice}>
             {priceLabel(p.price, p.billingFrequency)}
           </div>
+          {needsApproval && (
+            <div className={styles.autoTag} data-testid="needs-admin-approval">Needs admin approval</div>
+          )}
           {autoAdded && (
             <div className={styles.autoTag}>
               {p.hubspotProductId === AMS1_PRODUCT.hubspotProductId
@@ -1681,18 +1687,18 @@ export default function ProductConfigurator({
               the unit caps are for. */}
           <input
             type="number" inputMode="numeric" step={1}
-            min={min} max={max ?? undefined}
+            min={min} max={max}
             className={styles.stepQty}
             value={n}
             onChange={e => {
               const typed = Math.floor(Number(e.target.value));
-              setQtyFor(p.hubspotProductId, Number.isFinite(typed) ? Math.max(0, typed) : 0);
+              setQtyFor(p.hubspotProductId, Number.isFinite(typed) ? Math.min(max, Math.max(0, typed)) : 0);
             }}
             aria-label={`How many ${p.name}`}
           />
           <button
             type="button" className={styles.stepBtn}
-            disabled={max != null && n >= max}
+            disabled={n >= max}
             onClick={() => setQtyFor(p.hubspotProductId, n + 1)}
             aria-label={`Add one ${p.name}`}
           >+</button>

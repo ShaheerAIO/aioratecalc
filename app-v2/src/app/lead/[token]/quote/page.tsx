@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getLeadApplicationByToken } from "@/lib/leadToken";
+import { getLeadApplicationByToken, isQuoteLocked } from "@/lib/leadToken";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { buildCustomerSafeQuote } from "@/lib/leadQuote";
 import { refreshLeadBilling, refreshLeadInvoice } from "@/lib/billing/leadRefresh";
@@ -28,6 +28,20 @@ export default async function LeadQuotePage({ params }: { params: Promise<{ toke
         <div className={leadStyles.centeredInner}>
           <h1 className={leadStyles.title}>{lookup.reason === "expired" ? "Link Expired" : "Invalid Link"}</h1>
           <p className={leadStyles.subtitle}>Ask your AIO representative for a new link.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // A draft, or a live quote a rep has since edited past a limit and sent back
+  // for an admin's approval (2026-11-02). Nothing on it is final, so no
+  // figures and nothing to act on — just the reason, in the link-error style.
+  if (isQuoteLocked(lookup.row)) {
+    return (
+      <div className={leadStyles.centered}>
+        <div className={leadStyles.centeredInner}>
+          <h1 className={leadStyles.title}>Your Quote Is Being Updated</h1>
+          <p className={leadStyles.subtitle}>Your AIO rep will let you know when it&apos;s ready.</p>
         </div>
       </div>
     );

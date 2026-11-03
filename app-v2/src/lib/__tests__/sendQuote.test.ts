@@ -182,4 +182,31 @@ describe("sendQuoteAction", () => {
     expect(result.ok).toBe(false);
     expect(result.reasons?.[0].code).toBe("order_points_need_review");
   });
+
+  // A draft makes NO HubSpot writes (2026-11-02) — not even the deal fill-in,
+  // which would otherwise run before the publish gate's own refusal.
+  for (const status of ["draft", "pending_approval", "approved"] as const) {
+    it(`refuses quote_not_approved while the status is ${status}, before any HubSpot or DB write`, async () => {
+      getApplication.mockResolvedValue(app({ quoteStatus: status }));
+
+      const result = await sendQuoteAction("app-1");
+
+      expect(result.ok).toBe(false);
+      expect(result.reasons?.map(r => r.code)).toEqual(["quote_not_approved"]);
+      expect(result.reasons?.[0].message.length).toBeGreaterThan(20);
+      expect(resolveDealForCompany).not.toHaveBeenCalled();
+      expect(buildAndPublishBillingQuote).not.toHaveBeenCalled();
+      // No deal stamp and no lastSyncError.
+      expect(patches).toEqual([]);
+    });
+  }
+
+  it("sends as before when the status is null", async () => {
+    getApplication.mockResolvedValue(app({ hubspotDealId: "d-1", quoteStatus: null }));
+
+    const result = await sendQuoteAction("app-1");
+
+    expect(result.ok).toBe(true);
+    expect(buildAndPublishBillingQuote).toHaveBeenCalledTimes(1);
+  });
 });

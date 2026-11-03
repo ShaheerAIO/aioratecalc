@@ -7,7 +7,7 @@
 // Both directions live together on purpose: a new column has to be added to
 // each, and splitting the pair across files is how one of them gets forgotten.
 import { merchantApplications } from "@/lib/db/schema";
-import type { MerchantApplication, DealStage, PricingModel } from "@/types/merchant";
+import type { MerchantApplication, DealStage, PricingModel, QuoteStatus } from "@/types/merchant";
 
 export type ApplicationRow = typeof merchantApplications.$inferSelect;
 
@@ -29,6 +29,9 @@ export function rowToApp(row: ApplicationRow): MerchantApplication {
     foodbuyIds: row.foodbuyIds,
     hubspotIds: row.hubspotIds,
     hubspotInvoice: row.hubspotInvoice,
+    quoteStatus: (row.quoteStatus as QuoteStatus | null) ?? null,
+    quoteApproval: row.quoteApproval ?? null,
+    pendingDealChoice: row.pendingDealChoice ?? null,
     quoteType: row.quoteType,
     quoteConfig: row.quoteConfig,
     quoteLines: row.quoteLines,
@@ -69,6 +72,9 @@ export function appToRow(app: MerchantApplication) {
     foodbuyIds: app.foodbuyIds,
     hubspotIds: app.hubspotIds,
     // hubspotInvoice deliberately absent: only oneTimeInvoice.ts writes it.
+    quoteStatus: app.quoteStatus ?? null,
+    quoteApproval: app.quoteApproval ?? null,
+    pendingDealChoice: app.pendingDealChoice ?? null,
     quoteType: app.quoteType,
     quoteConfig: app.quoteConfig,
     quoteLines: app.quoteLines,

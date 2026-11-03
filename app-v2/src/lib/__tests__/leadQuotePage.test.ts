@@ -15,6 +15,7 @@ vi.mock("@/lib/db/client", () => ({ db }));
 vi.mock("@/lib/leadQuote", () => ({ buildCustomerSafeQuote }));
 
 const { default: LeadQuotePage } = await import("@/app/lead/[token]/quote/page");
+const { default: LeadConfirmPage } = await import("@/app/lead/[token]/confirm/page");
 
 const TOKEN = "tok-1";
 const NOW = new Date("2026-08-21T19:49:38.000Z");
@@ -112,5 +113,37 @@ describe("invalid / expired links", () => {
     const el = await page();
     expect(buildCustomerSafeQuote).not.toHaveBeenCalled();
     expect(JSON.stringify(el)).toContain("Invalid Link");
+  });
+});
+
+// THE DRAFT LOCK (2026-11-02). Neither step shows a figure or a control while
+// the quote is a draft, back with an admin, or approved but not yet live.
+describe("a quote that isn't live", () => {
+  const confirmPage = () => LeadConfirmPage({ params: Promise.resolve({ token: TOKEN }) });
+
+  for (const status of ["draft", "pending_approval", "approved"]) {
+    it(`the quote step shows only the notice, building no quote, while ${status}`, async () => {
+      row = baseRow({ quoteStatus: status });
+      buildCustomerSafeQuote.mockReturnValue({ basis: "config", monthlyVolume: 1000 });
+      const rendered = await text();
+      expect(buildCustomerSafeQuote).not.toHaveBeenCalled();
+      expect(rendered).toContain("your quote is being updated");
+      expect(rendered).toContain("your aio rep will let you know when it's ready.");
+      expect(rendered).not.toContain("leadquoteview");
+    });
+
+    it(`the confirm step shows only the notice, with no form, while ${status}`, async () => {
+      row = baseRow({ quoteStatus: status });
+      const rendered = flatten(await confirmPage()).join(" ").toLowerCase();
+      expect(rendered).toContain("your quote is being updated");
+      expect(rendered).not.toContain("confirmdetailsform");
+    });
+  }
+
+  it("both steps render as before when the status is null", async () => {
+    row = baseRow({ quoteStatus: null });
+    buildCustomerSafeQuote.mockReturnValue({ basis: "products", lines: [], lineTotals: null, orderPoints: null });
+    expect(await text()).toContain("leadquoteview");
+    expect(flatten(await confirmPage()).join(" ").toLowerCase()).toContain("confirmdetailsform");
   });
 });

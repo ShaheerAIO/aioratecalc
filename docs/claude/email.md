@@ -80,3 +80,8 @@ Vercel stores literally and does not run dotenv-expand. (The 2026-09-24 secret h
 no `$` at all, so this was moot that time — check each new one rather than assuming.)
 
 **Third email, 2026-10-26: `sendFoodbuyEnrollmentEmail`.** It goes to the Foodbuy rep, not to a merchant, and it is the first email with an **attachment** (Graph `fileAttachment` / Resend `attachments`, both base64). It sets Reply-To to the merchant through `SendExtras.replyTo`, which, unlike `rep`, does NOT change the sender display name. `render()` now leaves out the button block when no `url`/`cta` is given, and takes an optional `footer`. Graph's sendMail accepts inline attachments only up to ~3MB, so callers must cap them (`FOODBUY_SEND_MAX_BYTES`).
+
+**Staff emails for quote approval, 2026-11-02 (draft quotes + admin override approval).** Two internal emails, both with the "Sent by EasyOB to AIO staff" footer and sent through the same Graph/Resend path:
+- `sendQuoteApprovalRequestEmail`: to every ACTIVE admin except the requester (one send per admin), when a rep's save carries overrides. Lists each override's message; the button "Review & approve" links to `/admin?view=accounts&account=<id>`, which `AccountsDashboard` reads once on load to select that row.
+- `sendQuoteApprovedEmail`: to the owning rep when an admin approves (skipped if the rep approves-as-admin themself). Says the link is live again, or to open the draft and send it; the button "Open quote" links to `/rep?account=<id>`.
+Recipients come from `lib/staff.ts`. Failures are logged and never block the save or the approval. Override messages never carry the margin floor.

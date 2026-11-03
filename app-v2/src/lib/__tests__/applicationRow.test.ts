@@ -76,3 +76,35 @@ describe("applicationRow — dealLink round trip", () => {
     expect(app.dealLink).toBeNull();
   });
 });
+
+describe("applicationRow — quote draft columns round trip", () => {
+  const toRow = (a: MerchantApplication) =>
+    ({ ...appToRow(a), createdAt: new Date(APP.createdAt) }) as unknown as ApplicationRow;
+
+  it("preserves quoteStatus, quoteApproval and pendingDealChoice", () => {
+    const app: MerchantApplication = {
+      ...APP,
+      quoteStatus: "pending_approval",
+      quoteApproval: {
+        overrides: [{ kind: "cp_rate", message: "m", value: 150, limit: 200 }],
+        fingerprint: "abc",
+        requestedAt: "2026-11-02T00:00:00.000Z",
+        requestedByUserId: "rep-1",
+      },
+      pendingDealChoice: { mode: "existing", dealId: "d1" },
+    };
+    const out = rowToApp(toRow(app));
+    expect(out.quoteStatus).toBe("pending_approval");
+    expect(out.quoteApproval).toEqual(app.quoteApproval);
+    expect(out.pendingDealChoice).toEqual(app.pendingDealChoice);
+  });
+
+  it("null and undefined round-trip as null", () => {
+    for (const a of [APP, { ...APP, quoteStatus: null, quoteApproval: null, pendingDealChoice: null }]) {
+      const out = rowToApp(toRow(a));
+      expect(out.quoteStatus).toBeNull();
+      expect(out.quoteApproval).toBeNull();
+      expect(out.pendingDealChoice).toBeNull();
+    }
+  });
+});

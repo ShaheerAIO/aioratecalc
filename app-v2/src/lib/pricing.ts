@@ -548,8 +548,9 @@ function projectedProcessingRevenue(
  * removed 2026-10-23).
  *
  * This is a HARD refusal with exactly ONE recovery for a rep: raise the rate.
- * There is no per-quote override; an admin moves the floor itself by editing
- * the Min margin column on /admin/settings/rate-matrix.
+ * An admin moves the floor itself by editing the Min margin column on
+ * /admin/settings/rate-matrix. (Being under it is becoming an admin-approvable
+ * per-quote override, 2026-11-02: see `rateOverrides` in quoteOverrides.ts.)
  */
 export function marginFloorBlockers(pricing: Pick<RoleScopedPricing, "belowMarginFloor">): string[] {
   if (!pricing.belowMarginFloor) return [];

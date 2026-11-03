@@ -9,6 +9,7 @@ import { syncDealFromApplication } from "@/lib/adapters/hubspot";
 import { attachQuoteSummaryToDeal } from "@/lib/billing/quoteSummaryAttachment";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { rowToApp } from "@/lib/storage/applicationRow";
+import { isQuoteLocked } from "@/lib/leadToken";
 
 const TOKEN_TTL_MINUTES = 30;
 
@@ -50,6 +51,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     // priced lines, so omitting quoteType/quoteLines here read every such quote
     // as an unrated full_pos one with no volume and refused it as "no quote yet".
     const app = rowToApp(row);
+
+    // THE DRAFT LOCK (2026-11-02) — the checkout route's, for the merchants who
+    // accept here. A draft, or a quote a rep has sent back for an admin's
+    // approval, is not the merchant's to accept yet. Same neutral code as the
+    // checkout route; the page shows its own notice in place of the button.
+    //
+    // First acceptance only, like the confirmation gate below: a merchant
+    // who has already accepted is here for "Email Me a New Link", which acts on
+    // nothing on the quote, and an accepted quote can't be edited back into a
+    // draft anyway (the rep-side save refuses it).
+    if (!row.quoteAcceptedAt && isQuoteLocked(app)) {
+      return NextResponse.json({ error: "quote_locked" }, { status: 409 });
+    }
+
     if (!hasQuoteBasis(app)) {
       return NextResponse.json({ error: "There is no quote on this link yet" }, { status: 409 });
     }

@@ -14,7 +14,12 @@ import {
   markAdyenKycCompleteAction,
   type RepSummary,
 } from "@/lib/actions/applications";
-import { resendLeadLinkAction } from "@/lib/actions/prospects";
+import { resendLeadLinkAction, sendDraftAction } from "@/lib/actions/prospects";
+import {
+  approveQuoteAction,
+  getQuoteApprovalAction,
+  type QuoteApprovalView,
+} from "@/lib/actions/quoteApproval";
 import EditQuotePanel from "@/components/rep/EditQuotePanel";
 import DealPicker, { type ResolvedDeal } from "@/components/rep/DealPicker";
 import { fmt$, fmtCycle } from "@/lib/utils";
@@ -62,6 +67,13 @@ function StageBadge({ stage }: { stage: string }) {
       {stage.replace(/_/g, " ")}
     </span>
   );
+}
+
+// Draft / approval status next to the stage. null = live with the merchant.
+function QuoteStatusChip({ status }: { status: MerchantApplication["quoteStatus"] }) {
+  if (!status) return null;
+  const label = status === "draft" ? "Draft" : status === "pending_approval" ? "Needs approval" : "Approved, not sent";
+  return <span className={`${styles.badge} ${styles.statusChip}`} data-status={status}>{label}</span>;
 }
 
 const QUOTE_TYPE_LABELS = new Map(QUOTE_TYPES.map(t => [t.id, t.label]));
@@ -164,6 +176,26 @@ export function AccountsDashboard({
   // Rep quote editing (account-detail "Edit Quote" panel).
   const [editQuoteOpen, setEditQuoteOpen] = useState(false);
 
+  // Review panel for a quote awaiting admin approval, plus the outcome line
+  // shown after approving / sending a draft.
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewData, setReviewData] = useState<QuoteApprovalView | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [quoteNotice, setQuoteNotice] = useState<{ appId: string; text: string } | null>(null);
+
+  // Deep link from the approval emails: ?account=<id> selects that row once
+  // the list has loaded. Read from window in an effect (not useSearchParams)
+  // so no Suspense boundary is needed; done once.
+  const [deepLinkDone, setDeepLinkDone] = useState(false);
+  useEffect(() => {
+    if (deepLinkDone || apps.length === 0) return;
+    setDeepLinkDone(true);
+    const id = new URLSearchParams(window.location.search).get("account");
+    const match = id ? apps.find(a => a.id === id) : undefined;
+    if (match) setSelected(match);
+  }, [apps, deepLinkDone]);
+
   useEffect(() => {
     listApplicationsAction().then(setApps).catch(() => {});
     if (isAdmin) {
@@ -215,8 +247,8 @@ export function AccountsDashboard({
   });
 
   const canManageSelected = selected != null && (isAdmin || selected.ownerUserId === userId);
-  const showQuoteLink = canManageSelected;
-  const showOnboardingSend = selected != null && canManageSelected && !!selected.ownerContact?.email && (
+  const showQuoteLink = canManageSelected && !selected?.quoteStatus;
+  const showOnboardingSend = selected != null && canManageSelected && !selected.quoteStatus && !!selected.ownerContact?.email && (
     (selected.stage === "proposal_sent" && !selected.adyenOnboardingUrl) ||
     selected.stage === "merchant_link_sent"
   );
@@ -232,7 +264,12 @@ export function AccountsDashboard({
   // Exactly one action is primary: the next thing to do. The header used to
   // carry up to five coral buttons at once, which made none of them read as
   // the next step.
-  const primaryAction = canResume ? "resume" : showQuoteLink ? "quote" : showOnboardingSend ? "onboarding" : null;
+  const quoteStatus = selected?.quoteStatus ?? null;
+  const isOwner = selected != null && selected.ownerUserId === userId;
+  const showApprove = isAdmin && quoteStatus === "pending_approval";
+  const showSendDraft = canManageSelected && (quoteStatus === "draft" || quoteStatus === "approved");
+  const repWaiting = !isAdmin && isOwner && quoteStatus === "pending_approval";
+  const primaryAction = quoteStatus ? null : canResume ? "resume" : showQuoteLink ? "quote" : showOnboardingSend ? "onboarding" : null;
 
   const selectedRep     = selected ? repMap.get(selected.ownerUserId) : undefined;
   const selectedContact = selected?.ownerContact ?? null;
@@ -278,6 +315,49 @@ export function AccountsDashboard({
     setBusyId(null);
   };
 
+  const openReview = async (app: MerchantApplication) => {
+    setReviewOpen(true);
+    setReviewData(null);
+    setReviewError(null);
+    try {
+      setReviewData(await getQuoteApprovalAction(app.id));
+    } catch (e) {
+      setReviewError(e instanceof Error ? e.message : "Failed to load the approval request");
+    }
+  };
+
+  const handleApprove = async (app: MerchantApplication) => {
+    setApproving(true);
+    setReviewError(null);
+    try {
+      await approveQuoteAction(app.id);
+      const fresh = await listApplicationsAction();
+      setApps(fresh);
+      const updated = fresh.find(a => a.id === app.id);
+      if (updated) setSelected(updated);
+      setReviewOpen(false);
+      setQuoteNotice({ appId: app.id, text: "Approved. The rep has been emailed." });
+    } catch (e) {
+      setReviewError(e instanceof Error ? e.message : "Failed to approve the quote");
+    }
+    setApproving(false);
+  };
+
+  const handleSendDraft = async (app: MerchantApplication) => {
+    setBusyId(app.id);
+    try {
+      const res = await sendDraftAction(app.id);
+      updateOne(res.app);
+      setQuoteNotice({
+        appId: app.id,
+        text: res.delivered ? "Sent to the merchant." : "The merchant's link is live again.",
+      });
+    } catch (e) {
+      setQuoteNotice({ appId: app.id, text: e instanceof Error ? e.message : "Failed to send to the merchant" });
+    }
+    setBusyId(null);
+  };
+
   const handleMarkClosedLost = async (app: MerchantApplication) => {
     if (!window.confirm(`Mark ${app.business?.legalName || app.analysis?.merchantName || "this account"} as closed lost?`)) return;
     setBusyId(app.id);
@@ -295,6 +375,8 @@ export function AccountsDashboard({
     setTenantQuery("");
     setTenantResults([]);
     setEditQuoteOpen(false);
+    setReviewOpen(false);
+    setQuoteNotice(null);
     setTenantMismatch(null);
     setDealAdoptPreview(null);
   }, [selected?.id]);
@@ -547,6 +629,7 @@ export function AccountsDashboard({
                       {isAdmin && <div className={styles.tableCell} data-label="Rep">{rep?.name || rep?.email || "—"}</div>}
                       <div className={styles.tableCell} data-label="Stage">
                         <StageBadge stage={a.stage} />
+                        <QuoteStatusChip status={a.quoteStatus} />
                       </div>
                       <div className={`${styles.tableCell} ${styles["tableCell--numeric"]}`} data-label="Volume">{a.analysis ? fmt$(a.analysis.totalVolume) : "—"}</div>
                       <div className={`${styles.tableCell} ${styles["tableCell--accent"]}`} data-label="Fees">{a.analysis ? fmt$(a.analysis.totalFees) : "—"}</div>
@@ -588,6 +671,7 @@ export function AccountsDashboard({
                         {a.business?.dba || a.business?.legalName || a.analysis?.merchantName || "—"}
                       </span>
                       <StageBadge stage={a.stage} />
+                      <QuoteStatusChip status={a.quoteStatus} />
                     </button>
                   ))}
                 </div>
@@ -603,6 +687,7 @@ export function AccountsDashboard({
                           {selected.business?.dba || selected.business?.legalName || selected.analysis?.merchantName || "Account Detail"}
                         </h2>
                         <StageBadge stage={selected.stage} />
+                        <QuoteStatusChip status={selected.quoteStatus} />
                       </div>
                       <div className={styles.detailMeta}>
                         {selected.business?.legalName && selected.business.legalName !== selected.business.dba
@@ -619,6 +704,59 @@ export function AccountsDashboard({
                       ×
                     </button>
                   </div>
+
+                  {(showApprove || showSendDraft || repWaiting) && (
+                    <div className={styles.detailActions}>
+                      {showApprove && !reviewOpen && (
+                        <button onClick={() => openReview(selected)} className={styles.btnApprove}>
+                          Review &amp; approve
+                        </button>
+                      )}
+                      {showSendDraft && (
+                        <button
+                          onClick={() => handleSendDraft(selected)}
+                          disabled={busyId === selected.id}
+                          className={styles.btnPrimary}
+                        >
+                          Send to merchant
+                        </button>
+                      )}
+                      {repWaiting && <span className={styles.detailMeta}>Waiting for admin approval</span>}
+                    </div>
+                  )}
+
+                  {quoteNotice?.appId === selected.id && (
+                    <div className={styles.detailMeta} role="status">{quoteNotice.text}</div>
+                  )}
+
+                  {showApprove && reviewOpen && (
+                    <Section label="Review & approve">
+                      {reviewError && <div className={styles.detailMeta} role="alert">{reviewError}</div>}
+                      {!reviewData && !reviewError && <div className={styles.detailMeta}>Loading…</div>}
+                      {reviewData && (
+                        <>
+                          <div className={styles.detailMeta}>
+                            Requested by {reviewData.requestedByName || "the rep"}
+                            {reviewData.requestedAt ? ` on ${new Date(reviewData.requestedAt).toLocaleString()}` : ""}
+                          </div>
+                          <ul className={styles.overrideList}>
+                            {reviewData.overrides.map((o, i) => <li key={i}>{o.message}</li>)}
+                          </ul>
+                          <div className={styles.detailMeta}>The full quote is shown in the Quote section below.</div>
+                        </>
+                      )}
+                      <div className={styles.detailActions}>
+                        <button
+                          onClick={() => handleApprove(selected)}
+                          disabled={approving || !reviewData}
+                          className={styles.btnPrimary}
+                        >
+                          {approving ? "Approving…" : "Approve"}
+                        </button>
+                        <button onClick={() => setReviewOpen(false)} className={styles.btnGhost}>Cancel</button>
+                      </div>
+                    </Section>
+                  )}
 
                   {primaryAction && (
                     <div className={styles.detailActions}>
@@ -969,6 +1107,7 @@ export function AccountsDashboard({
                       {editQuoteOpen && (
                         <EditQuotePanel
                           app={selected}
+                          isAdmin={isAdmin}
                           onSaved={updated => { updateOne(updated); setEditQuoteOpen(false); }}
                           onCancel={() => setEditQuoteOpen(false)}
                         />

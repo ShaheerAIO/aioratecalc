@@ -2,7 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
-import { getLeadApplicationByToken } from "@/lib/leadToken";
+import { getLeadApplicationByToken, isQuoteLocked } from "@/lib/leadToken";
 import { rowToApp } from "@/lib/storage/applicationRow";
 import { hasQuoteBasis } from "@/lib/leadQuote";
 import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
@@ -106,6 +106,25 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ to
         .where(eq(merchantApplications.id, app.id));
       if (!app.hubspotInvoice?.openedAt) after(() => buildOneTimeInvoiceForId(app.id));
       return NextResponse.json({ url: snapshot.quoteLink });
+    }
+
+    // THE DRAFT LOCK (2026-11-02). A draft, a quote waiting on an admin's
+    // approval, or an approved one the rep hasn't made live: none of it is the
+    // merchant's to publish. A rep can send a quote the merchant already holds
+    // a link to back into approval by editing it past a limit, so this is not
+    // only a draft's guard.
+    //
+    // BELOW the published returns above, deliberately. A published quote is
+    // a finished HubSpot document — the rep-side save refuses to edit one —
+    // so nothing a lock could protect is left on it; and in a race where a
+    // status lands on a row published a moment earlier, withholding the link
+    // would strand a merchant in front of a quote that already exists and that
+    // they are bound by. ABOVE everything that does work — the deal fill-in
+    // and the build — so a locked quote never touches HubSpot from here.
+    // `canPublishBillingQuote` refuses the same state (`quote_not_approved`)
+    // as a backstop, but its message is rep-facing and is never sent here.
+    if (isQuoteLocked(app)) {
+      return NextResponse.json({ error: "quote_locked" }, { status: 409 });
     }
 
     if (!hasQuoteBasis(app)) {

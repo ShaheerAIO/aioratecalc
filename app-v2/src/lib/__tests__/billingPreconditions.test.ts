@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { canPublishBillingQuote } from "@/lib/billing/preconditions";
 import { ORDER_POINT_RULES } from "@/lib/quoting";
-import type { CatalogProduct, MerchantApplication, QuoteLine } from "@/types/merchant";
+import { overrideFingerprint } from "@/lib/quoteOverrides";
+import type { CatalogProduct, MerchantApplication, QuoteLine, QuoteOverride, QuoteStatus } from "@/types/merchant";
 
 // The only compensating control left after the rep confirmation modal was
 // cancelled (PHASE-E-SPEC.md §6.2), so every branch gets its own case with its
@@ -317,6 +318,138 @@ describe("canPublishBillingQuote", () => {
     expect(codes(check({ quoteLines: discounted }))).toEqual([]); // global 50 allows it
     const result = check({ quoteLines: discounted }, { discountCaps: { [LINES[0].hubspotProductId]: 25 } });
     expect(codes(result)).toContain("discount_over_policy");
+  });
+
+  // Over the cap became an admin-approvable override on 2026-11-02. With no
+  // approval on the quote it must still refuse, on either lever.
+  it("still refuses an over-cap discount, percent or cash, now that it is an override", () => {
+    const pct = check({ quoteLines: [LINES[0], { ...LINES[1], discountPercent: 60 }] });
+    expect(codes(pct)).toEqual(["discount_over_policy"]);
+    if (!pct.ok) expect(pct.reasons[0].message).toMatch(/POS Unit: 60% off \(cap 50%\)/);
+
+    const cash = check({ quoteLines: [LINES[0], { ...LINES[1], discountAmount: 900 }] });
+    expect(codes(cash)).toEqual(["discount_over_policy"]);
+  });
+
+  it("refuses a product over today's unit cap, summed across its lines", () => {
+    expect(codes(check({}, { unitCaps: { [POS.hubspotProductId]: 2 } }))).toEqual([]);
+    const over = [LINES[0], line(POS), line(POS, 2)];
+    expect(codes(check({ quoteLines: over }, { unitCaps: { [POS.hubspotProductId]: 2 } })))
+      .toContain("unit_cap_over_policy");
+  });
+
+  // ── Draft quotes + admin override approval (2026-11-02) ────────────────
+  describe("a quote that isn't live", () => {
+    for (const status of ["draft", "pending_approval", "approved"] as QuoteStatus[]) {
+      it(`refuses quote_not_approved while the status is ${status}`, () => {
+        const result = check({ quoteStatus: status });
+        expect(codes(result)).toEqual(["quote_not_approved"]);
+        if (!result.ok) expect(result.reasons[0].message.length).toBeGreaterThan(20);
+      });
+    }
+
+    it("publishes a live quote (status null) exactly as before", () => {
+      expect(check({ quoteStatus: null }).ok).toBe(true);
+    });
+
+    it("still answers already_published first, whatever the status", () => {
+      const result = check({
+        quoteStatus: "pending_approval",
+        hubspotIds: { publishedAt: "2026-11-01T00:00:00.000Z" } as MerchantApplication["hubspotIds"],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.alreadyPublished).toBe(true);
+      expect(codes(result)).toEqual(["already_published"]);
+    });
+  });
+
+  describe("an admin-approved override", () => {
+    const POS_ID = POS.hubspotProductId;
+    const discountOverride = (value: number, productId = POS_ID): QuoteOverride => ({
+      kind: "discount", productId, productName: "POS Unit", message: `POS Unit: ${value}% off (cap 50%)`, value, limit: 50,
+    });
+    const unitOverride = (value: number, productId = POS_ID): QuoteOverride => ({
+      kind: "unit_cap", productId, productName: "POS Unit", message: `POS Unit: ${value} units (cap 2)`, value, limit: 2,
+    });
+    // A signed-off approval whose fingerprint matches `lines` as they stand,
+    // unless `fingerprintLines` says what it was taken over instead.
+    const approvedFor = (
+      lines: QuoteLine[],
+      overrides: QuoteOverride[],
+      opts: { fingerprintLines?: QuoteLine[]; approvedAt?: string | null } = {},
+    ): Partial<MerchantApplication> => ({
+      quoteLines: lines,
+      quoteStatus: null,
+      quoteApproval: {
+        overrides,
+        fingerprint: overrideFingerprint(opts.fingerprintLines ?? lines, null, overrides),
+        requestedAt: "2026-11-01T00:00:00.000Z",
+        requestedByUserId: "rep-1",
+        approvedAt: opts.approvedAt === undefined ? "2026-11-01T01:00:00.000Z" : opts.approvedAt,
+        approvedByUserId: "admin-1",
+      },
+    });
+
+    const pct60 = [LINES[0], { ...LINES[1], discountPercent: 60 }];
+    const threePos = [LINES[0], line(POS), line(POS, 2)];
+    const caps = { unitCaps: { [POS_ID]: 2 } };
+
+    it("lets an approved over-cap discount publish", () => {
+      expect(check(approvedFor(pct60, [discountOverride(60)])).ok).toBe(true);
+    });
+
+    it("lets an approved over-cap CASH discount publish (value in percent of list)", () => {
+      const cash = [LINES[0], { ...LINES[1], discountAmount: 900 }]; // 75% of $1,200
+      expect(check(approvedFor(cash, [discountOverride(75)])).ok).toBe(true);
+    });
+
+    it("lets an approved unit-cap breach publish", () => {
+      expect(codes(check(approvedFor(threePos, [unitOverride(3)]), caps))).toEqual([]);
+    });
+
+    it("refuses when the fingerprint is stale — the quote changed after approval", () => {
+      // Approved over a 55% discount; the rep has since saved 60%, and the
+      // approval was carried over with its value bumped but its fingerprint not.
+      const at55 = [LINES[0], { ...LINES[1], discountPercent: 55 }];
+      const stale = approvedFor(pct60, [discountOverride(60)], { fingerprintLines: at55 });
+      expect(codes(check(stale))).toEqual(["discount_over_policy"]);
+
+      const staleUnits = approvedFor(threePos, [unitOverride(3)], { fingerprintLines: [LINES[0], line(POS, 3)] });
+      expect(codes(check(staleUnits, caps))).toEqual(["unit_cap_over_policy"]);
+    });
+
+    it("refuses an approval nobody has signed off yet", () => {
+      expect(codes(check(approvedFor(pct60, [discountOverride(60)], { approvedAt: null })))).toEqual(["discount_over_policy"]);
+    });
+
+    it("refuses a breach larger than the approved value", () => {
+      const pct70 = [LINES[0], { ...LINES[1], discountPercent: 70 }];
+      expect(codes(check(approvedFor(pct70, [discountOverride(60)])))).toEqual(["discount_over_policy"]);
+
+      const fourPos = [LINES[0], line(POS, 2), line(POS, 2)];
+      expect(codes(check(approvedFor(fourPos, [unitOverride(3)]), caps))).toEqual(["unit_cap_over_policy"]);
+    });
+
+    it("refuses a breach on a product, or of a kind, the approval doesn't name", () => {
+      // Approval for a different product.
+      expect(codes(check(approvedFor(pct60, [discountOverride(60, PLATFORM.hubspotProductId)]))))
+        .toEqual(["discount_over_policy"]);
+      // Right product, wrong kind: a unit-cap approval doesn't cover a discount.
+      expect(codes(check(approvedFor(pct60, [unitOverride(60)])))).toEqual(["discount_over_policy"]);
+      // Covers the discount, not the units.
+      const both = [LINES[0], { ...line(POS), discountPercent: 60 }, line(POS, 2)];
+      expect(codes(check(approvedFor(both, [discountOverride(60)]), caps))).toEqual(["unit_cap_over_policy"]);
+    });
+
+    it("never waives a hard blocker, approval or not", () => {
+      const bad = [LINES[0], { ...LINES[1], discountPercent: 140 }];
+      expect(codes(check(approvedFor(bad, [discountOverride(140)])))).toEqual(["discount_over_policy"]);
+    });
+
+    it("still refuses quote_not_approved on an approved quote the rep hasn't made live", () => {
+      const result = check({ ...approvedFor(pct60, [discountOverride(60)]), quoteStatus: "approved" });
+      expect(codes(result)).toEqual(["quote_not_approved"]);
+    });
   });
 
   it("nets discounts into the totals it hands back for logging", () => {

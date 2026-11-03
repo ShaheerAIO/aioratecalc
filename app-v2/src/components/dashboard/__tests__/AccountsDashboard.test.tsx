@@ -34,7 +34,11 @@ vi.mock("@/lib/actions/applications", () => ({
 }));
 
 const resendLeadLinkAction = vi.fn();
-vi.mock("@/lib/actions/prospects", () => ({ resendLeadLinkAction }));
+vi.mock("@/lib/actions/prospects", () => ({ resendLeadLinkAction, sendDraftAction: vi.fn() }));
+vi.mock("@/lib/actions/quoteApproval", () => ({
+  approveQuoteAction: vi.fn(),
+  getQuoteApprovalAction: vi.fn(),
+}));
 
 // Out of scope for this task (owned by another agent / unrelated to the two
 // outcomes under test) — stubbed out so their own action/server-only import

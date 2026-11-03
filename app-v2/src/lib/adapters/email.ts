@@ -471,3 +471,70 @@ export async function sendFoodbuyEnrollmentEmail(args: {
   );
   return { sent: result.sent };
 }
+
+const STAFF_FOOTER = "Sent by EasyOB to AIO staff. This is an internal notification.";
+
+// A rep's quote carries pricing overrides that need an admin's sign-off before
+// it can go to the merchant. One send per admin: `send` takes a single `to`.
+export async function sendQuoteApprovalRequestEmail(input: {
+  to: string[];
+  merchantName: string;
+  repName: string;
+  overrides: { message: string }[];
+  url: string;
+}): Promise<{ sent: number; failed: number; devUrl?: string }> {
+  const merchant = input.merchantName.trim() || "A merchant";
+  const html = render({
+    preheader: `${input.repName} needs your approval on ${merchant}'s quote.`,
+    heading: `Approval needed: ${merchant}`,
+    body: [
+      `${input.repName} has a quote for ${merchant} that needs admin approval before it can go out.`,
+      ...input.overrides.map((o) => o.message),
+    ],
+    cta: "Review & approve",
+    url: input.url,
+    footer: STAFF_FOOTER,
+  });
+  const results = await Promise.allSettled(
+    input.to.map((to) => send(to, `Approval needed: ${merchant} quote`, html, input.url))
+  );
+  let sent = 0;
+  let failed = 0;
+  let devUrl: string | undefined;
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value.sent) sent++;
+    else {
+      failed++;
+      if (r.status === "fulfilled" && r.value.devUrl && !devUrl) devUrl = r.value.devUrl;
+    }
+  }
+  return devUrl ? { sent, failed, devUrl } : { sent, failed };
+}
+
+export async function sendQuoteApprovedEmail(input: {
+  to: string;
+  merchantName: string;
+  approverName: string;
+  url: string;
+  linkLive: boolean;
+}): Promise<SendMagicLinkResult> {
+  const merchant = input.merchantName.trim() || "A merchant";
+  return send(
+    input.to,
+    `Approved: ${merchant} quote`,
+    render({
+      preheader: `${input.approverName} approved ${merchant}'s quote.`,
+      heading: `Quote approved: ${merchant}`,
+      body: [
+        `${input.approverName} approved your quote for ${merchant}.`,
+        input.linkLive
+          ? "The merchant's link is live again."
+          : "Open the draft and send it to the merchant.",
+      ],
+      cta: "Open quote",
+      url: input.url,
+      footer: STAFF_FOOTER,
+    }),
+    input.url
+  );
+}

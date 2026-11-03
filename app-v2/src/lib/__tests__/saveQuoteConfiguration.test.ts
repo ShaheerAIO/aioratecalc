@@ -33,7 +33,8 @@ vi.mock("@/lib/adapters/hubspot", () => ({
   getCompanyProfile: vi.fn(),
   setDealBillingNotes,
 }));
-vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail: vi.fn() }));
+const sendQuoteApprovalRequestEmail = vi.fn();
+vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail: vi.fn(), sendQuoteApprovalRequestEmail }));
 vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms: vi.fn() }));
 // prospects.ts now imports resolveDealForCompany for the Company & Deal
 // picker — mocked so the real module (which pulls in the server-only db
@@ -76,7 +77,27 @@ vi.mock("@/lib/actions/pricing", () => ({
   }),
 }));
 
+// Draft quotes + admin override approval (2026-11-02): the overrides are
+// judged against the live rate card and margin table, and the admins are
+// emailed — all three read the db, so they are stubbed. The rate card here is
+// FLAT at the fixtures' own 2.49% card-present and card-not-present, so a
+// quote on the default rates carries no rate override unless a test says so.
+const getRateMatrix = vi.fn();
+const listActiveAdminRecipients = vi.fn();
+const getStaffRecipient = vi.fn();
+vi.mock("@/lib/actions/rateMatrix", () => ({ getRateMatrix }));
+vi.mock("@/lib/marginReqsLoader", () => ({
+  loadMarginReqs: vi.fn(async () => (await import("@/lib/pricing")).MARGIN_REQS),
+}));
+vi.mock("@/lib/staff", () => ({ listActiveAdminRecipients, getStaffRecipient }));
+const FLAT_RATE_CARD = {
+  cardPresentBps: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 249)),
+  cardNotPresentBps: 249,
+  perTransactionFeeCents: 15,
+};
+
 const { saveQuoteConfigurationAction } = await import("@/lib/actions/prospects");
+const { overrideFingerprint } = await import("@/lib/quoteOverrides");
 
 // Fixture catalog: one platform tier, one pickable POS unit, and the three
 // always-included services — enough to exercise buildQuote's derivation.
@@ -169,6 +190,13 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
+  sendQuoteApprovalRequestEmail.mockResolvedValue({ sent: 2, failed: 0 });
+  listActiveAdminRecipients.mockResolvedValue([
+    { id: "admin-1", email: "admin1@aioapp.com", name: "Ada Admin" },
+    { id: "admin-2", email: "admin2@aioapp.com", name: "Abe Admin" },
+  ]);
+  getStaffRecipient.mockImplementation(async (id: string) => ({ id, email: `${id}@aioapp.com`, name: `Name ${id}` }));
   getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
   getApplication.mockResolvedValue(app());
   saveApplication.mockResolvedValue(undefined);
@@ -315,18 +343,20 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     expect(platform.billingStart).toEqual({ mode: "days", days: 45 });
   });
 
-  it("refuses a discount over the SERVER's cap, whatever the browser believed", async () => {
+  // Over the cap became an admin-approvable override on 2026-11-02, so it no
+  // longer refuses the SAVE (the approval gate is wired here later; publish
+  // still refuses it, see billingPreconditions.test.ts). A discount that is
+  // not a percentage at all is still a hard refusal at save.
+  it("refuses a discount that isn't a percentage, whatever the browser believed", async () => {
     await expect(
       saveQuoteConfigurationAction({
         applicationId: "app-1",
         picks: [{ hubspotProductId: "217445755632", qty: 1 }],
         channels: [],
-        // The mocked getMaxDiscountPercent above says 50. A client that shipped
-        // a 100% comp anyway gets refused here, not quietly saved.
-        adjustments: { "217445755632": { discountPercent: 100 } },
+        adjustments: { "217445755632": { discountPercent: 140 } },
         pricingModel: "2-tier",
       })
-    ).rejects.toThrow(/100%.*50% limit/);
+    ).rejects.toThrow(/140%, which isn't a percentage/);
     expect(saveApplication).not.toHaveBeenCalled();
   });
 
@@ -407,54 +437,45 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
 describe("saveQuoteConfigurationAction — the margin floor", () => {
   const WITH_BASIS = () => app({ quoteConfig: { monthlyVolume: 10000, avgTicket: 50 } });
 
-  it("refuses a rate far below AIO's cost, and never names the floor it failed", async () => {
+  // Under the floor is an admin-approvable override since 2026-11-02, not a
+  // refusal: a rep's edit is held for approval, never thrown back.
+  it("holds a rep's below-cost rate for approval, and never names the floor it failed", async () => {
     getApplication.mockResolvedValue(WITH_BASIS());
-    const attempt = saveQuoteConfigurationAction({
+    const updated = await saveQuoteConfigurationAction({
       applicationId: "app-1",
       picks: [],
       channels: [],
-      // 0.5% nets a NEGATIVE margin at this volume once the estimated
-      // interchange is backed out — below the floor for every volume tier.
+      // 0.5% nets a NEGATIVE margin at this volume — below every tier's floor.
       quoteRates: { cardPresentRate: 0.005, cardNotPresentRate: 0.005, amexCardPresentRate: 0.005, amexCardNotPresentRate: 0.005, perTransactionFee: 0 },
       pricingModel: "2-tier",
     });
 
-    // Pinned verbatim, not just a substring match: this is a HARD refusal
-    // with no override today (the margin-policy editor was deleted
-    // 2026-10-12 — see marginFloorBlockers' doc comment), so the wording
-    // must not promise an admin review that doesn't exist. The only honest
-    // recovery is raising the rate, and that's what the message says.
-    await expect(attempt).rejects.toThrow(
-      "The card rate is below the minimum AIO can process this volume at. Raise the rate to send this quote."
-    );
-    expect(saveApplication).not.toHaveBeenCalled();
-
-    // The refusal says "no", never the number it's measured against, and
-    // never an admin escape hatch.
-    const message = await attempt.catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
-    expect(message).not.toMatch(/0\.0085|0\.85\s*%/);
-    expect(message).not.toMatch(/admin/i);
+    expect(updated.quoteStatus).toBe("pending_approval");
+    expect(saveApplication).toHaveBeenCalledTimes(1);
+    const messages = updated.quoteApproval!.overrides.map(o => o.message);
+    expect(messages).toContain("Card-present rate 0.50% is below the minimum margin");
+    for (const m of messages) expect(m).not.toMatch(/0\.0085|0\.85\s*%/);
   });
 
   it("holds a rep and an admin to the same floor — there is no rep padding", async () => {
-    // The rep padding on top of the tier minimum was removed 2026-10-23: the
-    // admin moves the floor itself on the rate-matrix page. 2.90% nets ~0.78%
-    // here (under the first tier's 0.85% minimum) and 3.00% ~0.88% (over it),
-    // so both roles must give the same answer at each.
+    // 2.90% nets ~0.78% here (under the first tier's 0.85% minimum) and 3.00%
+    // ~0.88% (over it), so both roles must give the same answer at each.
     const at = (rate: number) => ({
       applicationId: "app-1",
       picks: [],
       channels: [],
-      quoteRates: { cardPresentRate: rate, cardNotPresentRate: rate, amexCardPresentRate: rate, amexCardNotPresentRate: rate, perTransactionFee: 0 },
+      quoteRates: { cardPresentRate: rate, cardNotPresentRate: 0.0249, amexCardPresentRate: rate, amexCardNotPresentRate: 0.0249, perTransactionFee: 0 },
       pricingModel: "2-tier" as const,
     });
+    const belowMargin = (a: MerchantApplication) =>
+      (a.quoteApproval?.overrides ?? []).some(o => /below the minimum margin/.test(o.message));
 
     for (const role of ["rep", "admin"] as const) {
       getEffectiveRole.mockResolvedValue({ userId: `${role}-1`, role });
       getApplication.mockResolvedValue(WITH_BASIS());
-      await expect(saveQuoteConfigurationAction(at(0.029))).rejects.toThrow(/below the minimum/i);
+      expect(belowMargin(await saveQuoteConfigurationAction(at(0.029)))).toBe(true);
       getApplication.mockResolvedValue(WITH_BASIS());
-      await expect(saveQuoteConfigurationAction(at(0.03))).resolves.toBeDefined();
+      expect(belowMargin(await saveQuoteConfigurationAction(at(0.03)))).toBe(false);
     }
   });
 
@@ -568,5 +589,112 @@ describe("saveQuoteConfigurationAction — the delayed-billing note", () => {
     getApplication.mockResolvedValue(app({ hubspotDealId: "deal-9", quoteNote: note }));
     const updated = await save(undefined, 90);
     expect(updated.quoteNote).toBe(note);
+  });
+});
+
+// ── Draft quotes + admin override approval (2026-11-02) ─────────────────────
+// Every save recomputes the overrides off what it is about to persist.
+describe("saveQuoteConfigurationAction — override approval", () => {
+  // A 2-unit POS quote with a unit cap of 1 — an override, not a blocker.
+  const save = () => saveQuoteConfigurationAction({
+    applicationId: "app-1",
+    picks: [{ hubspotProductId: "217445755632", qty: 2 }],
+    channels: [],
+    adjustments: PLAN_START,
+    pricingModel: "2-tier",
+  });
+  const saved = () => saveApplication.mock.calls[0][1] as MerchantApplication;
+  const capped = async () => {
+    const { getQuoteLimits } = await import("@/lib/actions/pricing");
+    // Twice: once to derive the lines, once to judge the saved ones.
+    const limits = { unitCaps: { "217445755632": 1 }, discountCaps: {}, maxBillingDelayDays: 90, showTablets: false };
+    vi.mocked(getQuoteLimits).mockResolvedValueOnce(limits).mockResolvedValueOnce(limits);
+  };
+
+  it("puts a rep's edit to a LIVE quote into pending_approval and emails the admins", async () => {
+    await capped();
+    const updated = await save();
+    expect(updated.quoteStatus).toBe("pending_approval");
+    expect(updated.quoteApproval).toMatchObject({
+      requestedByUserId: "rep-1",
+      overrides: [expect.objectContaining({ kind: "unit_cap", value: 2, limit: 1 })],
+    });
+    expect(updated.quoteApproval!.fingerprint).toBe(
+      overrideFingerprint(saved().quoteLines ?? [], saved().quoteRates ?? null, saved().quoteApproval!.overrides)
+    );
+    expect(sendQuoteApprovalRequestEmail).toHaveBeenCalledTimes(1);
+    expect(sendQuoteApprovalRequestEmail.mock.calls[0][0].url)
+      .toBe("http://localhost:3000/admin?view=accounts&account=app-1");
+  });
+
+  it("keeps an approval given for exactly this quote — no new request, no email", async () => {
+    await capped();
+    const first = await save();
+    const approved = { ...first, quoteStatus: null, quoteApproval: { ...first.quoteApproval!, approvedAt: "2026-11-01T00:00:00.000Z", approvedByUserId: "admin-1" } };
+    vi.clearAllMocks();
+    getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
+    getApplication.mockResolvedValue(approved);
+    await capped();
+    const again = await save();
+    expect(again.quoteStatus).toBeNull();
+    expect(again.quoteApproval).toEqual(approved.quoteApproval);
+    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not re-email for a quote already waiting on the same approval", async () => {
+    await capped();
+    const first = await save();
+    vi.clearAllMocks();
+    getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
+    getApplication.mockResolvedValue(first);
+    await capped();
+    expect((await save()).quoteStatus).toBe("pending_approval");
+    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+  });
+
+  it("self-approves an admin's overrides: live with a sent link", async () => {
+    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
+    await capped();
+    const updated = await save();
+    expect(updated.quoteStatus).toBeNull();
+    expect(updated.quoteApproval).toMatchObject({ requestedByUserId: "admin-1", approvedByUserId: "admin-1" });
+    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+  });
+
+  it("self-approves an admin's overrides on a draft as approved", async () => {
+    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
+    getApplication.mockResolvedValue(app({ quoteStatus: "draft", customerLinkToken: null }));
+    await capped();
+    expect((await save()).quoteStatus).toBe("approved");
+  });
+
+  it("with no overrides, clears the approval: pending goes live with a link, back to draft without", async () => {
+    const pending = { quoteStatus: "pending_approval" as const, quoteApproval: { overrides: [], fingerprint: "x", requestedAt: "t", requestedByUserId: "rep-1" } };
+    getApplication.mockResolvedValue(app(pending));
+    expect(await save()).toMatchObject({ quoteStatus: null, quoteApproval: null });
+    getApplication.mockResolvedValue(app({ ...pending, customerLinkToken: null }));
+    expect(await save()).toMatchObject({ quoteStatus: "draft", quoteApproval: null });
+    getApplication.mockResolvedValue(app({ quoteStatus: "draft", customerLinkToken: null }));
+    expect((await save()).quoteStatus).toBe("draft");
+    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+  });
+
+  it("writes no billing note to HubSpot for a quote that has never gone out", async () => {
+    getApplication.mockResolvedValue(app({ quoteStatus: "draft", customerLinkToken: null, hubspotDealId: "deal-9" }));
+    await saveQuoteConfigurationAction({
+      applicationId: "app-1",
+      picks: [{ hubspotProductId: "217445755632", qty: 1 }],
+      channels: [],
+      adjustments: PLAN_START,
+      quoteNote: "A note waiting for the send.",
+      pricingModel: "2-tier",
+    });
+    expect(setDealBillingNotes).not.toHaveBeenCalled();
+  });
+
+  it("keeps its existing refusals", async () => {
+    getApplication.mockResolvedValue(app({ detailsConfirmedAt: "2026-09-01T00:00:00.000Z" }));
+    await expect(save()).rejects.toThrow(/confirmed their details/);
+    expect(saveApplication).not.toHaveBeenCalled();
   });
 });

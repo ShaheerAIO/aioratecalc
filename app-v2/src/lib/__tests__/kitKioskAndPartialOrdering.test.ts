@@ -162,6 +162,7 @@ describe("the first kiosk: at list, out of the kit, discountable to 100% (2026-1
     for (const adjustment of [{ discountPercent: 100 }, { discountPercent: 30 }, { discountAmount: 999 }]) {
       const built = build("all_in_one", QSR_WITH_KIOSK, { [KIOSK]: adjustment }, { [KIOSK]: 20 });
       expect(built.blockers, JSON.stringify(adjustment)).toEqual([]);
+      expect(built.overrides, JSON.stringify(adjustment)).toEqual([]);
       // The publish re-check, which only has the saved lines, agrees.
       expect(adjustmentBlockers(built.quoteLines, 50, undefined, { [KIOSK]: 20 })).toEqual([]);
     }
@@ -173,12 +174,15 @@ describe("the first kiosk: at list, out of the kit, discountable to 100% (2026-1
   });
 
   it("caps a discount across SEVERAL kiosks as usual — only the first one is exempt", () => {
+    // Over the cap is an admin-approvable override (2026-11-02), not a blocker.
     const both = build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2), { [KIOSK]: { discountPercent: 100 } });
-    expect(both.blockers).toEqual([expect.stringMatching(/discounted 100%, over the 50% limit/)]);
+    expect(both.blockers).toEqual([]);
+    expect(both.overrides).toEqual([expect.objectContaining({ kind: "discount", value: 100, limit: 50 })]);
     // And a second kiosk discounted on its own line is an ordinary line.
     const second = build("all_in_one", withKiosks(QSR_WITH_KIOSK, 2),
       { [KIOSK]: { units: [{ discountPercent: 100 }, { discountPercent: 60 }] } });
-    expect(second.blockers).toEqual([expect.stringMatching(/discounted 60%, over the 50% limit/)]);
+    expect(second.blockers).toEqual([]);
+    expect(second.overrides).toEqual([expect.objectContaining({ kind: "discount", value: 60, limit: 50 })]);
   });
 
   it("a kiosk-only QSR quote still gets the kit on the rest (the kiosk is still its ordering device)", () => {

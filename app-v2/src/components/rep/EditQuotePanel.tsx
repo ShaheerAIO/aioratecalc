@@ -19,6 +19,7 @@ import type { FeeOverrides, RoleScopedPricing } from "@/lib/pricing";
 
 type Props = {
   app: MerchantApplication;
+  isAdmin?: boolean;
   onSaved: (app: MerchantApplication) => void;
   onCancel: () => void;
 };
@@ -55,7 +56,7 @@ const ZERO_FEES: FeeOverrides = { monthlyFee: 0, perTxnFee: 0, cpPerTxnFee: 0, c
  * floor feedback — the save is still safe in that case: saveQuoteConfigurationAction
  * has nothing to floor a below-cost margin against either, and says so.
  */
-export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
+export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Props) {
   const savedQuoteType = quoteTypeOf(app.quoteType);
   const [quoteType, setQuoteType] = useState<QuoteType>(savedQuoteType);
   const [picks, setPicks] = useState<ProductPick[]>(picksFromQuoteLines(app.quoteLines, savedQuoteType));
@@ -79,6 +80,11 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   const [pricing, setPricing] = useState<RoleScopedPricing | null>(null);
 
   const [saving, setSaving] = useState(false);
+  // AIO's policy CNP (from RateFields); any other CNP needs admin approval.
+  const [policyCnp, setPolicyCnp] = useState<number | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  // Held until the rep dismisses the notice, so the parent can't close the panel over it.
+  const [pendingSaved, setPendingSaved] = useState<{ app: MerchantApplication; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Whether this quote carries a RATE — which on a marketing plan depends on
@@ -171,10 +177,33 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
   // are needed"), where it used to be a note the rep could read past. Below
   // COST stays a warning: it is the sharper of the two, but it is measured
   // against the processor tier on file, which a rep can't fix from here.
-  const disabled = saving || blockers.length > 0 || belowMin || belowRevenueFloor || (!rated && !quote?.quoteLines.length);
+  // Below the margin or revenue floor, past a cap, or off-policy CNP are admin
+  // overrides now (2026-11-02), not refusals; only hard blockers disable Save.
+  const disabled = saving || blockers.length > 0 || (!rated && !quote?.quoteLines.length);
+
+  const approvalReasons: string[] = [];
+  for (const o of quote?.overrides ?? []) approvalReasons.push(o.message);
+  if (rated) {
+    if (belowMin) approvalReasons.push("Card-present rate is below the minimum margin");
+    if (belowRevenueFloor) approvalReasons.push("AIO's monthly revenue on this merchant is under the minimum");
+    if (!cnpOnly && cpAdjustRange && (cpAdjustBps < cpAdjustRange.min || cpAdjustBps > cpAdjustRange.max)) {
+      approvalReasons.push("Card-present rate adjustment is outside the allowed range");
+    }
+    if (policyCnp !== null && Math.round(quoteRates.cardNotPresentRate * 10000) !== Math.round(policyCnp * 10000)) {
+      approvalReasons.push("Card-not-present rate differs from AIO's standard rate");
+    }
+  }
+  const needsApproval = approvalReasons.length > 0;
+
+  const requestSave = () => {
+    if (disabled) return;
+    if (needsApproval) { setConfirming(true); return; }
+    void save();
+  };
 
   const save = async () => {
     if (disabled) return;
+    setConfirming(false);
     setSaving(true);
     setError(null);
     try {
@@ -193,7 +222,11 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
         pricingModel,
         quoteConfig: app.quoteConfig,
       });
-      onSaved(updated);
+      if (updated.quoteStatus === "pending_approval") {
+        setPendingSaved({ app: updated, message: "Sent to admins for approval. The merchant's link is paused until it's approved." });
+      } else if (isAdmin && updated.quoteStatus === "approved" && (updated.quoteApproval?.overrides?.length ?? 0) > 0) {
+        setPendingSaved({ app: updated, message: "Saved and approved." });
+      } else onSaved(updated);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save this quote");
     }
@@ -298,7 +331,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
           )}
 
           <div>
-            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} />
+            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} />
             {/* Used to deliberately skip auto-apply here ("these rates were
                 already chosen and saved"). OVERRIDDEN 2026-10-13 ("get rid of
                 the 'use it' and make it always override") — RateSuggestion no
@@ -357,8 +390,8 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
                 <div>Your commission (est., signing + activation): <strong>{pricing.projectedCommission.total == null ? "—" : `${fmt$(pricing.projectedCommission.total)}/yr`}</strong></div>
                 {belowRevenueFloor && (
                   <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Under the {fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} a month AIO processes for. Raise
-                    the card rate to save this quote, or this merchant is too small to process for.
+                    Under the {fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} a month AIO processes for. Saving
+                    this needs admin approval.
                   </div>
                 )}
                 {belowFloor && (
@@ -369,8 +402,7 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
                 )}
                 {belowMin && (
                   <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Below AIO&rsquo;s minimum margin for this volume. Raise the card rate to save
-                    this quote.
+                    Below AIO&rsquo;s minimum margin for this volume. Saving this needs admin approval.
                   </div>
                 )}
               </div>
@@ -382,8 +414,34 @@ export default function EditQuotePanel({ app, onSaved, onCancel }: Props) {
       {error && <div style={{ color: "var(--danger, #e5484d)" }}>{error}</div>}
       {blockers.length > 0 && <div style={{ color: "var(--danger, #e5484d)" }}>{blockers.join(" ")}</div>}
 
+      {pendingSaved && (
+        <div role="status" data-testid="pending-approval-notice" style={{ padding: 12, border: "1px solid var(--rule)", borderRadius: 8 }}>
+          {pendingSaved.message}
+          <div style={{ marginTop: 8 }}>
+            <button onClick={() => onSaved(pendingSaved.app)}>Done</button>
+          </div>
+        </div>
+      )}
+      {confirming && (
+        <div
+          role="dialog" aria-modal="true" aria-label="Needs admin approval"
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+        >
+          <div style={{ maxWidth: 480, width: "100%", background: "var(--paper, #fff)", color: "var(--ink, inherit)", borderRadius: 8, padding: 16 }}>
+            <p>
+              {isAdmin ? "This quote goes past AIO's limits. As an admin, saving it approves it." : "This quote goes past AIO's limits. If you continue, it will be saved as a draft and an admin will need to approve it before it can be sent."}
+            </p>
+            <ul>{approvalReasons.map(r => <li key={r}>{r}</li>)}</ul>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setConfirming(false)}>Cancel</button>
+              <button onClick={() => void save()}>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={save} disabled={disabled} style={{ opacity: disabled ? 0.6 : 1 }}>
+        <button onClick={requestSave} disabled={disabled || !!pendingSaved} style={{ opacity: disabled ? 0.6 : 1 }}>
           {saving ? "Saving…" : "Save Quote"}
         </button>
         <button onClick={onCancel} disabled={saving}>Cancel</button>

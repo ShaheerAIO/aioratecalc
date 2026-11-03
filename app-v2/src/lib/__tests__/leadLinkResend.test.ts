@@ -55,7 +55,26 @@ vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany: vi.fn() }));
 // reply-to tests below override it per case.
 vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuote: vi.fn(), resolveSender }));
 
-const { resendLeadLinkAction } = await import("@/lib/actions/prospects");
+// Draft quotes + admin override approval (2026-11-02): the overrides are
+// judged against the live rate card and margin table, and the admins are
+// emailed — all three read the db, so they are stubbed. The rate card here is
+// FLAT at the fixtures' own 2.49% card-present and card-not-present, so a
+// quote on the default rates carries no rate override unless a test says so.
+const getRateMatrix = vi.fn();
+const listActiveAdminRecipients = vi.fn();
+const getStaffRecipient = vi.fn();
+vi.mock("@/lib/actions/rateMatrix", () => ({ getRateMatrix }));
+vi.mock("@/lib/marginReqsLoader", () => ({
+  loadMarginReqs: vi.fn(async () => (await import("@/lib/pricing")).MARGIN_REQS),
+}));
+vi.mock("@/lib/staff", () => ({ listActiveAdminRecipients, getStaffRecipient }));
+const FLAT_RATE_CARD = {
+  cardPresentBps: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 249)),
+  cardNotPresentBps: 249,
+  perTransactionFeeCents: 15,
+};
+
+const { resendLeadLinkAction, issueCustomerQuoteLinkAction } = await import("@/lib/actions/prospects");
 
 const FUTURE = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 const PAST = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -104,6 +123,12 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
+  listActiveAdminRecipients.mockResolvedValue([
+    { id: "admin-1", email: "admin1@aioapp.com", name: "Ada Admin" },
+    { id: "admin-2", email: "admin2@aioapp.com", name: "Abe Admin" },
+  ]);
+  getStaffRecipient.mockImplementation(async (id: string) => ({ id, email: `${id}@aioapp.com`, name: `Name ${id}` }));
   getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
   getApplication.mockResolvedValue(app());
   saveApplication.mockResolvedValue(undefined);
@@ -315,5 +340,31 @@ describe("resendLeadLinkAction — reply-to rep", () => {
     expect(sendLeadLinkEmail).toHaveBeenCalledWith(
       "jane@testco.com", expect.stringContaining("/lead/tok-live"), "Test Co",
     );
+  });
+});
+
+// Draft quotes + admin override approval (2026-11-02): a quote that isn't live
+// (draft, waiting on an admin, or approved but unsent) has no link to send —
+// the lead page refuses it — so neither door hands one out.
+describe("a quote that isn't live gets no link", () => {
+  it.each(["draft", "pending_approval", "approved"] as const)("resend refuses a %s quote, sending and saving nothing", async (quoteStatus) => {
+    getApplication.mockResolvedValue(app({ quoteStatus }));
+    await expect(resendLeadLinkAction("app-1")).rejects.toThrow(
+      quoteStatus === "pending_approval" ? /waiting on an admin's approval/ : /saved as a draft/
+    );
+    expect(saveApplication).not.toHaveBeenCalled();
+    expect(sendLeadLinkEmail).not.toHaveBeenCalled();
+    expect(moveDealToQuoteSentAtSend).not.toHaveBeenCalled();
+  });
+
+  it("the wizard's link step refuses a quote waiting on approval, saving nothing", async () => {
+    getApplication.mockResolvedValue(app({ quoteStatus: "pending_approval" }));
+    await expect(issueCustomerQuoteLinkAction("app-1")).rejects.toThrow(/waiting on an admin's approval/);
+    expect(saveApplication).not.toHaveBeenCalled();
+  });
+
+  it("a live quote (null status) still resends as before", async () => {
+    getApplication.mockResolvedValue(app({ quoteStatus: null }));
+    await expect(resendLeadLinkAction("app-1")).resolves.toMatchObject({ linkUrl: expect.stringContaining("/lead/tok-live") });
   });
 });

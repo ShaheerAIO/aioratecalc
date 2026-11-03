@@ -99,6 +99,8 @@ export default function LeadQuoteView({
     // Only reachable from a stale tab: the button that reaches this route is
     // only rendered once `detailsConfirmed` is true.
     not_confirmed: "Please check and confirm your details first.",
+    // Stale tab only: a locked quote's page shows a notice instead of this view.
+    quote_locked: "Your quote is being updated. Your AIO rep will let you know when it's ready.",
     expired: "This link has expired. Ask your AIO representative for a new one.",
     invalid: "This link is no longer valid. Ask your AIO representative for a new one.",
   };

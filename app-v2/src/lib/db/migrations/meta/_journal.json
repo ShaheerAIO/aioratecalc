@@ -225,6 +225,13 @@
       "when": 1792700000000,
       "tag": "0031_payment_plan",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792800000000,
+      "tag": "0032_quote_drafts",
+      "breakpoints": true
     }
   ]
 }

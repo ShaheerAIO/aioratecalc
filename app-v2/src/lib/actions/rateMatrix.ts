@@ -5,7 +5,7 @@ import { db } from "@/lib/db/client";
 import { marginReqsPolicy, rateMatrixPolicy } from "@/lib/db/schema";
 import { loadMarginReqs, loadMarginReqsBps } from "@/lib/marginReqsLoader";
 import { getMarginFloor } from "@/lib/pricing";
-import { commissionMarginBreakdown } from "@/lib/wholesale";
+import { adjustBpsRangeFor } from "@/lib/wholesale";
 import { marginReqsProblems, type MarginReqBps } from "@/lib/marginPolicy";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import {
@@ -153,16 +153,10 @@ export async function getSuggestedRatesAction(input: {
   // on derivePricing's margin over INTERCHANGE_ESTIMATE, which put the card's
   // own cell above the tier's max and left a range with no zero in it.
   const marginReqs = await loadMarginReqs();
-  const cellMargin = commissionMarginBreakdown(
-    cp, input.monthlyVolume, input.avgTicket, matrix.perTransactionFeeCents / 100
-  ).margin;
-  const tier = getMarginFloor(input.monthlyVolume, marginReqs);
-  const EPS = 1e-6; // float slack so an exact-bps boundary isn't lost to rounding
-  const lo = Math.ceil((tier.minMargin - cellMargin) * 10000 - EPS);
-  const hi = Math.floor((tier.maxMargin - cellMargin) * 10000 + EPS);
-  // A tier saved with min == max can leave no whole bp between the bounds;
-  // collapse to the upper bound rather than return an empty range.
-  const adjustBpsRange = lo <= hi ? { min: lo, max: hi } : { min: hi, max: hi };
+  const adjustBpsRange = adjustBpsRangeFor(
+    cp, input.monthlyVolume, input.avgTicket, matrix.perTransactionFeeCents / 100,
+    getMarginFloor(input.monthlyVolume, marginReqs)
+  );
 
   return {
     adjustBpsRange,

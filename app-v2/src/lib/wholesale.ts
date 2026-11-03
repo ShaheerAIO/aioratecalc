@@ -129,3 +129,30 @@ export function commissionMarginBreakdown(
   const wholesalePct = wholesalePctFor(avgTicket);
   return { totalRevenue: revenue, takeRate, wholesalePct, margin: takeRate - wholesalePct };
 }
+
+/**
+ * How far the card-present rate may move off the rate card's cell, in whole
+ * bps, rounded inward: the move that puts Cole's commission margin (above) at
+ * the tier's min / max (2026-10-21, product owner: "It should cap based on the
+ * min and max margin"). One CP rate over all volume, so a bp of rate is a bp
+ * of margin and the range is `bound - cellMargin`.
+ *
+ * Pure so the server can evaluate it for a saved quote as well as for
+ * `getSuggestedRatesAction`. Only these bps may leave the server — never the
+ * tier margins passed in.
+ */
+export function adjustBpsRangeFor(
+  cellRate: number,
+  monthlyVolume: number,
+  avgTicket: number,
+  perTxnFee: number,
+  tier: { minMargin: number; maxMargin: number }
+): { min: number; max: number } {
+  const cellMargin = commissionMarginBreakdown(cellRate, monthlyVolume, avgTicket, perTxnFee).margin;
+  const EPS = 1e-6; // float slack so an exact-bps boundary isn't lost to rounding
+  const lo = Math.ceil((tier.minMargin - cellMargin) * 10000 - EPS);
+  const hi = Math.floor((tier.maxMargin - cellMargin) * 10000 + EPS);
+  // A tier saved with min == max can leave no whole bp between the bounds;
+  // collapse to the upper bound rather than return an empty range.
+  return lo <= hi ? { min: lo, max: hi } : { min: hi, max: hi };
+}

@@ -377,3 +377,9 @@ Surcharge" checkout fee (see above); ACH payers pay none. Quotes still never wri
 - **Applies to quotes published from now on.** Published quotes can't be edited, so earlier ones stay ACH-only.
 - **UNVERIFIED live:** the `;`-joined value on a quote, and that HubSpot bills the recurring subscription against a card stored
   at checkout. Check on the first real card checkout. Payroll invoices (`checkPayroll.ts`) are still ACH-only.
+
+## Draft quotes and approval at the publish door (2026-11-02, product owner)
+
+- **`canPublishBillingQuote` refuses `quote_not_approved` whenever `quote_status` is non-null** (draft, `pending_approval`, or `approved` but not made live), below the `already_published` short-circuit. `sendQuoteAction` makes the same refusal EARLY, before the deal fill-in, so it creates no deal and records no sync error. A draft makes no HubSpot writes at all.
+- **Caps are approval-aware.** An over-cap discount (`discount_over_policy`) or unit-cap breach (`unit_cap_over_policy`) is waived only when `approvedOverrides` finds a VALID approval (approved, and the sha256 fingerprint over `quoteLines ?? []`, `quoteRates ?? null` and the approved overrides still matches the row) covering the same kind and product at a value >= the breach. Any edit since, or a bigger discount than approved, refuses as before. The hard blockers (delay ceiling, malformed/plan-line discounts) are never waived.
+- **The merchant's link is locked while `quote_status` is non-null** (`isQuoteLocked`): lead pages show "being updated" and confirm / checkout / accept return 409 `quote_locked` (accept still passes once `quoteAcceptedAt` is set). So the merchant's own checkout can't publish an unapproved quote either. See quoting.md.

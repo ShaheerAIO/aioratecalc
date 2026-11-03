@@ -163,3 +163,52 @@ describe("sendFoodbuyEnrollmentEmail (2026-10-26)", () => {
     expect(result).toEqual({ sent: false });
   });
 });
+
+describe("staff approval emails", () => {
+  const sentBodies = () =>
+    fetchMock.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string) as { to: unknown; html: string });
+
+  it("sends one email per admin with escaped overrides and the CTA url", async () => {
+    const { sendQuoteApprovalRequestEmail } = await import("@/lib/adapters/email");
+    const r = await sendQuoteApprovalRequestEmail({
+      to: ["a@aioapp.com", "b@aioapp.com"],
+      merchantName: "Torta Palace",
+      repName: "Rae Rep",
+      overrides: [{ message: "Rate <b>0.1%</b> & below floor" }, { message: "Second override" }],
+      url: "http://localhost:3000/admin/q/1",
+    });
+    expect(r).toEqual({ sent: 2, failed: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const { html } = sentBodies()[0];
+    expect(html).toContain("Rae Rep");
+    expect(html).toContain("Rate &lt;b&gt;0.1%&lt;/b&gt; &amp; below floor");
+    expect(html).not.toContain("<b>0.1%</b>");
+    expect(html).toContain("Second override");
+    expect(html).toContain("Review &amp; approve");
+    expect(html).toContain("http://localhost:3000/admin/q/1");
+  });
+
+  it("does not throw with no transport; reports failures and a devUrl", async () => {
+    vi.unstubAllEnvs();
+    vi.stubEnv("RESEND_API_KEY", "");
+    const { sendQuoteApprovalRequestEmail } = await import("@/lib/adapters/email");
+    const r = await sendQuoteApprovalRequestEmail({
+      to: ["a@aioapp.com"], merchantName: "X", repName: "R", overrides: [], url: "http://x/y",
+    });
+    expect(r).toEqual({ sent: 0, failed: 1, devUrl: "http://x/y" });
+  });
+
+  it("switches copy on linkLive", async () => {
+    const { sendQuoteApprovedEmail } = await import("@/lib/adapters/email");
+    const base = { to: "r@aioapp.com", merchantName: "X", approverName: "Ann", url: "http://x/q" };
+    await sendQuoteApprovedEmail({ ...base, linkLive: true });
+    await sendQuoteApprovedEmail({ ...base, linkLive: false });
+    const [live, draft] = sentBodies();
+    expect(live.html).toContain("link is live again");
+    expect(live.html).not.toContain("send it to the merchant");
+    expect(draft.html).toContain("send it to the merchant");
+    expect(draft.html).not.toContain("link is live again");
+    expect(live.html).toContain("Open quote");
+    expect(live.html).toContain("http://x/q");
+  });
+});

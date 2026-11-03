@@ -9,7 +9,7 @@ import { fmt$, monthlyEquivalent } from "@/lib/utils";
 import { decomposePackages, kitFor, type PackageDecomposition } from "@/lib/quotePackages";
 import type {
   BillingFrequency, BillingStart, CatalogProduct, LineAdjustment, OrderPoints,
-  QuoteAdjustments, QuoteLine, QuoteRates, QuoteTotals, QuoteType, StoredQuoteType, UnitAdjustment,
+  QuoteAdjustments, QuoteLine, QuoteOverride, QuoteRates, QuoteTotals, QuoteType, StoredQuoteType, UnitAdjustment,
 } from "@/types/merchant";
 
 // ── Quote types ─────────────────────────────────────────────────────────────
@@ -2115,10 +2115,11 @@ export const MAX_BILLING_DELAY_DAYS = 365;
  * raise it. 90 days, at the product owner's request (2026-10-09) — "require a
  * long delay such as 90 days+ to be approved".
  *
- * There is no approval QUEUE and deliberately so: the approval is an admin
- * raising the ceiling at Admin → Quote limits, exactly the way the discount cap
- * already works. A rep asks, an admin decides, and the change is visible in one
- * place rather than becoming a workflow nobody maintains.
+ * There is no approval QUEUE for the delay, and deliberately so: the approval
+ * is an admin raising the ceiling at Admin → Quote limits. A rep asks, an admin
+ * decides, and the change is visible in one place rather than becoming a
+ * workflow nobody maintains. (The discount and unit caps DID become per-quote
+ * approvals, 2026-11-02 — see `BuiltQuote.overrides`. This one did not.)
  *
  * Distinct from MAX_BILLING_DELAY_DAYS above, which is HubSpot's hard limit and
  * is not anyone's to raise.
@@ -2363,6 +2364,13 @@ export const NEVER_DISCOUNTED_PRODUCT_IDS: readonly string[] = [MEGA_LOANER_PROD
  * Everything wrong with the rep's edits, in the language of the person who has
  * to fix it. Hard refusals, not warnings — these ride onto a document that
  * cannot be edited, deleted or voided once the merchant accepts it.
+ *
+ * The one exception is a discount over its CAP (percent or converted cash),
+ * which an admin may approve on a single quote (2026-11-02). Pass `overrides`
+ * and those land there, as `QuoteOverride`s, instead of in the returned list;
+ * leave it out and they are refused like everything else. Every other check
+ * here — 0–100, more than the line, the plan line, never-discounted products,
+ * the billing-delay ceiling — stays a hard refusal either way.
  */
 export function adjustmentBlockers(
   lines: QuoteLine[],
@@ -2385,9 +2393,15 @@ export function adjustmentBlockers(
    * legacy row with a discounted retired platform line from becoming
    * permanently unsavable the moment it's reopened.
    */
-  planProductId: string | null = null
+  planProductId: string | null = null,
+  /** Sink for the over-cap discounts an admin may approve. See above. */
+  overrides?: QuoteOverride[]
 ): string[] {
   const blockers: string[] = [];
+  const overCap = (message: string, override: QuoteOverride) => {
+    if (overrides) overrides.push(override);
+    else blockers.push(message);
+  };
   const cap = Math.min(100, Math.max(0, maxDiscountPercent));
   const delayCap = Math.min(MAX_BILLING_DELAY_DAYS, Math.max(1, maxBillingDelayDays));
 
@@ -2435,12 +2449,16 @@ export function adjustmentBlockers(
           // "allow the discount to be 100"): a rep allowed to give it away
           // can't sensibly be refused 30% off it. Several kiosks on the marked
           // line are capped as usual — only the first one is AIO's to give.
-          blockers.push(
+          overCap(
             isSpecific
               ? `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit admin set for this product. ` +
                 `Lower it, or ask an admin to raise it in Admin → Quote limits.`
               : `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit AIO allows on a quote. ` +
-                `Lower it, or ask an admin to set a cap for this product in Admin → Quote limits.`
+                `Lower it, or ask an admin to set a cap for this product in Admin → Quote limits.`,
+            {
+              kind: "discount", productId: line.hubspotProductId, productName: line.name,
+              message: `${line.name}: ${pct}% off (cap ${lineCap}%)`, value: pct, limit: lineCap,
+            }
           );
         }
       }
@@ -2467,14 +2485,19 @@ export function adjustmentBlockers(
           );
         } else if (list > 0 && (amount / list) * 100 > lineCap && !firstKioskUnit) {
           const asPct = Math.round((amount / list) * 1000) / 10;
-          blockers.push(
+          overCap(
             isSpecific
               ? `"${line.name}" is discounted ${fmt$(amount)} of ${fmt$(list)} — ${asPct}%, over the ` +
                 `${lineCap}% limit admin set for this product. Lower it, or ask an admin to raise it in ` +
                 `Admin → Quote limits.`
               : `"${line.name}" is discounted ${fmt$(amount)} of ${fmt$(list)} — ${asPct}%, over the ${lineCap}% ` +
                 `limit AIO allows on a quote. Lower it, or ask an admin to raise the limit in ` +
-                `Admin → Quote limits.`
+                `Admin → Quote limits.`,
+            {
+              kind: "discount", productId: line.hubspotProductId, productName: line.name,
+              message: `${line.name}: ${fmt$(amount)} off ${fmt$(list)}, ${asPct}% (cap ${lineCap}%)`,
+              value: (amount / list) * 100, limit: lineCap,
+            }
           );
         }
       }
@@ -2692,6 +2715,13 @@ export type BuiltQuote = {
    * same list, so the two can't disagree about what's blocking.
    */
   blockers: string[];
+  /**
+   * The limits this quote goes past that an admin may approve on this one
+   * quote (2026-11-02): a discount over its cap, a product over its unit cap.
+   * NOT in `blockers`. Empty means nothing here needs approval. The rate
+   * overrides are not derived here — see `rateOverrides` (quoteOverrides.ts).
+   */
+  overrides: QuoteOverride[];
 };
 
 /**
@@ -2841,10 +2871,12 @@ export function buildQuote(
 
   const totals = quoteTotals(quoteLines);
 
+  const overrides: QuoteOverride[] = [];
   const blockers: string[] = [
     ...adjustmentBlockers(
       quoteLines, maxDiscountPercent, limits.maxBillingDelayDays, limits.discountCaps,
-      platform.status === "resolved" ? platform.line.hubspotProductId : null
+      platform.status === "resolved" ? platform.line.hubspotProductId : null,
+      overrides
     ),
     ...discountQtyBlockers(adjustments, quoteLines),
     // The real lines only: fifty cents must not rescue a quote that nets to $0.
@@ -2911,13 +2943,14 @@ export function buildQuote(
   blockers.push(...partialOrderingPosBlockers(quoteType, quoteLines));
   blockers.push(...partialOrderingPointBlockers(quoteType, quoteLines));
 
+  // Over a unit cap is an admin-approvable override (2026-11-02), not a blocker.
   for (const [productId, { name, qty }] of qtyByProduct) {
     const max = maxQtyFor(productId, limits.unitCaps);
     if (max != null && qty > max) {
-      blockers.push(
-        `This quote has ${qty} × "${name}" on it, over the limit of ${max}. Drop the extras, or ask ` +
-        `an admin to raise it in Admin → Quote limits.`
-      );
+      overrides.push({
+        kind: "unit_cap", productId, productName: name,
+        message: `${name}: ${qty} units (cap ${max})`, value: qty, limit: max,
+      });
     }
   }
 
@@ -2934,5 +2967,6 @@ export function buildQuote(
     packages,
     totals,
     blockers,
+    overrides,
   };
 }

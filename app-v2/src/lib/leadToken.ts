@@ -10,6 +10,20 @@ import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import type { ApplicationRow } from "@/lib/storage/applicationRow";
 
+/**
+ * Whether the quote on this row is out of the merchant's hands right now
+ * (2026-11-02): a draft, waiting on an admin's approval, or approved but not
+ * yet made live by the rep. `quoteStatus` null is the only merchant-visible
+ * state. A rep can push a quote the merchant already has a link to back into
+ * `pending_approval` by editing it past a limit, so every lead page and every
+ * lead-side write that acts on the quote checks this, not just the link-send.
+ *
+ * Takes the row or the mapped app — both carry `quoteStatus`.
+ */
+export function isQuoteLocked(app: { quoteStatus?: string | null }): boolean {
+  return app.quoteStatus != null;
+}
+
 export type LeadTokenLookup =
   | { ok: true; row: ApplicationRow }
   | { ok: false; reason: "invalid" | "expired" };

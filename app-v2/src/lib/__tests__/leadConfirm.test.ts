@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { validateOnboardingFields } from "@/lib/onboardingValidation";
 import {
   applyLeadConfirmation,
@@ -351,5 +351,62 @@ describe("entity type, state and ZIP are required on the confirmation", () => {
 
   it("keeps the entity-type rule out of validateOnboardingFields (provisioning gate)", () => {
     expect(validateOnboardingFields(without("bizType"))["business.bizType"]).toBeUndefined();
+  });
+});
+
+// ── confirmLeadDetailsAction and the draft lock (2026-11-02) ──────────────
+// Confirming is the step that opens the publish, so it must refuse while the
+// quote is a draft, back with an admin, or approved but not yet live. Module
+// mocks are hoisted file-wide, but nothing above imports the DB, the lookup or
+// HubSpot, so the pure tests are untouched.
+const lookupRow = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
+const dbUpdates = vi.hoisted(() => [] as Record<string, unknown>[]);
+vi.mock("@/lib/db/client", () => ({
+  db: { update: () => ({ set: (v: Record<string, unknown>) => ({ where: async () => { dbUpdates.push(v); } }) }) },
+}));
+vi.mock("@/lib/leadToken", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/leadToken")>()),
+  getLeadApplicationByToken: async () => ({ ok: true, row: lookupRow.current }),
+}));
+vi.mock("@/lib/adapters/hubspot", () => ({
+  associateContactToCompany: vi.fn(), ensureQuoteContact: vi.fn(), updateCompanyConfirmedDetails: vi.fn(),
+  updateCompanyEin: vi.fn(), updateContactDetails: vi.fn(),
+}));
+
+describe("confirmLeadDetailsAction — the draft lock", () => {
+  const confirmRow = (extra: Record<string, unknown> = {}) => ({
+    id: "app-1",
+    business: BUSINESS,
+    ownerContact: OWNER,
+    billingContact: null,
+    processing: PROCESSING,
+    detailsConfirmedAt: null,
+    tenantLink: null,
+    ...extra,
+  });
+  const confirm = async () => {
+    const { confirmLeadDetailsAction } = await import("@/lib/actions/leadConfirm");
+    return confirmLeadDetailsAction("tok-1", {});
+  };
+
+  beforeEach(() => { dbUpdates.length = 0; });
+
+  for (const status of ["draft", "pending_approval", "approved"]) {
+    it(`refuses while the status is ${status}, stamping nothing`, async () => {
+      lookupRow.current = confirmRow({ quoteStatus: status });
+      const result = await confirm();
+      expect(result).toEqual({
+        ok: false,
+        formError: "Your quote is being updated. Your AIO rep will let you know when it's ready.",
+      });
+      expect(dbUpdates).toHaveLength(0);
+    });
+  }
+
+  it("confirms as before when the status is null", async () => {
+    lookupRow.current = confirmRow({ quoteStatus: null });
+    expect(await confirm()).toEqual({ ok: true });
+    expect(dbUpdates).toHaveLength(1);
+    expect(dbUpdates[0].detailsConfirmedAt).toBeInstanceOf(Date);
   });
 });

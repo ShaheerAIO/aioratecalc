@@ -18,6 +18,13 @@ import type { StatementAnalysis, ProcessorTier, QuoteConfig, QuoteRates } from "
 
 const DEFAULT_PADDING: PaddingConfig = { paddingAdyenCostHide: true };
 
+/** The caller's role and nothing else, so a client can pick role-appropriate copy. */
+export async function getMyRoleAction(): Promise<"rep" | "admin"> {
+  const effective = await getEffectiveRole();
+  if (!effective) throw new Error("Not authenticated");
+  return effective.role === "admin" ? "admin" : "rep";
+}
+
 export async function getActivePaddingPolicy(): Promise<PaddingConfig> {
   const [row] = await db.select().from(marginPolicy).where(eq(marginPolicy.isActive, true)).limit(1);
   if (!row) return DEFAULT_PADDING;
