@@ -37,7 +37,6 @@ const resendLeadLinkAction = vi.fn();
 vi.mock("@/lib/actions/prospects", () => ({ resendLeadLinkAction, sendDraftAction: vi.fn() }));
 vi.mock("@/lib/actions/quoteApproval", () => ({
   approveQuoteAction: vi.fn(),
-  getQuoteApprovalAction: vi.fn(),
 }));
 
 // Out of scope for this task (owned by another agent / unrelated to the two
@@ -100,7 +99,7 @@ async function openDetail() {
   render(<AccountsDashboard role="rep" userId={REP_ID} />);
   const row = await screen.findByText("Torta Palace");
   fireEvent.click(row);
-  await screen.findByText(/HubSpot Tenant/i);
+  await screen.findByText("HubSpot company");
 }
 
 beforeEach(() => {

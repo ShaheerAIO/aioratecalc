@@ -18,6 +18,8 @@ export interface QuoteApproval {
   requestedByUserId: string;
   approvedAt?: string | null; // ISO
   approvedByUserId?: string | null;
+  /** The HubSpot ticket opened for this request (closed when approved). */
+  ticketId?: string | null;
 }
 
 export type PricingModel = "flat-rate" | "2-tier" | "interchange-plus";

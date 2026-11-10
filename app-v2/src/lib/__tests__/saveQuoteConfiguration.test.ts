@@ -28,13 +28,16 @@ vi.mock("@/lib/storage/postgresAdapter", () => ({
 }));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
 const setDealBillingNotes = vi.fn();
+const createApprovalTicket = vi.fn();
+const closeApprovalTicket = vi.fn();
 vi.mock("@/lib/adapters/hubspot", () => ({
   listCompanyContacts: vi.fn(),
   getCompanyProfile: vi.fn(),
   setDealBillingNotes,
+  createApprovalTicket,
+  closeApprovalTicket,
 }));
-const sendQuoteApprovalRequestEmail = vi.fn();
-vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail: vi.fn(), sendQuoteApprovalRequestEmail }));
+vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail: vi.fn() }));
 vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms: vi.fn() }));
 // prospects.ts now imports resolveDealForCompany for the Company & Deal
 // picker — mocked so the real module (which pulls in the server-only db
@@ -83,13 +86,12 @@ vi.mock("@/lib/actions/pricing", () => ({
 // FLAT at the fixtures' own 2.49% card-present and card-not-present, so a
 // quote on the default rates carries no rate override unless a test says so.
 const getRateMatrix = vi.fn();
-const listActiveAdminRecipients = vi.fn();
 const getStaffRecipient = vi.fn();
 vi.mock("@/lib/actions/rateMatrix", () => ({ getRateMatrix }));
 vi.mock("@/lib/marginReqsLoader", () => ({
   loadMarginReqs: vi.fn(async () => (await import("@/lib/pricing")).MARGIN_REQS),
 }));
-vi.mock("@/lib/staff", () => ({ listActiveAdminRecipients, getStaffRecipient }));
+vi.mock("@/lib/staff", () => ({ getStaffRecipient }));
 const FLAT_RATE_CARD = {
   cardPresentBps: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 249)),
   cardNotPresentBps: 249,
@@ -191,11 +193,7 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
 beforeEach(() => {
   vi.clearAllMocks();
   getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
-  sendQuoteApprovalRequestEmail.mockResolvedValue({ sent: 2, failed: 0 });
-  listActiveAdminRecipients.mockResolvedValue([
-    { id: "admin-1", email: "admin1@aioapp.com", name: "Ada Admin" },
-    { id: "admin-2", email: "admin2@aioapp.com", name: "Abe Admin" },
-  ]);
+  createApprovalTicket.mockResolvedValue("ticket-9");
   getStaffRecipient.mockImplementation(async (id: string) => ({ id, email: `${id}@aioapp.com`, name: `Name ${id}` }));
   getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
   getApplication.mockResolvedValue(app());
@@ -451,7 +449,8 @@ describe("saveQuoteConfigurationAction — the margin floor", () => {
     });
 
     expect(updated.quoteStatus).toBe("pending_approval");
-    expect(saveApplication).toHaveBeenCalledTimes(1);
+    // Once for the request, once more to record its HubSpot ticket.
+    expect(saveApplication).toHaveBeenCalledTimes(2);
     const messages = updated.quoteApproval!.overrides.map(o => o.message);
     expect(messages).toContain("Card-present rate 0.50% is below the minimum margin");
     for (const m of messages) expect(m).not.toMatch(/0\.0085|0\.85\s*%/);
@@ -611,7 +610,7 @@ describe("saveQuoteConfigurationAction — override approval", () => {
     vi.mocked(getQuoteLimits).mockResolvedValueOnce(limits).mockResolvedValueOnce(limits);
   };
 
-  it("puts a rep's edit to a LIVE quote into pending_approval and emails the admins", async () => {
+  it("puts a rep's edit to a LIVE quote into pending_approval and opens a ticket", async () => {
     await capped();
     const updated = await save();
     expect(updated.quoteStatus).toBe("pending_approval");
@@ -622,12 +621,13 @@ describe("saveQuoteConfigurationAction — override approval", () => {
     expect(updated.quoteApproval!.fingerprint).toBe(
       overrideFingerprint(saved().quoteLines ?? [], saved().quoteRates ?? null, saved().quoteApproval!.overrides)
     );
-    expect(sendQuoteApprovalRequestEmail).toHaveBeenCalledTimes(1);
-    expect(sendQuoteApprovalRequestEmail.mock.calls[0][0].url)
-      .toBe("http://localhost:3000/admin?view=accounts&account=app-1");
+    expect(createApprovalTicket).toHaveBeenCalledTimes(1);
+    expect(createApprovalTicket.mock.calls[0][0].content)
+      .toContain("http://localhost:3000/admin?view=accounts&account=app-1");
+    expect(updated.quoteApproval!.ticketId).toBe("ticket-9");
   });
 
-  it("keeps an approval given for exactly this quote — no new request, no email", async () => {
+  it("keeps an approval given for exactly this quote — no new request, no ticket", async () => {
     await capped();
     const first = await save();
     const approved = { ...first, quoteStatus: null, quoteApproval: { ...first.quoteApproval!, approvedAt: "2026-11-01T00:00:00.000Z", approvedByUserId: "admin-1" } };
@@ -638,10 +638,10 @@ describe("saveQuoteConfigurationAction — override approval", () => {
     const again = await save();
     expect(again.quoteStatus).toBeNull();
     expect(again.quoteApproval).toEqual(approved.quoteApproval);
-    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expect(createApprovalTicket).not.toHaveBeenCalled();
   });
 
-  it("does not re-email for a quote already waiting on the same approval", async () => {
+  it("does not open a second ticket for a quote already waiting on the same approval", async () => {
     await capped();
     const first = await save();
     vi.clearAllMocks();
@@ -649,7 +649,21 @@ describe("saveQuoteConfigurationAction — override approval", () => {
     getApplication.mockResolvedValue(first);
     await capped();
     expect((await save()).quoteStatus).toBe("pending_approval");
-    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expect(createApprovalTicket).not.toHaveBeenCalled();
+    expect(closeApprovalTicket).not.toHaveBeenCalled();
+  });
+
+  it("closes the open ticket when an admin self-approves over a pending request", async () => {
+    await capped();
+    const first = await save();
+    vi.clearAllMocks();
+    getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
+    getApplication.mockResolvedValue(first);
+    getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" });
+    await capped();
+    await save();
+    expect(closeApprovalTicket).toHaveBeenCalledWith("ticket-9");
+    expect(createApprovalTicket).not.toHaveBeenCalled();
   });
 
   it("self-approves an admin's overrides: live with a sent link", async () => {
@@ -658,7 +672,7 @@ describe("saveQuoteConfigurationAction — override approval", () => {
     const updated = await save();
     expect(updated.quoteStatus).toBeNull();
     expect(updated.quoteApproval).toMatchObject({ requestedByUserId: "admin-1", approvedByUserId: "admin-1" });
-    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expect(createApprovalTicket).not.toHaveBeenCalled();
   });
 
   it("self-approves an admin's overrides on a draft as approved", async () => {
@@ -676,7 +690,7 @@ describe("saveQuoteConfigurationAction — override approval", () => {
     expect(await save()).toMatchObject({ quoteStatus: "draft", quoteApproval: null });
     getApplication.mockResolvedValue(app({ quoteStatus: "draft", customerLinkToken: null }));
     expect((await save()).quoteStatus).toBe("draft");
-    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expect(createApprovalTicket).not.toHaveBeenCalled();
   });
 
   it("writes no billing note to HubSpot for a quote that has never gone out", async () => {

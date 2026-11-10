@@ -61,7 +61,7 @@ app-v2/src/
     pricing.ts                ← getActivePaddingPolicy (Adyen-cost hiding only), getPricingPreviewAction
                                  (NB: named Padding*, not Pillow* — this doc's older "pillow" wording is drift)
     quoteApproval.ts          ← approveQuoteAction (admin-only; re-evaluates and refuses if the quote moved since the
-                                 request; emails the owning rep) + getQuoteApprovalAction (admin or owning rep, rep-safe).
+                                 request; closes its HubSpot ticket; emails the owning rep) + getQuoteApprovalAction (admin or owning rep, rep-safe).
                                  Draft quotes + admin override approval, 2026-11-02 — see quoting.md
     prospects.ts              ← createProspectAction (`mode: "send" | "draft"`; overrides force a rep to
                                  `pending_approval`), sendDraftAction ("Send to merchant"), saveQuoteConfigurationAction — rep creates a prospect + tokenized customer link.
@@ -82,7 +82,7 @@ app-v2/src/
                                  stored under). No DB, no "use server"
   lib/quoteEvaluation.ts     ← server-only, deliberately NOT "use server" (its exports take a whole application):
                                  `evaluateQuoteOverrides`, `quoteFingerprint`, `approvalCovers`, `appBaseUrl`
-  lib/staff.ts               ← server-only: `listActiveAdminRecipients`, `getStaffRecipient` (who gets the approval emails)
+  lib/staff.ts               ← server-only: `getStaffRecipient` (the rep on the approval ticket and the approved email)
   lib/adapters/
     aioDashboard.ts           ← THE way a merchant gets an Adyen account. createAioBusiness()
                                  (tenant), createAioLocation(), createAioAdyenOnboardingLink(),

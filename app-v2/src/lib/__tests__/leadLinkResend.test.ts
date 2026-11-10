@@ -61,13 +61,12 @@ vi.mock("@/lib/billing/publishBillingQuote", () => ({ buildAndPublishBillingQuot
 // FLAT at the fixtures' own 2.49% card-present and card-not-present, so a
 // quote on the default rates carries no rate override unless a test says so.
 const getRateMatrix = vi.fn();
-const listActiveAdminRecipients = vi.fn();
 const getStaffRecipient = vi.fn();
 vi.mock("@/lib/actions/rateMatrix", () => ({ getRateMatrix }));
 vi.mock("@/lib/marginReqsLoader", () => ({
   loadMarginReqs: vi.fn(async () => (await import("@/lib/pricing")).MARGIN_REQS),
 }));
-vi.mock("@/lib/staff", () => ({ listActiveAdminRecipients, getStaffRecipient }));
+vi.mock("@/lib/staff", () => ({ getStaffRecipient }));
 const FLAT_RATE_CARD = {
   cardPresentBps: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 249)),
   cardNotPresentBps: 249,
@@ -124,10 +123,6 @@ const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
 beforeEach(() => {
   vi.clearAllMocks();
   getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
-  listActiveAdminRecipients.mockResolvedValue([
-    { id: "admin-1", email: "admin1@aioapp.com", name: "Ada Admin" },
-    { id: "admin-2", email: "admin2@aioapp.com", name: "Abe Admin" },
-  ]);
   getStaffRecipient.mockImplementation(async (id: string) => ({ id, email: `${id}@aioapp.com`, name: `Name ${id}` }));
   getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
   getApplication.mockResolvedValue(app());

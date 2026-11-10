@@ -2,19 +2,21 @@
 
 // An admin approving the overrides on one quote (draft quotes + admin override
 // approval, 2026-11-02). A rep's quote with overrides is saved as
-// `pending_approval` and the admins are emailed (prospects.ts); this is the
-// other half: the admin approves, and the rep is emailed back.
+// `pending_approval` and a HubSpot ticket is opened on its company
+// (prospects.ts); this is the other half: the admin approves, the ticket is
+// closed, and the rep is emailed back.
 //
-// No HubSpot writes and no merchant email here. Approving a never-sent draft
+// No other HubSpot writes and no merchant email here. Approving a never-sent draft
 // leaves it `approved` for the rep to send; approving an edit to a quote whose
 // link is already out makes that link live again (`quoteStatus` null).
 
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { sendQuoteApprovedEmail } from "@/lib/adapters/email";
+import { closeApprovalTicket } from "@/lib/adapters/hubspot";
 import { getStaffRecipient } from "@/lib/staff";
 import { appBaseUrl, approvalCovers, evaluateQuoteOverrides } from "@/lib/quoteEvaluation";
-import type { MerchantApplication, QuoteApproval, QuoteOverride, QuoteStatus } from "@/types/merchant";
+import type { MerchantApplication, QuoteApproval, QuoteStatus } from "@/types/merchant";
 
 // The same gate the other admin actions use (users.ts's `requireAdmin`).
 async function requireAdmin() {
@@ -64,6 +66,15 @@ export async function approveQuoteAction(applicationId: string): Promise<Approve
   }
   await postgresStorage.saveApplication(scope, updated);
 
+  // Best-effort, like opening it: the approval is already saved.
+  if (quoteApproval.ticketId) {
+    try {
+      await closeApprovalTicket(quoteApproval.ticketId);
+    } catch (err) {
+      console.error("approval ticket close failed", app.id, quoteApproval.ticketId, err);
+    }
+  }
+
   let repNotified = false;
   if (app.ownerUserId !== effective.userId) {
     try {
@@ -86,48 +97,4 @@ export async function approveQuoteAction(applicationId: string): Promise<Approve
   }
 
   return { id: app.id, quoteStatus, quoteApproval, repNotified };
-}
-
-export type QuoteApprovalView = {
-  quoteStatus: QuoteStatus | null;
-  /** What was asked for (empty when the quote carries no approval). */
-  overrides: QuoteOverride[];
-  requestedAt: string | null;
-  requestedByName: string | null;
-  approvedAt: string | null;
-  approvedByName: string | null;
-};
-
-/**
- * The review panel's read of a quote's approval: what was asked for, by whom,
- * and who approved it. Open to any admin and to the owning rep — storage keeps
- * a rep off anyone else's row. Rep-safe: the override messages never carry the
- * margin floor (see `rateOverrides`).
- */
-export async function getQuoteApprovalAction(applicationId: string): Promise<QuoteApprovalView> {
-  const effective = await getEffectiveRole();
-  if (!effective) throw new Error("Not authenticated");
-  const scope = { userId: effective.userId, role: effective.role };
-
-  const app = await postgresStorage.getApplication(scope, applicationId);
-  if (!app) throw new Error("Application not found");
-
-  const approval = app.quoteApproval ?? null;
-  const nameOf = async (userId: string | null | undefined) => {
-    if (!userId) return null;
-    const who = await getStaffRecipient(userId);
-    return who ? who.name || who.email : null;
-  };
-  const [requestedByName, approvedByName] = await Promise.all([
-    nameOf(approval?.requestedByUserId), nameOf(approval?.approvedByUserId),
-  ]);
-
-  return {
-    quoteStatus: app.quoteStatus ?? null,
-    overrides: approval?.overrides ?? [],
-    requestedAt: approval?.requestedAt ?? null,
-    requestedByName,
-    approvedAt: approval?.approvedAt ?? null,
-    approvedByName,
-  };
 }

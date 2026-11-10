@@ -11,6 +11,7 @@ import {
   adjustmentsFromQuoteLines, picksFromQuoteLines, processesCardNotPresentOnly, quoteHasProcessing, quoteTypeOf,
 } from "@/lib/quoting";
 import { fmt$, fmtPct2 } from "@/lib/utils";
+import styles from "./EditQuotePanel.module.css";
 import {
   averageTicketOf, DEFAULT_QUOTE_RATES, MIN_MONTHLY_PROCESSING_REVENUE, SELECTABLE_PRICING_MODELS,
 } from "@/types/merchant";
@@ -185,7 +186,7 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
   for (const o of quote?.overrides ?? []) approvalReasons.push(o.message);
   if (rated) {
     if (belowMin) approvalReasons.push("Card-present rate is below the minimum margin");
-    if (belowRevenueFloor) approvalReasons.push("AIO's monthly revenue on this merchant is under the minimum");
+    if (belowRevenueFloor) approvalReasons.push(`AIO revenue on this merchant is under ${fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} a month`);
     if (!cnpOnly && cpAdjustRange && (cpAdjustBps < cpAdjustRange.min || cpAdjustBps > cpAdjustRange.max)) {
       approvalReasons.push("Card-present rate adjustment is outside the allowed range");
     }
@@ -274,19 +275,17 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
     );
   }
 
+  const saveLabel = saving
+    ? "Saving…"
+    : needsApproval ? (isAdmin ? "Save & approve" : "Submit for approval") : "Save Quote";
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div className={styles.panel}>
       {/* Say the window is OPEN, rather than letting an unlocked form imply
-          it. A rep who knows the customer hasn't confirmed yet knows they can
-          still fix a wrong price or a wrong contact — and knows it stops the
-          moment the customer presses confirm. */}
-      <div style={{ padding: 12, background: "var(--paper-3, rgba(127,127,127,0.06))", border: "1px solid var(--rule)", borderRadius: 8, fontSize: "0.8125rem", lineHeight: 1.5 }}>
-        <strong>Not confirmed by the customer yet — you can still change this quote.</strong>
-        <span style={{ opacity: 0.8 }}>
-          {" "}Nothing has been sent to HubSpot. The customer confirms their details from their own
-          link, and that is what creates the quote they sign — after which none of this can change.
-        </span>
-      </div>
+          it: the customer confirming their details is what ends it. */}
+      <p className={styles.openNote}>
+        Not confirmed by the customer yet, so this quote can still change. Nothing has been sent to HubSpot.
+      </p>
       <ProductConfigurator
         quoteType={quoteType}
         picks={picks}
@@ -303,10 +302,7 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
       />
 
       {rated && (
-        <div style={{ padding: 16, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}>
-          {/* Same as the prospect form: one sellable model means nothing to
-              pick, and a lone pill reads as a broken control. The rate fields
-              below are the two tiers. Returns if the list ever grows. */}
+        <div className={styles.rateCard}>
           {SELECTABLE_PRICING_MODELS.length > 1 && (
             <>
               <div style={{ marginBottom: 8, fontWeight: 600 }}>Pricing Model</div>
@@ -352,100 +348,109 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
               onAdjustmentChange={setCpAdjustBps}
               adoptSaved={!!app.quoteRates}
             />
-            {!canPreview && hasVolumeBasis && (
-              <p style={{ opacity: 0.7, fontSize: 13, marginTop: 6 }}>
-                Loading preview…
-              </p>
-            )}
+            {!canPreview && hasVolumeBasis && <p className={styles.muted}>Loading preview…</p>}
             {!canPreview && !hasVolumeBasis && (
-              <p style={{ opacity: 0.7, fontSize: 13, marginTop: 6 }}>
+              <p className={styles.muted}>
                 No statement or volume/ticket basis on file for this account, so there&apos;s nothing
-                to project these rates against yet — they still set what the customer&apos;s own
+                to project these rates against yet. They still set what the customer&apos;s own
                 upload will be priced at.
               </p>
             )}
             {canPreview && pricing && (
-              // Reduced to exactly three figures (2026-10-13, product owner):
-              // the fee projection the merchant sees anyway, the margin %,
-              // and the commission the rep would earn. AIO revenue (shown
-              // here with NO gate at all before this change) moved to
-              // /admin?view=commissions along with processor cost, net
-              // margin and the floor — see CommissionsPanel.
-              <div style={{ marginTop: 10, fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
-                <div>Projected fees: <strong>{fmt$(pricing.projectedMonthlyFees)}/mo</strong></div>
-                <div>Margin at this rate: <strong>{pricing.appliedTargetMargin == null ? "—" : fmtPct2(pricing.appliedTargetMargin)}</strong></div>
-                {/* What this rate is worth to AIO (2026-10-15, product owner:
-                    "show montly revenue and yearly arr in the card rate
-                    box"). The two are the same figure at two horizons — the
-                    yearly one is `payment_processing_arr`, what the deal
-                    carries once the merchant accepts. Both from the server's
-                    role-scoped preview; this panel derives neither. */}
+              // The fee projection the merchant sees anyway, the margin %, what
+              // the rate is worth to AIO (monthly and as ARR, i.e.
+              // `payment_processing_arr`), and the rep's commission. All from
+              // the server's role-scoped preview; this panel derives none.
+              // Breaching a floor is said once, in the approval box below.
+              <div className={styles.stats}>
+                <div>
+                  <div className={styles.statLabel}>Projected fees</div>
+                  <div className={styles.statValue}>{fmt$(pricing.projectedMonthlyFees)}/mo</div>
+                </div>
+                <div>
+                  <div className={styles.statLabel}>Margin</div>
+                  <div className={styles.statValue} data-bad={belowMin}>
+                    {pricing.appliedTargetMargin == null ? "—" : fmtPct2(pricing.appliedTargetMargin)}
+                  </div>
+                </div>
                 {pricing.monthlyProcessingRevenue != null && (
-                  <div style={belowRevenueFloor ? { color: "var(--danger, #e5484d)" } : undefined}>
-                    AIO revenue: <strong>{fmt$(pricing.monthlyProcessingRevenue)}/mo</strong>
-                    {" · "}
-                    Yearly ARR: <strong>{fmt$(pricing.processingArr ?? 0)}</strong>
+                  <div>
+                    <div className={styles.statLabel}>AIO revenue · ARR</div>
+                    <div className={styles.statValue} data-bad={belowRevenueFloor}>
+                      {fmt$(pricing.monthlyProcessingRevenue)}/mo · {fmt$(pricing.processingArr ?? 0)}
+                    </div>
                   </div>
                 )}
-                <div>Your commission (est., signing + activation): <strong>{pricing.projectedCommission.total == null ? "—" : `${fmt$(pricing.projectedCommission.total)}/yr`}</strong></div>
-                {belowRevenueFloor && (
-                  <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Under the {fmt$(MIN_MONTHLY_PROCESSING_REVENUE)} a month AIO processes for. Saving
-                    this needs admin approval.
+                <div>
+                  <div className={styles.statLabel}>Your commission (est.)</div>
+                  <div className={styles.statValue}>
+                    {pricing.projectedCommission.total == null ? "—" : `${fmt$(pricing.projectedCommission.total)}/yr`}
                   </div>
-                )}
-                {belowFloor && (
-                  <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Below cost — AIO loses money on this deal at this rate. Not blocked, but don&rsquo;t
-                    send it without asking.
-                  </div>
-                )}
-                {belowMin && (
-                  <div style={{ color: "var(--danger, #e5484d)" }}>
-                    Below AIO&rsquo;s minimum margin for this volume. Saving this needs admin approval.
-                  </div>
-                )}
+                </div>
+              </div>
+            )}
+            {canPreview && belowFloor && (
+              <div className={styles.warn} style={{ marginTop: 10 }}>
+                Below cost: AIO loses money on this deal at this rate. Not blocked, but don&rsquo;t
+                send it without asking.
               </div>
             )}
           </div>
         </div>
       )}
 
-      {error && <div style={{ color: "var(--danger, #e5484d)" }}>{error}</div>}
-      {blockers.length > 0 && <div style={{ color: "var(--danger, #e5484d)" }}>{blockers.join(" ")}</div>}
+      {error && <div className={styles.warn}>{error}</div>}
+      {blockers.length > 0 && <div className={styles.warn}>{blockers.join(" ")}</div>}
 
-      {pendingSaved && (
-        <div role="status" data-testid="pending-approval-notice" style={{ padding: 12, border: "1px solid var(--rule)", borderRadius: 8 }}>
-          {pendingSaved.message}
-          <div style={{ marginTop: 8 }}>
-            <button onClick={() => onSaved(pendingSaved.app)}>Done</button>
+      {needsApproval && !pendingSaved && (
+        <div className={styles.approval} data-testid="approval-summary">
+          <div className={styles.approvalTitle}>
+            {isAdmin ? "Outside AIO's limits: saving approves it" : "Outside AIO's limits: needs admin approval"}
           </div>
+          <ul>{approvalReasons.map(r => <li key={r}>{r}</li>)}</ul>
         </div>
       )}
+
+      {pendingSaved ? (
+        <div role="status" data-testid="pending-approval-notice" className={styles.done}>
+          <span>{pendingSaved.message}</span>
+          <button type="button" className={styles.btnPrimary} onClick={() => onSaved(pendingSaved.app)}>Done</button>
+        </div>
+      ) : (
+        <div className={styles.footer}>
+          <button type="button" className={styles.btnGhost} onClick={onCancel} disabled={saving}>Cancel</button>
+          <button
+            type="button"
+            className={needsApproval ? styles.btnApprove : styles.btnPrimary}
+            onClick={requestSave}
+            disabled={disabled}
+          >
+            {saveLabel}
+          </button>
+        </div>
+      )}
+
       {confirming && (
-        <div
-          role="dialog" aria-modal="true" aria-label="Needs admin approval"
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
-        >
-          <div style={{ maxWidth: 480, width: "100%", background: "var(--paper, #fff)", color: "var(--ink, inherit)", borderRadius: 8, padding: 16 }}>
+        <div className={styles.overlay}>
+          <div role="dialog" aria-modal="true" aria-labelledby="approval-title" className={styles.dialog}>
+            <h3 id="approval-title" className={styles.dialogTitle}>
+              {isAdmin ? "Approve this quote yourself?" : "Send this quote for approval?"}
+            </h3>
             <p>
-              {isAdmin ? "This quote goes past AIO's limits. As an admin, saving it approves it." : "This quote goes past AIO's limits. If you continue, it will be saved as a draft and an admin will need to approve it before it can be sent."}
+              {isAdmin
+                ? "This quote is outside AIO's limits. Saving it records your approval, and it can go to the merchant as normal."
+                : "This quote is outside AIO's limits. It will be saved, and an admin has to approve it before the merchant can see it. You'll get an email once it's approved."}
             </p>
             <ul>{approvalReasons.map(r => <li key={r}>{r}</li>)}</ul>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={() => setConfirming(false)}>Cancel</button>
-              <button onClick={() => void save()}>Continue</button>
+            <div className={styles.dialogActions}>
+              <button type="button" className={styles.btnGhost} onClick={() => setConfirming(false)}>Keep editing</button>
+              <button type="button" className={styles.btnApprove} onClick={() => void save()}>
+                {isAdmin ? "Save & approve" : "Submit for approval"}
+              </button>
             </div>
           </div>
         </div>
       )}
-
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={requestSave} disabled={disabled || !!pendingSaved} style={{ opacity: disabled ? 0.6 : 1 }}>
-          {saving ? "Saving…" : "Save Quote"}
-        </button>
-        <button onClick={onCancel} disabled={saving}>Cancel</button>
-      </div>
     </div>
   );
 }

@@ -1,0 +1,161 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.openNote {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  margin: 0;
+}
+
+.rateCard {
+  padding: var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--rule);
+}
+
+.statLabel {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+.statValue {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.statValue[data-bad="true"] { color: var(--danger); }
+
+.muted {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  margin: var(--space-xs) 0 0;
+}
+
+.warn {
+  font-size: 0.8125rem;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+/* What will happen on save when the quote is past a limit: said once, here,
+   instead of a red line under every figure that tripped it. */
+.approval {
+  border: 1px solid var(--accent-2);
+  background: oklch(63% 0.140 278 / 0.08);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.8125rem;
+  color: var(--ink);
+}
+
+.approvalTitle {
+  font-weight: 700;
+  color: var(--accent-2-text);
+}
+
+.approval ul {
+  margin: var(--space-2xs) 0 0;
+  padding-left: var(--space-md);
+}
+
+.footer {
+  display: flex;
+  gap: var(--space-xs);
+  justify-content: flex-end;
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--rule);
+}
+
+.btnPrimary,
+.btnApprove,
+.btnGhost {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  padding: var(--space-xs) var(--space-lg);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 150ms var(--ease-out), background 150ms var(--ease-out);
+}
+
+.btnPrimary { color: white; background: var(--accent); border: none; }
+.btnApprove { color: white; background: var(--accent-2); border: none; }
+.btnGhost { color: var(--ink-2); background: var(--paper); border: 1px solid var(--rule); font-weight: 600; }
+
+.btnPrimary:hover,
+.btnApprove:hover { opacity: 0.92; }
+.btnGhost:hover { background: var(--rule); color: var(--ink); }
+.btnPrimary:disabled,
+.btnApprove:disabled,
+.btnGhost:disabled { opacity: 0.6; cursor: default; }
+.btnPrimary:focus-visible,
+.btnApprove:focus-visible,
+.btnGhost:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.done {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  background: var(--success-bg);
+  color: var(--ink);
+  font-size: 0.875rem;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--space-md);
+}
+
+.dialog {
+  max-width: 30rem;
+  width: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-whisper);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.dialogTitle {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.dialog p { margin: 0; font-size: 0.875rem; color: var(--ink-2); }
+.dialog ul { margin: 0; padding-left: var(--space-md); font-size: 0.875rem; }
+
+.dialogActions {
+  display: flex;
+  gap: var(--space-xs);
+  justify-content: flex-end;
+  margin-top: var(--space-xs);
+}

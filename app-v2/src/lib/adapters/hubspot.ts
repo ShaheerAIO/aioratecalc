@@ -871,6 +871,80 @@ export async function associateDealToCompany(dealId: string, companyId: string):
   }
 }
 
+// ── Quote approval tickets (2026-11-09) ─────────────────────────────────────
+// A rep's over-limit quote opens a ticket on the merchant's company instead of
+// emailing every admin; approving it in EasyOB closes the ticket. Needs the
+// `tickets` scope on the general private app (HUBSPOT_PRIVATE_APP_TOKEN).
+// They go in the "Sales" ticket pipeline (product owner, 2026-11-09; the
+// portal's first pipeline is the customer Support queue): new tickets in its
+// first stage, and closing moves them to the stage HubSpot marks CLOSED, so
+// only the pipeline id is pinned.
+const APPROVAL_TICKET_PIPELINE_ID = "1833774813";
+
+type TicketPipeline = { openStageId: string; closedStageId: string | null; pipelineId: string };
+
+async function ticketPipeline(): Promise<TicketPipeline> {
+  const res = await fetchWithRetry(`${BASE}/crm/v3/pipelines/tickets/${APPROVAL_TICKET_PIPELINE_ID}`, { headers: headers() });
+  if (!res.ok) throw hubspotErr("HubSpot ticket pipeline read failed", res.status, await res.text());
+  const pipeline = (await res.json()) as {
+    id: string;
+    stages?: Array<{ id: string; displayOrder: number; metadata?: { ticketState?: string } }>;
+  };
+  const stages = [...(pipeline.stages ?? [])].sort((a, b) => a.displayOrder - b.displayOrder);
+  if (!stages.length) throw new Error("HubSpot's Sales ticket pipeline has no stages");
+  return {
+    pipelineId: pipeline.id,
+    openStageId: stages[0].id,
+    closedStageId: stages.find(s => s.metadata?.ticketState === "CLOSED")?.id ?? null,
+  };
+}
+
+/** Opens a ticket, attached to the company when there is one. Returns its id. */
+export async function createApprovalTicket(input: {
+  subject: string;
+  content: string;
+  companyId: string | null;
+}): Promise<string> {
+  const pipeline = await ticketPipeline();
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/tickets`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      properties: {
+        subject: input.subject,
+        content: input.content,
+        hs_pipeline: pipeline.pipelineId,
+        hs_pipeline_stage: pipeline.openStageId,
+      },
+    }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot approval ticket create failed", res.status, await res.text());
+  const ticketId = String(((await res.json()) as { id: string | number }).id);
+  if (input.companyId) {
+    // The default (unlabeled) association, so no type id has to be pinned.
+    const assoc = await fetchWithRetry(
+      `${BASE}/crm/v4/objects/tickets/${ticketId}/associations/default/companies/${input.companyId}`,
+      { method: "PUT", headers: headers() }
+    );
+    if (!assoc.ok) {
+      console.error("approval ticket → company association failed", ticketId, input.companyId, assoc.status, await assoc.text());
+    }
+  }
+  return ticketId;
+}
+
+/** Moves a ticket to its pipeline's closed stage. */
+export async function closeApprovalTicket(ticketId: string): Promise<void> {
+  const { closedStageId } = await ticketPipeline();
+  if (!closedStageId) throw new Error("HubSpot's Sales ticket pipeline has no closed stage");
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/tickets/${ticketId}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ properties: { hs_pipeline_stage: closedStageId } }),
+  });
+  if (!res.ok) throw hubspotErr(`HubSpot ticket ${ticketId} close failed`, res.status, await res.text());
+}
+
 // ── Phase 3: tenant linkage (read-only) ─────────────────────────────────────
 // HubSpot Companies are the system of record for AIO tenants and their
 // AIO-dashboard-created Adyen objects (AIOad). An admin/rep links an easyob

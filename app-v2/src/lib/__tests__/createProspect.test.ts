@@ -25,18 +25,19 @@ const buildAndPublishBillingQuote = vi.fn();
 const resolveSender = vi.fn();
 const moveDealToQuoteSentAtSend = vi.fn();
 const getApplication = vi.fn();
-const sendQuoteApprovalRequestEmail = vi.fn();
+const createApprovalTicket = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { saveApplication, getApplication } }));
 vi.mock("@/lib/adapters/hubspot", () => ({
   getCompanyProfile, listCompanyContacts, updateCompanyMerchantDetails,
   ensureQuoteContact, getContactById, updateContactDetails, moveDealToQuoteSentAtSend,
+  createApprovalTicket, closeApprovalTicket: vi.fn(),
 }));
 // The Company & Deal picker's resolution service — mocked so the real module
 // (which pulls in the server-only db client) is never loaded here.
 vi.mock("@/lib/hubspotDeal", () => ({ resolveDealForCompany }));
-vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail, sendQuoteApprovalRequestEmail }));
+vi.mock("@/lib/adapters/email", () => ({ sendLeadLinkEmail }));
 vi.mock("@/lib/adapters/sms", () => ({ sendLeadLinkSms }));
 vi.mock("@/lib/actions/catalog", () => ({ listQuotableProductsAction }));
 // The publish-at-send orchestrator (10/13) — mocked so the real module (which
@@ -76,13 +77,12 @@ vi.mock("@/lib/actions/pricing", () => ({
 // FLAT at the fixtures' own 2.49% card-present and card-not-present, so a
 // quote on the default rates carries no rate override unless a test says so.
 const getRateMatrix = vi.fn();
-const listActiveAdminRecipients = vi.fn();
 const getStaffRecipient = vi.fn();
 vi.mock("@/lib/actions/rateMatrix", () => ({ getRateMatrix }));
 vi.mock("@/lib/marginReqsLoader", () => ({
   loadMarginReqs: vi.fn(async () => (await import("@/lib/pricing")).MARGIN_REQS),
 }));
-vi.mock("@/lib/staff", () => ({ listActiveAdminRecipients, getStaffRecipient }));
+vi.mock("@/lib/staff", () => ({ getStaffRecipient }));
 const FLAT_RATE_CARD = {
   cardPresentBps: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 249)),
   cardNotPresentBps: 249,
@@ -138,10 +138,6 @@ function baseInput(over: Partial<Input> = {}): Input {
 beforeEach(() => {
   vi.clearAllMocks();
   getRateMatrix.mockResolvedValue(FLAT_RATE_CARD);
-  listActiveAdminRecipients.mockResolvedValue([
-    { id: "admin-1", email: "admin1@aioapp.com", name: "Ada Admin" },
-    { id: "admin-2", email: "admin2@aioapp.com", name: "Abe Admin" },
-  ]);
   getStaffRecipient.mockImplementation(async (id: string) => ({ id, email: `${id}@aioapp.com`, name: `Name ${id}` }));
   getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep" });
   getCompanyProfile.mockResolvedValue({ id: COMPANY_ID, name: "Torta Palace", tenantRef: null, adyenAccountHolderId: null });
@@ -155,7 +151,7 @@ beforeEach(() => {
   buildAndPublishBillingQuote.mockResolvedValue({ status: "skipped", reason: "nothing_to_bill" });
   resolveSender.mockResolvedValue({ ok: false, code: "no_rep_email" });
   moveDealToQuoteSentAtSend.mockResolvedValue(true);
-  sendQuoteApprovalRequestEmail.mockResolvedValue({ sent: 2, failed: 0 });
+  createApprovalTicket.mockResolvedValue("ticket-9");
 });
 
 describe("createProspectAction — hard blocks", () => {
@@ -294,20 +290,22 @@ function expectNoSend() {
 }
 
 describe("createProspectAction — overrides wait for an admin", () => {
-  it("saves a rep's under-floor quote as pending_approval, emails the admins, and sends nothing", async () => {
+  it("saves a rep's under-floor quote as pending_approval, opens a ticket on the company, and sends nothing", async () => {
     const result = await createProspectAction(baseInput({
       quoteConfig: BASIS, quoteRates: RATES(0.005), billingContact: { ...OWNER, email: "bill@x.com" },
     }));
 
     expect(result.quoteStatus).toBe("pending_approval");
     expect(result.linkUrl).toBeNull();
-    expect(result.notified).toEqual({ sent: 2, failed: 0 });
+    expect(result.ticketId).toBe("ticket-9");
     expect(result.overrides.map(o => o.kind)).toEqual(expect.arrayContaining(["cp_rate", "cnp_rate"]));
     expectNoSend();
 
-    expect(saveApplication).toHaveBeenCalledTimes(1);
-    const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
+    // Once for the request, once more to record the ticket on it.
+    expect(saveApplication).toHaveBeenCalledTimes(2);
+    const [, saved] = saveApplication.mock.calls[1] as [unknown, MerchantApplication];
     expect(saved.quoteStatus).toBe("pending_approval");
+    expect(saved.quoteApproval?.ticketId).toBe("ticket-9");
     expect(saved.customerLinkToken).toBeNull();
     expect(saved.hubspotDealId).toBeNull();
     expect(saved.pendingDealChoice).toEqual({ mode: "existing", dealId: DEAL.id });
@@ -318,26 +316,33 @@ describe("createProspectAction — overrides wait for an admin", () => {
       overrideFingerprint(saved.quoteLines ?? [], saved.quoteRates ?? null, saved.quoteApproval!.overrides)
     );
 
-    expect(sendQuoteApprovalRequestEmail).toHaveBeenCalledTimes(1);
-    const email = sendQuoteApprovalRequestEmail.mock.calls[0][0];
-    expect(email.to).toEqual(["admin1@aioapp.com", "admin2@aioapp.com"]);
-    expect(email.repName).toBe("Name rep-1");
-    expect(email.url).toBe(`http://localhost:3000/admin?view=accounts&account=${saved.id}`);
+    expect(createApprovalTicket).toHaveBeenCalledTimes(1);
+    const ticket = createApprovalTicket.mock.calls[0][0];
+    expect(ticket.companyId).toBe(COMPANY_ID);
+    expect(ticket.content).toContain("Name rep-1");
+    expect(ticket.content).toContain(`http://localhost:3000/admin?view=accounts&account=${saved.id}`);
   });
 
-  it("never names the margin floor in an override a rep (or the email) reads", async () => {
+  it("never names the margin floor in an override a rep (or the ticket) reads", async () => {
     const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005) }));
     for (const o of result.overrides) {
       expect(o.message).not.toMatch(/0\.0085|0\.85\s*%/);
     }
   });
 
-  it("holds a rep's quote even in draft mode, and leaves the requester out of the email", async () => {
-    getEffectiveRole.mockResolvedValue({ userId: "admin-2", role: "rep" });
+  it("holds a rep's quote even in draft mode", async () => {
     const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005), mode: "draft" }));
     expect(result.quoteStatus).toBe("pending_approval");
-    expect(sendQuoteApprovalRequestEmail.mock.calls[0][0].to).toEqual(["admin1@aioapp.com"]);
+    expect(createApprovalTicket).toHaveBeenCalledTimes(1);
     expectNoSend();
+  });
+
+  it("still saves the request when the ticket can't be opened", async () => {
+    createApprovalTicket.mockRejectedValue(new Error("MISSING_SCOPES"));
+    const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005) }));
+    expect(result.quoteStatus).toBe("pending_approval");
+    expect(result.ticketId).toBeNull();
+    expect(saveApplication).toHaveBeenCalledTimes(1);
   });
 
   it("treats ANY card-not-present rate off policy as an override", async () => {
@@ -361,11 +366,11 @@ describe("createProspectAction — overrides wait for an admin", () => {
 describe("createProspectAction — an admin approves their own overrides", () => {
   beforeEach(() => getEffectiveRole.mockResolvedValue({ userId: "admin-1", role: "admin" }));
 
-  it("stamps the approval with the admin and sends, with no approval email", async () => {
+  it("stamps the approval with the admin and sends, with no ticket", async () => {
     const result = await createProspectAction(baseInput({ quoteConfig: BASIS, quoteRates: RATES(0.005) }));
     expect(result.quoteStatus).toBeNull();
     expect(result.linkUrl).toContain("/lead/");
-    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expect(createApprovalTicket).not.toHaveBeenCalled();
     const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
     expect(saved.quoteStatus).toBeNull();
     expect(saved.quoteApproval).toMatchObject({ requestedByUserId: "admin-1", approvedByUserId: "admin-1" });
@@ -382,7 +387,7 @@ describe("createProspectAction — an admin approves their own overrides", () =>
     expect(result.quoteStatus).toBe("approved");
     const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
     expect(saved.quoteApproval?.approvedByUserId).toBe("admin-1");
-    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expect(createApprovalTicket).not.toHaveBeenCalled();
     expectNoSend();
   });
 });
@@ -394,10 +399,10 @@ describe("createProspectAction — save as draft", () => {
       billingContact: { ...OWNER, email: "bill@x.com" }, billingContactId: "contact-5",
     }));
     expect(result).toMatchObject({ quoteStatus: "draft", overrides: [], linkUrl: null, companySync: { synced: false } });
-    expect(result.notified).toBeUndefined();
+    expect(result.ticketId).toBeUndefined();
     expectNoSend();
     expect(getContactById).not.toHaveBeenCalled();
-    expect(sendQuoteApprovalRequestEmail).not.toHaveBeenCalled();
+    expect(createApprovalTicket).not.toHaveBeenCalled();
 
     const [, saved] = saveApplication.mock.calls[0] as [unknown, MerchantApplication];
     expect(saved).toMatchObject({

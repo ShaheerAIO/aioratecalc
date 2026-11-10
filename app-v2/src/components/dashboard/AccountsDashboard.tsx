@@ -15,18 +15,14 @@ import {
   type RepSummary,
 } from "@/lib/actions/applications";
 import { resendLeadLinkAction, sendDraftAction } from "@/lib/actions/prospects";
-import {
-  approveQuoteAction,
-  getQuoteApprovalAction,
-  type QuoteApprovalView,
-} from "@/lib/actions/quoteApproval";
+import { approveQuoteAction } from "@/lib/actions/quoteApproval";
 import EditQuotePanel from "@/components/rep/EditQuotePanel";
 import DealPicker, { type ResolvedDeal } from "@/components/rep/DealPicker";
 import { fmt$, fmtCycle } from "@/lib/utils";
 import { STAGE_COLORS } from "@/lib/stageColors";
 import { PROPOSAL_STAGES, ONBOARDING_STAGES } from "@/lib/stages";
 import { getOnboardingModules, type ModuleStatus } from "@/lib/onboardingModules";
-import { hubspotDealUrl } from "@/lib/billingView";
+import { billingPanelState, hubspotDealUrl } from "@/lib/billingView";
 import { QUOTE_TYPES, quoteTotals, quoteTypeOf } from "@/lib/quoting";
 import { BillingPanel } from "./BillingPanel";
 import { Field, Section } from "./DetailSection";
@@ -176,12 +172,10 @@ export function AccountsDashboard({
   // Rep quote editing (account-detail "Edit Quote" panel).
   const [editQuoteOpen, setEditQuoteOpen] = useState(false);
 
-  // Review panel for a quote awaiting admin approval, plus the outcome line
-  // shown after approving / sending a draft.
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewData, setReviewData] = useState<QuoteApprovalView | null>(null);
-  const [reviewError, setReviewError] = useState<string | null>(null);
+  // Approving a quote that waits on an admin, plus the outcome line shown
+  // after approving / sending a draft.
   const [approving, setApproving] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
   const [quoteNotice, setQuoteNotice] = useState<{ appId: string; text: string } | null>(null);
 
   // Deep link from the approval emails: ?account=<id> selects that row once
@@ -268,7 +262,14 @@ export function AccountsDashboard({
   const isOwner = selected != null && selected.ownerUserId === userId;
   const showApprove = isAdmin && quoteStatus === "pending_approval";
   const showSendDraft = canManageSelected && (quoteStatus === "draft" || quoteStatus === "approved");
-  const repWaiting = !isAdmin && isOwner && quoteStatus === "pending_approval";
+  // The approval card: any admin, or the rep who owns the quote.
+  const approvalPending = quoteStatus === "pending_approval" && !!selected?.quoteApproval && (isAdmin || isOwner);
+  const requester = selected?.quoteApproval ? repMap.get(selected.quoteApproval.requestedByUserId) : undefined;
+  const requesterName = requester?.name || requester?.email || null;
+  const showOnboarding = selected != null && (
+    !!selected.quoteAcceptedAt || !!selected.aioTenant || ONBOARDING_STAGES.includes(selected.stage)
+    || selected.stage === "adyen_approved"
+  );
   const primaryAction = quoteStatus ? null : canResume ? "resume" : showQuoteLink ? "quote" : showOnboardingSend ? "onboarding" : null;
 
   const selectedRep     = selected ? repMap.get(selected.ownerUserId) : undefined;
@@ -315,30 +316,18 @@ export function AccountsDashboard({
     setBusyId(null);
   };
 
-  const openReview = async (app: MerchantApplication) => {
-    setReviewOpen(true);
-    setReviewData(null);
-    setReviewError(null);
-    try {
-      setReviewData(await getQuoteApprovalAction(app.id));
-    } catch (e) {
-      setReviewError(e instanceof Error ? e.message : "Failed to load the approval request");
-    }
-  };
-
   const handleApprove = async (app: MerchantApplication) => {
     setApproving(true);
-    setReviewError(null);
+    setApproveError(null);
     try {
       await approveQuoteAction(app.id);
       const fresh = await listApplicationsAction();
       setApps(fresh);
       const updated = fresh.find(a => a.id === app.id);
       if (updated) setSelected(updated);
-      setReviewOpen(false);
-      setQuoteNotice({ appId: app.id, text: "Approved. The rep has been emailed." });
+      setQuoteNotice({ appId: app.id, text: "Approved. The rep has been emailed and the HubSpot ticket closed." });
     } catch (e) {
-      setReviewError(e instanceof Error ? e.message : "Failed to approve the quote");
+      setApproveError(e instanceof Error ? e.message : "Failed to approve the quote");
     }
     setApproving(false);
   };
@@ -375,7 +364,7 @@ export function AccountsDashboard({
     setTenantQuery("");
     setTenantResults([]);
     setEditQuoteOpen(false);
-    setReviewOpen(false);
+    setApproveError(null);
     setQuoteNotice(null);
     setTenantMismatch(null);
     setDealAdoptPreview(null);
@@ -693,7 +682,7 @@ export function AccountsDashboard({
                         {selected.business?.legalName && selected.business.legalName !== selected.business.dba
                           ? `${selected.business.legalName} · `
                           : ""}
-                        Created {new Date(selected.createdAt).toLocaleDateString()} · {selected.id}
+                        Created {new Date(selected.createdAt).toLocaleDateString()}
                       </div>
                     </div>
                     <button
@@ -705,13 +694,40 @@ export function AccountsDashboard({
                     </button>
                   </div>
 
-                  {(showApprove || showSendDraft || repWaiting) && (
+                  {/* An over-limit quote, said once: what it goes past and, for
+                      an admin, the one button that approves it. The quote
+                      itself is the Quote section below. */}
+                  {approvalPending && (
+                    <div className={styles.approvalCard}>
+                      <div className={styles.approvalHead}>
+                        <div>
+                          <div className={styles.approvalTitle}>
+                            {isAdmin ? "Needs your approval" : "Waiting for admin approval"}
+                          </div>
+                          <div className={styles.detailMeta}>
+                            Requested{requesterName ? ` by ${requesterName}` : ""}
+                            {" "}{new Date(selected.quoteApproval!.requestedAt).toLocaleDateString()}
+                          </div>
+                        </div>
+                        {showApprove && (
+                          <button
+                            onClick={() => handleApprove(selected)}
+                            disabled={approving}
+                            className={styles.btnApprove}
+                          >
+                            {approving ? "Approving…" : "Approve"}
+                          </button>
+                        )}
+                      </div>
+                      <ul className={styles.overrideList}>
+                        {selected.quoteApproval!.overrides.map((o, i) => <li key={i}>{o.message}</li>)}
+                      </ul>
+                      {approveError && <div className={styles.approvalError} role="alert">{approveError}</div>}
+                    </div>
+                  )}
+
+                  {(showSendDraft || primaryAction) && (
                     <div className={styles.detailActions}>
-                      {showApprove && !reviewOpen && (
-                        <button onClick={() => openReview(selected)} className={styles.btnApprove}>
-                          Review &amp; approve
-                        </button>
-                      )}
                       {showSendDraft && (
                         <button
                           onClick={() => handleSendDraft(selected)}
@@ -721,45 +737,6 @@ export function AccountsDashboard({
                           Send to merchant
                         </button>
                       )}
-                      {repWaiting && <span className={styles.detailMeta}>Waiting for admin approval</span>}
-                    </div>
-                  )}
-
-                  {quoteNotice?.appId === selected.id && (
-                    <div className={styles.detailMeta} role="status">{quoteNotice.text}</div>
-                  )}
-
-                  {showApprove && reviewOpen && (
-                    <Section label="Review & approve">
-                      {reviewError && <div className={styles.detailMeta} role="alert">{reviewError}</div>}
-                      {!reviewData && !reviewError && <div className={styles.detailMeta}>Loading…</div>}
-                      {reviewData && (
-                        <>
-                          <div className={styles.detailMeta}>
-                            Requested by {reviewData.requestedByName || "the rep"}
-                            {reviewData.requestedAt ? ` on ${new Date(reviewData.requestedAt).toLocaleString()}` : ""}
-                          </div>
-                          <ul className={styles.overrideList}>
-                            {reviewData.overrides.map((o, i) => <li key={i}>{o.message}</li>)}
-                          </ul>
-                          <div className={styles.detailMeta}>The full quote is shown in the Quote section below.</div>
-                        </>
-                      )}
-                      <div className={styles.detailActions}>
-                        <button
-                          onClick={() => handleApprove(selected)}
-                          disabled={approving || !reviewData}
-                          className={styles.btnPrimary}
-                        >
-                          {approving ? "Approving…" : "Approve"}
-                        </button>
-                        <button onClick={() => setReviewOpen(false)} className={styles.btnGhost}>Cancel</button>
-                      </div>
-                    </Section>
-                  )}
-
-                  {primaryAction && (
-                    <div className={styles.detailActions}>
                       {canResume && (
                         <button onClick={() => router.push(`/rep/proposals/new?id=${selected.id}`)} className={styles.btnPrimary}>
                           {selected.stage === "analysis" ? "Continue Analysis" : "Resume Proposal"}
@@ -786,6 +763,10 @@ export function AccountsDashboard({
                         </button>
                       )}
                     </div>
+                  )}
+
+                  {quoteNotice?.appId === selected.id && (
+                    <div className={styles.detailMeta} role="status">{quoteNotice.text}</div>
                   )}
 
                   {/* The three numbers the table was showing right up until the
@@ -848,182 +829,6 @@ export function AccountsDashboard({
                     </Section>
                   )}
 
-                  {/* Who's on this deal. `Rep` is the commission owner AND the
-                      address a published HubSpot quote is sent from
-                      (resolveSender), which is why an admin sees the email and
-                      not just the name. `ownerContact` is the merchant's own
-                      contact person — a different "owner" entirely. */}
-                  <Section label="Deal">
-                    <div className={styles.detailGrid}>
-                      {isAdmin && (
-                        <Field
-                          label="Rep (commission)"
-                          value={selectedRep?.name || selectedRep?.email || "Unassigned"}
-                          meta={selectedRep?.name ? selectedRep.email : undefined}
-                        />
-                      )}
-                      {selectedContact && (contactName || selectedContact.email) && (
-                        <Field
-                          label="Merchant contact"
-                          value={contactName || selectedContact.email}
-                          meta={[contactName ? selectedContact.email : null, selectedContact.phone]
-                            .filter(Boolean)
-                            .join(" · ") || undefined}
-                        />
-                      )}
-                      {selected.analysis?.currentProcessorName && (
-                        <Field label="Current processor" value={selected.analysis.currentProcessorName} />
-                      )}
-                    </div>
-                  </Section>
-
-                  {/* HubSpot linkage — the company (AIO tenant) and the deal.
-                      Owner rep or any admin may edit; a rep never sees another
-                      rep's accounts, so ownership is the only gate. Recording
-                      only — no Adyen call. */}
-                  {(isAdmin || selected.ownerUserId === userId) && (
-                    <Section label="HubSpot">
-                      <div>
-                        <div className={styles.subLabel}>HubSpot Tenant</div>
-                        {selected.tenantLink ? (
-                          <div className={styles.linkedRow}>
-                            <div className={styles.linkedRowMain}>
-                              <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
-                                {selected.tenantLink.companyName}
-                              </div>
-                              <div className={styles.detailMeta}>
-                                {selected.tenantLink.tenantRef || "no tenant ref"}
-                                {selected.tenantLink.adyenAccountHolderId ? ` · ${selected.tenantLink.adyenAccountHolderId}` : ""}
-                              </div>
-                            </div>
-                            <button className={styles.btnGhost} disabled={linking} onClick={() => handleUnlinkTenant(selected)}>
-                              Unlink
-                            </button>
-                          </div>
-                        ) : (
-                          <div>
-                            <input
-                              type="search"
-                              className={styles.splitSearchInput}
-                              placeholder="Search HubSpot companies to link a tenant…"
-                              value={tenantQuery}
-                              onChange={e => setTenantQuery(e.target.value)}
-                            />
-                            {tenantQuery.trim().length >= 2 && (
-                              <>
-                                {tenantSearching && <div className={styles.pickerStatus}>Searching…</div>}
-                                {!tenantSearching && tenantResults.length === 0 && (
-                                  <div className={styles.pickerStatus}>No matching companies.</div>
-                                )}
-                                {tenantResults.length > 0 && (
-                                  <div className={styles.pickerResults}>
-                                    {tenantResults.map(c => (
-                                      <button
-                                        key={c.id}
-                                        className={styles.splitRow}
-                                        disabled={linking}
-                                        onClick={() => handleLinkTenant(selected, c.id)}
-                                      >
-                                        <span className={styles.splitRowName}>{c.name}</span>
-                                        <span className={styles.detailMeta}>
-                                          {c.tenantRef || "no tenant ref"}{c.adyenAccountHolderId ? ` · ${c.adyenAccountHolderId}` : ""}
-                                        </span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        )}
-                        {tenantMismatch?.appId === selected.id && (
-                          <div className={styles.warningBanner} role="alert">
-                            <strong>Deal attached to a different company.</strong> HubSpot deal{" "}
-                            {tenantMismatch.dealId} is still linked to{" "}
-                            {tenantMismatch.otherCompanyIds.length > 1 ? "companies" : "company"}{" "}
-                            {tenantMismatch.otherCompanyIds.join(", ")} — not this tenant. We left it
-                            alone rather than silently give one deal two companies. Resolve the
-                            deal&rsquo;s company association in HubSpot directly.
-                          </div>
-                        )}
-                      </div>
-
-                      {selected.hubspotDealId && (
-                        <div>
-                          <div className={styles.subLabel}>HubSpot Deal</div>
-                          <div className={styles.detailFieldValue}>
-                            {selectedDealUrl
-                              ? <a href={selectedDealUrl} target="_blank" rel="noreferrer">{selected.hubspotDealId}</a>
-                              : selected.hubspotDealId}
-                          </div>
-                          {selected.dealLink?.dealName && (
-                            <div className={styles.detailMeta}>
-                              {selected.dealLink.dealName}
-                              {selected.dealLink.origin === "adopted" ? " · adopted" : ""}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </Section>
-                  )}
-
-                  {/* HubSpot deal adoption — the account has NO deal at all (a
-                      legacy row from before deal adoption existed, or a
-                      company whose deal was never attached). This is the
-                      "go pick one" destination sendQuoteAction's
-                      `ambiguous` refusal points reps at; it disappears the
-                      moment a deal is attached, in favor of the "HubSpot
-                      Deal" field above. Existing-deal only — creating a
-                      brand-new deal for a company with none is
-                      sendQuoteAction's job (mode: "create"). */}
-                  {(isAdmin || selected.ownerUserId === userId) && !selected.hubspotDealId && (
-                    <Section label="HubSpot Deal">
-                      {!selected.tenantLink ? (
-                        <div className={styles.sectionNote}>
-                          Link the HubSpot tenant company above first — the deal picker needs to know
-                          which company&apos;s deals to search.
-                        </div>
-                      ) : dealAdoptPreview ? (
-                        <div className={styles.confirmStack}>
-                          <div>
-                            <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
-                              {dealAdoptPreview.deal.name}
-                            </div>
-                            <div className={styles.detailMeta}>
-                              {dealAdoptPreview.deal.stageLabel ?? "no stage"}
-                            </div>
-                          </div>
-                          <div className={styles.warningBanner} role="alert">
-                            {selected.quoteAcceptedAt
-                              ? "This merchant already accepted their quote. Adopting this deal will immediately build and PUBLISH a live HubSpot billing quote — a one-way door: no edit, no delete, no void through the API."
-                              : "No quote has been accepted yet, so adopting this deal just attaches it — nothing publishes."}
-                          </div>
-                          <div className={styles.confirmActions}>
-                            <button
-                              className={styles.btnPrimary}
-                              disabled={adoptingDeal}
-                              onClick={() => handleAdoptDeal(selected, dealAdoptPreview.deal.id)}
-                            >
-                              {adoptingDeal ? "Adopting…" : "Confirm & Adopt Deal"}
-                            </button>
-                            <button className={styles.btnGhost} disabled={adoptingDeal} onClick={() => setDealAdoptPreview(null)}>
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <DealPicker
-                          companyId={selected.tenantLink.hubspotCompanyId}
-                          companyName={selected.tenantLink.companyName}
-                          defaultDealName={selected.business?.dba || selected.business?.legalName || selected.analysis?.merchantName || ""}
-                          resolved={null}
-                          onResolved={setDealAdoptPreview}
-                          allowCreate={false}
-                        />
-                      )}
-                    </Section>
-                  )}
-
                   {/* What the merchant is buying. The HubSpot document built
                       from it — quote id, signature, payment, subscriptions —
                       is the Billing section below; keeping the two apart is
@@ -1078,7 +883,7 @@ export function AccountsDashboard({
                           )}
                           {selected.quoteAcceptedAt ? (
                             <div className={styles.detailMeta}>
-                              Accepted {new Date(selected.quoteAcceptedAt).toLocaleDateString()} — locked. Start a new
+                              Accepted {new Date(selected.quoteAcceptedAt).toLocaleDateString()}. Locked: start a new
                               quote to change terms.
                             </div>
                           ) : selected.detailsConfirmedAt ? (
@@ -1087,9 +892,8 @@ export function AccountsDashboard({
                             // shut — days before acceptance, and seconds
                             // before `publishedAt`.
                             <div className={styles.detailMeta}>
-                              Customer confirmed their details{" "}
-                              {new Date(selected.detailsConfirmedAt).toLocaleDateString()} — locked and published to
-                              HubSpot. Start a new quote to change terms.
+                              Customer confirmed {new Date(selected.detailsConfirmedAt).toLocaleDateString()}. Locked and
+                              published to HubSpot.
                             </div>
                           ) : (
                             // The window, while it is open. Worth saying out
@@ -1098,8 +902,7 @@ export function AccountsDashboard({
                             // so "I already sent it" used to mean "too late"
                             // and no longer does.
                             <div className={styles.detailMeta}>
-                              Not confirmed by the customer yet — you can still change this quote. Nothing has been
-                              sent to HubSpot.
+                              Editable until the customer confirms their details.
                             </div>
                           )}
                         </>
@@ -1115,13 +918,18 @@ export function AccountsDashboard({
                     </Section>
                   )}
 
+                  {billingPanelState(selected) !== "not_configured" && billingPanelState(selected) !== "rate_only" && (
                   <BillingPanel
                     app={selected}
                     canManage={isAdmin || selected.ownerUserId === userId}
                     onUpdated={updateOne}
                     debugBillingBypass={debugBillingBypass}
                   />
+                  )}
 
+                  {/* Before the quote is accepted every module is "not
+                      started", which says nothing. */}
+                  {showOnboarding && (
                   <Section label="Onboarding">
                     {/* Provisioning is a cron with no human in the loop, so a
                         failure that only ever reached a Vercel log is a failure
@@ -1201,6 +1009,187 @@ export function AccountsDashboard({
                       </div>
                     ) : null}
                   </Section>
+                  )}
+
+                  {/* Everything about WHO and WHERE that isn't the next step:
+                      the people, the HubSpot company and deal, the ids. Closed
+                      by default (product owner, 2026-11-09: "hide all the stuff
+                      that can be hidden away in a drawer"); open on arrival
+                      only when the HubSpot company still needs linking, since
+                      nothing reaches HubSpot until it is. */}
+                  <details
+                    key={selected.id}
+                    className={styles.drawer}
+                    open={canManageSelected && !selected.tenantLink ? true : undefined}
+                  >
+                    <summary className={styles.drawerSummary}>
+                      <span>Contacts &amp; HubSpot</span>
+                      <span className={styles.drawerHint} data-warn={canManageSelected && !selected.tenantLink}>
+                        {[
+                          isAdmin ? selectedRep?.name || selectedRep?.email : null,
+                          contactName || selectedContact?.email,
+                          selected.tenantLink ? "HubSpot linked" : "Not linked to HubSpot",
+                        ].filter(Boolean).join(" · ")}
+                      </span>
+                    </summary>
+                    <div className={styles.drawerBody}>
+                      <div className={styles.detailGrid}>
+                        {isAdmin && (
+                          <Field
+                            label="Rep (commission)"
+                            value={selectedRep?.name || selectedRep?.email || "Unassigned"}
+                            meta={selectedRep?.name ? selectedRep.email : undefined}
+                          />
+                        )}
+                        {selectedContact && (contactName || selectedContact.email) && (
+                          <Field
+                            label="Merchant contact"
+                            value={contactName || selectedContact.email}
+                            meta={[contactName ? selectedContact.email : null, selectedContact.phone]
+                              .filter(Boolean)
+                              .join(" · ") || undefined}
+                          />
+                        )}
+                        {selected.analysis?.currentProcessorName && (
+                          <Field label="Current processor" value={selected.analysis.currentProcessorName} />
+                        )}
+                      </div>
+                      {canManageSelected && (
+                        <>
+                          <div>
+                            <div className={styles.subLabel}>HubSpot company</div>
+                            {selected.tenantLink ? (
+                              <div className={styles.linkedRow}>
+                                <div className={styles.linkedRowMain}>
+                                  <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
+                                    {selected.tenantLink.companyName}
+                                  </div>
+                                  <div className={styles.detailMeta}>
+                                    {selected.tenantLink.tenantRef || "no tenant ref"}
+                                    {selected.tenantLink.adyenAccountHolderId ? ` · ${selected.tenantLink.adyenAccountHolderId}` : ""}
+                                  </div>
+                                </div>
+                                <button className={styles.btnGhost} disabled={linking} onClick={() => handleUnlinkTenant(selected)}>
+                                  Unlink
+                                </button>
+                              </div>
+                            ) : (
+                              <div>
+                                <input
+                                  type="search"
+                                  className={styles.splitSearchInput}
+                                  placeholder="Search HubSpot companies to link a tenant…"
+                                  value={tenantQuery}
+                                  onChange={e => setTenantQuery(e.target.value)}
+                                />
+                                {tenantQuery.trim().length >= 2 && (
+                                  <>
+                                    {tenantSearching && <div className={styles.pickerStatus}>Searching…</div>}
+                                    {!tenantSearching && tenantResults.length === 0 && (
+                                      <div className={styles.pickerStatus}>No matching companies.</div>
+                                    )}
+                                    {tenantResults.length > 0 && (
+                                      <div className={styles.pickerResults}>
+                                        {tenantResults.map(c => (
+                                          <button
+                                            key={c.id}
+                                            className={styles.splitRow}
+                                            disabled={linking}
+                                            onClick={() => handleLinkTenant(selected, c.id)}
+                                          >
+                                            <span className={styles.splitRowName}>{c.name}</span>
+                                            <span className={styles.detailMeta}>
+                                              {c.tenantRef || "no tenant ref"}{c.adyenAccountHolderId ? ` · ${c.adyenAccountHolderId}` : ""}
+                                            </span>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                            {tenantMismatch?.appId === selected.id && (
+                              <div className={styles.warningBanner} role="alert">
+                                <strong>Deal attached to a different company.</strong> HubSpot deal{" "}
+                                {tenantMismatch.dealId} is still linked to{" "}
+                                {tenantMismatch.otherCompanyIds.length > 1 ? "companies" : "company"}{" "}
+                                {tenantMismatch.otherCompanyIds.join(", ")} — not this tenant. We left it
+                                alone rather than silently give one deal two companies. Resolve the
+                                deal&rsquo;s company association in HubSpot directly.
+                              </div>
+                            )}
+                          </div>
+
+                          {selected.hubspotDealId && (
+                            <div>
+                              <div className={styles.subLabel}>HubSpot deal</div>
+                              <div className={styles.detailFieldValue}>
+                                {selectedDealUrl
+                                  ? <a href={selectedDealUrl} target="_blank" rel="noreferrer">{selected.hubspotDealId}</a>
+                                  : selected.hubspotDealId}
+                              </div>
+                              {selected.dealLink?.dealName && (
+                                <div className={styles.detailMeta}>
+                                  {selected.dealLink.dealName}
+                                  {selected.dealLink.origin === "adopted" ? " · adopted" : ""}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {!selected.hubspotDealId && (
+                            <div>
+                              <div className={styles.subLabel}>HubSpot deal</div>
+                              {!selected.tenantLink ? (
+                                <div className={styles.sectionNote}>
+                                  Link the HubSpot company above first — the deal picker needs to know
+                                  which company&apos;s deals to search.
+                                </div>
+                              ) : dealAdoptPreview ? (
+                                <div className={styles.confirmStack}>
+                                  <div>
+                                    <div className={styles.detailFieldValue} style={{ fontWeight: 600 }}>
+                                      {dealAdoptPreview.deal.name}
+                                    </div>
+                                    <div className={styles.detailMeta}>
+                                      {dealAdoptPreview.deal.stageLabel ?? "no stage"}
+                                    </div>
+                                  </div>
+                                  <div className={styles.warningBanner} role="alert">
+                                    {selected.quoteAcceptedAt
+                                      ? "This merchant already accepted their quote. Adopting this deal will immediately build and PUBLISH a live HubSpot billing quote — a one-way door: no edit, no delete, no void through the API."
+                                      : "No quote has been accepted yet, so adopting this deal just attaches it — nothing publishes."}
+                                  </div>
+                                  <div className={styles.confirmActions}>
+                                    <button
+                                      className={styles.btnPrimary}
+                                      disabled={adoptingDeal}
+                                      onClick={() => handleAdoptDeal(selected, dealAdoptPreview.deal.id)}
+                                    >
+                                      {adoptingDeal ? "Adopting…" : "Confirm & Adopt Deal"}
+                                    </button>
+                                    <button className={styles.btnGhost} disabled={adoptingDeal} onClick={() => setDealAdoptPreview(null)}>
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <DealPicker
+                                  companyId={selected.tenantLink.hubspotCompanyId}
+                                  companyName={selected.tenantLink.companyName}
+                                  defaultDealName={selected.business?.dba || selected.business?.legalName || selected.analysis?.merchantName || ""}
+                                  resolved={null}
+                                  onResolved={setDealAdoptPreview}
+                                  allowCreate={false}
+                                />
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                      <div className={styles.detailMeta}>Account {selected.id}</div>
+                    </div>
+                  </details>
 
                   {/* Owner-only: this actually works the deal. */}
                   {selected.ownerUserId === userId

@@ -15,18 +15,18 @@ import { resolveDealForCompany, type DealChoice, type DealRefusalCode, type Deal
 import { stripBlanks, validateOnboardingFields } from "@/lib/onboardingValidation";
 import type { StorageScope } from "@/lib/storage/storageInterface";
 import {
-  sendLeadLinkEmail, sendQuoteApprovalRequestEmail, type ReplyToRep, type SendMagicLinkResult,
+  sendLeadLinkEmail, type ReplyToRep, type SendMagicLinkResult,
 } from "@/lib/adapters/email";
 import { sendLeadLinkSms, type SendSmsResult } from "@/lib/adapters/sms";
 import {
-  deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot, moveDealToQuoteSentAtSend,
+  closeApprovalTicket, createApprovalTicket, deleteQuoteLineItem, ensureQuoteContact, getContactById, getQuoteSnapshot, moveDealToQuoteSentAtSend,
   setDealBillingNotes, updateCompanyMerchantDetails, updateContactDetails, type ContactDetailsPatch,
 } from "@/lib/adapters/hubspot";
 import { resolveSender } from "@/lib/billing/publishBillingQuote";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
 import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
 import { appBaseUrl, approvalCovers, evaluateQuoteOverrides, quoteFingerprint } from "@/lib/quoteEvaluation";
-import { getStaffRecipient, listActiveAdminRecipients } from "@/lib/staff";
+import { getStaffRecipient } from "@/lib/staff";
 import {
   buildQuote, describeDelayDeviation, isAllowedForQuoteType, isProcessingQuote,
   longestBillingDelayDays, planDefaultBillingDelayDays,
@@ -543,31 +543,53 @@ function selfApproval(
 }
 
 /**
- * Email every active admin but the requester that this quote needs approval.
- * Best-effort: a failure is logged and reported as nothing sent, never thrown —
- * the row is already saved as `pending_approval`, and the admin dashboard
- * lists it whether or not the email arrived.
+ * Open a HubSpot ticket on the merchant's company saying this quote needs an
+ * admin's approval (2026-11-09: replaced the email to every admin), and save
+ * its id onto `app.quoteApproval` so approving can close it. Company only,
+ * never a deal: a draft has no deal until it is sent. Best-effort: a failure
+ * is logged and returns null, never thrown — the row is already saved as
+ * `pending_approval`, and the admin dashboard lists it either way.
  */
-async function notifyAdminsOfApprovalRequest(
-  app: Pick<MerchantApplication, "id" | "business" | "analysis">,
+async function openApprovalTicket(
+  scope: StorageScope,
+  app: MerchantApplication,
   overrides: QuoteOverride[],
   requestedByUserId: string
-): Promise<{ sent: number; failed: number }> {
+): Promise<string | null> {
   try {
-    const admins = (await listActiveAdminRecipients()).filter(a => a.id !== requestedByUserId && a.email);
-    if (!admins.length) return { sent: 0, failed: 0 };
     const rep = await getStaffRecipient(requestedByUserId);
-    const result = await sendQuoteApprovalRequestEmail({
-      to: admins.map(a => a.email),
-      merchantName: app.business?.dba || app.business?.legalName || app.analysis?.merchantName || "",
-      repName: rep?.name || rep?.email || "A rep",
-      overrides,
-      url: `${appBaseUrl()}/admin?view=accounts&account=${encodeURIComponent(app.id)}`,
+    const merchantName = app.business?.dba || app.business?.legalName || app.analysis?.merchantName || app.id;
+    const ticketId = await createApprovalTicket({
+      subject: `Quote approval: ${merchantName}`,
+      content: [
+        `${rep?.name || rep?.email || "A rep"} asked to approve a quote outside AIO's limits:`,
+        ...overrides.map(o => `- ${o.message}`),
+        "",
+        `Review & approve: ${appBaseUrl()}/admin?view=accounts&account=${encodeURIComponent(app.id)}`,
+      ].join("\n"),
+      companyId: app.tenantLink?.hubspotCompanyId ?? null,
     });
-    return { sent: result.sent, failed: result.failed };
+    app.quoteApproval = { ...app.quoteApproval!, ticketId };
+    await postgresStorage.saveApplication(scope, app);
+    return ticketId;
   } catch (err) {
-    console.error("quote approval request email failed", app.id, err);
-    return { sent: 0, failed: 0 };
+    console.error("quote approval ticket failed", app.id, err);
+    return null;
+  }
+}
+
+/**
+ * Close the ticket of an approval request that a save just replaced (a new
+ * request, an admin's self-approval, or no overrides left), so HubSpot never
+ * holds an open ticket nobody can act on. Approved requests had theirs closed
+ * when they were approved. Best-effort, like opening it.
+ */
+async function closeSupersededTicket(prior: QuoteApproval | null | undefined, next: QuoteApproval | null): Promise<void> {
+  if (!prior?.ticketId || prior.approvedAt || next?.ticketId === prior.ticketId) return;
+  try {
+    await closeApprovalTicket(prior.ticketId);
+  } catch (err) {
+    console.error("superseded approval ticket close failed", prior.ticketId, err);
   }
 }
 
@@ -673,8 +695,8 @@ export type CreateProspectResult = {
   quoteStatus: QuoteStatus | null;
   /** Every override on the quote (empty when none). On an admin's quote, already self-approved. */
   overrides: QuoteOverride[];
-  /** Only on `pending_approval`: the approval-request emails to the admins. */
-  notified?: { sent: number; failed: number };
+  /** Only on `pending_approval`: the HubSpot approval ticket, null if it couldn't be opened. */
+  ticketId?: string | null;
   /** null when nothing was sent. */
   linkUrl: string | null;
   /** `{ sent: false, devUrl: null }` when nothing was sent. */
@@ -1012,8 +1034,8 @@ export async function createProspectAction(input: {
   const mode = input.mode ?? "send";
   const isAdmin = effective.role === "admin";
   const overrides = await evaluateQuoteOverrides(app);
-  const held = (quoteStatus: QuoteStatus, notified?: { sent: number; failed: number }): CreateProspectResult => ({
-    id: app.id, app, quoteStatus, overrides, ...(notified ? { notified } : {}),
+  const held = (quoteStatus: QuoteStatus, ticketId?: string | null): CreateProspectResult => ({
+    id: app.id, app, quoteStatus, overrides, ...(ticketId !== undefined ? { ticketId } : {}),
     linkUrl: null, emailResult: { sent: false, devUrl: null }, smsResult: null, companySync: { synced: false },
   });
 
@@ -1022,10 +1044,10 @@ export async function createProspectAction(input: {
     app.quoteStatus = "pending_approval";
     app.quoteApproval = requestApproval(app, overrides, effective.userId, now);
     await postgresStorage.saveApplication(scope, app);
-    const notified = await notifyAdminsOfApprovalRequest(app, overrides, effective.userId);
-    return held("pending_approval", notified);
+    const ticketId = await openApprovalTicket(scope, app, overrides, effective.userId);
+    return held("pending_approval", ticketId);
   }
-  // An admin approves their own overrides: stamped with them, no email.
+  // An admin approves their own overrides: stamped with them, no ticket.
   if (overrides.length) app.quoteApproval = selfApproval(app, overrides, effective.userId, now);
 
   if (mode === "draft") {
@@ -1242,7 +1264,8 @@ export async function saveQuoteConfigurationAction(input: {
   updated.quoteApproval = next.quoteApproval;
 
   await postgresStorage.saveApplication(scope, updated);
-  if (next.notify) await notifyAdminsOfApprovalRequest(updated, overrides, effective.userId);
+  await closeSupersededTicket(app.quoteApproval, updated.quoteApproval);
+  if (next.notify) await openApprovalTicket(scope, updated, overrides, effective.userId);
   // A quote that has never gone out makes no HubSpot writes: its note reaches
   // the deal when it is sent (`sendProspectToMerchant`). One whose link is
   // already out keeps mirroring, as it always has.
@@ -1259,8 +1282,8 @@ export async function saveQuoteConfigurationAction(input: {
  *
  *  - Rep, overrides: an approval given for exactly this quote (same
  *    fingerprint) is kept, status and all. A row already waiting on the same
- *    quote stays waiting without a second round of emails. Anything else goes
- *    to `pending_approval` with a fresh request, and the admins are emailed —
+ *    quote stays waiting without a second ticket. Anything else goes
+ *    to `pending_approval` with a fresh request, and an approval ticket is opened in HubSpot —
  *    including a quote whose link is live, which the lead page then shows as
  *    "being updated" until an admin approves it.
  *  - Admin, overrides: self-approved (an existing approval for this exact

@@ -876,3 +876,81 @@ details[open] > .disclosureSummary::before { transform: rotate(90deg); }
     transition-duration: 1ms;
   }
 }
+
+/* ---------- Approval card + Contacts & HubSpot drawer (2026-11-09) ---------- */
+
+.approvalCard {
+  border: 1px solid var(--accent-2);
+  background: oklch(63% 0.140 278 / 0.08);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.approvalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.approvalTitle {
+  font-weight: 700;
+  color: var(--accent-2-text);
+}
+
+.approvalError {
+  margin-top: var(--space-xs);
+  font-size: 0.8125rem;
+  color: var(--danger);
+}
+
+.drawer {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-md);
+}
+
+.drawerSummary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.drawerSummary::-webkit-details-marker { display: none; }
+
+.drawerSummary::before {
+  content: "›";
+  display: inline-block;
+  color: var(--ink-3);
+  transition: transform 150ms var(--ease-out);
+}
+
+details[open] > .drawerSummary::before { transform: rotate(90deg); }
+.drawerSummary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.drawerHint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.drawerHint[data-warn="true"] { color: var(--warning); font-weight: 600; }
+
+.drawerBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}

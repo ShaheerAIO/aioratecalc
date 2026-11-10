@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MerchantApplication, QuoteRates } from "@/types/merchant";
 
-// approveQuoteAction / getQuoteApprovalAction — the admin half of draft quotes
+// approveQuoteAction — the admin half of draft quotes
 // + admin override approval (2026-11-02). Under test: admin only, only a
 // quote waiting on approval, refused when the quote no longer matches what was
 // asked about, the status it lands on (live again with a sent link, approved
@@ -13,11 +13,13 @@ const saveApplication = vi.fn();
 const sendQuoteApprovedEmail = vi.fn();
 const getStaffRecipient = vi.fn();
 const getRateMatrix = vi.fn();
+const closeApprovalTicket = vi.fn();
 
 vi.mock("@/lib/auth/getEffectiveRole", () => ({ getEffectiveRole }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { getApplication, saveApplication } }));
 vi.mock("@/lib/adapters/email", () => ({ sendQuoteApprovedEmail }));
-vi.mock("@/lib/staff", () => ({ getStaffRecipient, listActiveAdminRecipients: vi.fn() }));
+vi.mock("@/lib/staff", () => ({ getStaffRecipient }));
+vi.mock("@/lib/adapters/hubspot", () => ({ closeApprovalTicket }));
 vi.mock("@/lib/actions/rateMatrix", () => ({ getRateMatrix }));
 vi.mock("@/lib/marginReqsLoader", () => ({
   loadMarginReqs: vi.fn(async () => (await import("@/lib/pricing")).MARGIN_REQS),
@@ -28,7 +30,7 @@ vi.mock("@/lib/actions/pricing", () => ({
   getPricingPreviewAction: vi.fn(),
 }));
 
-const { approveQuoteAction, getQuoteApprovalAction } = await import("@/lib/actions/quoteApproval");
+const { approveQuoteAction } = await import("@/lib/actions/quoteApproval");
 const { evaluateQuoteOverrides, quoteFingerprint } = await import("@/lib/quoteEvaluation");
 
 const RATE_CARD = {
@@ -113,6 +115,16 @@ describe("approveQuoteAction", () => {
     expect(sendQuoteApprovedEmail.mock.calls[0][0].linkLive).toBe(true);
   });
 
+  it("closes the request's HubSpot ticket, and still approves if that fails", async () => {
+    const row = await pending();
+    getApplication.mockResolvedValue({ ...row, quoteApproval: { ...row.quoteApproval!, ticketId: "ticket-9" } });
+    await approveQuoteAction("app-1");
+    expect(closeApprovalTicket).toHaveBeenCalledWith("ticket-9");
+
+    closeApprovalTicket.mockRejectedValue(new Error("MISSING_SCOPES"));
+    await expect(approveQuoteAction("app-1")).resolves.toMatchObject({ quoteStatus: "approved" });
+  });
+
   it("refuses when the quote changed since the request (stale fingerprint), saving nothing", async () => {
     const row = await pending();
     getApplication.mockResolvedValue({ ...row, quoteRates: { ...RATES, cardNotPresentRate: 0.0319 } });
@@ -139,31 +151,5 @@ describe("approveQuoteAction", () => {
     getApplication.mockResolvedValue(await pending());
     await expect(approveQuoteAction("app-1")).resolves.toMatchObject({ quoteStatus: "approved", repNotified: false });
     expect(saveApplication).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("getQuoteApprovalAction", () => {
-  it("returns what was asked for, by whom, and who approved it", async () => {
-    const row = await pending();
-    getApplication.mockResolvedValue({
-      ...row, quoteStatus: "approved",
-      quoteApproval: { ...row.quoteApproval!, approvedAt: "2026-11-02T00:00:00.000Z", approvedByUserId: "admin-1" },
-    });
-    expect(await getQuoteApprovalAction("app-1")).toEqual({
-      quoteStatus: "approved",
-      overrides: row.quoteApproval!.overrides,
-      requestedAt: "2026-11-01T00:00:00.000Z",
-      requestedByName: "Name rep-1",
-      approvedAt: "2026-11-02T00:00:00.000Z",
-      approvedByName: "Name admin-1",
-    });
-  });
-
-  it("is empty for a quote with no approval, and refuses a row the caller can't see", async () => {
-    getEffectiveRole.mockResolvedValue({ userId: "rep-1", role: "rep", name: "Rita" });
-    getApplication.mockResolvedValue(base({ quoteStatus: null, quoteApproval: null }));
-    expect(await getQuoteApprovalAction("app-1")).toMatchObject({ overrides: [], requestedByName: null, approvedAt: null });
-    getApplication.mockResolvedValue(null);
-    await expect(getQuoteApprovalAction("app-2")).rejects.toThrow(/not found/);
   });
 });
