@@ -6,7 +6,7 @@ Written 2026-11-11 for whoever merges this work into `v2`. Read it before mergin
 
 ```
 v2
- └─ nov11-feedback          ← 5 feature commits. MERGE THIS into v2.
+ └─ nov11-feedback          ← 6 feature commits. MERGE THIS into v2.
      └─ debug/team-preview  ← debug-only commits ("DEBUG-ONLY: …"). NEVER MERGE THIS.
 ```
 
@@ -19,10 +19,11 @@ v2
 | `c59de53` Admin-only skip billing; never send Adyen cost to reps | `bypassBillingAction` refuses non-admins; `derivePricingForRole` always returns `adyenCostRate: null` to non-admins. |
 | `b68b62d` Account dashboard revamp (phases 1-2) + last_edited_at | `AccountsDashboard` on `lib/accountStatus.ts` (status, flags, next action, tabs), `last_edited_at` column (migration `0033_last_edited_at.sql`), and the whole of `actions/prospects.ts` (standard rates + `lastEditedAt`). |
 | `b085025` Docs for Nov 11 batch | `docs/claude/*` updates for the above. |
+| `7a0ca6a` Standard rates is a toggle that hides volume/ticket | Product-owner feedback on `f450770` ("buggy"). "Standard rates" is now a pressed/unpressed toggle (`RateFields` `standardRates` + `onStandardRatesChange`, host-driven). New Prospect: ON applies the card, hides and empties volume/ticket, unmounts `RateSuggestion`; OFF resets to the fresh-form rate and shows the empty boxes; a typed rate turns it off. Edit Quote: OFF restores the rates and adjustment from before ON. Server waiver unchanged. Not yet in `docs/claude/quoting.md`. |
 
 **Merge the set, not single commits.** `f450770` does not compile on its own: it uses
 `actions/prospects.ts` changes that only landed in `b68b62d`. Cherry-picking any one commit will break the
-build; merge the branch (or all five, in order).
+build; merge the branch (or all six, in order).
 
 ### `debug/team-preview` — NEVER MERGE
 
