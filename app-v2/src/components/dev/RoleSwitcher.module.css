@@ -1,4 +1,5 @@
 /* Hallmark · genre: modern-minimal · design-system: design.md · designed-as-app */
+/* DEBUG-ROLE-SWITCHER: floating Rep/Admin pill, bottom-right, above all content. */
 
 .wrap {
   position: fixed;
@@ -6,39 +7,49 @@
   right: var(--space-md);
   z-index: 9999;
   display: flex;
-  gap: var(--space-2xs);
+  gap: var(--space-3xs);
   align-items: center;
   background: var(--paper-2);
   border: 1px solid var(--rule);
   border-radius: var(--radius-pill);
-  padding: var(--space-2xs) var(--space-xs);
+  padding: var(--space-3xs);
   box-shadow: var(--shadow-whisper);
   font-family: var(--font-body);
+  transition: opacity 150ms var(--ease-out);
+}
+
+/* Clear of the sandbox banner pinned to the bottom edge (SandboxBanner.module.css). */
+.wrap[data-above-banner="true"] {
+  bottom: calc(1.75rem + var(--space-sm));
+}
+
+.wrap[data-pending="true"] {
+  opacity: 0.6;
 }
 
 .label {
-  color: var(--ink-3);
+  color: var(--accent-text);
   font-size: 0.65rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding-left: var(--space-2xs);
+  padding-inline: var(--space-xs) var(--space-2xs);
 }
 
 .button {
-  padding: var(--space-3xs) var(--space-sm);
+  padding: var(--space-2xs) var(--space-sm);
   border-radius: var(--radius-pill);
-  border: 1px solid var(--rule);
+  border: 1px solid transparent;
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 600;
   font-family: var(--font-body);
   transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
 }
 
-.button:hover { background: var(--paper); }
+.button:hover:not([data-active="true"]) { background: var(--paper); color: var(--ink); }
 
 .button:focus-visible {
   outline: 2px solid var(--focus);
@@ -49,10 +60,10 @@
 
 .button[data-active="true"] {
   background: var(--accent);
-  border-color: var(--accent);
   color: white;
+  cursor: default;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .button { transition-duration: 1ms; }
+  .wrap, .button { transition-duration: 1ms; }
 }

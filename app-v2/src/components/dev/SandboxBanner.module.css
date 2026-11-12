@@ -1,0 +1,27 @@
+/* DEBUG-SANDBOX: debug-only, never merge. Thin bar pinned to the bottom edge. */
+
+.spacer {
+  height: 1.75rem;
+}
+
+.banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Above the sticky nav (200), below drawers (300) and modal overlays (1000). */
+  z-index: 250;
+  min-height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3xs) var(--space-md);
+  background: var(--warning);
+  color: white;
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  line-height: 1.3;
+}
