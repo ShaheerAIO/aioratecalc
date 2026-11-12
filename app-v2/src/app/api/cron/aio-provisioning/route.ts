@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { rowToApp } from "@/lib/storage/applicationRow";
@@ -39,6 +40,8 @@ export async function GET(req: NextRequest) {
   if (req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  // DEBUG-SANDBOX: debug-only, never merge. A cron here would act on the prod DB.
+  if (isSandbox()) return NextResponse.json({ skipped: "sandbox" });
 
   // An unconfigured optional integration is not an incident — 200, not 500.
   // Contrast the missing CRON_SECRET above, which is a misconfiguration.

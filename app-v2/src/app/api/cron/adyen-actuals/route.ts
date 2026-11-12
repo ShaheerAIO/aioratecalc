@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { advanceApprovedFromSettlement } from "@/lib/aio/approvedFromSettlement";
 import { downloadReport, AdyenReportError } from "@/lib/adapters/adyenReports";
 import { parsePaymentsAccountingReport } from "@/lib/adyen/paymentsAccountingParser";
@@ -28,6 +29,8 @@ export async function GET(req: NextRequest) {
   if (req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  // DEBUG-SANDBOX: debug-only, never merge. A cron here would act on the prod DB.
+  if (isSandbox()) return NextResponse.json({ skipped: "sandbox" });
 
   const filenames = expectedReportFilenames();
   const alreadyProcessed = await getProcessedFilenames(filenames);

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
@@ -60,6 +61,8 @@ export async function GET(req: NextRequest) {
   if (req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  // DEBUG-SANDBOX: debug-only, never merge. A cron here would act on the prod DB.
+  if (isSandbox()) return NextResponse.json({ skipped: "sandbox" });
 
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
