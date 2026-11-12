@@ -7,6 +7,7 @@ import { getPricingPreviewAction } from "@/lib/actions/pricing";
 import ProductConfigurator, { type ConfiguredQuote, type ProductPick } from "@/components/quoting/ProductConfigurator";
 import RateFields from "@/components/rep/RateFields";
 import RateSuggestion from "@/components/rep/RateSuggestion";
+import { standardQuoteRates } from "@/lib/standardRates";
 import {
   adjustmentsFromQuoteLines, picksFromQuoteLines, processesCardNotPresentOnly, quoteHasProcessing, quoteTypeOf,
 } from "@/lib/quoting";
@@ -76,6 +77,10 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
   const [cpAdjustBps, setCpAdjustBps] = useState(0);
   const [cpAdjustRange, setCpAdjustRange] = useState<{ min: number; max: number } | null>(null);
   const [pricingModel, setPricingModel] = useState<PricingModel>(app.pricingModel ?? "2-tier");
+  // The "Standard rates" toggle (2026-11-11), and what it replaced: the rates
+  // and adjustment immediately before it was turned on, restored when it is
+  // turned off. Null whenever it is off.
+  const [beforeStandard, setBeforeStandard] = useState<{ rates: QuoteRates; adjustBps: number } | null>(null);
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [pricing, setPricing] = useState<RoleScopedPricing | null>(null);
@@ -87,6 +92,31 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
   // Held until the rep dismisses the notice, so the parent can't close the panel over it.
   const [pendingSaved, setPendingSaved] = useState<{ app: MerchantApplication; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // ON applies the flat standard card. With a basis on file, RateSuggestion
+  // holds CP = card + adjustment, so the 2.49% is set as an adjustment
+  // against the card's figure (as a typed rate is) — it stays 2.49% and the
+  // range check still judges it. OFF puts back exactly what was there.
+  const toggleStandardRates = (on: boolean) => {
+    if (on) {
+      if (policyCnp === null) return;
+      const standard = standardQuoteRates(policyCnp);
+      const cardBps = Math.round(quoteRates.cardPresentRate * 10000) - cpAdjustBps;
+      setBeforeStandard({ rates: quoteRates, adjustBps: cpAdjustBps });
+      setCpAdjustBps(Math.round(standard.cardPresentRate * 10000) - cardBps);
+      setQuoteRates(standard);
+    } else if (beforeStandard) {
+      setQuoteRates(beforeStandard.rates);
+      setCpAdjustBps(beforeStandard.adjustBps);
+      setBeforeStandard(null);
+    }
+  };
+  // A rate the rep types while it is on turns it off and KEEPS the typed
+  // rate (there is nothing to restore over a deliberate edit).
+  const onRateFieldsChange = (next: QuoteRates) => {
+    setQuoteRates(next);
+    setBeforeStandard(null);
+  };
 
   // Whether this quote carries a RATE — which on a marketing plan depends on
   // whether its Website takes online orders, not on the plan alone. Everything
@@ -327,13 +357,11 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
           )}
 
           <div>
-            {/* "Use standard rates" (2026-11-11) resets the rates to the flat
-                standard card. Volume isn't editable here, so unlike prospect
-                creation there is no requirement for it to waive: with a basis
-                on file the 2.49% is held as an adjustment against the rate
-                card and judged against its range like any typed rate; with
-                none, it is simply the rate, as on every no-volume quote. */}
-            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} showStandardRates />
+            {/* "Standard rates" (2026-11-11) toggles the flat standard card on
+                and back off — see `toggleStandardRates`. Volume isn't editable
+                here, so unlike prospect creation there are no boxes to hide
+                and no requirement to waive. */}
+            <RateFields value={quoteRates} onChange={onRateFieldsChange} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} standardRates={beforeStandard !== null} onStandardRatesChange={toggleStandardRates} />
             {/* Used to deliberately skip auto-apply here ("these rates were
                 already chosen and saved"). OVERRIDDEN 2026-10-13 ("get rid of
                 the 'use it' and make it always override") — RateSuggestion no

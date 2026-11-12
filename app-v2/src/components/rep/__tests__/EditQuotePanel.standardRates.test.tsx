@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 //
-// "Use standard rates" in the Edit Quote panel (product owner, 2026-11-11).
-// Volume isn't editable here, so the button only resets the rates to the flat
-// standard card: 2.49% + $0.15 card present, AIO's policy card-not-present.
+// The "Standard rates" toggle in the Edit Quote panel (product owner,
+// 2026-11-11). Volume isn't editable here, so ON only sets the flat standard
+// card (2.49% + $0.15 card present, AIO's policy card-not-present) and OFF
+// restores the rates the panel had immediately before it was turned on.
 // With a volume basis on file the 2.49% is still judged against the rate
 // card's range like any typed rate — standard rates waive no approval.
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import type { CatalogProduct, MerchantApplication, QuoteLine, QuoteRates } from "@/types/merchant";
 
 const { saveQuoteConfigurationAction, listQuotableProductsAction, analysisFromQuoteConfigAction, getSuggestedRatesAction } = vi.hoisted(() => ({
@@ -61,7 +62,7 @@ const app = (over: Partial<MerchantApplication> = {}) => ({
   quoteAcceptedAt: null, detailsConfirmedAt: null, ...over,
 }) as unknown as MerchantApplication;
 
-const standardButton = () => screen.getByRole("button", { name: "Use standard rates" }) as HTMLButtonElement;
+const standardButton = () => screen.getByRole("button", { name: "Standard rates" }) as HTMLButtonElement;
 const cp = () => (screen.getByLabelText("Card present rate, percent") as HTMLInputElement).value;
 
 beforeEach(() => {
@@ -72,7 +73,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-describe("EditQuotePanel — Use standard rates", () => {
+describe("EditQuotePanel — Standard rates toggle", () => {
   it("resets a saved quote's rates to the standard card, clearing the off-policy CNP approval", async () => {
     render(<EditQuotePanel app={app()} onSaved={() => {}} onCancel={() => {}} />);
     // The saved 3.50% CNP is off the 3.30% policy, so it needs approval first.
@@ -111,5 +112,60 @@ describe("EditQuotePanel — Use standard rates", () => {
     await waitFor(() => expect(cp()).toBe("2.49"));
     expect(screen.getByTestId("approval-summary").textContent)
       .toMatch(/Card-present rate adjustment is outside the allowed range/);
+  });
+
+  it("OFF restores exactly the rates the panel had before it was turned on", async () => {
+    render(<EditQuotePanel app={app()} onSaved={() => {}} onCancel={() => {}} />);
+    await screen.findByRole("button", { name: "Submit for approval" });
+    await waitFor(() => expect(standardButton().disabled).toBe(false));
+    fireEvent.click(standardButton());
+    expect(standardButton().getAttribute("aria-pressed")).toBe("true");
+    expect(cp()).toBe("2.49");
+
+    fireEvent.click(standardButton());
+    expect(standardButton().getAttribute("aria-pressed")).toBe("false");
+    expect(cp()).toBe("2.70");
+    expect((screen.getByLabelText(/Card not present rate, percent/) as HTMLInputElement).value).toBe("3.50");
+    // The restored 3.50% CNP is off policy again, so it goes for approval.
+    fireEvent.click(await screen.findByRole("button", { name: "Submit for approval" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Submit for approval" }));
+    await waitFor(() => expect(saveQuoteConfigurationAction).toHaveBeenCalled());
+    expect(saveQuoteConfigurationAction.mock.calls[0][0].quoteRates).toEqual(SAVED);
+  });
+
+  it("with a volume on file, OFF puts back the card's rate and adjustment", async () => {
+    analysisFromQuoteConfigAction.mockResolvedValue({
+      totalVolume: 400000, totalTransactions: 13333, averageTicket: 30, totalFees: 0,
+    });
+    getSuggestedRatesAction.mockResolvedValue({
+      rates: { ...STANDARD, cardPresentRate: 0.0217, amexCardPresentRate: 0.0217 },
+      volumeBand: "$250K+", ticketColumn: 30, adjustBpsRange: { min: -14, max: 3 },
+    });
+    render(
+      <EditQuotePanel
+        app={app({ quoteRates: { ...STANDARD, cardPresentRate: 0.0217, amexCardPresentRate: 0.0217 }, quoteConfig: { monthlyVolume: 400000, avgTicket: 30 } })}
+        onSaved={() => {}} onCancel={() => {}}
+      />
+    );
+    await waitFor(() => expect(getSuggestedRatesAction).toHaveBeenCalled());
+    await waitFor(() => expect(standardButton().disabled).toBe(false));
+    fireEvent.click(standardButton());
+    await waitFor(() => expect(cp()).toBe("2.49"));
+    fireEvent.click(standardButton());
+    await waitFor(() => expect(cp()).toBe("2.17"));
+    await new Promise(r => setTimeout(r, 50));
+    expect(cp()).toBe("2.17");
+    expect(screen.queryByTestId("approval-summary")).toBeNull();
+  });
+
+  it("typing a rate while on turns it off and keeps the typed rate", async () => {
+    render(<EditQuotePanel app={app()} onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(standardButton().disabled).toBe(false));
+    fireEvent.click(standardButton());
+    const box = screen.getByLabelText("Card present rate, percent") as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "2.60" } });
+    fireEvent.blur(box);
+    expect(standardButton().getAttribute("aria-pressed")).toBe("false");
+    expect(cp()).toBe("2.60");
   });
 });
