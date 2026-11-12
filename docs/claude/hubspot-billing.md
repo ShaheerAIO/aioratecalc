@@ -393,3 +393,12 @@ A rep's save that needs admin approval (see `quoting.md`, draft quotes + admin o
 - The id is stored on `quote_approval.ticketId` (jsonb, no migration). Approving closes it. A re-save that replaces an open request (a new request, an admin self-approving, or no overrides left) closes the old one.
 - **Best-effort:** a failure is logged and never blocks the save or the approval.
 - **Needs the `tickets` scope on the general private app (`HUBSPOT_PRIVATE_APP_TOKEN`).** Granted 2026-11-09. Without it, requests still save as `pending_approval` but no ticket opens.
+
+## Payroll is billed separately (2026-11-11)
+Payroll lines on a quote are forced to 100% off (`applyBilledSeparately`, see `quoting.md`) and carry no commission; the real charge is the draft invoice from `/admin/payroll-billing` (`check-payroll-billing.md`). Unverified: a quote whose only monthly line is payroll may publish a $0 monthly subscription. Quotes saved earlier keep payroll priced until re-saved. HubSpot still bills on the fixed delay; "Billing starts N days after checkout or on Go Live" is copy only.
+
+## Skip Billing (Debug) is admin-only (2026-11-11)
+`BillingPanel` takes an `isAdmin` prop and `bypassBillingAction` refuses non-admins server-side (the prop only hides the button).
+
+## Publish Quote Now and Skip Billing are hidden in the UI (2026-11-11)
+Product owner: "hide all debugging stuff for now". `BillingPanel` keeps the code behind two constants, `SHOW_PUBLISH_NOW` and `SHOW_DEBUG_CONTROLS` (both `false`); flip them to bring the buttons back. `sendQuoteAction` and `bypassBillingAction` are unchanged, and the merchant still publishes from their quote link. The HubSpot quote id, template, full sync error, subscription rows and the one-time invoice id moved to the admin-only `BillingDetails` disclosure, rendered in the dashboard's Admin card. Reps see status, signature, payment, the payment link and invoice retry.
