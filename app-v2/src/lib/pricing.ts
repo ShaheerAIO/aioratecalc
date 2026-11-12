@@ -355,7 +355,7 @@ export type RoleScopedPricing = DerivedPricing & {
   belowMarginFloor: boolean;  // target margin is below the tier's min-margin floor — blocks the client-side
                               // save button (PricingStep.tsx, EditQuotePanel.tsx); the write-path backstop against the
                               // TRUE floor lives server-side in actions/prospects.ts (assertMarginAboveTrueFloor)
-  adyenCostRate: number | null; // null when hidden from this role (reps, per paddingAdyenCostHide)
+  adyenCostRate: number | null; // always null for reps (2026-11-11); admins get the true cost
   desiredMargin: number;      // per-tier default target (rep-visible)
   maxMargin: number;          // per-tier soft ceiling (rep-visible)
   /**
@@ -460,7 +460,7 @@ export function derivePricingForRole(
     belowMarginFloor: appliedMargin < tier.minMargin,
     adyenCostRate: role === "admin"
       ? (activeTier ? trueAdyenCostRate : null)
-      : (padding.paddingAdyenCostHide ? null : trueAdyenCostRate),
+      : null, // 2026-11-11: reps never see the true Adyen cost, regardless of paddingAdyenCostHide
     desiredMargin: tier.desiredMargin,
     maxMargin: tier.maxMargin,
     projectedCommission,
