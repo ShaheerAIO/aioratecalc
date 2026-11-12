@@ -22,6 +22,7 @@
 // never be able to write their own tenant ids.
 
 import { eq, sql } from "drizzle-orm";
+import { isSandbox, SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import type { AioTenantIds, MerchantApplication } from "@/types/merchant";
@@ -117,6 +118,8 @@ async function patch(id: string, tenant: AioTenantIds): Promise<void> {
  * iterating rows and one bad merchant must not abort the batch.
  */
 export async function provisionAioTenant(app: MerchantApplication): Promise<ProvisionOutcome> {
+  // DEBUG-SANDBOX: debug-only, never merge. Before the claim: nothing is written.
+  if (isSandbox()) return { status: "blocked", error: SANDBOX_MESSAGE };
   const now = new Date();
   if (!(await claim(app.id, now))) return { status: "not_claimed" };
 

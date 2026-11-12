@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSandbox, SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
@@ -32,6 +33,8 @@ const TOKEN_TTL_MINUTES = 30;
 //
 // Returns only { sent, devUrl } — no application data crosses back.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
+  // DEBUG-SANDBOX: debug-only, never merge. Acceptance writes, emails and syncs the deal.
+  if (isSandbox()) return NextResponse.json({ error: SANDBOX_MESSAGE }, { status: 409 });
   try {
     const { token } = await params;
     const { email } = await req.json();

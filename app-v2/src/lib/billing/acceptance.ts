@@ -20,6 +20,7 @@
 // authenticated dashboard all observe the same paid subscription.
 
 import { randomUUID } from "crypto";
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications, customerLoginTokens } from "@/lib/db/schema";
@@ -86,6 +87,9 @@ export async function recordAcceptance(
   opts: { syncDeal: boolean },
 ): Promise<MerchantApplication> {
   if (app.quoteAcceptedAt) return app;
+  // DEBUG-SANDBOX: debug-only, never merge. Acceptance sends the account email,
+  // moves the deal and builds the invoice, so in sandbox nothing is recorded.
+  if (isSandbox()) return app;
 
   // Forward-only, same rule the Adyen webhook used: a deal already further
   // along (onboarding, closed won) is never dragged back to quote_accepted.

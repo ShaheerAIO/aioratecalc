@@ -33,6 +33,7 @@
 // as publishBillingQuote.ts: it imports lib/db/client, which carries one.
 
 import { and, eq, isNull } from "drizzle-orm";
+import { isSandbox, SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { rowToApp } from "@/lib/storage/applicationRow";
@@ -118,6 +119,8 @@ function isDone(inv: HubspotInvoice | null | undefined): boolean {
  * call after the first either resumes an unfinished build or does nothing.
  */
 export async function buildOneTimeInvoice(app: MerchantApplication): Promise<OneTimeInvoiceResult> {
+  // DEBUG-SANDBOX: debug-only, never merge. Before the claim: nothing is written.
+  if (isSandbox()) return { status: "failed", step: "preflight", error: SANDBOX_MESSAGE };
   if (!app.hubspotIds?.publishedAt) return { status: "skipped", reason: "not_published" };
   if (!app.hubspotIds?.splitBilling) return { status: "skipped", reason: "not_split" };
 

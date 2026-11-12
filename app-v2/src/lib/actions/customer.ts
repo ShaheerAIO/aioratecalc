@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "crypto";
+import { assertNotSandbox, isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { hash } from "bcryptjs";
 import { eq, sql } from "drizzle-orm";
 import { AuthError } from "next-auth";
@@ -55,6 +56,8 @@ export async function requestCustomerLoginAction(email: string): Promise<SendMag
   if (!user || user.role !== "customer" || user.disabledAt) {
     return { sent: true, devUrl: null };
   }
+  // DEBUG-SANDBOX: debug-only, never merge. No login token for an email that won't go.
+  if (isSandbox()) return { sent: false, devUrl: null };
 
   const token = randomUUID();
   const expiresAt = new Date(Date.now() + LOGIN_TOKEN_TTL_MINUTES * 60 * 1000);
@@ -311,6 +314,7 @@ export async function startPayrollOnboardingAction(
   if (!app.business || !app.ownerContact) {
     throw new Error("Add your business details before setting up payroll");
   }
+  assertNotSandbox(); // DEBUG-SANDBOX: debug-only, never merge (Check company + onboard link)
 
   // Already opted in — hand back a fresh link instead of creating a second
   // Check company for the same merchant.

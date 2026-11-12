@@ -8,6 +8,7 @@
 
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db/client";
+import { isSandbox, SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { checkCompanyLinks, checkPayrollInvoices } from "@/lib/db/schema";
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import {
@@ -238,6 +239,7 @@ export type CreatePayrollInvoiceResult =
  */
 export async function createPayrollInvoiceAction(csvText: string, checkCompanyId: string): Promise<CreatePayrollInvoiceResult> {
   const admin = await requireAdmin();
+  if (isSandbox()) return { status: "failed", error: SANDBOX_MESSAGE }; // DEBUG-SANDBOX: debug-only, never merge
   let usage;
   try {
     usage = parseUsageCsv(csvText);

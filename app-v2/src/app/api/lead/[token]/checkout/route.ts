@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
@@ -59,6 +60,8 @@ import { EMPTY_HUBSPOT_IDS, type HubspotIds } from "@/types/merchant";
 // refusals come back as one neutral code, and the real reasons are persisted
 // against the account where a rep will see them.
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
+  // DEBUG-SANDBOX: debug-only, never merge. The publish door: refused before any read or write.
+  if (isSandbox()) return NextResponse.json({ error: "sandbox" }, { status: 409 });
   try {
     const { token } = await params;
     const lookup = await getLeadApplicationByToken(token);

@@ -46,6 +46,7 @@
 // assumed, and adapters/email.ts for the one path EasyOB itself controls.
 
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
+import { isSandbox, SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import { ensureDealForPublish } from "@/lib/billing/ensureDeal";
 import { buildAndPublishBillingQuote } from "@/lib/billing/publishBillingQuote";
@@ -65,6 +66,7 @@ export type SendQuoteResult = {
 export async function sendQuoteAction(applicationId: string): Promise<SendQuoteResult> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
+  if (isSandbox()) return { ok: false, error: SANDBOX_MESSAGE }; // DEBUG-SANDBOX: debug-only, never merge
 
   // getApplication already enforces the ownership rule this action needs — an
   // admin sees every row, a rep only their own — so the check isn't restated
@@ -156,6 +158,7 @@ export type RetryInvoiceResult = { ok: boolean; error?: string };
 export async function retryOneTimeInvoiceAction(applicationId: string): Promise<RetryInvoiceResult> {
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
+  if (isSandbox()) return { ok: false, error: SANDBOX_MESSAGE }; // DEBUG-SANDBOX: debug-only, never merge
 
   const app = await postgresStorage.getApplication(
     { userId: effective.userId, role: effective.role === "admin" ? "admin" : "rep" },

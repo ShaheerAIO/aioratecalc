@@ -20,6 +20,7 @@
 // none of which would survive being reimplemented here.
 
 import { eq } from "drizzle-orm";
+import { isSandbox, SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { getLeadApplicationByToken, isQuoteLocked } from "@/lib/leadToken";
@@ -69,6 +70,9 @@ export async function confirmLeadDetailsAction(
   // confirmation time would misreport when the quote was locked — which is
   // precisely what the rep's own panel reads.
   if (row.detailsConfirmedAt) return { ok: true };
+  // DEBUG-SANDBOX: debug-only, never merge. Confirming freezes the quote and is
+  // what publishes it; refused before the write so a prod row isn't frozen.
+  if (isSandbox()) return { ok: false, formError: SANDBOX_MESSAGE };
 
   const next = applyLeadConfirmation(
     {

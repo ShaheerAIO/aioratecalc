@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { amountInvoiced } from "@/lib/quoting";
 import { fmt$ } from "@/lib/utils";
 import type { CustomerSafeQuote } from "@/types/merchant";
@@ -103,6 +104,7 @@ export default function LeadQuoteView({
     quote_locked: "Your quote is being updated. Your AIO rep will let you know when it's ready.",
     expired: "This link has expired. Ask your AIO representative for a new one.",
     invalid: "This link is no longer valid. Ask your AIO representative for a new one.",
+    sandbox: SANDBOX_MESSAGE, // DEBUG-SANDBOX: debug-only, never merge
   };
 
   // Publishes the HubSpot quote if it isn't published yet, then sends the

@@ -26,6 +26,7 @@
 // same reason lib/adyen/reportWindow.ts was split out of adyenReports.ts.
 
 import { and, eq, isNull } from "drizzle-orm";
+import { isSandbox, SANDBOX_MESSAGE } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { db } from "@/lib/db/client";
 import { merchantApplications, users } from "@/lib/db/schema";
 import {
@@ -304,6 +305,9 @@ export async function buildAndPublishBillingQuote(
   // This is a real, supported deal shape (commit c65b4b1, which stopped
   // attaching the install services to one), not an error state.
   if (lines.length === 0) return { status: "skipped", reason: "nothing_to_bill" };
+  // DEBUG-SANDBOX: debug-only, never merge. Before the build claim, so no
+  // hubspotIds / lastSyncError is written for a publish that can't happen.
+  if (isSandbox()) return { status: "failed", step: "contact", error: SANDBOX_MESSAGE };
 
   if (app.hubspotIds?.publishedAt) return { status: "skipped", reason: "already_published" };
 

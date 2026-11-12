@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "crypto";
+import { assertNotSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { getEffectiveRole } from "@/lib/auth/getEffectiveRole";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
 import {
@@ -740,6 +741,9 @@ async function sendProspectToMerchant(
     billingContactId?: string | null;
   },
 ): Promise<SentToMerchant> {
+  // DEBUG-SANDBOX: debug-only, never merge. Before the deal is resolved (which
+  // can create one) and before the single save, so nothing is written.
+  assertNotSandbox();
   const { now } = opts;
   let hubspotDealId = app.hubspotDealId ?? null;
   let dealLink = app.dealLink ?? null;
@@ -1422,6 +1426,7 @@ export async function issueCustomerQuoteLinkAction(
   // A draft, or a quote waiting on (or holding) an approval, isn't live: its
   // link goes out through `sendDraftAction`, never from here.
   if (app.quoteStatus) throw new Error(notLiveMessage(app.quoteStatus));
+  assertNotSandbox(); // DEBUG-SANDBOX: debug-only, never merge
 
   return persistLeadLink(scope, app, new Date());
 }
@@ -1454,6 +1459,7 @@ export async function resendLeadLinkAction(
   const app = await postgresStorage.getApplication(scope, applicationId);
   if (!app) throw new Error("Application not found");
   if (app.quoteStatus) throw new Error(notLiveMessage(app.quoteStatus));
+  assertNotSandbox(); // DEBUG-SANDBOX: debug-only, never merge
 
   const { app: updated, linkUrl } = await persistLeadLink(scope, app, new Date());
   const email = updated.ownerContact?.email;

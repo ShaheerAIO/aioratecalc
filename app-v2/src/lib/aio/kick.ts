@@ -12,6 +12,7 @@
 // `not_claimed` and does nothing.
 
 import { after } from "next/server";
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import type { MerchantApplication } from "@/types/merchant";
 import { aioDashboardEnabled } from "@/lib/adapters/aioDashboard";
 import { isReadyForAioProvisioning } from "@/lib/aio/provisioningGate";
@@ -27,6 +28,7 @@ export function aioAllowlisted(id: string): boolean {
 }
 
 export function kickAioProvisioning(app: MerchantApplication): void {
+  if (isSandbox()) return; // DEBUG-SANDBOX: debug-only, never merge
   if (!aioDashboardEnabled() || !aioAllowlisted(app.id)) return;
   if (!isReadyForAioProvisioning(app).ready) return;
 

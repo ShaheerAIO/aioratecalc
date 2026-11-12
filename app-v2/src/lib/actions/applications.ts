@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "crypto";
+import { assertNotSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
 import { inArray } from "drizzle-orm";
 import { shouldAdvance } from "@/lib/stages";
 import { postgresStorage } from "@/lib/storage/postgresAdapter";
@@ -106,6 +107,7 @@ export async function sendMerchantOnboardingLinkAction(id: string): Promise<{ ap
   if (!app) throw new Error("Application not found");
   const email = app.ownerContact?.email;
   if (!email) throw new Error("No owner contact email on file for this application");
+  assertNotSandbox(); // DEBUG-SANDBOX: debug-only, never merge
 
   const now = new Date();
   const updated: MerchantApplication = {
