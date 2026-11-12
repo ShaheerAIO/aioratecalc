@@ -28,6 +28,14 @@ import { Field, Section } from "./DetailSection";
 // into a link to the actual HubSpot record.
 const HUBSPOT_PORTAL_ID = process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID;
 
+// Hidden, not deleted (product owner 2026-11-11: "hide all debugging stuff for
+// now"). Flip to bring them back; the code below them is unchanged.
+//  - SHOW_DEBUG_CONTROLS: the "Skip Billing (Debug)" button.
+//  - SHOW_PUBLISH_NOW: the "Publish Quote Now" escape hatch and its warning —
+//    the merchant publishes from their own quote link, so nothing waits on it.
+const SHOW_DEBUG_CONTROLS = false;
+const SHOW_PUBLISH_NOW = false;
+
 // hs_quote_esign_status, in rep language. Signing and paying are separate acts
 // on one HubSpot page, so SIGNED with no subscription is a real and common
 // state (observed live 2026-09-25 on quote 330655913691) — and it was visible
@@ -47,6 +55,8 @@ type Props = {
   onUpdated: (app: MerchantApplication) => void;
   /** DEBUG-BILLING-BYPASS — see lib/debug/billingBypass.ts. */
   debugBillingBypass?: boolean;
+  /** Skip Billing is admin-only (product owner 2026-11-11). */
+  isAdmin?: boolean;
 };
 
 // DEBUG-BILLING-BYPASS — delete with lib/debug/billingBypass.ts.
@@ -94,13 +104,14 @@ function DebugBillingBypass({ app, onUpdated }: Pick<Props, "app" | "onUpdated">
  * disappears. A rep who needs to change a published quote is told to do it in
  * HubSpot, not offered a button that implies otherwise.
  */
-export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = false }: Props) {
+export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = false, isAdmin = false }: Props) {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendQuoteResult | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
 
   const state = billingPanelState(app);
-  const showBypass = debugBillingBypass && canManage && !app.quoteAcceptedAt && (app.quoteLines?.length ?? 0) > 0;
+  // 2026-11-11: product owner turned Skip Billing off for non-admins.
+  const showBypass = SHOW_DEBUG_CONTROLS && debugBillingBypass && isAdmin && canManage && !app.quoteAcceptedAt && (app.quoteLines?.length ?? 0) > 0;
 
   if (state === "not_configured") {
     return (
@@ -129,7 +140,7 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
         <div className={styles.emptyNote}>
           Waiting on the HubSpot company link. Nothing is created in HubSpot until this account is
           linked to its company — a deal can only be attached to a company when it is created, so one
-          made now would never show up on the company record. Link the tenant company above and the
+          made now would never show up on the company record. Link the company under Contacts &amp; HubSpot and the
           deal and quote are built automatically.
         </div>
         {showBypass && <DebugBillingBypass app={app} onUpdated={onUpdated} />}
@@ -138,10 +149,9 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
   }
 
   const hubspotIds = app.hubspotIds;
-  const quoteUrl = hubspotIds?.quoteId ? hubspotQuoteUrl(hubspotIds.quoteId, HUBSPOT_PORTAL_ID) : null;
   const subscriptions = hubspotIds?.subscriptions ?? [];
   const errored = hasBillingSyncError(hubspotIds);
-  const showSend = canManage && canSendQuote(app);
+  const showSend = SHOW_PUBLISH_NOW && canManage && canSendQuote(app);
 
   const copyLink = () => {
     if (!hubspotIds?.quoteLink) return;
@@ -168,33 +178,22 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
     setSending(false);
   };
 
+  // What a rep needs: where the HubSpot quote is, whether it's signed and
+  // paid, and the link to hand the merchant. The raw ids, the template, the
+  // subscription rows and the sync-error text are admin diagnostics and live in
+  // BillingDetails (rendered in the dashboard's Admin card).
   return (
     <Section label="Billing">
       {errored && (
         <div className={styles.errorBanner}>
           <div className={styles.errorBannerTitle}>HubSpot sync failed</div>
-          <div className={styles.errorBannerMessage}>{hubspotIds!.lastSyncError}</div>
-          {hubspotIds!.lastSyncErrorAt && (
-            <div className={styles.errorBannerMeta}>{new Date(hubspotIds!.lastSyncErrorAt).toLocaleString()}</div>
-          )}
+          <div className={styles.errorBannerMessage}>
+            {isAdmin ? "The error is under Billing details in the Admin card." : "An admin can see the details and retry."}
+          </div>
         </div>
       )}
 
-      {/* The HubSpot document only. The deal id lives once, in the HubSpot
-          section above, and what the merchant is buying lives once, in the
-          Quote section — both used to be repeated here in different words. */}
       <div className={shared.detailGrid}>
-        <Field
-          label="Quote"
-          value={
-            hubspotIds?.quoteId
-              ? quoteUrl
-                ? <a href={quoteUrl} target="_blank" rel="noreferrer">{hubspotIds.quoteId}</a>
-                : hubspotIds.quoteId
-              : "—"
-          }
-          meta={hubspotIds?.quoteTemplateId ? `Template ${hubspotIds.quoteTemplateId}` : undefined}
-        />
         <Field
           label="Status"
           value={
@@ -204,7 +203,7 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
               </span>
             ) : (
               <span className={shared.badge} style={{ background: "var(--warning-bg)", color: "var(--warning)" }}>
-                Draft
+                Not published yet
               </span>
             )
           }
@@ -259,49 +258,6 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
         </div>
       )}
 
-      <div>
-        <div className={shared.subLabel}>
-          Subscriptions{subscriptions.length > 0 ? ` (${subscriptions.length})` : ""}
-        </div>
-        {subscriptions.length === 0 ? (
-          <div className={styles.emptyNote}>
-            {hubspotIds?.publishedAt
-              ? "None yet — HubSpot creates these once the customer finishes checkout."
-              : "None yet."}
-          </div>
-        ) : (
-          <div className={styles.subList}>
-            {subscriptions.map(sub => {
-              const money = subscriptionMoney(sub);
-              const color = subscriptionStatusColor(sub.status);
-              return (
-                <div key={sub.subscriptionId} className={styles.subRow}>
-                  <span className={styles.subStatus} style={{ background: color.bg, color: color.fg }}>
-                    {(sub.status ?? "unknown").replace(/_/g, " ")}
-                  </span>
-                  <span className={styles.subMoney}>
-                    {money
-                      ? `${money.perCycleLabel} ${money.monthlyLabel}`
-                      : sub.mrr != null
-                        ? `${fmt$(sub.mrr)}/mo`
-                        : "—"}
-                  </span>
-                  <span className={shared.detailMeta}>{sub.paymentMethod || "no payment method"}</span>
-                  <div className={styles.subMeta}>
-                    {sub.billingStartDate && <span>first charge {sub.billingStartDate}</span>}
-                    {sub.lastPaymentStatus && <span>last payment: {sub.lastPaymentStatus}</span>}
-                    {sub.completedPayments != null && <span>{sub.completedPayments} completed</span>}
-                    {sub.totalCollected != null && sub.totalCollected > 0 && (
-                      <span>{fmt$(sub.totalCollected)} collected</span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
       {hubspotIds?.splitBilling && <OneTimeInvoice app={app} canManage={canManage} onUpdated={onUpdated} />}
 
       {showSend && (
@@ -313,7 +269,7 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
               it. The irreversibility is stated before the click rather than
               behind a modal: a published quote can't be edited, replaced or
               voided through the API, and the merchant signs an ACH mandate
-              against it. */}
+              against it. Hidden by SHOW_PUBLISH_NOW. */}
           <div className={styles.emptyNote}>
             The merchant can do this themselves from their quote link — you only need this if
             you&rsquo;re finishing the deal with them. Publishing emails them the e-signature
@@ -339,8 +295,7 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
 
       {hubspotIds?.publishedAt && (
         <div className={styles.emptyNote}>
-          This quote is published and can&rsquo;t be edited, deleted, or voided from EasyOB — voiding is only
-          possible by hand in HubSpot. To change it, do that directly in HubSpot.
+          Published quotes can&rsquo;t be edited or voided from EasyOB. To change it, do that in HubSpot.
         </div>
       )}
 
@@ -349,19 +304,127 @@ export function BillingPanel({ app, canManage, onUpdated, debugBillingBypass = f
   );
 }
 
+/**
+ * Admin-only billing diagnostics: the HubSpot quote id and template, the full
+ * sync error, the subscription rows and the one-time invoice record. Rendered
+ * by AccountsDashboard inside its Admin card, never for a rep. Closed by
+ * default; opens itself when something has failed. null when there is no
+ * HubSpot billing record to describe.
+ */
+export function BillingDetails({ app }: { app: MerchantApplication }) {
+  const hubspotIds = app.hubspotIds;
+  const inv = app.hubspotInvoice;
+  if (!hubspotIds?.quoteId && !hubspotIds?.lastSyncError && !inv) return null;
+
+  const quoteUrl = hubspotIds?.quoteId ? hubspotQuoteUrl(hubspotIds.quoteId, HUBSPOT_PORTAL_ID) : null;
+  const subscriptions = hubspotIds?.subscriptions ?? [];
+  const errored = hasBillingSyncError(hubspotIds);
+  const invoiceUrl = inv?.invoiceId && HUBSPOT_PORTAL_ID
+    ? `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-53/${inv.invoiceId}`
+    : null;
+
+  return (
+    <details key={app.id} className={styles.details} open={errored || !!inv?.lastSyncError ? true : undefined}>
+      <summary className={shared.disclosureSummary}>Billing details</summary>
+      <div className={styles.detailsBody}>
+        {errored && (
+          <div className={styles.errorBanner}>
+            <div className={styles.errorBannerTitle}>HubSpot sync failed</div>
+            <div className={styles.errorBannerMessage}>{hubspotIds!.lastSyncError}</div>
+            {hubspotIds!.lastSyncErrorAt && (
+              <div className={styles.errorBannerMeta}>{new Date(hubspotIds!.lastSyncErrorAt).toLocaleString()}</div>
+            )}
+          </div>
+        )}
+
+        <div className={shared.detailGrid}>
+          <Field
+            label="HubSpot quote"
+            value={
+              hubspotIds?.quoteId
+                ? quoteUrl
+                  ? <a href={quoteUrl} target="_blank" rel="noreferrer">{hubspotIds.quoteId}</a>
+                  : hubspotIds.quoteId
+                : "—"
+            }
+            meta={hubspotIds?.quoteTemplateId ? `Template ${hubspotIds.quoteTemplateId}` : undefined}
+          />
+          {inv && (
+            <Field
+              label="One-time invoice"
+              value={inv.invoiceId ? invoiceUrl ? <a href={invoiceUrl} target="_blank" rel="noreferrer">{inv.invoiceId}</a> : inv.invoiceId : "—"}
+            />
+          )}
+        </div>
+
+        {inv?.lastSyncError && (
+          <div className={styles.errorBanner}>
+            <div className={styles.errorBannerTitle}>Invoice not built</div>
+            <div className={styles.errorBannerMessage}>{inv.lastSyncError}</div>
+            {inv.lastSyncErrorAt && (
+              <div className={styles.errorBannerMeta}>{new Date(inv.lastSyncErrorAt).toLocaleString()}</div>
+            )}
+          </div>
+        )}
+
+        <div>
+          <div className={shared.subLabel}>
+            Subscriptions{subscriptions.length > 0 ? ` (${subscriptions.length})` : ""}
+          </div>
+          {subscriptions.length === 0 ? (
+            <div className={styles.emptyNote}>
+              {hubspotIds?.publishedAt
+                ? "None yet — HubSpot creates these once the customer finishes checkout."
+                : "None yet."}
+            </div>
+          ) : (
+            <div className={styles.subList}>
+              {subscriptions.map(sub => {
+                const money = subscriptionMoney(sub);
+                const color = subscriptionStatusColor(sub.status);
+                return (
+                  <div key={sub.subscriptionId} className={styles.subRow}>
+                    <span className={styles.subStatus} style={{ background: color.bg, color: color.fg }}>
+                      {(sub.status ?? "unknown").replace(/_/g, " ")}
+                    </span>
+                    <span className={styles.subMoney}>
+                      {money
+                        ? `${money.perCycleLabel} ${money.monthlyLabel}`
+                        : sub.mrr != null
+                          ? `${fmt$(sub.mrr)}/mo`
+                          : "—"}
+                    </span>
+                    <span className={shared.detailMeta}>{sub.paymentMethod || "no payment method"}</span>
+                    <div className={styles.subMeta}>
+                      {sub.billingStartDate && <span>first charge {sub.billingStartDate}</span>}
+                      {sub.lastPaymentStatus && <span>last payment: {sub.lastPaymentStatus}</span>}
+                      {sub.completedPayments != null && <span>{sub.completedPayments} completed</span>}
+                      {sub.totalCollected != null && sub.totalCollected > 0 && (
+                        <span>{fmt$(sub.totalCollected)} collected</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 // The one-time invoice (2026-10-22): hardware, install and training, drafted in
 // HubSpot right after acceptance. Staff open and CHARGE it in HubSpot, against
 // the payment method stored at checkout — nothing here charges anyone. Only on
 // quotes published under split billing; an older quote collected those lines
 // at checkout. The one write is a retry of the same idempotent draft build the
-// acceptance and the nightly cron run.
+// acceptance and the nightly cron run. The invoice id and the raw build error
+// are admin diagnostics (BillingDetails).
 function OneTimeInvoice({ app, canManage, onUpdated }: Pick<Props, "app" | "canManage" | "onUpdated">) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<RetryInvoiceResult | null>(null);
   const inv = app.hubspotInvoice;
-  const invoiceUrl = inv?.invoiceId && HUBSPOT_PORTAL_ID
-    ? `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-53/${inv.invoiceId}`
-    : null;
 
   const retry = async () => {
     setBusy(true);
@@ -379,27 +442,16 @@ function OneTimeInvoice({ app, canManage, onUpdated }: Pick<Props, "app" | "canM
   const built = !!inv?.builtAt && !!inv.openedAt;
   const status = built
     ? inv!.paymentStatus === "paid" ? "Paid" : inv!.status === "open" ? "Open — ready to charge" : inv!.paymentStatus ?? inv!.status
-    : app.hubspotIds?.publishedAt
-      ? "Not built yet"
-      : "Built when the quote is published";
+    : inv?.lastSyncError
+      ? "Couldn't be built"
+      : app.hubspotIds?.publishedAt
+        ? "Not built yet"
+        : "Built when the quote is published";
 
   return (
     <div>
       <div className={shared.subLabel}>One-time invoice</div>
-      {inv?.lastSyncError && (
-        <div className={styles.errorBanner}>
-          <div className={styles.errorBannerTitle}>Invoice not built</div>
-          <div className={styles.errorBannerMessage}>{inv.lastSyncError}</div>
-          {inv.lastSyncErrorAt && (
-            <div className={styles.errorBannerMeta}>{new Date(inv.lastSyncErrorAt).toLocaleString()}</div>
-          )}
-        </div>
-      )}
       <div className={shared.detailGrid}>
-        <Field
-          label="Invoice"
-          value={inv?.invoiceId ? invoiceUrl ? <a href={invoiceUrl} target="_blank" rel="noreferrer">{inv.invoiceId}</a> : inv.invoiceId : "—"}
-        />
         <Field label="Status" value={status} />
         <Field label="Amount" value={inv?.amount != null ? fmt$(inv.amount) : "—"} />
         <Field

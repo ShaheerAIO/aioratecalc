@@ -278,6 +278,10 @@ export const merchantApplications = pgTable("merchant_applications", {
   // Frozen alongside quoteConfig/quoteLines — the record of what was agreed,
   // not a piece of live deal state (that's `stage`).
   quoteAcceptedAt: timestamp("quote_accepted_at", { withTimezone: true }),
+  // Last time STAFF edited the quote or details (2026-11-11). Written only by
+  // the staff edit actions -- never webhooks, provisioning, link sends or
+  // customer actions. Nullable: null = never edited since the column existed.
+  lastEditedAt: timestamp("last_edited_at", { withTimezone: true }),
   // Set once, when the MERCHANT confirms their own details on the public lead
   // link — which is what authorises the HubSpot quote to be built at all.
   // Earlier than both `quoteAcceptedAt` above and `hubspotIds.publishedAt`,
