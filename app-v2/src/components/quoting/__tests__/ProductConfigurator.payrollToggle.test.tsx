@@ -6,7 +6,7 @@
 // longer has a row in its product group. Both layouts.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import type { CatalogProduct, QuoteAdjustments, QuoteType } from "@/types/merchant";
 
 const { listQuotableProductsAction } = vi.hoisted(() => ({ listQuotableProductsAction: vi.fn() }));
@@ -116,5 +116,32 @@ describe("the payroll toggle", () => {
     render(<Host layout="document" initialType="marketing_partial" />);
     await waitFor(() => expect(screen.getByText("Orders Hub Tablet")).toBeTruthy());
     expect(screen.queryByRole("switch", { name: /Payroll/ })).toBeNull();
+  });
+});
+
+describe("payroll on the rep's document: billed separately (2026-11-11)", () => {
+  it("shows payroll at $0 tagged 'Billed separately', with no discount control", async () => {
+    render(
+      <Host
+        layout="document"
+        initialType="all_in_one"
+        initialPicks={[{ hubspotProductId: PAYROLL, qty: 12 }, { hubspotProductId: "217445755632", qty: 1 }]}
+      />
+    );
+    const tag = await waitFor(() => screen.getByText("Billed separately"));
+    expect(screen.queryByText("Included", { selector: "span" })).toBeNull();
+    // tag → name → main column → the document line.
+    const docLine = tag.parentElement!.parentElement!.parentElement!;
+    expect(docLine.textContent).toContain(PAYROLL_NAME);
+    expect(docLine.textContent).toContain("$96.00");
+    expect(docLine.textContent).toContain("$0.00/mo");
+
+    // The toggle says "Adjust", not "−$96.00": the 100% isn't the rep's.
+    fireEvent.click(within(docLine).getByRole("button", { name: /Adjust/ }));
+    expect(screen.queryByLabelText(`Discount percent for ${PAYROLL_NAME}`)).toBeNull();
+    expect(screen.queryByLabelText(`Discount amount in dollars for ${PAYROLL_NAME}`)).toBeNull();
+    // Billing start stays: the quote-wide start moves payroll with the rest.
+    expect(screen.getByLabelText(`When billing starts for ${PAYROLL_NAME}`)).toBeTruthy();
+    expect(screen.getByText(/Payroll is billed separately/)).toBeTruthy();
   });
 });

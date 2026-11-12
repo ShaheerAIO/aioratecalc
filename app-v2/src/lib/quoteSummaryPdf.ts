@@ -19,7 +19,8 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { lineDescription } from "@/lib/lineDescriptions";
 import {
-  CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, isInvoicedLine, lineListAmount, lineNetAmount,
+  CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, isBilledSeparately, isInvoicedLine, lineListAmount,
+  lineNetAmount,
 } from "@/lib/quoting";
 import { displayName, splitRecurringLines, type RecurringTotals } from "@/lib/quoteSummarySections";
 import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
@@ -41,8 +42,10 @@ const isDiscounted = (l: QuoteLine) => (l.discountPercent ?? 0) > 0 || (l.discou
 
 // Same wording as the on-screen summary: a cash discount reads as the dollars
 // agreed, 100% reads as "Included" — but "100% off" on the first kiosk, which
-// is meant to read as a discount (2026-10-29).
+// is meant to read as a discount (2026-10-29), and "Billed separately" on
+// payroll, which AIO bills outside this quote (2026-11-11).
 function discountLabel(l: QuoteLine): string {
+  if (isBilledSeparately(l) && l.discountPercent === 100) return "Billed separately";
   if (l.discountPercent === 100 && !l.firstKiosk) return "Included";
   if ((l.discountAmount ?? 0) > 0) return `${fmt$(l.discountAmount!)} off`;
   return `${l.discountPercent}% off`;

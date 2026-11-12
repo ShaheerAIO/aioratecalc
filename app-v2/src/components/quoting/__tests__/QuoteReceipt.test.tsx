@@ -251,3 +251,17 @@ describe("the Processing margin total row", () => {
     ]);
   });
 });
+
+describe("payroll, billed separately (2026-11-11)", () => {
+  it("tags the $0 payroll line 'Billed separately' with its list price struck through", () => {
+    renderReceipt([
+      line({
+        hubspotProductId: "223152695998", name: "Payroll - AIO Platform (Per Person)", qty: 12, unitPrice: 8,
+        billingFrequency: "monthly", productType: "Software", discountPercent: 100,
+      }),
+    ], { oneTime: 0, recurring: [{ frequency: "monthly", amount: 0 }], monthlyEquivalent: 0 });
+    expect(screen.getByText("Billed separately")).toBeTruthy();
+    expect(screen.queryByText("Included")).toBeNull();
+    expect(screen.getByText("$96.00")).toBeTruthy();
+  });
+});

@@ -2,6 +2,7 @@
 
 import {
   describeBillingStart,
+  isBilledSeparately,
   isCompedService,
   lineListAmount,
   lineNetAmount,
@@ -172,7 +173,10 @@ function ReceiptLine({ line }: { line: QuoteLine }) {
   // Either lever — a cash discount must strike through the list price too,
   // or the receipt shows full price beside a smaller total.
   const discounted = (line.discountPercent ?? 0) > 0 || (line.discountAmount ?? 0) > 0;
-  const tag = line.coveredByPackage ? "In package" : isCompedService(line) ? "Included" : null;
+  // Payroll is $0 here because AIO bills it outside the quote (2026-11-11).
+  const tag = line.coveredByPackage ? "In package"
+    : isBilledSeparately(line) ? "Billed separately"
+    : isCompedService(line) ? "Included" : null;
   const cycle = line.billingFrequency === "one_time" ? "" : `/${fmtCycle(line.billingFrequency)}`;
 
   return (

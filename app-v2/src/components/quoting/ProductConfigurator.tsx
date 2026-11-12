@@ -29,6 +29,7 @@ import {
   describeBillingStart,
   groupProducts,
   isAllowedForQuoteType,
+  isBilledSeparately,
   isCompedService,
   isPosRequiringTerminal,
   isPreAuthProduct,
@@ -520,9 +521,10 @@ export default function ProductConfigurator({
   // Package-covered lines are left out. Their 100% isn't a discount anyone
   // gave — it is how a package is expressed — and counting it here would
   // report the same money twice, once as "package savings" and again, gross,
-  // as a discount.
+  // as a discount. Payroll is left out too (2026-11-11): its 100% means it is
+  // billed outside the quote, not given away.
   const totalDiscount = quoteLines.reduce(
-    (sum, l) => sum + (l.coveredByPackage ? 0 : lineDiscountAmount(l)),
+    (sum, l) => sum + (l.coveredByPackage || isBilledSeparately(l) ? 0 : lineDiscountAmount(l)),
     0
   );
 
@@ -621,6 +623,9 @@ export default function ProductConfigurator({
   // would put it straight back every time a rep set a line to bill at
   // checkout, since clearing an adjustment deletes it.
   const [pendingStart, setPendingStart] = useState<BillingStart | null>(null);
+  // Recurring product ids this quote has already had a billing start decided
+  // for; null until the first render that has any (see the effect below).
+  const seenRecurring = useRef<Set<string> | null>(null);
 
   // A plan clicked BEFORE the catalog arrived has nothing to seed from, and
   // the cart it opens with is most of what choosing it means — so the choice
@@ -669,6 +674,9 @@ export default function ProductConfigurator({
     // discount left behind would re-attach itself to whatever the new plan
     // seeds — a comp meant for one quote silently applying to another.
     if (switching) onAdjustmentsChange?.({});
+    // Wiped adjustments + `pendingStart` re-seed the new plan's lines, so the
+    // lines-seen record starts over with them.
+    if (switching) seenRecurring.current = null;
 
     // The 45-day start the two POS plans bill from. Applied a render later
     // (see `pendingStart`) because the lines it applies to don't exist until
@@ -1079,6 +1087,39 @@ export default function ProductConfigurator({
     // change would re-apply a start the rep has since cleared.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingStart, recurringIds]);
+  // A recurring line that appears AFTER the plan was chosen (the derived extra
+  // software license past 3 screens, Website, any recurring pick) takes the
+  // start the other recurring lines share, instead of billing at checkout and
+  // flipping the control to "Mixed" (product owner, 2026-11-11: "the billing
+  // should always automatically be set to the 45 day delay"). A rep who set
+  // everything to "at checkout" keeps that: a shared "now" stays unset. Lines
+  // already on the quote when it opened, and any line with a start of its own,
+  // are left alone.
+  useEffect(() => {
+    if (!onAdjustmentsChange || recurringIds.length === 0) return;
+    const seen = seenRecurring.current;
+    if (!seen) {
+      seenRecurring.current = new Set(recurringIds);
+      return;
+    }
+    const fresh = recurringIds.filter(id => !seen.has(id));
+    if (fresh.length === 0) return;
+    fresh.forEach(id => seen.add(id));
+    // `pendingStart` is about to sweep every recurring line, these included.
+    if (pendingStart) return;
+    const old = recurringLines.filter(l => !fresh.includes(l.hubspotProductId));
+    const first = old[0]?.billingStart ?? null;
+    const shared = old.length > 0 && old.every(l => startKey(l.billingStart) === startKey(first));
+    const seed = shared ? first : quoteType ? planDefaultBillingStart(quoteType) : null;
+    if (!seed) return;
+    const targets = fresh.filter(id => {
+      const a = adjustments[id];
+      return !a?.billingStart && !a?.units?.some(u => u.billingStart);
+    });
+    if (targets.length) setAdjustments(targets, { billingStart: seed });
+    // setAdjustments closes over today's adjustments, like the effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recurringIds]);
   // One shared start, or null when the lines disagree — a rep who delayed a
   // single line by hand must not be told the whole quote is delayed.
   const sharedStart = useMemo(() => {
@@ -1143,7 +1184,10 @@ export default function ProductConfigurator({
     // EITHER lever counts. Scoped to the percentage, a cash discount would
     // show no result line and no "applies to" control — the row would look
     // undiscounted while billing less.
-    const discounted = (l.discountPercent ?? 0) > 0 || (l.discountAmount ?? 0) > 0;
+    // Payroll's forced 100% (2026-11-11) is not the rep's discount, so the
+    // toggle doesn't claim one.
+    const billedSeparately = isBilledSeparately(l);
+    const discounted = !billedSeparately && ((l.discountPercent ?? 0) > 0 || (l.discountAmount ?? 0) > 0);
     const delayed = mode !== "now";
     const unitMode = Array.isArray(adjustments[id]?.units) || openUnits.has(id);
     const units = unitMode ? unitsOf(id, l.qty) : [];
@@ -1160,7 +1204,8 @@ export default function ProductConfigurator({
     // 45-day delay, and taking the whole drawer away would break that.
     const isPlanLine = platform.line?.hubspotProductId === id;
     // Loaner and Website: no discount inputs either (2026-10-30), billing start stays.
-    const noDiscount = isPlanLine || NEVER_DISCOUNTED_PRODUCT_IDS.includes(id);
+    // Nor payroll (2026-11-11): it is always 100% off, billed outside the quote.
+    const noDiscount = isPlanLine || NEVER_DISCOUNTED_PRODUCT_IDS.includes(id) || billedSeparately;
 
     return (
       <div className={styles.adjustWrap}>
@@ -1397,6 +1442,10 @@ export default function ProductConfigurator({
               <p className={styles.adjustNote}>
                 The plan price is fixed and can&apos;t be discounted — delay when billing starts
                 instead.
+              </p>
+            ) : billedSeparately ? (
+              <p className={styles.adjustNote}>
+                Payroll is billed separately, outside this quote, so it shows here at $0.
               </p>
             ) : noDiscount ? (
               <p className={styles.adjustNote}>
@@ -1780,6 +1829,8 @@ export default function ProductConfigurator({
         return { tag: "Pre-auth", why: "Nothing else is due at checkout, so the card is pre-authorized. Can't be removed." };
       }
       if (l.hubspotProductId === PROCESSING_DISCLOSURE_PRODUCT.hubspotProductId) return { tag: "Card rates" };
+      // $0 here, invoiced outside the sale (2026-11-11) — not "Included".
+      if (isBilledSeparately(l)) return { tag: "Billed separately" };
       if (l.hubspotProductId === SOFTWARE_LICENSE_PRODUCT.hubspotProductId) {
         return { tag: "Auto", why: `${built.softwareLicense.screens} screens, ${INCLUDED_SCREEN_COUNT} included in the plan` };
       }
@@ -1790,7 +1841,10 @@ export default function ProductConfigurator({
         // chip on this screen that is AIO vocabulary rather than English
         // (Shaheer, 2026-10-16). `isCompedService` still decides the MONEY —
         // see `applyServiceComp` — this only decides what the line is called.
-        return { tag: "Included" };
+        // Only while it is actually $0: services are charged at list by
+        // default now (2026-11-11), and a charged install must not say
+        // "Included".
+        if (lineNetAmount(l) === 0) return { tag: "Included" };
       }
       return {};
     };

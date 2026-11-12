@@ -302,6 +302,25 @@ describe("quoteHardwareCommission", () => {
     expect(result.perLine.every(l => typeof l.rep === "number")).toBe(true);
   });
 
+  it("floors a 100%-discounted Onsite Installation at $0 for rep and RSM, not negative (comp list empty, 2026-11-11)", () => {
+    // The floor is keyed on INCLUDED_SERVICE_PRODUCTS, not on the comp list: with
+    // the comp ended, a rep who discounts the install 100% is a sale at a loss.
+    const at = COMPED_SERVICE_PRODUCT_IDS.indexOf("223452690133");
+    if (at >= 0) COMPED_SERVICE_PRODUCT_IDS.splice(at, 1);
+    const install = hwLine({
+      hubspotProductId: "223452690133", name: "Onsite Installation", productType: "Service",
+      qty: 1, unitPrice: 999, discountPercent: 100, costToRep: 300,
+      repCommissionBps: 1000, rsmCommissionBps: 500,
+    });
+    const one = lineHardwareCommission(install);
+    expect(one.status).toBe("computed");
+    expect(one.rep).toBe(0);
+    expect(one.rsm).toBe(0);
+    const all = quoteHardwareCommission([install]);
+    expect(all.rep).toBe(0);
+    expect(all.rsm).toBe(0);
+  });
+
   it("reports a one-time line with no cost in missingCost", () => {
     const lines = [hwLine({ costToRep: null, repCommissionBps: 1000 })];
     const result = quoteHardwareCommission(lines);

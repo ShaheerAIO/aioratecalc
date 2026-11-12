@@ -409,6 +409,20 @@ describe("QuoteSummary — payroll box, ordering points, payment order", () => {
     expect(software.textContent).not.toContain("$476.00");
   });
 
+  it("labels payroll at 100% off 'Billed separately', not 'Included' (2026-11-11)", () => {
+    const quote = {
+      ...MIXED,
+      lines: MIXED.lines.map(l => l.hubspotProductId === "223152695998"
+        ? { ...l, qty: 12, unitPrice: 8, discountPercent: 100 } : l),
+    } as CustomerSafeQuote;
+    render(<QuoteSummary quote={quote} />);
+    const payroll = screen.getByText("Payroll", { selector: "h2" }).closest("section")!;
+    expect(payroll.textContent).toContain("$96.00");
+    expect(payroll.textContent).toContain("$0.00/mo");
+    expect(payroll.textContent).toContain("Billed separately");
+    expect(payroll.textContent).not.toContain("Included");
+  });
+
   it("shows the license line as a license", () => {
     render(<QuoteSummary quote={MIXED} />);
     expect(screen.getByText("Additional License ×2")).toBeTruthy();

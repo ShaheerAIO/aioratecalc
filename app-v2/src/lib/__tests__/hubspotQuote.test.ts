@@ -109,6 +109,16 @@ describe("toLineItemProperties", () => {
       toLineItemProperties(line({ coveredByPackage: "QSR Kit", discountPercent: 50 }))
     ).not.toHaveProperty("description");
   });
+
+  it("publishes payroll at list with a plain 100% discount, like any free line (2026-11-11)", () => {
+    expect(toLineItemProperties(line({
+      hubspotProductId: "223152695998", name: "Payroll - AIO Platform (Per Person)", qty: 12, unitPrice: 8,
+      billingFrequency: "monthly", discountPercent: 100,
+    }))).toEqual({
+      hs_product_id: "223152695998", quantity: "12", price: "8",
+      recurringbillingfrequency: "monthly", hs_discount_percentage: "100",
+    });
+  });
 });
 
 describe("draftQuoteProperties", () => {
