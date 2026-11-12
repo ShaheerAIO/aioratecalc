@@ -1,0 +1,108 @@
+# MERGE NOTES — `nov11-feedback` and `debug/team-preview`
+
+Written 2026-11-11 for whoever merges this work into `v2`. Read it before merging anything.
+
+## Branch layout
+
+```
+v2
+ └─ nov11-feedback          ← 5 feature commits. MERGE THIS into v2.
+     └─ debug/team-preview  ← debug-only commits ("DEBUG-ONLY: …"). NEVER MERGE THIS.
+```
+
+### `nov11-feedback` (`git log --oneline v2..nov11-feedback`)
+
+| Commit | What it is |
+|---|---|
+| `80b19b3` Nov 11 quoting feedback | Website off the Order & Pay picker, Go Live billing-start copy, "Mixed" billing-start seed fix, install/training charged at list again (`COMPED_SERVICE_PRODUCT_IDS = []`), payroll billed separately (100% off, no commission), Mega Kiosk Loaner back on every plan. |
+| `f450770` Standard rates button | `lib/standardRates.ts` + the "Use standard rates" button; `createProspectAction`'s `standardRates` flag waives the volume/ticket requirement for exactly the standard card. |
+| `c59de53` Admin-only skip billing; never send Adyen cost to reps | `bypassBillingAction` refuses non-admins; `derivePricingForRole` always returns `adyenCostRate: null` to non-admins. |
+| `b68b62d` Account dashboard revamp (phases 1-2) + last_edited_at | `AccountsDashboard` on `lib/accountStatus.ts` (status, flags, next action, tabs), `last_edited_at` column (migration `0033_last_edited_at.sql`), and the whole of `actions/prospects.ts` (standard rates + `lastEditedAt`). |
+| `b085025` Docs for Nov 11 batch | `docs/claude/*` updates for the above. |
+
+**Merge the set, not single commits.** `f450770` does not compile on its own: it uses
+`actions/prospects.ts` changes that only landed in `b68b62d`. Cherry-picking any one commit will break the
+build; merge the branch (or all five, in order).
+
+### `debug/team-preview` — NEVER MERGE
+
+Exists only so the team can click through a shareable Vercel preview of `nov11-feedback`. Every commit on it
+is prefixed `DEBUG-ONLY:` and every hunk is marked in code with `DEBUG-SANDBOX`, `DEBUG-AUTO-LOGIN` or
+`DEBUG-ROLE-SWITCHER` + "debug-only, never merge". `git log --oneline nov11-feedback..debug/team-preview`
+lists them. If anything from it is ever wanted on `v2`, re-implement it deliberately; do not merge or
+cherry-pick the branch.
+
+## What the debug branch adds
+
+Everything is inert unless its env flag is exactly `"true"`.
+
+| Flag | Effect |
+|---|---|
+| `ENABLE_DEBUG_ROLE_SWITCH` | The existing debug role switcher (pre-existing; now rendered as a floating Rep/Admin pill on staff pages). |
+| `DEBUG_AUTO_LOGIN` | Only together with `ENABLE_DEBUG_ROLE_SWITCH`. A visitor with no session and no `debug_role` cookie is the debug **rep** (`rep@aioapp.com`; falls back to the `admin@aioapp.com` row if no rep row exists). The pill sets the cookie to flip to admin (`admin@aioapp.com`). `/customer` and `/lead` are untouched. |
+| `DEBUG_SANDBOX` | No outbound side effects (email, SMS, HubSpot writes, AIO dashboard, Check, crons); send/publish/provision actions refuse before writing to the DB ("Sandbox: nothing was sent (debug deployment)."); a bottom banner says so. |
+
+The owner overrode the "`ENABLE_DEBUG_ROLE_SWITCH` must never be set in a Vercel project environment" rule
+**for this preview deployment only**, with the flags passed per deployment (`vercel deploy -e … -b …`), never
+stored in the project env. That rule still stands for everything else.
+
+### Debug-only files (new)
+
+- `app-v2/src/lib/debug/sandbox.ts` — `isSandbox`, `assertNotSandbox`, `SandboxError`, `SANDBOX_MESSAGE`, `sandboxFetch`
+- `app-v2/src/lib/debug/autoLogin.ts` — `isDebugAutoLoginEnabled`, `effectiveDebugRole`
+- `app-v2/src/components/dev/SandboxBanner.tsx`, `SandboxBanner.module.css`
+- Tests: `app-v2/src/lib/__tests__/debugSandbox.test.ts`, `debugSandboxBilling.test.ts`,
+  `debugSandboxProspects.test.ts`, `debugSandboxStaffActions.test.ts`, `debugAutoLogin.test.ts`,
+  `app-v2/src/components/dev/__tests__/debugChrome.test.tsx`
+
+### Debug-only hunks in existing files
+
+| File | Hunk |
+|---|---|
+| `lib/adapters/hubspot.ts`, `hubspotFiles.ts`, `lib/billing/commissionWriteback.ts`, `lib/adapters/check.ts`, `lib/adapters/aioDashboard.ts` | one line: `import { sandboxFetch as fetch } from "@/lib/debug/sandbox"` |
+| `lib/adapters/email.ts` | import + early `{ sent: false }` return in `send()` |
+| `lib/adapters/sms.ts` | import + early `{ sent: false }` return in `sendLeadLinkSms` |
+| `lib/actions/prospects.ts` | import + `assertNotSandbox()` in `sendProspectToMerchant`, `issueCustomerQuoteLinkAction`, `resendLeadLinkAction` |
+| `lib/actions/applications.ts` | import + `assertNotSandbox()` in `sendMerchantOnboardingLinkAction` |
+| `lib/actions/billing.ts` | import + early return in `sendQuoteAction`, `retryOneTimeInvoiceAction` |
+| `lib/actions/checkPayroll.ts` | import + early return in `createPayrollInvoiceAction` |
+| `lib/actions/customer.ts` | import + early return in `requestCustomerLoginAction`, `assertNotSandbox()` in `startPayrollOnboardingAction` |
+| `lib/actions/leadConfirm.ts` | import + early `formError` in `confirmLeadDetailsAction` |
+| `lib/billing/acceptance.ts` | import + early return in `recordAcceptance` |
+| `lib/billing/publishBillingQuote.ts` | import + early `failed` in `buildAndPublishBillingQuote` (before the build claim) |
+| `lib/billing/oneTimeInvoice.ts` | import + early `failed` in `buildOneTimeInvoice` (before the claim) |
+| `lib/aio/kick.ts`, `lib/aio/provision.ts` | import + early return in `kickAioProvisioning` / `provisionAioTenant` |
+| `app/api/lead/[token]/checkout/route.ts`, `accept/route.ts` | import + early 409 |
+| `app/api/cron/{adyen-actuals,aio-provisioning,hubspot-billing-sync,hubspot-links}/route.ts` | import + `{ skipped: "sandbox" }` after the auth check |
+| `components/customer/LeadQuoteView.tsx` | import + `sandbox` entry in `CHECKOUT_ERRORS` |
+| `lib/auth.config.ts`, `lib/auth/getEffectiveRole.ts` | `parseDebugRole` → `effectiveDebugRole`; rep→admin row fallback |
+| `app/layout.tsx` | `effectiveDebugRole`, `SandboxBanner`, new `RoleSwitcher` props |
+| `components/dev/RoleSwitcher.tsx`, `RoleSwitcher.module.css` | rewritten as the floating pill (staff pages only, flips in place) |
+
+## Prerequisites
+
+**Already done:**
+- Migration `0033_last_edited_at.sql` was applied to the production DB on 2026-11-11.
+
+**Still to do before deploying `nov11-feedback` to production:**
+- In `/admin/settings/quote-limits`, set the per-product discount cap to **100** for **Onsite Installation**
+  (`223452690133`) and **System Onboarding and Training** (`223152695032`). They are charged at list again,
+  and without the cap a rep can't discount them to 100% (the cap, not the old comp, is what stops them).
+
+## Open product questions
+
+- **Onboarding link from Signed.** `canSendOnboarding` only offers it from `quote_accepted`,
+  `merchant_link_sent` or legacy `proposal_sent` with no KYC link. Should a Signed account offer it too?
+- **Admin default tab.** Admin defaults to "All", rep to "Needs me". Confirm that's what admins want.
+- **Standard rates with no volume: margin gap.** A standard-rate prospect has no volume, so no margin floor
+  can be judged, and 2.49% is below the minimum margin at small volumes. Nothing catches that today.
+- **Payroll $0 subscription.** If payroll is a quote's only monthly line, the published HubSpot quote may
+  carry a $0/mo subscription (unverified).
+- **Dashboard phases 3–4** (versions / "Unsent changes", full-width editor) are blocked on proposal
+  questions Q1, Q5 and Q6.
+
+## Team feedback
+
+_(For the owner to fill in after the team has used the preview.)_
+
+-
