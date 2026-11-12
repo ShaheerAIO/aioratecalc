@@ -2,6 +2,7 @@
 // Scopes required: crm.objects.deals.read/write, crm.objects.contacts.read/write
 
 import { paymentProcessingArr } from "@/lib/billing/processingArr";
+import { sandboxFetch as fetch } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge (writes refused when DEBUG_SANDBOX=true)
 import { commissionRateToBps, quoteHardwareCommission } from "@/lib/commission";
 import { PAYROLL_PRODUCT_ID, carriesWebsite, includesMarketing, isProcessingQuote, quoteTypeOf } from "@/lib/quoting";
 import { locationAddress } from "@/types/merchant";

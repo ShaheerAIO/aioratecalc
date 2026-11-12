@@ -19,6 +19,8 @@
 // recorded once. That is why a Graph failure falls through to Resend below
 // rather than simply giving up.
 
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
+
 export interface SendMagicLinkResult {
   sent: boolean;
   devUrl: string | null;
@@ -208,6 +210,12 @@ async function sendViaResend(
 async function send(
   to: string, subject: string, html: string, fallbackUrl: string, rep?: ReplyToRep | null, extras?: SendExtras
 ): Promise<SendMagicLinkResult> {
+  // DEBUG-SANDBOX: debug-only, never merge. Answers exactly as an unconfigured
+  // transport does, so every caller's existing "not sent" path runs.
+  if (isSandbox()) {
+    console.warn(`[sandbox] email not sent: "${subject}"`);
+    return { sent: false, devUrl: fallbackUrl };
+  }
   let graphError: unknown = null;
 
   if (graphConfigured()) {

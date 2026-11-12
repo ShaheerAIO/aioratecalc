@@ -2,6 +2,8 @@
 // email.ts's posture — degrades gracefully so an unconfigured or misdialed
 // number falls back to the rep's copy-link UI instead of blocking the send.
 
+import { isSandbox } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge
+
 export interface SendSmsResult {
   sent: boolean;
   devUrl: string | null;
@@ -20,6 +22,8 @@ function toE164(raw: string): string | null {
 }
 
 export async function sendLeadLinkSms(to: string, url: string): Promise<SendSmsResult> {
+  // DEBUG-SANDBOX: debug-only, never merge. Same answer as an unconfigured Twilio.
+  if (isSandbox()) return { sent: false, devUrl: url };
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_FROM_NUMBER;

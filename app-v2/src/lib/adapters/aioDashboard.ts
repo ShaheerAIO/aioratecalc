@@ -36,6 +36,7 @@
 import { locationAddress } from "@/types/merchant";
 import type { MerchantApplication, OwnerContact } from "@/types/merchant";
 import { toE164Phone } from "@/lib/utils";
+import { sandboxFetch as fetch } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge (writes refused when DEBUG_SANDBOX=true)
 
 /** AIO wants a single name field; OwnerContact is split. */
 function contactName(c: OwnerContact | null | undefined): string {

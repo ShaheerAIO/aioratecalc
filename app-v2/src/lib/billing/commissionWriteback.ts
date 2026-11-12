@@ -59,6 +59,7 @@ import { db } from "@/lib/db/client";
 import { merchantApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import type { MerchantApplication } from "@/types/merchant";
+import { sandboxFetch as fetch } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge (writes refused when DEBUG_SANDBOX=true)
 
 const BASE = "https://api.hubapi.com";
 

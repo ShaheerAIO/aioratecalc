@@ -16,6 +16,7 @@
 // `createDealNote` live on 2026-10-13; it needs `crm.objects.notes.write`.
 
 import { uploadHubspotFile } from "@/lib/adapters/hubspot";
+import { sandboxFetch as fetch } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge (writes refused when DEBUG_SANDBOX=true)
 
 const BASE = "https://api.hubapi.com";
 

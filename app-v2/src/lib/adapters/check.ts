@@ -13,6 +13,7 @@
 // would substitute an unverified value for a verified one.
 
 import type { MerchantApplication, CheckOnboardStatus } from "@/types/merchant";
+import { sandboxFetch as fetch } from "@/lib/debug/sandbox"; // DEBUG-SANDBOX: debug-only, never merge (writes refused when DEBUG_SANDBOX=true)
 
 // Check documents the sandbox host explicitly; the production host is not in
 // the public docs, so it's env-driven rather than guessed. Set
