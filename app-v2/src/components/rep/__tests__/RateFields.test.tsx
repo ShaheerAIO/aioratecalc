@@ -286,3 +286,95 @@ describe("RateFields — freshQuote (closing the no-basis CNP gap)", () => {
     });
   });
 });
+
+// 2026-11-11, product owner: "Allow a user to select a button for standard
+// rates (this can be used for a new restaurant that doesn't have any volume
+// yet)". The button applies the flat standard card: 2.49% + $0.15 card
+// present, AIO's POLICY card-not-present rate (never the 2.49% placeholder).
+describe("RateFields — Use standard rates", () => {
+  beforeEach(() => { getCnpPolicyRateAction.mockResolvedValue(0.033); });
+  afterEach(() => { cleanup(); getCnpPolicyRateAction.mockReset(); });
+
+  const button = () => screen.getByRole("button", { name: "Use standard rates" }) as HTMLButtonElement;
+
+  it("is only shown when the host asks for it", () => {
+    render(<RateFields value={STORED} onChange={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Use standard rates" })).toBeNull();
+  });
+
+  it("stays disabled until the policy CNP is confirmed", async () => {
+    getCnpPolicyRateAction.mockReturnValue(new Promise(() => {}));
+    render(<RateFields value={STORED} onChange={() => {}} showStandardRates />);
+    expect(button().disabled).toBe(true);
+  });
+
+  it("applies 2.49% + $0.15 card present and the policy CNP on both lanes, then tells the host", async () => {
+    let last: QuoteRates = STORED;
+    const onStandardRates = vi.fn();
+    function Spy() {
+      const [value, setValue] = useState<QuoteRates>({ ...STORED, cardNotPresentRate: 0.03, perTransactionFee: 0.2 });
+      return (
+        <RateFields
+          value={value} onChange={next => { last = next; setValue(next); }}
+          showStandardRates onStandardRates={onStandardRates}
+        />
+      );
+    }
+    render(<Spy />);
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    expect(last).toEqual({
+      cardPresentRate: 0.0249, amexCardPresentRate: 0.0249,
+      cardNotPresentRate: 0.033, amexCardNotPresentRate: 0.033,
+      perTransactionFee: 0.15,
+    });
+    expect(onStandardRates).toHaveBeenCalledTimes(1);
+    expect((screen.getByLabelText("Card present rate, percent") as HTMLInputElement).value).toBe("2.49");
+    expect((screen.getByLabelText(/Card not present rate, percent/) as HTMLInputElement).value).toBe("3.30");
+    expect(screen.queryByTestId("cnp-outside-policy")).toBeNull();
+  });
+
+  it("reports the flat rate as an adjustment against the rate card, so the range still judges it", async () => {
+    // The card says 2.17% and the rep is at +10 bps (2.27%). Standard rates
+    // are 2.49%, i.e. +32 against the card — outside a -12..+20 range.
+    let bpsSeen = 10;
+    function Adj() {
+      const [value, setValue] = useState<QuoteRates>({ ...STORED, cardPresentRate: 0.0227 });
+      const [bps, setBps] = useState(10);
+      return (
+        <RateFields
+          value={value} onChange={setValue}
+          adjustBps={bps} onAdjustBps={b => { bpsSeen = b; setBps(b); }}
+          adjustRange={{ min: -12, max: 20 }} showStandardRates
+        />
+      );
+    }
+    render(<Adj />);
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    expect(bpsSeen).toBe(32);
+    expect((screen.getByLabelText("Card present rate, percent") as HTMLInputElement).value).toBe("2.49");
+    expect(screen.getByTestId("rate-outside-limits")).toBeTruthy();
+  });
+
+  it("reports a zero adjustment when there is no card behind the rate", async () => {
+    let bpsSeen: number | null = null;
+    function NoCard() {
+      // A rep who typed 2.60% over the flat default: adjustment +11, card 2.49%.
+      const [value, setValue] = useState<QuoteRates>({ ...DEFAULT_QUOTE_RATES, cardPresentRate: 0.026 });
+      const [bps, setBps] = useState(11);
+      return (
+        <RateFields
+          value={value} onChange={setValue}
+          adjustBps={bps} onAdjustBps={b => { bpsSeen = b; setBps(b); }}
+          adjustRange={null} showStandardRates freshQuote
+        />
+      );
+    }
+    render(<NoCard />);
+    await waitFor(() => expect(button().disabled).toBe(false));
+    fireEvent.click(button());
+    expect(bpsSeen).toBe(0);
+    expect(screen.queryByTestId("rate-outside-limits")).toBeNull();
+  });
+});

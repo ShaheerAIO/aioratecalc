@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { DecimalField } from "@/components/rep/NumberField";
 import { getCnpPolicyRateAction } from "@/lib/actions/rateMatrix";
+import { standardQuoteRates } from "@/lib/standardRates";
 import { DEFAULT_QUOTE_RATES, MAX_PLAUSIBLE_CARD_RATE, type QuoteRates } from "@/types/merchant";
 import styles from "./RateFields.module.css";
 
@@ -121,6 +122,19 @@ export type RateFieldsProps = {
    * different from policy is an override an admin has to approve.
    */
   onPolicyCnp?: (policyCnp: number) => void;
+  /**
+   * Shows a "Use standard rates" button (product owner, 2026-11-11: "Allow a
+   * user to select a button for standard rates (this can be used for a new
+   * restaurant that doesn't have any volume yet)"). Clicking it applies AIO's
+   * flat standard card (`standardQuoteRates`, lib/standardRates.ts: 2.49% +
+   * $0.15 card-present, the policy CNP) through `onChange`/`onAdjustBps`
+   * like any edit, then calls `onStandardRates` so the host can react —
+   * prospect creation uses it to stop requiring a volume and ticket. Disabled
+   * until the policy CNP has been confirmed, so "standard" never means the
+   * 2.49% CNP placeholder.
+   */
+  showStandardRates?: boolean;
+  onStandardRates?: () => void;
 };
 
 /**
@@ -133,6 +147,7 @@ const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
 export default function RateFields({
   value, onChange, hideNote, freshQuote, cardNotPresentOnly, adjustBps = 0, onAdjustBps, adjustRange, onPolicyCnp,
+  showStandardRates, onStandardRates,
 }: RateFieldsProps) {
   // Past the range is allowed (an admin approves it); only a +-500 bps sanity
   // clamp remains.
@@ -156,6 +171,18 @@ export default function RateFields({
     onChange({ ...value, cardNotPresentRate: next, amexCardNotPresentRate: next });
   };
   const setPerTransactionFee = (perTransactionFee: number) => onChange({ ...value, perTransactionFee });
+  // The standard card (2026-11-11). Where the host prices off the rate card,
+  // the flat card-present rate is reported as an adjustment against the
+  // card's own figure, exactly as a typed rate is: RateSuggestion holds
+  // CP = card + adjustment, so this keeps it at 2.49% instead of snapping
+  // back, and the "outside the allowed range" check still judges it.
+  const applyStandardRates = () => {
+    if (policyCnp === null) return;
+    const standard = standardQuoteRates(policyCnp);
+    onAdjustBps?.(Math.round(standard.cardPresentRate * 10000) - cardBps);
+    onChange(standard);
+    onStandardRates?.();
+  };
 
   // A SAVED quote (no freshQuote) trusts its own stored CNP immediately —
   // cnpLocked starts true and nothing below ever runs for it. A fresh quote
@@ -277,6 +304,23 @@ export default function RateFields({
           )}
         </div>
       </div>
+
+      {showStandardRates && (
+        <div className={styles.standardRow}>
+          <button
+            type="button"
+            className={styles.standardBtn}
+            onClick={applyStandardRates}
+            disabled={policyCnp === null}
+          >
+            Use standard rates
+          </button>
+          <span className={styles.standardHint}>
+            {pctText(DEFAULT_QUOTE_RATES.cardPresentRate)}% + ${DEFAULT_QUOTE_RATES.perTransactionFee.toFixed(2)} card present
+            {policyCnp !== null ? `, ${pctText(policyCnp)}% card not present` : ""}
+          </span>
+        </div>
+      )}
 
       {/* Why the card-present lane isn't there. Shown whether or not the host
           hides the standing note, because its absence is the surprising part. */}

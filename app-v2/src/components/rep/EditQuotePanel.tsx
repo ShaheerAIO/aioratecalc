@@ -327,7 +327,13 @@ export default function EditQuotePanel({ app, isAdmin, onSaved, onCancel }: Prop
           )}
 
           <div>
-            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} />
+            {/* "Use standard rates" (2026-11-11) resets the rates to the flat
+                standard card. Volume isn't editable here, so unlike prospect
+                creation there is no requirement for it to waive: with a basis
+                on file the 2.49% is held as an adjustment against the rate
+                card and judged against its range like any typed rate; with
+                none, it is simply the rate, as on every no-volume quote. */}
+            <RateFields value={quoteRates} onChange={setQuoteRates} cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} showStandardRates />
             {/* Used to deliberately skip auto-apply here ("these rates were
                 already chosen and saved"). OVERRIDDEN 2026-10-13 ("get rid of
                 the 'use it' and make it always override") — RateSuggestion no

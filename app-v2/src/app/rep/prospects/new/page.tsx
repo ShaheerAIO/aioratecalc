@@ -26,6 +26,7 @@ import { getMyRoleAction, getPricingPreviewAction } from "@/lib/actions/pricing"
 // pricing.ts for anything but its types.
 import type { RoleScopedPricing } from "@/lib/pricing";
 import { ORDER_POINT_CHANNELS, processesCardNotPresentOnly, quoteHasProcessing } from "@/lib/quoting";
+import { isStandardQuoteRates } from "@/lib/standardRates";
 import { fmt$ } from "@/lib/utils";
 import {
   DEFAULT_CARD_PRESENT_PCT, DEFAULT_QUOTE_RATES, MIN_MONTHLY_PROCESSING_REVENUE, SELECTABLE_PRICING_MODELS,
@@ -91,6 +92,10 @@ function NewProspectFlow() {
   const [cpAdjustBps, setCpAdjustBps] = useState(0);
   const [cpAdjustRange, setCpAdjustRange] = useState<{ min: number; max: number } | null>(null);
   const [pricingModel, setPricingModel] = useState<PricingModel>("2-tier");
+  // The rep pressed "Use standard rates" (product owner, 2026-11-11: "this
+  // can be used for a new restaurant that doesn't have any volume yet"). Only
+  // a request — see `standardMode` below for when it actually applies.
+  const [standardRates, setStandardRates] = useState(false);
   // "Yes, $1.2M a month really is their volume." Reset by any edit to it.
   const [volumeConfirmed, setVolumeConfirmed] = useState(false);
   // The server's role-scoped view of what the typed rates earn. The floor
@@ -344,6 +349,21 @@ function NewProspectFlow() {
   const volume = rated ? parseFloat(processing.monthlyVolume) || 0 : 0;
   const basisHalfSet = (ticket > 0) !== (volume > 0);
   const volumeLooksHigh = volume >= IMPLAUSIBLE_MONTHLY_VOLUME;
+  // STANDARD-RATES MODE (2026-11-11): the quote goes out on the flat standard
+  // card with no volume or ticket required. Derived rather than stored, so
+  // there is no exit path to forget:
+  //  - typing over any rate leaves it (the rates are no longer the standard
+  //    card), and the volume/ticket requirement is back;
+  //  - entering BOTH a volume and a ticket leaves it: there is now a basis, so
+  //    the rate card prices the quote (RateSuggestion applies, as everywhere
+  //    else) and the margin and range checks judge it. Pressing the button
+  //    again then holds 2.49% as an adjustment against the card, which those
+  //    checks still judge — standard rates never skip an approval a quote
+  //    WITH volume would need.
+  // RateSuggestion only looks a rate up with both figures, so while this is
+  // on it has nothing to overwrite the flat card-present rate with.
+  const standardMode = rated && standardRates && !(volume > 0 && ticket > 0)
+    && policyCnp !== null && isStandardQuoteRates(quoteRates, policyCnp);
 
   const hardBlocks: string[] = [];
   if (!deal || !hubspotCompany) hardBlocks.push("Open this quote from its HubSpot deal before sending the link.");
@@ -354,8 +374,9 @@ function NewProspectFlow() {
   // REQUIRED on a processing quote (product owner, 2026-10-18). Without both
   // the rate card can't be read, so the merchant was quoted the flat standard
   // rate whatever their size — and no margin floor was checked at all.
-  if (rated && !(volume > 0 && ticket > 0)) {
-    hardBlocks.push("Enter the monthly volume and average ticket — the card rate is priced off both.");
+  // Standard rates (2026-11-11) waive it: the flat card is the rate.
+  if (rated && !standardMode && !(volume > 0 && ticket > 0)) {
+    hardBlocks.push("Enter the monthly volume and average ticket — the card rate is priced off both, or use standard rates.");
   }
   hardBlocks.push(...quoteBlockers);
   // The margin floor and the $10/mo revenue floor are NOT hard blocks any
@@ -481,6 +502,8 @@ function NewProspectFlow() {
         billingContactId,
         quoteRates, pricingModel, quoteType: quoteType!,
         quoteConfig: ticket > 0 && volume > 0 ? { avgTicket: ticket, monthlyVolume: volume } : null,
+        // The server re-checks that the rates really are the standard card.
+        standardRates: standardMode,
         // Only the picks cross the wire — prices and the tier are re-derived
         // server-side against the live catalog.
         picks,
@@ -505,7 +528,7 @@ function NewProspectFlow() {
   };
 
   const reset = () => {
-    setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier");
+    setQuoteRates(DEFAULT_QUOTE_RATES); setPricingModel("2-tier"); setStandardRates(false);
     setQuoteType(null); setPicks([]); setChannels([]); setChannelsApplied([]); setQuote(null);
     setAdjustments({});
     setLinkUrl(null); setOutcome(null); setConfirmMode(null); setEmailSent(false); setSmsSent(false); setCompanySynced(true); setCopied(false); setError(null);
@@ -520,8 +543,10 @@ function NewProspectFlow() {
   // marketing-only quote the lines are the quote — there's no rate to have.
   // Read off the built lines, not the picks: Marketing Only carries its $199
   // platform line with nothing picked, so a rep may take every menu board off.
+  // A standard-rates quote with lines is a whole quote: the customer sees the
+  // lines and the standard rates, with no volume (leadQuote.ts paymentDetails).
   const hasQuote = rated
-    ? (ticket > 0 && volume > 0)
+    ? (ticket > 0 && volume > 0) || (standardMode && (quote?.quoteLines.length ?? 0) > 0)
     : (quote?.quoteLines.length ?? 0) > 0;
 
   const merchantName = business.dba || business.legalName;
@@ -703,7 +728,7 @@ function NewProspectFlow() {
       {/* freshQuote: this page always starts a new quote at the flat
           standard rate, often before a volume/ticket basis exists — see
           RateFields.tsx's doc comment on that prop. */}
-      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} />
+      <RateFields value={quoteRates} onChange={setQuoteRates} hideNote freshQuote cardNotPresentOnly={cnpOnly} adjustBps={cpAdjustBps} onAdjustBps={setCpAdjustBps} adjustRange={cpAdjustRange} onPolicyCnp={setPolicyCnp} showStandardRates onStandardRates={() => setStandardRates(true)} />
       {/* Sits under the boxes rather than above them: the rep reads the rate
           they're quoting first, and what the card would have said second. It
           now ALWAYS applies what it suggests (2026-10-13, "get rid of the
@@ -745,12 +770,14 @@ function NewProspectFlow() {
         </p>
       )}
 
-      <p className={styles.prefillNote}>
-        {basisHalfSet
+      <p className={styles.prefillNote} data-testid="basis-note">
+        {standardMode
+          ? "Standard rates — the monthly volume and average ticket are optional. Enter both to price off the rate card instead."
+          : basisHalfSet
           ? `Add the ${volume > 0 ? "average ticket" : "monthly volume"} too — the card rate is priced off both.`
           : hasQuote
             ? "The customer opens the link straight to this quote."
-            : "Required. The card rate is priced off the monthly volume and average ticket."}
+            : "Required, unless you use standard rates. The card rate is priced off the monthly volume and average ticket."}
       </p>
     </section>
   );
@@ -791,6 +818,8 @@ function NewProspectFlow() {
       <span className={styles.docRateNote}>
         {cnpOnly
           ? "They take orders online and nowhere else, so every sale is card-not-present."
+          : standardMode
+            ? "AIO's standard rates"
           : hasQuote
             ? `On about ${fmt$(volume)}/mo at a ${fmt$(ticket)} average ticket`
             : "Add their monthly volume and average ticket above to quote this"}
