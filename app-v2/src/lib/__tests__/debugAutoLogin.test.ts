@@ -37,10 +37,13 @@ vi.mock("drizzle-orm", async importOriginal => {
 
 const { getEffectiveRole } = await import("@/lib/auth/getEffectiveRole");
 const { authConfig } = await import("@/lib/auth.config");
-const { effectiveDebugRole, isDebugAutoLoginEnabled } = await import("@/lib/debug/autoLogin");
+const { effectiveDebugRole, isDebugAutoLoginEnabled, debugUserEmail } = await import("@/lib/debug/autoLogin");
 
 const REP = { id: "11111111-1111-4111-8111-111111111111", email: "rep@aioapp.com", name: "Rep", role: "rep", disabledAt: null };
 const ADMIN = { id: "22222222-2222-4222-8222-222222222222", email: "admin@aioapp.com", name: "Admin", role: "admin", disabledAt: null };
+// The dedicated rows auto-login acts as (prod has no seeded rep@/admin@ rows).
+const DEBUG_REP = { id: "33333333-3333-4333-8333-333333333333", email: "debug-rep@aioapp.com", name: "Debug Rep", role: "rep", disabledAt: null };
+const DEBUG_ADMIN = { id: "44444444-4444-4444-8444-444444444444", email: "debug-admin@aioapp.com", name: "Debug Admin", role: "admin", disabledAt: null };
 
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
@@ -48,7 +51,7 @@ beforeEach(() => {
     saved[k] = process.env[k];
     delete process.env[k];
   }
-  rows = [REP, ADMIN];
+  rows = [REP, ADMIN, DEBUG_REP, DEBUG_ADMIN];
   debugCookie = undefined;
 });
 afterEach(() => {
@@ -92,6 +95,8 @@ describe("off unless both flags are set", () => {
     expect(await getEffectiveRole()).toBeNull();
     expect(authorized("/rep")).toBe(false);
     debugCookie = "admin";
+    // Local dev keeps the seeded <role>@aioapp.com rows.
+    expect(debugUserEmail("admin")).toBe("admin@aioapp.com");
     expect(await getEffectiveRole()).toMatchObject({ role: "admin", userId: ADMIN.id, isDebug: true });
   });
 });
@@ -99,21 +104,29 @@ describe("off unless both flags are set", () => {
 describe("both flags: auto-login", () => {
   beforeEach(bothFlags);
 
-  it("an anonymous visitor is the seeded rep by default", async () => {
-    expect(await getEffectiveRole()).toMatchObject({ role: "rep", userId: REP.id, isDebug: true });
+  it("an anonymous visitor is the dedicated debug rep by default", async () => {
+    expect(await getEffectiveRole()).toMatchObject({ role: "rep", userId: DEBUG_REP.id, isDebug: true });
     expect(authorized("/rep")).toBe(true);
     expect(authorized("/admin")).toBe(false);
   });
 
   it("the debug_role cookie decides: admin", async () => {
     debugCookie = "admin";
-    expect(await getEffectiveRole()).toMatchObject({ role: "admin", userId: ADMIN.id, isDebug: true });
+    expect(await getEffectiveRole()).toMatchObject({ role: "admin", userId: DEBUG_ADMIN.id, isDebug: true });
     expect(authorized("/admin", "admin")).toBe(true);
   });
 
-  it("no seeded rep row: the rep view runs as the seeded admin row", async () => {
-    rows = [ADMIN];
-    expect(await getEffectiveRole()).toMatchObject({ role: "rep", userId: ADMIN.id, isDebug: true });
+  it("maps to debug-<role>@aioapp.com", () => {
+    expect(debugUserEmail("rep")).toBe("debug-rep@aioapp.com");
+    expect(debugUserEmail("admin")).toBe("debug-admin@aioapp.com");
+  });
+
+  it("a missing debug row is logged and falls through to the real session (no other row borrowed)", async () => {
+    rows = [REP, ADMIN, DEBUG_ADMIN];
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await getEffectiveRole()).toBeNull();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("debug-rep@aioapp.com"));
+    error.mockRestore();
   });
 
   it("customer routes are untouched", () => {

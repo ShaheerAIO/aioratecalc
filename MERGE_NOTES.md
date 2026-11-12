@@ -39,7 +39,7 @@ Everything is inert unless its env flag is exactly `"true"`.
 | Flag | Effect |
 |---|---|
 | `ENABLE_DEBUG_ROLE_SWITCH` | The existing debug role switcher (pre-existing; now rendered as a floating Rep/Admin pill on staff pages). |
-| `DEBUG_AUTO_LOGIN` | Only together with `ENABLE_DEBUG_ROLE_SWITCH`. A visitor with no session and no `debug_role` cookie is the debug **rep** (`rep@aioapp.com`; falls back to the `admin@aioapp.com` row if no rep row exists). The pill sets the cookie to flip to admin (`admin@aioapp.com`). `/customer` and `/lead` are untouched. |
+| `DEBUG_AUTO_LOGIN` | Only together with `ENABLE_DEBUG_ROLE_SWITCH`. A visitor with no session and no `debug_role` cookie is the debug **rep**, acting as the dedicated `debug-rep@aioapp.com` users row; the pill sets the cookie to flip to admin (`debug-admin@aioapp.com`). A missing row is logged and falls through to the real session. With auto-login off, the switcher keeps the local seeded `rep@`/`admin@aioapp.com` rows. `/customer` and `/lead` are untouched. |
 | `DEBUG_SANDBOX` | No outbound side effects (email, SMS, HubSpot writes, AIO dashboard, Check, crons); send/publish/provision actions refuse before writing to the DB ("Sandbox: nothing was sent (debug deployment)."); a bottom banner says so. |
 
 The owner overrode the "`ENABLE_DEBUG_ROLE_SWITCH` must never be set in a Vercel project environment" rule
@@ -75,7 +75,7 @@ stored in the project env. That rule still stands for everything else.
 | `app/api/lead/[token]/checkout/route.ts`, `accept/route.ts` | import + early 409 |
 | `app/api/cron/{adyen-actuals,aio-provisioning,hubspot-billing-sync,hubspot-links}/route.ts` | import + `{ skipped: "sandbox" }` after the auth check |
 | `components/customer/LeadQuoteView.tsx` | import + `sandbox` entry in `CHECKOUT_ERRORS` |
-| `lib/auth.config.ts`, `lib/auth/getEffectiveRole.ts` | `parseDebugRole` → `effectiveDebugRole`; rep→admin row fallback |
+| `lib/auth.config.ts`, `lib/auth/getEffectiveRole.ts` | `parseDebugRole` → `effectiveDebugRole`; debug row via `debugUserEmail`, `console.error` when it's missing |
 | `app/layout.tsx` | `effectiveDebugRole`, `SandboxBanner`, new `RoleSwitcher` props |
 | `components/dev/RoleSwitcher.tsx`, `RoleSwitcher.module.css` | rewritten as the floating pill (staff pages only, flips in place) |
 
@@ -100,6 +100,27 @@ stored in the project env. That rule still stands for everything else.
   carry a $0/mo subscription (unverified).
 - **Dashboard phases 3–4** (versions / "Unsent changes", full-width editor) are blocked on proposal
   questions Q1, Q5 and Q6.
+
+## Cleanup after team testing
+
+Auto-login acts as two dedicated users that exist in the **PRODUCTION** `users` table (created by the owner
+2026-11-11, no password, no Entra link): "Debug Rep" `debug-rep@aioapp.com` (role `rep`) and "Debug Admin"
+`debug-admin@aioapp.com` (role `admin`). Every account/draft the team created through the preview is owned by
+them (`merchant_applications.owner_user_id`). Find those rows with (not run; review before running anything):
+
+```sql
+SELECT id, stage, quote_status, created_at
+FROM merchant_applications
+WHERE owner_user_id IN (SELECT id FROM users WHERE email LIKE 'debug-%@aioapp.com');
+```
+
+The team may also have edited real accounts in admin view (approvals, closed lost, rate/limit edits); those
+keep their real owner and aren't found by this query. `quote_approval.approvedByUserId` and the policy tables'
+`updated_by_user_id` can name a debug user too.
+
+`owner_user_id` is a required FK, so **deleting the debug users needs those rows reassigned or deleted first**
+(`/admin/users` → delete reassigns; or delete the test applications). Disabling them (`disabled_at`) is the
+softer option and also stops auto-login resolving to them.
 
 ## Team feedback
 
