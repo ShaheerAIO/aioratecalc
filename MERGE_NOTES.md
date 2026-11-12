@@ -89,6 +89,11 @@ stored in the project env. That rule still stands for everything else.
 - In `/admin/settings/quote-limits`, set the per-product discount cap to **100** for **Onsite Installation**
   (`223452690133`) and **System Onboarding and Training** (`223152695032`). They are charged at list again,
   and without the cap a rep can't discount them to 100% (the cap, not the old comp, is what stops them).
+- **Customer-facing changes were NOT exercised in the sandbox preview** (sends are refused there, so new quotes
+  never get a customer link; only the two [TEST] copies' existing links can be viewed, and confirm/accept/checkout
+  are blocked). Before merging, check on a real (non-sandbox) environment: customer quote shows "Billing starts
+  N days after checkout or on Go Live"; payroll line reads "Billed separately" at $0; Onsite Installation /
+  Training priced at list unless discounted; Website absent on Order & Pay quotes; QuoteSummary PDF matches.
 
 ## Open product questions
 
