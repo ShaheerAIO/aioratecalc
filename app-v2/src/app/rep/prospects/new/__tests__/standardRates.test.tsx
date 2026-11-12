@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 //
-// "Use standard rates" on New Prospect (product owner, 2026-11-11: "Allow a
-// user to select a button for standard rates (this can be used for a new
-// restaurant that doesn't have any volume yet)"). Pressing it puts the page in
-// standard-rates mode: the flat card is applied and the monthly volume and
-// average ticket (REQUIRED on a processing quote since 2026-10-18) may be left
-// blank. Typing over a rate, or entering both figures, leaves the mode.
+// The "Standard rates" toggle on New Prospect (product owner, 2026-11-11:
+// "Allow a user to select a button for standard rates (this can be used for a
+// new restaurant that doesn't have any volume yet)", then "if the button is
+// clicked the entry boxes for volume and size should be hidden away. if
+// unclicked it should clear the old rate"). ON applies the flat card, hides
+// and empties the volume and ticket (REQUIRED on a processing quote since
+// 2026-10-18) and waives them. OFF clears it back to the fresh-form rate and
+// shows the empty boxes again. Typing over a rate while on turns it off.
 //
 // The configurator and the merchant form are stubbed: this is about the
 // page's own gate and what it sends, not about quote derivation.
@@ -68,9 +70,15 @@ vi.mock("@/components/rep/MerchantDetailsForm", () => ({
 import NewProspectPage from "@/app/rep/prospects/new/page";
 
 const VOLUME_BLOCK = /Enter the monthly volume and average ticket/;
+const STANDARD = {
+  cardPresentRate: 0.0249, amexCardPresentRate: 0.0249,
+  cardNotPresentRate: 0.033, amexCardNotPresentRate: 0.033, perTransactionFee: 0.15,
+};
 const createButton = () => screen.getByRole("button", { name: /Create (Quote )?Link/ }) as HTMLButtonElement;
-const standardButton = () => screen.getByRole("button", { name: "Use standard rates" }) as HTMLButtonElement;
+const toggle = () => screen.getByRole("button", { name: "Standard rates" }) as HTMLButtonElement;
 const cpBox = () => screen.getByLabelText("Card present rate, percent") as HTMLInputElement;
+const volumeBox = () => screen.queryByLabelText("Monthly card volume, dollars") as HTMLInputElement | null;
+const ticketBox = () => screen.queryByLabelText("Average ticket, dollars") as HTMLInputElement | null;
 
 async function openProcessingQuote() {
   render(<NewProspectPage />);
@@ -79,6 +87,19 @@ async function openProcessingQuote() {
   fireEvent.click(screen.getByRole("button", { name: "Pick plan" }));
   fireEvent.click(screen.getByRole("button", { name: "Set legal name" }));
   fireEvent.change(screen.getByLabelText("Send to"), { target: { value: "ana@tortapalace.com" } });
+}
+
+/** Volume and ticket entered, and the rate card's 2.17% applied over them. */
+async function priceOffTheCard() {
+  fireEvent.change(volumeBox()!, { target: { value: "80000" } });
+  fireEvent.change(ticketBox()!, { target: { value: "25" } });
+  await waitFor(() => expect(cpBox().value).toBe("2.17"));
+}
+
+async function turnOn() {
+  await waitFor(() => expect(toggle().disabled).toBe(false));
+  fireEvent.click(toggle());
+  expect(toggle().getAttribute("aria-pressed")).toBe("true");
 }
 
 beforeEach(() => {
@@ -102,21 +123,36 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-describe("New Prospect — Use standard rates", () => {
-  it("still requires a volume and ticket on a processing quote until the button is pressed", async () => {
+describe("New Prospect — Standard rates toggle", () => {
+  it("still requires a volume and ticket on a processing quote while it is off", async () => {
     await openProcessingQuote();
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(volumeBox()).toBeTruthy();
     expect(screen.getByText(VOLUME_BLOCK)).toBeTruthy();
     expect(createButton().disabled).toBe(true);
   });
 
-  it("sends a standard-rate quote with no volume: flat card, no quoteConfig, standardRates flagged", async () => {
+  it("ON over a rate-card price: applies the flat card and hides and empties the volume and ticket", async () => {
     await openProcessingQuote();
-    await waitFor(() => expect(standardButton().disabled).toBe(false));
-    fireEvent.click(standardButton());
+    await priceOffTheCard();
+    await turnOn();
 
+    expect(volumeBox()).toBeNull();
+    expect(ticketBox()).toBeNull();
+    expect(cpBox().value).toBe("2.49");
+    expect((screen.getByLabelText(/Card not present rate, percent/) as HTMLInputElement).value).toBe("3.30");
     expect(screen.queryByText(VOLUME_BLOCK)).toBeNull();
     expect(screen.getByTestId("basis-note").textContent).toMatch(/Standard rates/);
-    // No volume, so no approval is asked for merely for lacking one.
+    // And it stays 2.49%: the rate card doesn't come back over it.
+    await new Promise(r => setTimeout(r, 400));
+    expect(cpBox().value).toBe("2.49");
+    expect(screen.queryByTestId("rate-outside-limits")).toBeNull();
+  });
+
+  it("sends a standard-rate quote with no volume: flat card, no quoteConfig, no volume, standardRates flagged", async () => {
+    await openProcessingQuote();
+    await priceOffTheCard();
+    await turnOn();
     await waitFor(() => expect(createButton().disabled).toBe(false));
     fireEvent.click(createButton());
 
@@ -124,36 +160,37 @@ describe("New Prospect — Use standard rates", () => {
     const sent = createProspectAction.mock.calls[0][0];
     expect(sent.standardRates).toBe(true);
     expect(sent.quoteConfig).toBeNull();
-    expect(sent.quoteRates).toEqual({
-      cardPresentRate: 0.0249, amexCardPresentRate: 0.0249,
-      cardNotPresentRate: 0.033, amexCardNotPresentRate: 0.033, perTransactionFee: 0.15,
-    });
+    expect(sent.processing.monthlyVolume).toBe("");
+    expect(sent.processing.avgTicket).toBe("");
+    expect(sent.quoteRates).toEqual(STANDARD);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("leaves the mode when the rep types over the rate: the volume is required again", async () => {
+  it("OFF clears the standard rate back to the unpriced start and shows the empty boxes again", async () => {
     await openProcessingQuote();
-    await waitFor(() => expect(standardButton().disabled).toBe(false));
-    fireEvent.click(standardButton());
+    await turnOn();
+    fireEvent.click(toggle());
+
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(volumeBox()!.value).toBe("");
+    expect(ticketBox()!.value).toBe("");
+    expect(screen.getByText(VOLUME_BLOCK)).toBeTruthy();
+    expect(createButton().disabled).toBe(true);
+    // The rate card prices it again once both are entered.
+    await priceOffTheCard();
     expect(screen.queryByText(VOLUME_BLOCK)).toBeNull();
+  });
+
+  it("typing over a rate while on turns it off and keeps the typed rate", async () => {
+    await openProcessingQuote();
+    await turnOn();
 
     fireEvent.change(cpBox(), { target: { value: "2.60" } });
     fireEvent.blur(cpBox());
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(cpBox().value).toBe("2.60");
+    expect(volumeBox()).toBeTruthy();
     expect(screen.getByText(VOLUME_BLOCK)).toBeTruthy();
     expect(createButton().disabled).toBe(true);
-  });
-
-  it("leaves the mode once both a volume and a ticket are entered: the rate card prices it", async () => {
-    await openProcessingQuote();
-    await waitFor(() => expect(standardButton().disabled).toBe(false));
-    fireEvent.click(standardButton());
-
-    fireEvent.change(screen.getByLabelText("Monthly card volume, dollars"), { target: { value: "80000" } });
-    expect(screen.getByTestId("basis-note").textContent).toMatch(/Standard rates/);
-    fireEvent.change(screen.getByLabelText("Average ticket, dollars"), { target: { value: "25" } });
-
-    await waitFor(() => expect(getSuggestedRatesAction).toHaveBeenCalledWith({ monthlyVolume: 80000, avgTicket: 25 }));
-    await waitFor(() => expect(cpBox().value).toBe("2.17"));
-    expect(screen.getByTestId("basis-note").textContent).not.toMatch(/Standard rates/);
   });
 });

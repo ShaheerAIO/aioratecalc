@@ -130,7 +130,7 @@
   color: var(--text-dim);
 }
 
-/* "Use standard rates" (2026-11-11). The small ghost pill the rep pages use
+/* The "Standard rates" toggle (2026-11-11). The small ghost pill the rep pages use
    for an action inside a panel (prospects-new's .btnGhost.btnSm), restated
    here because this component renders on hosts with their own stylesheets. */
 .standardRow {
@@ -156,6 +156,10 @@
 }
 
 .standardBtn:hover { background: var(--rule); color: var(--ink); }
+
+/* On: the filled accent pill, so the state reads at a glance. */
+.standardBtn[data-active] { color: white; background: var(--accent); border-color: var(--accent); }
+.standardBtn[data-active]:hover { opacity: 0.92; background: var(--accent); color: white; }
 .standardBtn:disabled { opacity: 0.6; cursor: default; }
 .standardBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
