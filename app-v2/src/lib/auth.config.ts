@@ -1,7 +1,8 @@
 import type { NextAuthConfig } from "next-auth";
 import { NextResponse } from "next/server";
-import { DEBUG_ROLE_COOKIE, isDebugRoleSwitchEnabled, parseDebugRole } from "@/lib/auth/debugRole";
+import { DEBUG_ROLE_COOKIE, isDebugRoleSwitchEnabled } from "@/lib/auth/debugRole";
 import { ENTRA_PROVIDER_ID } from "@/lib/auth/entraDenial";
+import { effectiveDebugRole } from "@/lib/debug/autoLogin"; // DEBUG-AUTO-LOGIN: debug-only, never merge
 
 // Edge-safe: no DB/bcrypt imports here (those live in auth.ts, providers only
 // run in the Node route-handler context). Middleware imports this file
@@ -33,7 +34,8 @@ export const authConfig: NextAuthConfig = {
       // so a leftover rep/admin debug cookie must never hijack /customer auth
       // (it would permanently block real customer sessions from that route).
       if (isDebugRoleSwitchEnabled() && (pathname.startsWith("/admin") || pathname.startsWith("/rep"))) {
-        const debugRole = parseDebugRole(request.cookies.get(DEBUG_ROLE_COOKIE)?.value);
+        // DEBUG-AUTO-LOGIN: debug-only, never merge (was parseDebugRole; defaults to "rep" under DEBUG_AUTO_LOGIN)
+        const debugRole = effectiveDebugRole(request.cookies.get(DEBUG_ROLE_COOKIE)?.value);
         if (debugRole) role = debugRole;
       }
       if (pathname.startsWith("/admin")) return role === "admin";

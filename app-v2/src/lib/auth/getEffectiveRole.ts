@@ -5,7 +5,8 @@ import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db/client";
 import { users } from "@/lib/db/schema";
-import { DEBUG_ROLE_COOKIE, isDebugRoleSwitchEnabled, parseDebugRole, type DebugRole } from "./debugRole";
+import { DEBUG_ROLE_COOKIE, isDebugRoleSwitchEnabled, type DebugRole } from "./debugRole";
+import { effectiveDebugRole, isDebugAutoLoginEnabled } from "@/lib/debug/autoLogin"; // DEBUG-AUTO-LOGIN: debug-only, never merge
 
 export type EffectiveRole = { role: DebugRole; userId: string; name: string; isDebug: boolean };
 
@@ -43,9 +44,15 @@ function isUuid(value: string): boolean {
 export const getEffectiveRole = cache(async function getEffectiveRole(): Promise<EffectiveRole | null> {
   if (isDebugRoleSwitchEnabled()) {
     const store = await cookies();
-    const debugRole = parseDebugRole(store.get(DEBUG_ROLE_COOKIE)?.value);
+    // DEBUG-AUTO-LOGIN: debug-only, never merge (was parseDebugRole; defaults to "rep" under DEBUG_AUTO_LOGIN)
+    const debugRole = effectiveDebugRole(store.get(DEBUG_ROLE_COOKIE)?.value);
     if (debugRole) {
-      const [user] = await db.select().from(users).where(eq(users.email, `${debugRole}@aioapp.com`)).limit(1);
+      let [user] = await db.select().from(users).where(eq(users.email, `${debugRole}@aioapp.com`)).limit(1);
+      // DEBUG-AUTO-LOGIN: debug-only, never merge. No seeded rep row → act as the
+      // seeded admin row in the rep view, rather than bouncing to a sign-in nobody can use.
+      if (!user && debugRole === "rep" && isDebugAutoLoginEnabled()) {
+        [user] = await db.select().from(users).where(eq(users.email, "admin@aioapp.com")).limit(1);
+      }
       if (user) return { role: debugRole, userId: user.id, name: `${user.name} (debug)`, isDebug: true };
     }
   }
