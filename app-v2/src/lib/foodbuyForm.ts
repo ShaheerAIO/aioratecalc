@@ -138,7 +138,8 @@ export function validateFoodbuyForm(data: FoodbuyFormData): Record<string, strin
 
   const b = data.business;
   need("business.legalName", b.legalName, "Legal entity name");
-  if (!/^\d{2}-?\d{7}$/.test(b.ein.trim())) errors["business.ein"] = "Enter your 9-digit Federal ID # (EIN)";
+  // EIN is optional (2026-11-16, product owner), but one that IS typed must be 9 digits.
+  if (b.ein.trim() && !/^\d{2}-?\d{7}$/.test(b.ein.trim())) errors["business.ein"] = "Enter your 9-digit Federal ID # (EIN)";
   need("business.bizType", b.bizType, "Type of business");
   need("business.address", b.address, "Corporate address");
   need("business.city", b.city, "City");

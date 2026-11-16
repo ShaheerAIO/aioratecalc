@@ -58,11 +58,17 @@ describe("validateFoodbuyForm", () => {
     expect(validateFoodbuyForm(completeForm())).toEqual({});
   });
 
-  it("requires the EIN, GPO answer, acceptance and signature", () => {
-    const f = { ...completeForm(), business: { ...completeForm().business, ein: "" }, gpo: { participates: null, name: "" }, accept: false, signature: "" };
+  it("requires the GPO answer, acceptance and signature", () => {
+    const f = { ...completeForm(), gpo: { participates: null, name: "" }, accept: false, signature: "" };
     expect(Object.keys(validateFoodbuyForm(f))).toEqual(
-      expect.arrayContaining(["business.ein", "gpo.participates", "accept", "signature"]),
+      expect.arrayContaining(["gpo.participates", "accept", "signature"]),
     );
+  });
+
+  it("leaves the EIN optional, but checks its shape when typed", () => {
+    const withEin = (ein: string) => ({ ...completeForm(), business: { ...completeForm().business, ein } });
+    expect(validateFoodbuyForm(withEin(""))).toEqual({});
+    expect(validateFoodbuyForm(withEin("12-345678"))).toHaveProperty(["business.ein"]);
   });
 
   it("requires the GPO's name only when they're in one", () => {

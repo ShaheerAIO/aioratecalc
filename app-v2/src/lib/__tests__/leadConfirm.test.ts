@@ -224,7 +224,6 @@ describe("the confirmation step requires every box on it", () => {
   const requiredNow: Array<[string, Record<string, string>]> = [
     ["business.dba", { "business.dba": "" }],
     ["business.bizType", { "business.bizType": "" }],
-    ["business.ein", { "business.ein": "" }],
     ["ownerContact.title", { "ownerContact.title": "" }],
   ];
 
@@ -233,6 +232,11 @@ describe("the confirmation step requires every box on it", () => {
       expect(confirmationErrors(applyLeadConfirmation(current, blanked))).toHaveProperty(path);
     });
   }
+
+  it("accepts a blank EIN (optional since 2026-11-16)", () => {
+    expect(confirmationErrors(applyLeadConfirmation(current, { "business.ein": "" })))
+      .not.toHaveProperty("business.ein");
+  });
 
   it("checks the EIN's SHAPE, not just that something was typed", () => {
     // Nine digits, always. Nothing downstream verifies this one — Adyen and
@@ -257,7 +261,7 @@ describe("the confirmation step requires every box on it", () => {
     const stripped = { business: { ...BUSINESS, dba: "", bizType: "" as const, ein: "" }, ownerContact: { ...OWNER, title: "" } };
     expect(validateOnboardingFields(stripped)).toEqual({});
     expect(Object.keys(confirmationErrors(stripped)).sort())
-      .toEqual(["business.bizType", "business.dba", "business.ein", "ownerContact.title"]);
+      .toEqual(["business.bizType", "business.dba", "ownerContact.title"]);
   });
 });
 
@@ -313,8 +317,8 @@ describe("missingConfirmationFields — what a disabled button is waiting on", (
   });
 
   it("lists them in the order the form asks for them", () => {
-    const next = applyLeadConfirmation(current, { "business.ein": "", "business.dba": "" });
-    expect(missingConfirmationFields(next)).toEqual(["Trading name (DBA)", "Federal EIN"]);
+    const next = applyLeadConfirmation(current, { "ownerContact.title": "", "business.dba": "" });
+    expect(missingConfirmationFields(next)).toEqual(["Trading name (DBA)", "Owner — Title"]);
   });
 });
 
