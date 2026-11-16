@@ -291,8 +291,8 @@ function confirmationOnlyErrors(input: LeadConfirmInput): OnboardingFieldErrors 
 
   if (blank(biz.dba)) errors["business.dba"] = "Enter the name customers know you by.";
   if (blank(biz.bizType)) errors["business.bizType"] = "Choose how the business is registered.";
-  if (blank(biz.ein)) errors["business.ein"] = "Enter the business's 9-digit federal EIN.";
-  else if (!EIN.test((biz.ein ?? "").trim())) errors["business.ein"] = "An EIN is 9 digits, e.g. 12-3456789.";
+  // EIN is optional (2026-11-16, product owner), but one that IS typed must be 9 digits.
+  if (!blank(biz.ein) && !EIN.test((biz.ein ?? "").trim())) errors["business.ein"] = "An EIN is 9 digits, e.g. 12-3456789.";
 
   if (blank(input.ownerContact?.title)) errors["ownerContact.title"] = "Enter their role, e.g. Owner.";
 

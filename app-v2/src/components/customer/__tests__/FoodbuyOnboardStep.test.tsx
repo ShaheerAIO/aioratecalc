@@ -74,7 +74,7 @@ describe("FoodbuyOnboardStep", () => {
     render(<FoodbuyOnboardStep app={APP} />);
     fireEvent.click(screen.getByText("Review Agreement →"));
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Enter your 9-digit Federal ID # (EIN)")).toBeTruthy();
+    expect(screen.queryByText("Enter your 9-digit Federal ID # (EIN)")).toBeNull();
     expect(screen.getByText("Line 1: Account # is required")).toBeTruthy();
     expect(screen.getByText("Sign the agreement")).toBeTruthy();
   });
