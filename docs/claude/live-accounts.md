@@ -6,23 +6,34 @@ the role (`getEffectiveRole`). Rendered on every request (`dynamic = "force-dyna
 cached. Built 2026-11-19.
 
 ## Definition (product owner, 2026-11-19)
-- **Ordering is live** when the HubSpot company has an active (`hs_status` active | past_due)
-  platform subscription **and** its AIO tenant ran Adyen card transactions in the last 30 days.
+- **Ordering is live** when the AIO tenant ran Adyen card transactions in the last 30 days.
+  **Billing doesn't decide it** (product owner, 2026-11-19: "if someone is transacting but not paying
+  that still counts as live"; originally it also required an active platform subscription). With an
+  active (`hs_status` active | past_due) platform subscription it's "Live – ordering, billed";
+  without one it's "Live – not billed" (bucket `transacting_not_paying`), still listed under "Needs
+  attention" as a billing follow-up. The headline counts both. Paying without transactions is not live.
 - **Marketing is live** when the company has an active `AIO Marketing Platform…` subscription **and**
-  an associated meeting with `hs_activity_type = "Marketing Discovery"` and
-  `hs_meeting_outcome = "COMPLETED"`. `"Discovery Meeting"` is the **sales** discovery (pre-sale) and
-  does not count; a COMPLETED `Discovery Meeting` with "marketing" in its title goes to its own
-  bucket ("discovery logged under sales type") so it can be re-typed in HubSpot.
+  a COMPLETED post-sale marketing session on the company (`marketingDiscovery`): activity type
+  "Marketing Discovery" or "Marketing Catchup", or an untyped meeting titled Marketing Onboarding /
+  Marketing Meeting / Marketing Catchup / Brandbook. **Broadened 2026-11-19** (product owner) from
+  "Marketing Discovery only": a review of all 26 marketing subscribers found the team rarely uses that
+  type, and logs the post-sale work under those titles, with catchups only after discovery (5 → 13
+  live). Never counted: the pre-sale `"Discovery Meeting"` (even titled "marketing"), a generic
+  "Onboarding Call", a "Marketing Suite" pitch, or a "Declined: …" calendar copy.
 - Subscription `hs_name` classification (`classifySubscription`): "Marketing Partial Ordering" →
   ordering; "AIO Marketing Platform" → marketing; names starting "Payroll" → other;
   /Platform|All.in.One|Order & Pay|Pre Auth|Food Truck|Billing Migration/i → ordering; else other.
 
-## Buckets
-1 Live – ordering · 2 Live – marketing · 3 Transacting, not paying in HubSpot (tenant-level; incl.
-ambiguous, name-only and unmatched tenants) · 4 Paying (ordering), no Adyen transactions in 30d ·
-5 Paying (ordering), company has no tenant id · 6 Marketing – discovery under sales type ·
-7 Marketing – no marketing discovery · 8 Other subscription only. A company paying for both
-ordering and marketing appears once on each side. Plus "Suggested HubSpot fixes".
+## Buckets and layout
+Buckets: Live – ordering, billed · Live – marketing · Live – not billed (tenant-level; incl. ambiguous,
+name-only and unmatched tenants) · Paying, no transactions in 30 days · Paying, no tenant ID in
+HubSpot · Marketing paid, discovery not done · Other subscription only. A company paying for both
+ordering and marketing appears once on each side.
+
+The page (simplified 2026-11-19, "too many tables") shows the two live counts as headline numbers
+(ordering = billed + not billed), then ONE "Needs attention" table (Live – not billed plus the three
+non-live ordering/marketing buckets, with a Reason column, largest volume first). The live lists and the suggested HubSpot fixes are collapsed `<details>`.
+"Other subscription only" (payroll, hardware, investor) isn't listed.
 
 ## Data sources (all READ-ONLY)
 - **Adyen activity:** `merchant_daily_actuals`, summed per `tenant_number` for `sale_date` in the
@@ -69,7 +80,9 @@ same line suffixed "(name match — verify first)". Nothing is written; fixes ar
 ## First run (2026-11-19, real data, ~16s)
 Live ordering 21 · live marketing 5 · transacting not paying 60 (25 name-suggested, 25 unmatched,
 9 company not paying for the platform, 1 override) · paying no tx 41 · paying no tenant 11 ·
-marketing sales-type discovery 5 · marketing no discovery 16 · other only 2 · fixes 29.
+marketing sales-type discovery 5 · marketing no discovery 16 · other only 2 · fixes 29. (Before the
+ingest fix and re-ingest; after them, the HubSpot Tenant Id fixes and the broadened marketing rule
+the same day: ordering 62 billed + 19 not billed = 81 (every transacting tenant), marketing 13.)
 
 ## Files
 `lib/liveAccounts.ts` (pure) · `lib/liveAccountsData.ts` (server-only loader) ·
