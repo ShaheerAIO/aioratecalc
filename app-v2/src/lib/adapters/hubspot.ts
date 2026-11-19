@@ -3265,3 +3265,156 @@ export async function findCompaniesByCheckId(checkCompanyIds: string[]): Promise
   }
   return out;
 }
+
+// ── Live accounts (/admin/live-accounts) — READ-ONLY ────────────────────────
+// Token split as everywhere else: subscriptions on the billing token;
+// companies, company search and meetings on the general one.
+
+type HubspotObject = { id: string; properties?: Record<string, string | null> };
+
+export type HubspotSubscriptionSummary = {
+  id: string;
+  name: string | null;
+  status: string | null;
+  frequency: string | null;
+  lastPaymentDate: string | null;
+  lastPaymentStatus: string | null;
+  companyIds: string[];
+};
+
+/** Every subscription in the portal (≈243 on 2026-11-19), with its companies. */
+export async function listAllSubscriptions(): Promise<HubspotSubscriptionSummary[]> {
+  const out: HubspotSubscriptionSummary[] = [];
+  let after: string | undefined;
+  do {
+    const params = new URLSearchParams({
+      limit: "100",
+      properties: "hs_status,hs_name,hs_recurring_billing_frequency,hs_last_payment_date,hs_last_payment_status",
+      associations: "companies",
+      ...(after ? { after } : {}),
+    });
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/subscriptions?${params}`, { headers: billingHeaders() });
+    if (!res.ok) throw hubspotErr("HubSpot subscription list failed", res.status, await res.text());
+    const data = await res.json() as {
+      results?: Array<HubspotObject & { associations?: Record<string, { results?: Array<{ id: string | number }> }> }>;
+      paging?: { next?: { after?: string } };
+    };
+    for (const r of data.results ?? []) {
+      const p = r.properties ?? {};
+      out.push({
+        id: String(r.id),
+        name: clean(p.hs_name),
+        status: clean(p.hs_status),
+        frequency: clean(p.hs_recurring_billing_frequency),
+        lastPaymentDate: clean(p.hs_last_payment_date),
+        lastPaymentStatus: clean(p.hs_last_payment_status),
+        companyIds: dedupeCompanyIds(r.associations?.companies?.results),
+      });
+    }
+    after = data.paging?.next?.after;
+  } while (after);
+  return out;
+}
+
+export type HubspotCompanyRecord = { id: string; properties: Record<string, string | null> };
+
+/** Companies by id, 100 per call. Unknown ids are simply absent. */
+export async function batchReadCompanies(ids: string[], properties: string[]): Promise<HubspotCompanyRecord[]> {
+  const out: HubspotCompanyRecord[] = [];
+  const unique = [...new Set(ids)];
+  for (let i = 0; i < unique.length; i += 100) {
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/batch/read`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ properties, inputs: unique.slice(i, i + 100).map(id => ({ id })) }),
+    });
+    // 207: some ids didn't resolve — the rest are still good.
+    if (!res.ok) throw hubspotErr("HubSpot company batch read failed", res.status, await res.text());
+    const data = await res.json() as { results?: HubspotObject[] };
+    for (const r of data.results ?? []) out.push({ id: String(r.id), properties: r.properties ?? {} });
+  }
+  return out;
+}
+
+/** Every company with `property` set (HAS_PROPERTY), paginated. */
+export async function searchCompaniesWithProperty(property: string, properties: string[]): Promise<HubspotCompanyRecord[]> {
+  const out: HubspotCompanyRecord[] = [];
+  let after: string | undefined;
+  do {
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/search`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        filterGroups: [{ filters: [{ propertyName: property, operator: "HAS_PROPERTY" }] }],
+        properties,
+        limit: 100,
+        ...(after ? { after } : {}),
+      }),
+    });
+    if (!res.ok) throw hubspotErr(`HubSpot company search on ${property} failed`, res.status, await res.text());
+    const data = await res.json() as { results?: HubspotObject[]; paging?: { next?: { after?: string } } };
+    for (const r of data.results ?? []) out.push({ id: String(r.id), properties: r.properties ?? {} });
+    after = data.paging?.next?.after;
+  } while (after);
+  return out;
+}
+
+/** Free-text company search returning the requested properties. */
+export async function searchCompaniesByText(query: string, properties: string[], limit = 10): Promise<HubspotCompanyRecord[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const res = await fetchWithRetry(`${BASE}/crm/v3/objects/companies/search`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ query: q, limit, properties }),
+  });
+  if (!res.ok) throw hubspotErr("HubSpot company search failed", res.status, await res.text());
+  const data = await res.json() as { results?: HubspotObject[] };
+  return (data.results ?? []).map(r => ({ id: String(r.id), properties: r.properties ?? {} }));
+}
+
+export type HubspotMeetingSummary = {
+  id: string;
+  title: string | null;
+  activityType: string | null;
+  outcome: string | null;
+  startTime: string | null;
+};
+
+/** Meetings on each company, keyed by company id. */
+export async function listCompanyMeetings(companyIds: string[]): Promise<Map<string, HubspotMeetingSummary[]>> {
+  const out = new Map<string, HubspotMeetingSummary[]>();
+  const meetingIdsByCompany = new Map<string, string[]>();
+  for (let i = 0; i < companyIds.length; i += 100) {
+    const part = await batchAssociationIds("companies", "meetings", companyIds.slice(i, i + 100), () => headers());
+    for (const [cid, ids] of part) meetingIdsByCompany.set(cid, ids);
+  }
+  const meetingIds = [...new Set([...meetingIdsByCompany.values()].flat())];
+  const meetings = new Map<string, HubspotMeetingSummary>();
+  for (let i = 0; i < meetingIds.length; i += 100) {
+    const res = await fetchWithRetry(`${BASE}/crm/v3/objects/meetings/batch/read`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        properties: ["hs_meeting_title", "hs_activity_type", "hs_meeting_outcome", "hs_meeting_start_time"],
+        inputs: meetingIds.slice(i, i + 100).map(id => ({ id })),
+      }),
+    });
+    if (!res.ok) throw hubspotErr("HubSpot meeting batch read failed", res.status, await res.text());
+    const data = await res.json() as { results?: HubspotObject[] };
+    for (const r of data.results ?? []) {
+      const p = r.properties ?? {};
+      meetings.set(String(r.id), {
+        id: String(r.id),
+        title: clean(p.hs_meeting_title),
+        activityType: clean(p.hs_activity_type),
+        outcome: clean(p.hs_meeting_outcome),
+        startTime: clean(p.hs_meeting_start_time),
+      });
+    }
+  }
+  for (const cid of companyIds) {
+    out.set(cid, (meetingIdsByCompany.get(cid) ?? []).map(id => meetings.get(id)).filter((m): m is HubspotMeetingSummary => !!m));
+  }
+  return out;
+}

@@ -182,3 +182,62 @@ describe("parsePaymentsAccountingReport — header validation", () => {
     expect(() => parsePaymentsAccountingReport("")).toThrow(/no header row/);
   });
 });
+
+describe("parsePaymentsAccountingReport — tenant attribution", () => {
+  const HEAD = "Psp Reference,Merchant Reference,Record Type,Main Amount,Creation Date,Store,Split Payment Data,Metadata";
+  const q = (o: object) => `"${JSON.stringify(o).replace(/"/g, '""')}"`;
+  const line = (psp: string, ref: string, store: string, meta: string) =>
+    `${psp},${ref},SentForSettle,10.00,2026-11-01 10:00:00,${store},,${meta}`;
+  const run = (...lines: string[]) => parsePaymentsAccountingReport([HEAD, ...lines].join("\n"));
+  const tenants = (p: ReturnType<typeof run>) => p.actuals.map((a) => a.tenantNumber).sort();
+
+  it("businessId wins over a differing store number", () => {
+    const p = run(line("A", "2032-prod", "prod-2070", q({ businessId: "2032" })));
+    expect(tenants(p)).toEqual(["2032"]);
+  });
+
+  it("accepts a numeric businessId", () => {
+    expect(tenants(run(line("A", "x", "prod-1", q({ businessId: 77 }))))).toEqual(["77"]);
+  });
+
+  it("falls back to traceId when businessId is absent", () => {
+    const p = run(line("A", "x", "prod-2070", q({ traceId: "tenant_2032_0ec6abc" })));
+    expect(tenants(p)).toEqual(["2032"]);
+  });
+
+  it("falls back to Merchant Reference", () => {
+    expect(tenants(run(line("A", "2032-prod", "prod-2070", "")))).toEqual(["2032"]);
+  });
+
+  it("splits one store carrying two tenants into two buckets", () => {
+    const p = run(
+      line("A", "x", "prod-2062", q({ businessId: "2026" })),
+      line("B", "x", "prod-2062", q({ businessId: "2023" })),
+      line("C", "x", "prod-2062", q({ businessId: "2026" }))
+    );
+    expect(p.actuals.map((a) => [a.tenantNumber, a.transactionCount])).toEqual([
+      ["2023", 1],
+      ["2026", 2],
+    ]);
+  });
+
+  it("counts and excludes rows with no attribution source, never using the store number", () => {
+    const p = run(line("A", "order-9", "prod-2070", ""));
+    expect(p.actuals).toEqual([]);
+    expect(p.anomalies.unattributedTenantRows).toBe(1);
+  });
+
+  it("falls through malformed Metadata JSON to the next source", () => {
+    const p = run(line("A", "2032-prod", "prod-2070", '"{not json"'));
+    expect(tenants(p)).toEqual(["2032"]);
+    expect(p.anomalies.unattributedTenantRows).toBe(0);
+  });
+
+  it("works when the Metadata column is absent entirely", () => {
+    const p = parsePaymentsAccountingReport(
+      "Psp Reference,Merchant Reference,Record Type,Main Amount,Creation Date,Store,Split Payment Data\n" +
+        "A,2032-prod,SentForSettle,10.00,2026-11-01 10:00:00,prod-2070,"
+    );
+    expect(tenants(p)).toEqual(["2032"]);
+  });
+});

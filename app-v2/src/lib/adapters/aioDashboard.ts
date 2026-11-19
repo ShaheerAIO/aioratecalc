@@ -367,6 +367,27 @@ export async function findAioBusinessByAlias(alias: string): Promise<{
   };
 }
 
+/** Read-only: every business (tenant) with its restaurants, for display and
+ *  name-matching on /admin/live-accounts ONLY. /api/business/list is the
+ *  FILTERED view — it omits very new tenants (see above) — so it must never
+ *  be used to decide whether a tenant exists. `id` is the AIO tenant id. */
+export async function listAioBusinesses(): Promise<{
+  id: number;
+  businessName: string;
+  restaurants: { name: string; address: string | null; city: string | null }[];
+}[]> {
+  const json = await aioCall("/api/business/list", "business list", undefined, { method: "GET" });
+  const { success, data, message } = unwrap(json);
+  if (!success || !Array.isArray(data)) throw new Error(`AIO dashboard business list failed: ${message || "no data"}`);
+  return data.map((b: any) => ({
+    id: Number(b.id),
+    businessName: String(b.businessName ?? ""),
+    restaurants: Array.isArray(b.restaurants)
+      ? b.restaurants.map((r: any) => ({ name: String(r.name ?? ""), address: r.address ?? null, city: r.city ?? null }))
+      : [],
+  }));
+}
+
 // ── Step 1: the tenant ("business") ─────────────────────────────────────────
 
 /** businessName is ALSO globally unique — AIO answers "Business name already

@@ -14,8 +14,16 @@
 //     every item whose type is "Commission" — richer split configs also carry
 //     PaymentFee / Fixed Fee / Remainder items, so "item2" is not a safe shortcut.
 //  3. Staging traffic is in the live data (stores like `4-stagev2`). Only
-//     `prod-{n}` is attributable; everything else is reported as an anomaly and
+//     `prod-{n}` rows count; everything else is reported as an anomaly and
 //     never attributed to a tenant.
+//
+// Attribution: the TENANT comes from the payment's own metadata (`Metadata`
+// JSON `businessId`, then `traceId` `tenant_{n}_...`, then Merchant Reference
+// `{n}-prod`), NEVER from the store number. Verified 2026-11-19 on 30 days of
+// live reports: only 18 of 82 prod stores had store number == tenant (e.g.
+// `prod-2070` carries tenant 2032), and one store can hold several tenants
+// (`prod-2062` had 2026, 2023, 2025). Rows with no source are counted in
+// `unattributedTenantRows` and skipped.
 
 // The record type we count payments at. See trap 1 above.
 export const SETTLE_RECORD_TYPE = "SentForSettle";
@@ -40,6 +48,9 @@ const COL_RECORD_TYPE = "Record Type";
 const COL_STORE = "Store";
 const COL_AMOUNT = "Main Amount";
 const COL_SPLIT = "Split Payment Data";
+// Optional columns: a missing one just means that attribution source yields nothing.
+const COL_METADATA = "Metadata";
+const COL_MERCHANT_REFERENCE = "Merchant Reference";
 // Day of SALE, not settlement/batch date — keying months off the batch date
 // smears transactions across month boundaries. `Creation Date` is the sale
 // moment; `Booking Date` is the fallback when that optional column is absent.
@@ -58,6 +69,8 @@ export interface DailyTenantActual {
 export interface ReportAnomalies {
   /** Settle rows whose store is present but not `prod-{n}` (e.g. `4-stagev2`). */
   nonProdStores: { store: string; rows: number }[];
+  /** Prod-store settle rows with no resolvable tenant (no businessId, traceId or `{n}-prod` reference). Excluded; never falls back to the store number. */
+  unattributedTenantRows: number;
   /** Settle rows with no store at all — unattributable. */
   missingStoreRows: number;
   /** Settle rows whose `Main Amount` is blank or non-numeric. Excluded entirely. */
@@ -172,6 +185,32 @@ function toCents(raw: string): number | null {
   return Number.isFinite(n) ? Math.round(n * 100) : null;
 }
 
+/** Tenant number from payment metadata / merchant reference; null if none. */
+export function tenantFromRow(metadataRaw: string, merchantReference: string): string | null {
+  const meta = metadataRaw.trim();
+  if (meta) {
+    try {
+      const parsed: unknown = JSON.parse(meta);
+      if (parsed && typeof parsed === "object") {
+        const obj = parsed as Record<string, unknown>;
+        const biz = obj.businessId;
+        if (typeof biz === "string" || typeof biz === "number") {
+          const s = String(biz).trim();
+          if (/^\d+$/.test(s)) return s;
+        }
+        if (typeof obj.traceId === "string") {
+          const t = /^tenant_(\d+)_/.exec(obj.traceId);
+          if (t) return t[1];
+        }
+      }
+    } catch {
+      // malformed Metadata: fall through to the next source
+    }
+  }
+  const ref = /^(\d+)-prod$/.exec(merchantReference.trim());
+  return ref ? ref[1] : null;
+}
+
 export function parsePaymentsAccountingReport(csv: string): ParsedPaymentsReport {
   const rows = parseCsv(csv);
   const header = rows[0];
@@ -186,11 +225,15 @@ export function parsePaymentsAccountingReport(csv: string): ParsedPaymentsReport
     throw new Error(`Adyen report has none of the date columns: ${DATE_COLUMNS.join(", ")}`);
   }
 
-  const cell = (row: string[], name: string) => row[idx.get(name)!] ?? "";
+  const cell = (row: string[], name: string) => {
+    const i = idx.get(name);
+    return i === undefined ? "" : (row[i] ?? "");
+  };
 
   const anomalies: ReportAnomalies = {
     nonProdStores: [],
     missingStoreRows: 0,
+    unattributedTenantRows: 0,
     unparseableAmountRows: 0,
     emptySplitRows: 0,
     unparseableSplitRows: 0,
@@ -228,9 +271,13 @@ export function parsePaymentsAccountingReport(csv: string): ParsedPaymentsReport
       anomalies.missingStoreRows++;
       continue;
     }
-    const storeMatch = PROD_STORE.exec(store);
-    if (!storeMatch) {
+    if (!PROD_STORE.test(store)) {
       nonProd.set(store, (nonProd.get(store) ?? 0) + 1);
+      continue;
+    }
+    const tenantNumber = tenantFromRow(cell(row, COL_METADATA), cell(row, COL_MERCHANT_REFERENCE));
+    if (tenantNumber === null) {
+      anomalies.unattributedTenantRows++;
       continue;
     }
 
@@ -251,7 +298,6 @@ export function parsePaymentsAccountingReport(csv: string): ParsedPaymentsReport
       anomalies.noCommissionItemRows++;
     }
 
-    const tenantNumber = storeMatch[1];
     const key = `${tenantNumber}|${saleDate}`;
     let bucket = buckets.get(key);
     if (!bucket) {
