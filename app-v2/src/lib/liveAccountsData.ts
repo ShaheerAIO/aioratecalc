@@ -99,7 +99,10 @@ export async function loadLiveAccounts(): Promise<LiveAccountsPageData> {
     try {
       return await fn();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // "fetch failed" alone says nothing; the network reason is on `cause`.
+      const cause = err instanceof Error && err.cause instanceof Error ? err.cause : null;
+      const code = cause && "code" in cause ? ` ${String(cause.code)}` : "";
+      const message = (err instanceof Error ? err.message : String(err)) + (cause ? ` (cause:${code} ${cause.message})` : "");
       console.error(`[live-accounts] ${label} failed:`, message);
       warnings.push(`${label} failed — ${message.slice(0, 300)}`);
       return fallback;

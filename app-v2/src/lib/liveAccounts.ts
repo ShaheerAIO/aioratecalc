@@ -2,12 +2,15 @@
 // lib/liveAccountsData.ts fetches, this decides. See docs/claude/live-accounts.md.
 //
 // "Live" (product owner, 2026-11-19):
-//   ORDERING  — an active (active|past_due) platform subscription on the HubSpot
-//               company AND its AIO tenant ran card transactions on Adyen in
-//               the last 30 days.
-//   MARKETING — an active "AIO Marketing Platform…" subscription AND a meeting
-//               on the company with activity type "Marketing Discovery" and
-//               outcome COMPLETED. "Discovery Meeting" is the SALES discovery
+//   ORDERING  — the AIO tenant ran card transactions on Adyen in the last 30
+//               days. Billing doesn't decide it (product owner, 2026-11-19:
+//               "if someone is transacting but not paying that still counts as
+//               live"): with an active (active|past_due) platform subscription
+//               it's `live_ordering`, without one `transacting_not_paying`
+//               ("Live – not billed"), and both count.
+//   MARKETING — an active "AIO Marketing Platform…" subscription AND a
+//               completed post-sale marketing session on the company (see
+//               marketingDiscovery). "Discovery Meeting" is the SALES discovery
 //               (pre-sale) and does not count.
 //
 // Tenant → company is matched on the AIO tenant id only — the company's
@@ -242,15 +245,22 @@ export function tenantsNeedingNameSearch(
 const isCompleted = (m: MeetingRecord) => (m.outcome ?? "").trim().toUpperCase() === "COMPLETED";
 const activityIs = (m: MeetingRecord, type: string) => (m.activityType ?? "").trim().toLowerCase() === type.toLowerCase();
 
-/** The meeting that makes a marketing account live, if any. */
-export function strictMarketingDiscovery(meetings: MeetingRecord[]): MeetingRecord | null {
-  return latest(meetings.filter(m => activityIs(m, "Marketing Discovery") && isCompleted(m)));
-}
+// The team rarely uses the "Marketing Discovery" type (2026-11-19 review of
+// all 26 marketing subscribers): the post-sale work is logged as untyped
+// "AIO Marketing Onboarding", "Brandbook Review" or "Marketing Meeting"
+// meetings, then recurring "Marketing Catchup" calls, which only start after
+// discovery. Any of these, COMPLETED, counts. A generic "Onboarding Call" and
+// the pre-sale "Discovery Meeting" do not; nor does a "Declined: …" calendar copy.
+const MARKETING_SESSION_TYPES = ["Marketing Discovery", "Marketing Catchup"];
+const MARKETING_SESSION_TITLE = /marketing (discovery|onboarding|meeting|catch ?up)|brand ?book/i;
 
-/** A completed SALES discovery with "marketing" in the title — not live, but
- *  probably a marketing discovery logged under the wrong type. */
-export function salesTypeMarketingDiscovery(meetings: MeetingRecord[]): MeetingRecord | null {
-  return latest(meetings.filter(m => activityIs(m, "Discovery Meeting") && isCompleted(m) && /marketing/i.test(m.title ?? "")));
+/** The completed marketing session that makes a marketing account live, if any (the latest). */
+export function marketingDiscovery(meetings: MeetingRecord[]): MeetingRecord | null {
+  return latest(meetings.filter(m =>
+    isCompleted(m) &&
+    !/^declined:/i.test((m.title ?? "").trim()) &&
+    (MARKETING_SESSION_TYPES.some(t => activityIs(m, t)) || (!activityIs(m, "Discovery Meeting") && MARKETING_SESSION_TITLE.test(m.title ?? ""))),
+  ));
 }
 
 function latest(ms: MeetingRecord[]): MeetingRecord | null {
@@ -270,18 +280,16 @@ export type BucketId =
   | "transacting_not_paying"
   | "paying_no_transactions"
   | "paying_no_tenant"
-  | "marketing_sales_type_discovery"
   | "marketing_no_discovery"
   | "other_only";
 
 export const BUCKETS: { id: BucketId; title: string; description: string }[] = [
-  { id: "live_ordering", title: "Live – ordering", description: "Active platform subscription and Adyen card transactions in the last 30 days." },
-  { id: "live_marketing", title: "Live – marketing", description: "Active AIO Marketing Platform subscription and a completed Marketing Discovery meeting." },
-  { id: "transacting_not_paying", title: "Transacting, not paying in HubSpot", description: "A tenant ran card transactions, but no company with an active platform subscription is confirmed for it (includes ambiguous and name-only matches)." },
-  { id: "paying_no_transactions", title: "Paying (ordering), no Adyen transactions in 30 days", description: "Active platform subscription and a known tenant, but no card transactions in the window." },
-  { id: "paying_no_tenant", title: "Paying (ordering), company has no tenant id", description: "Active platform subscription, but neither the company nor an override names its AIO tenant." },
-  { id: "marketing_sales_type_discovery", title: "Marketing – discovery logged under sales type", description: "A completed \"Discovery Meeting\" (the sales type) with \"marketing\" in its title, but no Marketing Discovery." },
-  { id: "marketing_no_discovery", title: "Marketing – no marketing discovery", description: "Active marketing subscription without a completed Marketing Discovery meeting." },
+  { id: "live_ordering", title: "Live – ordering, billed", description: "Adyen card transactions in the last 30 days and an active platform subscription." },
+  { id: "live_marketing", title: "Live – marketing", description: "Active AIO Marketing Platform subscription and a completed marketing session (discovery, onboarding, brandbook, marketing meeting or catchup)." },
+  { id: "transacting_not_paying", title: "Live – not billed", description: "Counts as live: a tenant ran card transactions, but no company with an active platform subscription is confirmed for it (includes ambiguous and name-only matches)." },
+  { id: "paying_no_transactions", title: "Paying, no transactions in 30 days", description: "Active platform subscription and a known tenant, but no card transactions in the window." },
+  { id: "paying_no_tenant", title: "Paying, no tenant ID in HubSpot", description: "Active platform subscription, but neither the company nor an override names its AIO tenant." },
+  { id: "marketing_no_discovery", title: "Marketing paid, discovery not done", description: "Active marketing subscription without a completed marketing session." },
   { id: "other_only", title: "Other subscription only", description: "Only payroll, hardware payments or other non-platform subscriptions." },
 ];
 
@@ -440,14 +448,12 @@ export function buildLiveAccounts(input: LiveAccountsInput): LiveAccountsResult 
     }
     if (kinds.has("marketing")) {
       const meetings = input.meetingsByCompany.get(cid) ?? [];
-      const strict = strictMarketingDiscovery(meetings);
-      const salesType = strict ? null : salesTypeMarketingDiscovery(meetings);
-      const bucket: BucketId = strict ? "live_marketing" : salesType ? "marketing_sales_type_discovery" : "marketing_no_discovery";
-      const evidence = strict ?? salesType;
+      const evidence = marketingDiscovery(meetings);
+      const bucket: BucketId = evidence ? "live_marketing" : "marketing_no_discovery";
       buckets[bucket].push({
         ...base,
         key: `${bucket}:${cid}`,
-        discovery: evidence ? describeMeeting(evidence) : meetings.length ? `${meetings.length} meeting(s), none a completed Marketing Discovery` : "No meetings",
+        discovery: evidence ? describeMeeting(evidence) : meetings.length ? `${meetings.length} meeting(s), none a completed marketing session` : "No meetings",
       });
     }
     if (!kinds.has("ordering") && !kinds.has("marketing")) {

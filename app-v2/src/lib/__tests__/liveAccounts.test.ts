@@ -7,8 +7,7 @@ import {
   matchTenantById,
   matchTenantByName,
   nameSimilarity,
-  salesTypeMarketingDiscovery,
-  strictMarketingDiscovery,
+  marketingDiscovery,
   suggestedFixText,
   tenantsNeedingNameSearch,
   type AioBusiness,
@@ -183,16 +182,38 @@ describe("matching", () => {
 });
 
 describe("marketing discovery", () => {
-  it("only a COMPLETED Marketing Discovery is strict evidence", () => {
-    expect(strictMarketingDiscovery([meeting("Marketing Discovery", "COMPLETED")])).not.toBeNull();
-    expect(strictMarketingDiscovery([meeting("Marketing Discovery", "SCHEDULED")])).toBeNull();
-    expect(strictMarketingDiscovery([meeting("Discovery Meeting", "COMPLETED", "Marketing discovery")])).toBeNull();
+  const live = (type: string, outcome: string, title?: string) => marketingDiscovery([meeting(type, outcome, title)]) !== null;
+
+  it("counts a completed Marketing Discovery or Marketing Catchup, whatever the title", () => {
+    expect(live("Marketing Discovery", "COMPLETED")).toBe(true);
+    expect(live("Marketing Catchup", "COMPLETED", "(no title)")).toBe(true);
+    expect(live("Marketing Discovery", "SCHEDULED")).toBe(false);
+    expect(live("Marketing Catchup", "NO_SHOW")).toBe(false);
   });
 
-  it("a completed sales Discovery Meeting counts for the side bucket only with 'marketing' in the title", () => {
-    expect(salesTypeMarketingDiscovery([meeting("Discovery Meeting", "COMPLETED", "AIO Marketing kickoff")])).not.toBeNull();
-    expect(salesTypeMarketingDiscovery([meeting("Discovery Meeting", "COMPLETED", "Demo")])).toBeNull();
-    expect(salesTypeMarketingDiscovery([meeting("Discovery Meeting", "NO_SHOW", "Marketing")])).toBeNull();
+  it("counts completed untyped marketing sessions by title (real titles from HubSpot)", () => {
+    expect(live("", "COMPLETED", "AIO Marketing Onboarding | Entre Comales")).toBe(true);
+    expect(live("", "COMPLETED", "Marketing Meeting - El Paladar")).toBe(true);
+    expect(live("", "COMPLETED", "BrandBook Review Meeting - Pop Haus")).toBe(true);
+    expect(live("", "COMPLETED", "Pop Haus - Marketing Catchup")).toBe(true);
+    expect(live("", "SCHEDULED", "AIO Marketing Onboarding | Vietnoms")).toBe(false);
+  });
+
+  it("does not count pre-sale or generic meetings", () => {
+    // The sales discovery, even when its title says marketing.
+    expect(live("Discovery Meeting", "COMPLETED", "Fog of London <> AIO Marketing Discovery Meeting")).toBe(false);
+    expect(live("", "COMPLETED", "Underdogs Cantina <> AIO Marketing Suite")).toBe(false);
+    expect(live("", "COMPLETED", "AIO | Marketing Suite Meeting | Pulcinella Pizza & Pasta")).toBe(false);
+    expect(live("Onboarding Call", "COMPLETED", "AIO Onboarding Call for Underdogs Cantina")).toBe(false);
+    expect(live("", "COMPLETED", "Declined: AIO Marketing Onboarding | Entre Comales")).toBe(false);
+  });
+
+  it("returns the latest qualifying session", () => {
+    const m = marketingDiscovery([
+      { ...meeting("Marketing Catchup", "COMPLETED", "first"), startTime: "2026-10-01T00:00:00Z" },
+      { ...meeting("Marketing Catchup", "COMPLETED", "second"), startTime: "2026-11-01T00:00:00Z" },
+    ]);
+    expect(m?.title).toBe("second");
   });
 });
 
@@ -206,7 +227,7 @@ describe("buildLiveAccounts buckets", () => {
       company("C", "Transacting Free Co", { tenant_id: "20" }),
       company("D", "Paying Idle Co", { tenant_id: "40" }),
       company("E", "No Tenant Co"),
-      company("F", "Sales Type Co"),
+      company("F", "Catchup Co"),
       company("G", "Override Co", { tenant_id: "71" }),
       company("H", "Payroll Only Co"),
       company("I", "No Discovery Co"),
@@ -228,8 +249,8 @@ describe("buildLiveAccounts buckets", () => {
     ],
     meetingsByCompany: new Map([
       ["B", [meeting("Marketing Discovery", "COMPLETED", "Kickoff")]],
-      ["F", [meeting("Discovery Meeting", "COMPLETED", "Marketing discovery")]],
-      ["I", [meeting("Discovery Meeting", "COMPLETED", "Demo")]],
+      ["F", [meeting("Marketing Catchup", "COMPLETED")]],
+      ["I", [meeting("Discovery Meeting", "COMPLETED", "AIO Marketing discovery")]],
     ]),
   }));
   const ids = (b: keyof typeof r.buckets) => r.buckets[b].map(x => x.companyId ?? `tenant:${x.tenantIds[0]}`);
@@ -239,9 +260,9 @@ describe("buildLiveAccounts buckets", () => {
     expect(r.buckets.live_ordering.find(x => x.companyId === "G")!.match).toBe("override");
     expect(r.buckets.live_ordering[0]).toMatchObject({ txCount: 100, volume: 5000, match: "tenant id" });
   });
-  it("2 live marketing", () => {
-    expect(ids("live_marketing")).toEqual(["B"]);
-    expect(r.buckets.live_marketing[0].discovery).toContain("Marketing Discovery");
+  it("2 live marketing: Marketing Discovery or a later Marketing Catchup", () => {
+    expect(ids("live_marketing").sort()).toEqual(["B", "F"]);
+    expect(r.buckets.live_marketing.find(x => x.companyId === "B")!.discovery).toContain("Marketing Discovery");
   });
   it("3 transacting, not paying: canceled company, ambiguous and name-only", () => {
     const rows = r.buckets.transacting_not_paying;
@@ -258,13 +279,10 @@ describe("buildLiveAccounts buckets", () => {
   it("5 paying, no tenant id", () => {
     expect(ids("paying_no_tenant")).toEqual(["E"]);
   });
-  it("6 marketing discovery under the sales type", () => {
-    expect(ids("marketing_sales_type_discovery")).toEqual(["F"]);
-  });
-  it("7 marketing without discovery", () => {
+  it("6 marketing without discovery (a sales Discovery Meeting doesn't count)", () => {
     expect(ids("marketing_no_discovery")).toEqual(["I"]);
   });
-  it("8 other subscription only (Payroll is other)", () => {
+  it("7 other subscription only (Payroll is other)", () => {
     expect(ids("other_only")).toEqual(["H"]);
   });
 
