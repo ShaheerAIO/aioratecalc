@@ -2044,6 +2044,11 @@ export type DraftQuoteInput = {
   title: string;
   /** yyyy-MM-dd. hs_expiration_date is a date-typed property (verified live). */
   expirationDate: string;
+  /**
+   * The Order Form terms, as HTML (`quoteTermsFor`). Written at create because
+   * the API, unlike HubSpot's own editor, copies no template terms onto a quote.
+   */
+  terms: string;
 };
 
 /**
@@ -2061,6 +2066,7 @@ export function draftQuoteProperties(input: DraftQuoteInput): Record<string, str
     hs_template_type: "CPQ_QUOTE",
     hs_title: input.title,
     hs_expiration_date: input.expirationDate,
+    hs_terms: input.terms,
     // The three that turn the quote into a checkout. hs_billing_enabled is what
     // makes HubSpot create the subscription; hs_store_payment_method_at_checkout
     // is what makes the stored ACH method reusable for the recurring charges.

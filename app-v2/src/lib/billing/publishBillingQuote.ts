@@ -47,6 +47,7 @@ import {
   type QuoteAssociation,
 } from "@/lib/adapters/hubspot";
 import { writeCommissionToDeal } from "@/lib/billing/commissionWriteback";
+import { quoteTermsFor } from "@/lib/quoteTerms";
 import { attachQuoteSummaryToDeal } from "@/lib/billing/quoteSummaryAttachment";
 import { resolveQuoteTemplate, type ResolvedQuoteTemplate } from "@/lib/actions/quoteTemplates";
 import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
@@ -487,7 +488,11 @@ export async function buildAndPublishBillingQuote(
     if (!ids.quoteId) {
       const expiry = new Date(Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1000);
       const { quoteId } = await createDraftQuote(
-        draftQuoteProperties({ title: quoteTitle(app), expirationDate: isoDate(expiry) })
+        draftQuoteProperties({
+          title: quoteTitle(app),
+          expirationDate: isoDate(expiry),
+          terms: quoteTermsFor(quoteTypeOf(app.quoteType)),
+        })
       );
       ids = { ...ids, quoteId, quoteTemplateId: template };
       await persist(app.id, ids);

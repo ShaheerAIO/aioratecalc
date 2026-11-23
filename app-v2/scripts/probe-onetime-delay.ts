@@ -109,6 +109,7 @@ async function main() {
     hs.draftQuoteProperties({
       title: "PROBE — deferred one-time line (do not send)",
       expirationDate: expiry,
+      terms: "",
     })
   );
   console.log("[probe] draft quote:", quoteId, "slug:", slug);

@@ -122,7 +122,12 @@ describe("toLineItemProperties", () => {
 });
 
 describe("draftQuoteProperties", () => {
-  const props = draftQuoteProperties({ title: "Taco Shop — AIO Platform Quote", expirationDate: "2026-09-20" });
+  const props = draftQuoteProperties({ title: "Taco Shop — AIO Platform Quote", expirationDate: "2026-09-20", terms: "<p>Terms</p>" });
+
+  // The API copies no template terms onto a quote (2026-11-24), so the draft carries them.
+  it("writes the caller's terms", () => {
+    expect(props.hs_terms).toBe("<p>Terms</p>");
+  });
 
   it("sets the CPQ template type and the caller's title and expiry", () => {
     expect(props.hs_template_type).toBe("CPQ_QUOTE");
