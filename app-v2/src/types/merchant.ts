@@ -506,6 +506,17 @@ export type QuoteLine = {
    */
   firstKiosk?: true;
   /**
+   * Set on the one-unit line carrying the quote's FIRST bought Mega Kiosk
+   * (2026-11-24, Elizabeth Phillips: "the mega kiosk is 1500 for the first one
+   * and then anything after the 1st one is 2250"). Its `unitPrice` is
+   * `FIRST_MEGA_PRICE`, not the catalog's — a price, not a discount, so it is
+   * $1,500 on the HubSpot line too. Derived by `buildQuote` and held there:
+   * no rep adjustment reaches it.
+   *
+   * Never sent to HubSpot as a property; `price` carries it.
+   */
+  firstMega?: true;
+  /**
    * Hardware commission inputs, SNAPSHOT from `CatalogProduct` at
    * `toQuoteLine` time — same rule as `unitPrice`/`billingFrequency` above: a
    * saved quote must keep computing the same commission even after the
@@ -1211,6 +1222,8 @@ export type MerchantApplication = {
   // it's the moment the quote was agreed, and it belongs with the frozen
   // quoteConfig/quoteLines rather than with the live deal state.
   quoteAcceptedAt: string | null;
+  /** Last staff (rep/admin) edit of the quote or details; not bumped by webhooks, provisioning, link sends or customer actions. */
+  lastEditedAt: string | null;
   /**
    * When the MERCHANT confirmed their own details and so authorised the
    * HubSpot quote to be built (2026-10-15, product owner). A moment, not a

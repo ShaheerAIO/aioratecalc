@@ -57,6 +57,9 @@ export async function saveApplicationAction(app: MerchantApplication): Promise<M
     quoteStatus: stored?.quoteStatus ?? null,
     quoteApproval: stored?.quoteApproval ?? null,
     pendingDealChoice: stored?.pendingDealChoice ?? null,
+    // Staff edit via the proposal wizard (this action is blind-upsert, so the
+    // stored value must not be clobbered by a stale browser copy either).
+    lastEditedAt: new Date().toISOString(),
   };
   await postgresStorage.saveApplication(scope, toSave);
   return toSave;

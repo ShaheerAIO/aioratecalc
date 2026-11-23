@@ -121,6 +121,25 @@ export type RateFieldsProps = {
    * different from policy is an override an admin has to approve.
    */
   onPolicyCnp?: (policyCnp: number) => void;
+  /**
+   * The "Standard rates" TOGGLE (product owner, 2026-11-11: "Allow a user to
+   * select a button for standard rates (this can be used for a new restaurant
+   * that doesn't have any volume yet)"; then, after trying it: "if the button
+   * is clicked the entry boxes for volume and size should be hidden away. if
+   * unclicked it should clear the old rate"). Shown when
+   * `onStandardRatesChange` is passed; `standardRates` is whether it is on.
+   *
+   * Entirely HOST-driven: this component only renders the pressed state and
+   * reports the press. Applying AIO's flat standard card
+   * (`standardQuoteRates`, lib/standardRates.ts), and what turning it off
+   * restores, differ per host (prospect creation hides and clears the volume
+   * and ticket; the Edit Quote panel restores the rates it had). Turning it
+   * ON is disabled until the policy CNP has been confirmed, so "standard"
+   * never means the 2.49% CNP placeholder. A rate typed into a box still
+   * goes through `onChange` as usual; hosts turn the toggle off on it.
+   */
+  standardRates?: boolean;
+  onStandardRatesChange?: (on: boolean) => void;
 };
 
 /**
@@ -133,6 +152,7 @@ const pctText = (fraction: number) => (fraction * 100).toFixed(2);
 
 export default function RateFields({
   value, onChange, hideNote, freshQuote, cardNotPresentOnly, adjustBps = 0, onAdjustBps, adjustRange, onPolicyCnp,
+  standardRates = false, onStandardRatesChange,
 }: RateFieldsProps) {
   // Past the range is allowed (an admin approves it); only a +-500 bps sanity
   // clamp remains.
@@ -277,6 +297,32 @@ export default function RateFields({
           )}
         </div>
       </div>
+
+      {onStandardRatesChange && (
+        <div className={styles.standardRow}>
+          {/* A toggle, not a one-shot button (2026-11-11): the first version
+              applied the card and showed nothing, so a rep couldn't tell
+              whether it was on, and there was no way to take it back. The
+              label stays the same either way; the pressed state carries it. */}
+          <button
+            type="button"
+            className={styles.standardBtn}
+            aria-pressed={standardRates}
+            data-active={standardRates || undefined}
+            onClick={() => onStandardRatesChange(!standardRates)}
+            disabled={!standardRates && policyCnp === null}
+          >
+            Standard rates{standardRates && <span aria-hidden="true"> ✓</span>}
+          </button>
+          <span className={styles.standardHint}>
+            {standardRates
+              ? "On: the quote uses AIO's standard rates. Turn off to price off the rate card."
+              : `${pctText(DEFAULT_QUOTE_RATES.cardPresentRate)}% + $${DEFAULT_QUOTE_RATES.perTransactionFee.toFixed(2)} card present${
+                  policyCnp !== null ? `, ${pctText(policyCnp)}% card not present` : ""
+                }, for a merchant with no volume yet`}
+          </span>
+        </div>
+      )}
 
       {/* Why the card-present lane isn't there. Shown whether or not the host
           hides the standing note, because its absence is the surprising part. */}

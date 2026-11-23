@@ -2,7 +2,7 @@
 // CNP rate, per-product discount caps and unit caps. Pure layer only.
 import { describe, it, expect } from "vitest";
 import { overrideFingerprint, rateOverrides, type RateOverrideInput } from "@/lib/quoteOverrides";
-import { adjustmentBlockers, COMPED_SERVICE_PRODUCT_IDS } from "@/lib/quoting";
+import { adjustmentBlockers } from "@/lib/quoting";
 import { adjustBpsRangeFor, commissionMarginBreakdown } from "@/lib/wholesale";
 import { DEFAULT_QUOTE_RATES, type QuoteLine, type QuoteOverride } from "@/types/merchant";
 
@@ -117,12 +117,12 @@ describe("adjustmentBlockers with an overrides sink", () => {
     ]);
   });
 
-  it("produces neither for a comped service at exactly 100%, or the first-kiosk unit", () => {
+  it("produces neither for a service at 100% under a 100% product cap, or the first-kiosk unit", () => {
     const sink: QuoteOverride[] = [];
-    const comped = pos({ hubspotProductId: COMPED_SERVICE_PRODUCT_IDS[0], name: "Onsite Installation", discountPercent: 100 });
+    const comped = pos({ hubspotProductId: "223452690133", name: "Onsite Installation", discountPercent: 100 });
     const kiosk = pos({ hubspotProductId: "222497165009", name: "Kiosk", firstKiosk: true, discountPercent: 80 });
     const covered = pos({ coveredByPackage: "qsr-kit", discountPercent: 100 });
-    expect(adjustmentBlockers([comped, kiosk, covered], 50, undefined, {}, null, sink)).toEqual([]);
+    expect(adjustmentBlockers([comped, kiosk, covered], 50, undefined, { [comped.hubspotProductId]: 100 }, null, sink)).toEqual([]);
     expect(sink).toEqual([]);
   });
 

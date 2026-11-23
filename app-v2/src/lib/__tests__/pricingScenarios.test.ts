@@ -49,8 +49,9 @@ const CATALOG: CatalogProduct[] = [
   p("260559288040", "AIO Processing Two Tiered Rate", 0, "one_time", "AIO Payment Processing"),
 ];
 
-// Install and training are both comped to $0 again since 2026-10-28.
-const INSTALL_AND_TRAINING = 0;
+// Install ($999) and training ($499) are charged at list again since
+// 2026-11-11 (the comp list is empty).
+const INSTALL_AND_TRAINING = 999 + 499;
 
 // The sheet's "first kiosk free": since 2026-10-29 the first kiosk goes on at
 // list and the REP discounts it, so the scenarios carry that discount — one

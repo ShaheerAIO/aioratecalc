@@ -109,10 +109,25 @@ describe("toLineItemProperties", () => {
       toLineItemProperties(line({ coveredByPackage: "QSR Kit", discountPercent: 50 }))
     ).not.toHaveProperty("description");
   });
+
+  it("publishes payroll at list with a plain 100% discount, like any free line (2026-11-11)", () => {
+    expect(toLineItemProperties(line({
+      hubspotProductId: "223152695998", name: "Payroll - AIO Platform (Per Person)", qty: 12, unitPrice: 8,
+      billingFrequency: "monthly", discountPercent: 100,
+    }))).toEqual({
+      hs_product_id: "223152695998", quantity: "12", price: "8",
+      recurringbillingfrequency: "monthly", hs_discount_percentage: "100",
+    });
+  });
 });
 
 describe("draftQuoteProperties", () => {
-  const props = draftQuoteProperties({ title: "Taco Shop — AIO Platform Quote", expirationDate: "2026-09-20" });
+  const props = draftQuoteProperties({ title: "Taco Shop — AIO Platform Quote", expirationDate: "2026-09-20", terms: "<p>Terms</p>" });
+
+  // The API copies no template terms onto a quote (2026-11-24), so the draft carries them.
+  it("writes the caller's terms", () => {
+    expect(props.hs_terms).toBe("<p>Terms</p>");
+  });
 
   it("sets the CPQ template type and the caller's title and expiry", () => {
     expect(props.hs_template_type).toBe("CPQ_QUOTE");
@@ -345,5 +360,18 @@ describe("EMPTY_HUBSPOT_IDS", () => {
 
   it("carries no dealId — the flat hubspotDealId column is canonical", () => {
     expect(EMPTY_HUBSPOT_IDS).not.toHaveProperty("dealId");
+  });
+});
+
+describe("toLineItemProperties — the first Mega Kiosk", () => {
+  it("sends its $1,500 as the line's price, with no discount and no marker property", () => {
+    const props = toLineItemProperties(line({
+      hubspotProductId: "260674226888", name: "Mega Kiosk (Marketing Only)",
+      unitPrice: 1500, billingFrequency: "one_time", firstMega: true,
+    }));
+    expect(props.price).toBe("1500");
+    expect(props.discount).toBeUndefined();
+    expect(props.hs_discount_percentage).toBeUndefined();
+    expect(Object.keys(props).some(k => /mega/i.test(k))).toBe(false);
   });
 });

@@ -61,3 +61,6 @@ already invoiced. The server re-parses the CSV for every create — the client n
 `lib/payroll/checkUsage.ts` (pure: parser, name normalizer, contact pick) ·
 `lib/actions/checkPayroll.ts` · `app/admin/payroll-billing/` · HubSpot reads at the end of
 `adapters/hubspot.ts` · migration `0029_check_payroll.sql`.
+
+## Quotes (2026-11-11)
+Product owner: payroll is **billed separately**. The quote shows "Billed separately" at 100% off with no commission (`applyBilledSeparately`, `quoting.md`); this page's invoices are where the merchant is actually charged. Open: possible $0 monthly subscription if payroll is a quote's only monthly line (unverified).

@@ -350,15 +350,15 @@ describe("quoteSanityBlockers", () => {
   });
 });
 
-describe("buildQuote with the standing service comp (since 2026-10-28)", () => {
+describe("buildQuote with the install and training at list price (comp ended 2026-11-11)", () => {
   const picked = [toQuoteLine(CATALOG.find(c => c.hubspotProductId === POS_ID)!, 1)];
 
-  it("comps the install and the training to 100%", () => {
+  it("charges the install and the training at list, undiscounted by default", () => {
     const built = buildQuote("all_in_one", picked, [], CATALOG);
-    expect(built.quoteLines.filter(l => l.discountPercent != null).map(l => l.hubspotProductId)).toEqual([INSTALL_ID, TRAINING_ID]);
-    // $0 install + $0 training + $749 POS + $300 AMS1. The WiFi package is
-    // a pick since 2026-10-21, so a POS-only cart carries none.
-    expect(built.totals.oneTime).toBe(1049);
+    expect(built.quoteLines.filter(l => l.discountPercent != null)).toEqual([]);
+    // $999 install + $499 training + $749 POS + $300 AMS1. The WiFi package
+    // is a pick since 2026-10-21, so a POS-only cart carries none.
+    expect(built.totals.oneTime).toBe(2547);
   });
 });
 
@@ -643,7 +643,7 @@ describe("draft reconciliation", () => {
 describe("describeBillingStart", () => {
   it("reads as prose for a customer", () => {
     expect(describeBillingStart({ mode: "date", date: "2026-11-01" })).toBe("Billing starts 2026-11-01");
-    expect(describeBillingStart({ mode: "days", days: 60 })).toBe("Billing starts 60 days after checkout");
+    expect(describeBillingStart({ mode: "days", days: 60 })).toBe("Billing starts 60 days after checkout or on Go Live");
   });
 });
 

@@ -101,7 +101,7 @@ async function main() {
   const expiry = new Date(Date.now() + 14 * 86400_000).toISOString().slice(0, 10);
   const lineItemIds = await createQuoteLineItems(out.lines);
   const { quoteId } = await createDraftQuote(
-    draftQuoteProperties({ title: "[TEST] QSR Kit label — DELETE ME, never published", expirationDate: expiry })
+    draftQuoteProperties({ title: "[TEST] QSR Kit label — DELETE ME, never published", expirationDate: expiry, terms: "" })
   );
   await associateQuote(quoteId, [
     ...lineItemIds.map(id => ({ toObjectType: "line_items" as const, toObjectId: id, associationTypeId: QUOTE_TO_LINE_ITEM })),

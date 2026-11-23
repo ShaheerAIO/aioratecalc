@@ -145,6 +145,8 @@ const PICKABLE = FULL_CATALOG.filter(
 // plan's default now needs a note (quoteNoteBlockers, 2026-10-15) — these
 // tests are about re-derivation and the acceptance guard, not about that.
 const PLAN_START = { "335283119838": { billingStart: { mode: "days" as const, days: 45 } } };
+// The same seed on the $199 marketing plan, which bills at 45 days too since 2026-11-18.
+const MARKETING_PLAN_START = { "332609247965": { billingStart: { mode: "days" as const, days: 45 } } };
 
 const app = (over: Partial<MerchantApplication> = {}): MerchantApplication =>
   ({
@@ -275,6 +277,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       applicationId: "app-1",
       picks: [],
       channels: [],
+      adjustments: MARKETING_PLAN_START,
       pricingModel: "2-tier",
       quoteType: "marketing_only",
     });
@@ -283,7 +286,9 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
     // includes are a PICK since 2026-10-09 — preselected in the configurator,
     // not derived — so a payload that genuinely carries no picks is a plan on
     // its own, and a merchant who wanted none gets none.
-    expect(updated.quoteLines!.map(l => l.name)).toEqual(["AIO Marketing Platform"]);
+    // Plus the $0.50 pre-auth: the plan bills at 45 days since 2026-11-18,
+    // so nothing else is due at checkout.
+    expect(updated.quoteLines!.map(l => l.name)).toEqual(["AIO Marketing Platform", "AIO Pre Auth"]);
     // Marketing quotes carry no ordering-point count.
     expect(updated.orderPoints).toBeNull();
   });
@@ -297,6 +302,7 @@ describe("saveQuoteConfigurationAction — re-derivation", () => {
       applicationId: "app-1",
       picks: [{ hubspotProductId: MENU_BOARD_ID, qty: 3 }],
       channels: [],
+      adjustments: MARKETING_PLAN_START,
       pricingModel: "2-tier",
       quoteType: "marketing_only",
     });

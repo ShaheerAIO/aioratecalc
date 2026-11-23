@@ -149,6 +149,39 @@ export const MARKETING_ADDON_PRODUCT: NamedProduct = { name: "Marketing (Partial
 /** The Mega Kiosk on loan, $100/mo each, on any plan. Created 2026-10-27. */
 export const MEGA_LOANER_PRODUCT_ID = "343373224660";
 
+/** The Mega Kiosk bought: "Mega Kiosk (Marketing Only)", $2,250 in HubSpot. */
+export const MEGA_PRODUCT_ID = "260674226888";
+
+/**
+ * What the FIRST bought Mega on a quote costs (2026-11-24, Elizabeth Phillips:
+ * "the mega kiosk is 1500 for the first one and then anything after the 1st
+ * one is 2250 ... we need to make it automated"). Settled with the product
+ * owner the same day: the first on EACH quote (a second location's quote gets
+ * its own), bought Megas only (a Loaner doesn't use it up), and at the Mega's
+ * own commission rate on whatever margin $1,500 leaves.
+ */
+export const FIRST_MEGA_PRICE = 1500;
+
+/**
+ * Split one bought Mega off the quote's first Mega line at `FIRST_MEGA_PRICE`.
+ * The rest stay at the catalog price. A PRICE rather than a discount, so the
+ * merchant reads "$1,500" on the quote, and the rep's discount cap — which
+ * bounds rep discretion — never sees a 33% give-away the rep didn't make.
+ * Never raises a price: a catalog Mega already at or under $1,500 is left alone.
+ */
+export function applyFirstMegaPrice(lines: QuoteLine[]): QuoteLine[] {
+  let done = false;
+  return lines.flatMap(line => {
+    if (
+      done || line.hubspotProductId !== MEGA_PRODUCT_ID || line.coveredByPackage ||
+      line.qty < 1 || line.unitPrice <= FIRST_MEGA_PRICE
+    ) return [line];
+    done = true;
+    const first: QuoteLine = { ...line, qty: 1, unitPrice: FIRST_MEGA_PRICE, firstMega: true };
+    return line.qty > 1 ? [first, { ...line, qty: line.qty - 1 }] : [first];
+  });
+}
+
 /** Whether this quote carries AIO's marketing, which is what brings the three menu boards. */
 export function includesMarketing(
   quoteType: QuoteType,
@@ -265,23 +298,31 @@ export function isRetiredPick(hubspotProductId: string): boolean {
  * RETIRED_PICK_PRODUCT_IDS and visibility only in the same way: a draft that
  * already carries one still saves, and the row stays while it is on the quote.
  *
- * The Mega Kiosk Loaner is off the two POS plans (2026-10-29, product owner:
- * hide it on Order & Pay and All-in-One); Marketing Only and Marketing
- * Partial Ordering keep it.
+ * The Mega Kiosk Loaner was off the two POS plans from 2026-10-29 until
+ * 2026-11-11 (product owner: "turn back on the 100/month mega"); every plan
+ * offers it again.
  *
  * 2026-10-30 (product owner): "remove kiosk ordering and online ordering from
  * all in one and order and pay" (Online Ordering on both POS plans) and "hide
  * mega kiosk from O&P" (the Mega, "Mega Kiosk (Marketing Only)", on Order &
  * Pay; All-in-One, MPO and Marketing Only offer it). Online Ordering stays on
  * MPO, where its chip selects it.
+ *
+ * 2026-11-11 (product owner): "Remove website option from order and pay only"
+ * (the Website, on Order & Pay).
+ *
+ * 2026-11-18 (Elizabeth Phillips): "remove Mega Kiosk loaner from Order and Pay
+ * only", and the Nugget (AIO Tableside POS) with it, a marketing display for now.
  */
 export const PLAN_HIDDEN_PICK_PRODUCT_IDS: Partial<Record<QuoteType, readonly string[]>> = {
   order_pay_only: [
-    MEGA_LOANER_PRODUCT_ID,
     ONLINE_ORDERING_PRODUCT.hubspotProductId,
     "260674226888", // Mega Kiosk (Marketing Only)
+    WEBSITE_PRODUCT_ID,
+    MEGA_LOANER_PRODUCT_ID,
+    "335279520447", // AIO Tableside POS ("Nugget")
   ],
-  all_in_one: [MEGA_LOANER_PRODUCT_ID, ONLINE_ORDERING_PRODUCT.hubspotProductId],
+  all_in_one: [ONLINE_ORDERING_PRODUCT.hubspotProductId],
 };
 
 /** Whether the picker should stop offering this product on this plan. */
@@ -466,6 +507,8 @@ export const MARKETING_PRODUCTS = [
   { name: "Marketing Kit - Mega Kiosk", hubspotProductId: "332617109238" },
   { name: "Marketing Kit - 27\" Kiosk", hubspotProductId: "332793212658" },
   { name: "Mega Kiosk Loaner", hubspotProductId: MEGA_LOANER_PRODUCT_ID },
+  // The "Nugget": a marketing display since 2026-11-18, despite the name.
+  { name: "AIO Tableside POS", hubspotProductId: "335279520447" },
   { name: "Website", hubspotProductId: "333275576048" },
   { name: "Menu Board Computer", hubspotProductId: "223511653103" },
 ] as const;
@@ -491,6 +534,7 @@ const PARTIAL_ORDERING_PRODUCT_IDS: readonly string[] = [
   "260674226888", // Mega Kiosk (Marketing Only)
   "332617109238", // Marketing Kit - Mega Kiosk (retired; drafts still save)
   MEGA_LOANER_PRODUCT_ID,
+  "335279520447", // AIO Tableside POS ("Nugget"), a marketing display since 2026-11-18
   WEBSITE_PRODUCT_ID,
   "223511653103", // Menu Board Computer
 ];
@@ -504,7 +548,7 @@ const POS_DEVICE_PRODUCT_IDS: readonly string[] = [
   "223452690130", // POS Unit - With Customer Facing Display
   "339229355762", // POS (Dual Screen) + Payment Terminal
   "223511653101", // mPOS
-  "335279520447", // AIO Tableside POS
+  // NOT the AIO Tableside POS ("Nugget"): a marketing display since 2026-11-18.
 ];
 
 /** A POS on a Marketing Partial Ordering quote. Reports, like the other ceilings. */
@@ -757,6 +801,8 @@ export const SCREEN_PRODUCT_IDS = [
   // "The Mega counts as one of the 3 licenses").
   "332617109238", // Marketing Kit - Mega Kiosk
   MEGA_LOANER_PRODUCT_ID,
+  // The "Nugget" takes a license like the Mega, display or not (product owner, 2026-11-18).
+  "335279520447", // AIO Tableside POS
   // NOT the Menu Board Computer: it drives a TV, it is not a screen anyone
   // works on, and it takes no license (product owner, 2026-10-18).
   // Both tablets run an AIO app, so each one takes a license like any other
@@ -897,6 +943,41 @@ export function payrollBlockers(lines: Array<{ hubspotProductId: string; qty: nu
   return ["Payroll needs a POS unit on the quote. Add one, or take payroll off."];
 }
 
+/**
+ * Products that ride on the quote at list but 100% off, because AIO bills them
+ * OUTSIDE the sale (product owner, 2026-11-11: "Payroll should be discounted
+ * on the quote to 100% off but can show on easyOB for commission purposes but
+ * we bill them separately outside of the sale"). Payroll is invoiced monthly
+ * off Check's usage export (`/admin/payroll-billing`), so charging it on the
+ * subscription as well would bill it twice. It earns no commission (decided
+ * the same day): a recurring line earns none anyway, and at $0 net it adds
+ * nothing to the ARR estimate.
+ *
+ * Deliberately NOT `coveredByPackage`: that tag groups lines under a package
+ * banner and reads "Included with X" on the HubSpot line item, and payroll is
+ * neither in a package nor included.
+ */
+export const BILLED_SEPARATELY_PRODUCT_IDS: readonly string[] = [PAYROLL_PRODUCT_ID];
+
+export function isBilledSeparately(line: Pick<QuoteLine, "hubspotProductId">): boolean {
+  return BILLED_SEPARATELY_PRODUCT_IDS.includes(line.hubspotProductId);
+}
+
+/**
+ * Hold a billed-separately line at 100% off, whatever the rep sent. Same shape
+ * as `applyPackageComp` and run beside it, after the rep's edits: a discount
+ * a rep types on payroll is ignored rather than refused, because the line is
+ * $0 on this quote either way. The billing start is left alone — the
+ * quote-wide "Billing starts" control moves every recurring line together,
+ * and stripping it here would make that control read "Mixed".
+ */
+export function applyBilledSeparately(line: QuoteLine): QuoteLine {
+  if (!isBilledSeparately(line)) return line;
+  const separate = { ...line, discountPercent: 100 };
+  delete separate.discountAmount;
+  return separate;
+}
+
 function isSoftwareLicenseProduct(id: string, name: string): boolean {
   return id === SOFTWARE_LICENSE_PRODUCT.hubspotProductId || name.trim() === SOFTWARE_LICENSE_PRODUCT.name;
 }
@@ -941,8 +1022,13 @@ export function screenCount(lines: Array<{ hubspotProductId: string; qty: number
  * automatically discounted to 100% off", then the same day extended to
  * System Onboarding and Training). Onsite Installation and System Onboarding
  * and Training are both on the list.
+ *
+ * ENDED AGAIN 2026-11-11 (product owner: "Default onsite installation and
+ * system onboarding/training to cost money and let them add in the
+ * discount"). The list is empty: both lines default to list price and a rep
+ * discounts them like any other line.
  */
-export const COMPED_SERVICE_PRODUCT_IDS: string[] = ["223452690133", "223152695032"];
+export const COMPED_SERVICE_PRODUCT_IDS: string[] = [];
 
 export function isCompedService(line: Pick<QuoteLine, "hubspotProductId">): boolean {
   return COMPED_SERVICE_PRODUCT_IDS.includes(line.hubspotProductId);
@@ -1066,6 +1152,8 @@ export function splitPartialDiscount(line: QuoteLine, adjustment: LineAdjustment
     !want || !Number.isInteger(want) || want <= 0 ||
     want >= line.qty ||
     line.coveredByPackage ||
+    // Wholly 100% off too (2026-11-11); splitting would put units back at list.
+    isBilledSeparately(line) ||
     !(line.discountPercent || line.discountAmount)
   ) return [line];
 
@@ -1131,7 +1219,7 @@ export function splitByUnits(line: QuoteLine, adjustment: LineAdjustment & { uni
 export function unitsFromQuoteLines(lines: QuoteLine[] | null | undefined, productId: string): UnitAdjustment[] {
   const out: UnitAdjustment[] = [];
   for (const line of lines ?? []) {
-    if (line.hubspotProductId !== productId || line.coveredByPackage) continue;
+    if (line.hubspotProductId !== productId || line.coveredByPackage || line.firstMega) continue;
     const unit: UnitAdjustment = {};
     if (line.discountPercent) unit.discountPercent = line.discountPercent;
     if (line.billingStart) unit.billingStart = line.billingStart;
@@ -1747,8 +1835,6 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "mPOS": { pointsPerUnit: 1, hubspotProductId: "223511653101" },
   "Kiosk 27\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "222497165009" },
   "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "223519571666" },
-  // Steve's list counts a "Tableside AI Device"; this is that product.
-  "AIO Tableside POS": { pointsPerUnit: 1, hubspotProductId: "335279520447" },
   // Resolved by Shaheer 2026-08-20: the bundle contains exactly one POS, so it
   // counts one point like a bare POS Unit. Was 0-with-needsReview while the
   // contents were unknown.
@@ -1786,6 +1872,9 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "Marketing Kit - 27\" Kiosk": { pointsPerUnit: 0, hubspotProductId: "332793212658" },
   // Display only — the loaned Mega can't take an order or a payment.
   "Mega Kiosk Loaner": { pointsPerUnit: 0, hubspotProductId: MEGA_LOANER_PRODUCT_ID },
+  // The "Nugget". Was 1 point (Steve's "Tableside AI Device"); it takes no
+  // orders today and is a marketing display (product owner, 2026-11-18).
+  "AIO Tableside POS": { pointsPerUnit: 0, hubspotProductId: "335279520447" },
   "Menu Board Computer": { pointsPerUnit: 0, hubspotProductId: "223511653103" },
   "Thermal Printer": { pointsPerUnit: 0, hubspotProductId: "223511653104" },
   "Epson Sticky Printer": { pointsPerUnit: 0, hubspotProductId: "250458906315" },
@@ -2127,7 +2216,10 @@ export const MAX_BILLING_DELAY_DAYS = 365;
 export const DEFAULT_MAX_APPROVED_DELAY_DAYS = 90;
 
 /**
- * The billing delay a plan starts with — 45 days on the two POS plans
+ * The billing delay a plan starts with — 45 days on EVERY plan. Marketing Only
+ * billed at checkout until 2026-11-18 (Elizabeth Phillips: "switch marketing
+ * to say billing at 45 days since we will charge after they have their
+ * marketing call"). Before that, 45 on the processing plans
  * (45 since 2026-10-29, product owner: "45 day default billing delay"; it was 60 when
  * the product owner asked for it, 2026-10-09: "automatically add in billing after 60 days for
  * all-in-one and order/pay only, then let them adjust if needed").
@@ -2142,10 +2234,8 @@ export const DEFAULT_MAX_APPROVED_DELAY_DAYS = 90;
 export const PLAN_DEFAULT_BILLING_DELAY_DAYS = 45;
 
 /** The billing start a newly chosen plan seeds onto its recurring lines, if any. */
-export function planDefaultBillingStart(quoteType: QuoteType): BillingStart | null {
-  return isProcessingQuote(quoteType)
-    ? { mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS }
-    : null;
+export function planDefaultBillingStart(_quoteType: QuoteType): BillingStart | null {
+  return { mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS };
 }
 
 /**
@@ -2190,7 +2280,7 @@ export function longestBillingDelayDays(lines: Array<{ billingStart?: BillingSta
 
 /**
  * The one billing delay this plan's quotes carry silently: its own default.
- * 45 days on the two POS plans, "at checkout" on the marketing plans.
+ * 45 days on every plan since 2026-11-18 (Marketing Only was "at checkout").
  */
 export function planDefaultBillingDelayDays(quoteType: QuoteType): number {
   return billingStartDelayDays(planDefaultBillingStart(quoteType));
@@ -2213,10 +2303,10 @@ export function planDefaultBillingDelayDays(quoteType: QuoteType): number {
  *
  * Three things are load-bearing about how it's measured:
  *
- *  - **It compares against the PLAN's default, not against 45.** A marketing
- *    quote has no 45-day default — `planDefaultBillingStart` returns null for
- *    one — so a flat "must be 45" would have demanded a note on every
- *    marketing quote ever sent, for billing exactly when its plan says to.
+ *  - **It compares against the PLAN's default, not against 45.** Every plan
+ *    defaults to 45 since 2026-11-18, but until then a marketing quote billed
+ *    at checkout, and a flat "must be 45" would have demanded a note on every
+ *    one of them. Keep reading the plan's default if the plans diverge again.
  *  - **It reads the LONGEST delay, the same scalar the rep-facing control and
  *    the HubSpot preamble read**, rather than asking each line separately. A
  *    rep who seeds the plan's 45 days and then adds a monthly line that bills
@@ -2436,7 +2526,7 @@ export function adjustmentBlockers(
           blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
         } else if (
           pct > lineCap &&
-          !((isCompedService(line) || line.coveredByPackage) && pct === 100) &&
+          !((isCompedService(line) || line.coveredByPackage || isBilledSeparately(line)) && pct === 100) &&
           !firstKioskUnit
         ) {
           // A comped service or a package-covered line sitting at exactly 100%
@@ -2449,6 +2539,8 @@ export function adjustmentBlockers(
           // "allow the discount to be 100"): a rep allowed to give it away
           // can't sensibly be refused 30% off it. Several kiosks on the marked
           // line are capped as usual — only the first one is AIO's to give.
+          // A billed-separately line (payroll, 2026-11-11) is forced to 100%
+          // by `applyBilledSeparately`, so it is policy too, not discretion.
           overCap(
             isSpecific
               ? `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit admin set for this product. ` +
@@ -2622,7 +2714,9 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
   // exists to prevent, in the other direction.
   const chargeable = new Map<string, number>();
   for (const line of lines ?? []) {
-    if (line.coveredByPackage) continue;
+    // The first Mega is held at its price by `buildQuote`, so it is neither a
+    // rep edit to carry back nor a unit the rep's edits count across.
+    if (line.coveredByPackage || line.firstMega) continue;
     chargeable.set(line.hubspotProductId, (chargeable.get(line.hubspotProductId) ?? 0) + line.qty);
   }
 
@@ -2633,7 +2727,7 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
   // shape could say still reopens the old way, so existing quotes are untouched.
   const shape = new Map<string, { starts: Set<string>; discounts: Set<number>; discounted: number }>();
   for (const line of lines ?? []) {
-    if (line.coveredByPackage) continue;
+    if (line.coveredByPackage || line.firstMega) continue;
     const s = shape.get(line.hubspotProductId) ?? { starts: new Set(), discounts: new Set(), discounted: 0 };
     s.starts.add(startSignature(line.billingStart));
     // A cash discount counts as a distinct discount for shape purposes, so a
@@ -2651,9 +2745,13 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
   const out: QuoteAdjustments = {};
   for (const id of perUnit) out[id] = { units: unitsFromQuoteLines(lines, id) };
   for (const line of lines ?? []) {
-    if (line.coveredByPackage || perUnit.has(line.hubspotProductId)) continue;
+    if (line.coveredByPackage || line.firstMega || perUnit.has(line.hubspotProductId)) continue;
     const adjustment: LineAdjustment = {};
-    if (line.discountAmount) {
+    if (isBilledSeparately(line)) {
+      // Its 100% is policy, re-applied by `applyBilledSeparately` on the way
+      // out — not a rep discount to carry back (2026-11-11). Only its billing
+      // start is the rep's.
+    } else if (line.discountAmount) {
       adjustment.discountAmount = line.discountAmount;
       if (line.qty < (chargeable.get(line.hubspotProductId) ?? 0)) adjustment.discountQty = line.qty;
     } else if (line.discountPercent) {
@@ -2681,7 +2779,7 @@ function isRetiredWifiLine(line: { hubspotProductId: string; name: string }): bo
 export function describeBillingStart(start: BillingStart): string {
   return start.mode === "date"
     ? `Billing starts ${start.date}`
-    : `Billing starts ${start.days} days after checkout`;
+    : `Billing starts ${start.days} days after checkout or on Go Live`;
 }
 
 // ── The one derivation ──────────────────────────────────────────────────────
@@ -2817,14 +2915,20 @@ export function buildQuote(
   const adjustedLines = [
     ...(platform.line ? [platform.line] : []),
     ...softwareLicense.lines,
-    ...packages.lines,
+    ...applyFirstMegaPrice(packages.lines),
   ].flatMap(line => {
+    // The first Mega's $1,500 is policy, held like a covered line: no rep
+    // adjustment reaches it, and it owns no unit in "adjust each unit" mode.
+    // The rep's edits land on the Megas after it.
+    if (line.firstMega) return [line];
     const adjustment = adjustments[line.hubspotProductId];
     // "Adjust each unit" mode: the units are numbered across every chargeable
     // line of the product, so the cursor carries on from where the last one
     // stopped. Covered lines are skipped here and fall through to the package
     // comp below — they are already wholly paid for and own no units.
-    if (hasUnitAdjustments(adjustment) && !line.coveredByPackage) {
+    // A billed-separately line has no per-unit discount to give, so it never
+    // takes this path (2026-11-11).
+    if (hasUnitAdjustments(adjustment) && !line.coveredByPackage && !isBilledSeparately(line)) {
       const offset = unitCursor.get(line.hubspotProductId) ?? 0;
       unitCursor.set(line.hubspotProductId, offset + line.qty);
       return splitByUnits(line, adjustment, offset);
@@ -2833,7 +2937,10 @@ export function buildQuote(
     // not clear them. An explicit discount from the rep beats the service comp
     // (see applyServiceComp) but never the package one (see applyPackageComp),
     // because a covered line is hardware the package price already bought.
-    const adjusted = applyPackageComp(applyServiceComp(applyLineAdjustment(line, adjustment), adjustment));
+    // Payroll is held at 100% the same way: it is billed outside the sale.
+    const adjusted = applyBilledSeparately(
+      applyPackageComp(applyServiceComp(applyLineAdjustment(line, adjustment), adjustment))
+    );
     // Last: scoping a discount to part of the quantity splits the line in two.
     return splitPartialDiscount(adjusted, adjustment);
   });

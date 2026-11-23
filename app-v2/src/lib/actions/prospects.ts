@@ -25,6 +25,8 @@ import {
 import { resolveSender } from "@/lib/billing/publishBillingQuote";
 import { analysisFromQuoteConfig } from "@/lib/pricing";
 import { getMaxDiscountPercent, getQuoteLimits } from "@/lib/actions/pricing";
+import { getRateMatrix } from "@/lib/actions/rateMatrix";
+import { isStandardQuoteRates } from "@/lib/standardRates";
 import { appBaseUrl, approvalCovers, evaluateQuoteOverrides, quoteFingerprint } from "@/lib/quoteEvaluation";
 import { getStaffRecipient } from "@/lib/staff";
 import {
@@ -832,6 +834,15 @@ export async function createProspectAction(input: {
   // controls quotes the standard 2.49% / 2.49% / $0.15, which is what the form
   // shows them by default.
   quoteRates?: QuoteRates | null;
+  /**
+   * The rep pressed "Use standard rates" (product owner, 2026-11-11: "this
+   * can be used for a new restaurant that doesn't have any volume yet"):
+   * waives the volume + ticket requirement below, but only when `quoteRates`
+   * really are the standard card (lib/standardRates.ts) against the LIVE
+   * policy CNP. Ignored when a basis is supplied — the quote is then priced
+   * and judged like any other.
+   */
+  standardRates?: boolean;
   pricingModel: PricingModel;
   // Dual statement path. Either (or both) may be supplied: the rep can enter
   // ticket/volume configs, upload the statement themselves (analysis already
@@ -931,8 +942,20 @@ export async function createProspectAction(input: {
   // rate card and past every margin floor. At CREATION only — a saved quote
   // reopened in EditQuotePanel can't take a ticket, so enforcing it on save
   // would freeze every older row that never had one.
+  //
+  // Standard rates waive it (2026-11-11): the flat card IS the rate, so there
+  // is no rate-card cell to price off and nothing a volume would change. Only
+  // the exact standard card qualifies — any other rate with no basis is still
+  // the unpriced quote the 2026-10-18 rule refuses. With no volume, no floor
+  // or range can be judged (`evaluateQuoteOverrides` finds none), which is
+  // the same posture every no-volume quote has always had; an off-policy CNP
+  // can't get here, because it isn't the standard card.
   if (rated && !analysis && !quoteConfig) {
-    throw new Error("Enter the monthly volume and average ticket — the card rate is priced off both.");
+    const standard = !!input.standardRates
+      && isStandardQuoteRates(input.quoteRates, (await getRateMatrix()).cardNotPresentBps / 10000);
+    if (!standard) {
+      throw new Error("Enter the monthly volume and average ticket — the card rate is priced off both.");
+    }
   }
 
   // The floors are overrides now (see `evaluateQuoteOverrides` below); only
@@ -1002,6 +1025,7 @@ export async function createProspectAction(input: {
     quoteLines,
     orderPoints,
     quoteAcceptedAt: null,
+    lastEditedAt: now.toISOString(),
     // Nothing is confirmed and nothing is published at send time — the
     // merchant does both, from their own link. See the note above the
     // delivery block.
@@ -1254,6 +1278,7 @@ export async function saveQuoteConfigurationAction(input: {
     quoteRates,
     pricingModel: input.pricingModel,
     updatedAt: now.toISOString(),
+    lastEditedAt: now.toISOString(),
   };
 
   // Overrides are recomputed on EVERY save, off exactly what is about to be
@@ -1361,6 +1386,7 @@ export async function saveApplicationDetailsAction(input: {
     processing: input.processing,
     agreement: input.agreement,
     updatedAt: new Date().toISOString(),
+    lastEditedAt: new Date().toISOString(),
   };
   await postgresStorage.saveApplication(scope, updated);
   // A quote that has never gone out makes no HubSpot writes (2026-11-02):

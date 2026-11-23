@@ -74,16 +74,12 @@ describe("the billing-delay ceiling", () => {
 });
 
 describe("the billing start a plan opens with", () => {
-  it("gives the two POS plans 60 days", () => {
-    for (const plan of ["all_in_one", "order_pay_only"] as const) {
+  it("gives every plan 45 days, Marketing Only included since 2026-11-18", () => {
+    for (const plan of ["all_in_one", "order_pay_only", "marketing_partial", "marketing_only"] as const) {
       expect(planDefaultBillingStart(plan)).toEqual({
         mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS,
       });
     }
-  });
-
-  it("gives Marketing Only none — it bills from checkout", () => {
-    expect(planDefaultBillingStart("marketing_only")).toBeNull();
   });
 
   it("opens inside the ceiling, so a brand-new quote is never born blocked", () => {

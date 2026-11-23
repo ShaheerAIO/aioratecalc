@@ -16,6 +16,9 @@ import {
   planIncludesWebsite,
   PROCESSING_DISCLOSURE_PRODUCT,
   ORDER_POINT_RULES,
+  SCREEN_PRODUCT_IDS,
+  FIRST_MEGA_PRICE,
+  MEGA_PRODUCT_ID,
   PICKER_EXCLUDED_PRODUCT_NAMES,
   PLATFORM_PRODUCTS,
   QUOTE_TYPES,
@@ -39,6 +42,11 @@ import {
   processingDisclosureText,
   PAYROLL_PRODUCT_ID,
   payrollBlockers,
+  WEBSITE_PRODUCT_ID,
+  DEFAULT_QUOTE_LIMITS,
+  isBilledSeparately,
+  lineListAmount,
+  lineNetAmount,
 } from "@/lib/quoting";
 import type { CatalogProduct, QuoteAdjustments, QuoteLine, QuoteType } from "@/types/merchant";
 
@@ -235,6 +243,13 @@ describe("quote types", () => {
     expect(isAllowedForQuoteType(online, "order_pay_only")).toBe(true);
   });
 
+  it("hides the Website on Order & Pay only (2026-11-11)", () => {
+    expect(isHiddenPick(WEBSITE_PRODUCT_ID, "order_pay_only")).toBe(true);
+    for (const plan of ["all_in_one", "marketing_only", "marketing_partial"] as const) {
+      expect(isHiddenPick(WEBSITE_PRODUCT_ID, plan), plan).toBe(false);
+    }
+  });
+
   it("offers the Mega Kiosk (Marketing Only) on All-in-One, MPO and Marketing Only, not on Order & Pay (2026-10-30)", () => {
     const mega = find("Mega Kiosk (Marketing Only)");
     expect(mega.hubspotProductId).toBe("260674226888");
@@ -261,15 +276,16 @@ describe("quote types", () => {
     }
   });
 
-  it("hides the Mega Kiosk Loaner from the picker on the two POS plans only — still allowed, so a draft saves (2026-10-29)", () => {
-    const loaner = find("Mega Kiosk Loaner");
-    for (const plan of ["order_pay_only", "all_in_one"] as const) {
-      expect(isHiddenPick(loaner.hubspotProductId, plan), plan).toBe(true);
-      expect(isAllowedForQuoteType(loaner, plan), plan).toBe(true);
-    }
-    for (const plan of ["marketing_only", "marketing_partial"] as const) {
-      expect(isHiddenPick(loaner.hubspotProductId, plan), plan).toBe(false);
-      expect(isAllowedForQuoteType(loaner, plan), plan).toBe(true);
+  it("offers the Mega Kiosk Loaner and the Nugget on every plan but Order & Pay (2026-11-18)", () => {
+    for (const name of ["Mega Kiosk Loaner", "AIO Tableside POS"]) {
+      const product = find(name);
+      for (const plan of ["all_in_one", "marketing_only", "marketing_partial"] as const) {
+        expect(isHiddenPick(product.hubspotProductId, plan), `${name} on ${plan}`).toBe(false);
+        expect(isAllowedForQuoteType(product, plan), `${name} on ${plan}`).toBe(true);
+      }
+      // Visibility only: a draft that already carries one still saves.
+      expect(isHiddenPick(product.hubspotProductId, "order_pay_only"), name).toBe(true);
+      expect(isAllowedForQuoteType(product, "order_pay_only"), name).toBe(true);
     }
     // The plan-wide retirements still hide everywhere; the Mega bought is still offered.
     expect(isHiddenPick("332793212658", "marketing_only")).toBe(true);
@@ -299,6 +315,7 @@ describe("quote types", () => {
       "KDS (Kitchen Display System)",
       "Kiosk 27\" + Payment Terminal (AMS1) and Mount",
       "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount",
+      "AIO Tableside POS",
       "Marketing (Partial Ordering)",
       "Marketing Kit - Mega Kiosk",
       "Mega Kiosk (Marketing Only)",
@@ -331,9 +348,9 @@ describe("always-included services", () => {
         "System Onboarding and Training",
       ]);
       expect(lines.every(l => l.qty === 1)).toBe(true);
-      // Both are comped to $0 again (2026-10-28). See COMPED_SERVICE_PRODUCT_IDS.
-      expect(quoteTotals(lines).oneTime).toBe(0);
-      expect(lines.map(l => l.discountPercent ?? 0)).toEqual([100, 100]);
+      // At list since 2026-11-11 (the comp list is empty). See COMPED_SERVICE_PRODUCT_IDS.
+      expect(quoteTotals(lines).oneTime).toBe(1498);
+      expect(lines.map(l => l.discountPercent ?? 0)).toEqual([0, 0]);
     }
   });
 
@@ -574,11 +591,15 @@ describe("deriveOrderPoints", () => {
     }
   });
 
-  it("counts a tableside POS, which Steve's list calls a Tableside AI Device", () => {
-    expect(ORDER_POINT_RULES["AIO Tableside POS"].pointsPerUnit).toBe(1);
+  // Was 1 point (Steve's "Tableside AI Device"); the "Nugget" takes no orders
+  // today and is a marketing display (product owner, 2026-11-18). It still
+  // takes a software license, like the Mega.
+  it("counts no ordering point for the Nugget (AIO Tableside POS), but still a screen", () => {
+    expect(ORDER_POINT_RULES["AIO Tableside POS"].pointsPerUnit).toBe(0);
     const { orderPoints, unclassified } = deriveOrderPoints([line("AIO Tableside POS", 2)], []);
-    expect(orderPoints.total).toBe(2);
+    expect(orderPoints.total).toBe(0);
     expect(unclassified).toEqual([]);
+    expect(SCREEN_PRODUCT_IDS).toContain("335279520447");
   });
 
   it("counts neither marketing kit, and calls neither of them a mystery", () => {
@@ -824,9 +845,9 @@ describe("buildQuote — the one derivation", () => {
       // Last, past every adjustment — see `resolveProcessingDisclosure`.
       RATE_LINE,
     ]);
-    // 0 + 0 + 2×749 + 69 + 2×300 = $2,167 due once. Install and training are
-    // both comped again since 2026-10-28.
-    expect(built.totals.oneTime).toBe(2167);
+    // 999 + 499 + 2×749 + 69 + 2×300 = $3,665 due once. Install and training
+    // are at list since 2026-11-11.
+    expect(built.totals.oneTime).toBe(3665);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
@@ -1604,6 +1625,78 @@ describe("payroll needs a counter POS (2026-10-18)", () => {
   });
 });
 
+describe("payroll is billed separately: 100% off on the quote (2026-11-11)", () => {
+  const catalog: CatalogProduct[] = [
+    ...CATALOG,
+    { hubspotProductId: PAYROLL_PRODUCT_ID, name: "Payroll - AIO Platform (Per Person)", price: 8, billingFrequency: "monthly", productType: "Software" },
+  ];
+  const payrollPick = toQuoteLine(catalog.find(c => c.hubspotProductId === PAYROLL_PRODUCT_ID)!, 12);
+  const posPick = toQuoteLine(catalog.find(c => c.name === "POS Unit")!, 1);
+  const build = (adjustments: QuoteAdjustments = {}, maxDiscount = 50, limits = DEFAULT_QUOTE_LIMITS) =>
+    buildQuote("all_in_one", [payrollPick, posPick], [], catalog, adjustments, maxDiscount, limits);
+  const payrollLines = (q: ReturnType<typeof build>) =>
+    q.quoteLines.filter(l => l.hubspotProductId === PAYROLL_PRODUCT_ID);
+
+  it("is keyed on the payroll product only", () => {
+    expect(isBilledSeparately({ hubspotProductId: PAYROLL_PRODUCT_ID })).toBe(true);
+    expect(isBilledSeparately(posPick)).toBe(false);
+  });
+
+  it("nets to $0 with its list price still on the line, and the rest of the quote still charges", () => {
+    const q = build();
+    const [line] = payrollLines(q);
+    expect(payrollLines(q)).toHaveLength(1);
+    expect(line).toMatchObject({ qty: 12, unitPrice: 8, discountPercent: 100 });
+    expect(line.discountAmount).toBeUndefined();
+    expect(lineListAmount(line)).toBe(96);
+    expect(lineNetAmount(line)).toBe(0);
+    expect(line.coveredByPackage).toBeUndefined();
+    // Out of the monthly total: only the plan bills monthly.
+    expect(q.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
+    // Payroll at $0 does not trip "every line nets to $0" or anything else.
+    expect(q.blockers).toEqual([]);
+    expect(q.overrides).toEqual([]);
+  });
+
+  it.each([
+    ["a percent", { discountPercent: 20 }],
+    ["a cash amount", { discountAmount: 10 }],
+    ["an explicit 0", { discountPercent: 0 }],
+    ["a scoped percent", { discountPercent: 50, discountQty: 3 }],
+    ["per-unit edits", { units: [{ discountPercent: 10 }, { discountPercent: 30 }] }],
+  ])("ignores %s from the rep", (_name, adjustment) => {
+    const q = build({ [PAYROLL_PRODUCT_ID]: adjustment });
+    const lines = payrollLines(q);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ qty: 12, discountPercent: 100 });
+    expect(lines[0].discountAmount).toBeUndefined();
+    expect(q.blockers).toEqual([]);
+  });
+
+  it("is never over a discount cap, even a 0% cap set on payroll itself", () => {
+    expect(build({}, 50).blockers).toEqual([]);
+    const q = build({}, 0, { ...DEFAULT_QUOTE_LIMITS, discountCaps: { [PAYROLL_PRODUCT_ID]: 0 } });
+    expect(q.blockers.join(" ")).not.toContain("Payroll");
+    expect(q.overrides.filter(o => o.productId === PAYROLL_PRODUCT_ID)).toEqual([]);
+  });
+
+  it("keeps the rep's billing start", () => {
+    const start = { mode: "days" as const, days: 45 };
+    const [line] = payrollLines(build({ [PAYROLL_PRODUCT_ID]: { billingStart: start } }));
+    expect(line).toMatchObject({ discountPercent: 100, billingStart: start });
+  });
+
+  it("reopens without reading the forced 100% back as a rep discount", () => {
+    expect(adjustmentsFromQuoteLines(build().quoteLines)[PAYROLL_PRODUCT_ID]).toBeUndefined();
+
+    const start = { mode: "days" as const, days: 45 };
+    const saved = build({ [PAYROLL_PRODUCT_ID]: { discountPercent: 20, billingStart: start } }).quoteLines;
+    const reopened = adjustmentsFromQuoteLines(saved);
+    expect(reopened[PAYROLL_PRODUCT_ID]).toEqual({ billingStart: start });
+    expect(payrollLines(build(reopened))).toEqual(saved.filter(l => l.hubspotProductId === PAYROLL_PRODUCT_ID));
+  });
+});
+
 describe("the marketing line on Marketing Partial Ordering", () => {
   it("is one per quote, and never reads as unclassified hardware (HubSpot gives it no type)", () => {
     const id = find("Marketing (Partial Ordering)").hubspotProductId;
@@ -1611,5 +1704,50 @@ describe("the marketing line on Marketing Partial Ordering", () => {
     const { unclassified, orderPoints } = deriveOrderPoints([line("Marketing (Partial Ordering)", 1)], []);
     expect(unclassified).toEqual([]);
     expect(orderPoints.total).toBe(0);
+  });
+});
+
+// 2026-11-24 (Elizabeth Phillips): "the mega kiosk is 1500 for the first one
+// and then anything after the 1st one is 2250". First on each quote, bought
+// Megas only, held by buildQuote.
+describe("the first Mega Kiosk at $1,500", () => {
+  const megas = (q: ReturnType<typeof buildQuote>) => q.quoteLines.filter(l => l.hubspotProductId === MEGA_PRODUCT_ID);
+
+  it("prices a lone Mega at $1,500, as a price rather than a discount", () => {
+    const [mega, ...rest] = megas(buildQuote("marketing_only", [line("Mega Kiosk (Marketing Only)", 1)], [], CATALOG));
+    expect(rest).toEqual([]);
+    expect(mega).toMatchObject({ qty: 1, unitPrice: FIRST_MEGA_PRICE, firstMega: true });
+    expect(mega.discountPercent ?? null).toBeNull();
+    expect(mega.discountAmount ?? null).toBeNull();
+  });
+
+  it("bills every Mega after the first at list", () => {
+    const lines = megas(buildQuote("all_in_one", [line("Mega Kiosk (Marketing Only)", 3)], [], CATALOG));
+    expect(lines.map(l => [l.qty, l.unitPrice, l.firstMega ?? false])).toEqual([[1, 1500, true], [2, 2250, false]]);
+  });
+
+  it("keeps a rep's discount off the first Mega and on the rest, inside the cap", () => {
+    const q = buildQuote(
+      "all_in_one", [line("Mega Kiosk (Marketing Only)", 2)], [], CATALOG,
+      { [MEGA_PRODUCT_ID]: { discountPercent: 10 } }
+    );
+    const [first, second] = megas(q);
+    expect(first).toMatchObject({ unitPrice: 1500, firstMega: true });
+    expect(first.discountPercent ?? null).toBeNull();
+    expect(second).toMatchObject({ unitPrice: 2250, discountPercent: 10 });
+    expect(q.overrides).toEqual([]);
+  });
+
+  it("is not used up by a Mega Kiosk Loaner", () => {
+    const q = buildQuote(
+      "marketing_only", [line("Mega Kiosk Loaner", 1), line("Mega Kiosk (Marketing Only)", 1)], [], CATALOG
+    );
+    expect(megas(q)[0]).toMatchObject({ unitPrice: 1500, firstMega: true });
+  });
+
+  it("reopens as the rep's quantity with no adjustment, and rebuilds the same", () => {
+    const q = buildQuote("all_in_one", [line("Mega Kiosk (Marketing Only)", 3)], [], CATALOG);
+    expect(picksFromQuoteLines(q.quoteLines, "all_in_one")).toContainEqual({ hubspotProductId: MEGA_PRODUCT_ID, qty: 3 });
+    expect(adjustmentsFromQuoteLines(q.quoteLines)[MEGA_PRODUCT_ID]).toBeUndefined();
   });
 });

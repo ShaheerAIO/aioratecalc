@@ -41,7 +41,7 @@ export const LINE_DESCRIPTIONS: Record<string, string> = {
   "223452690130": "A countertop point-of-sale station with a second screen facing your customer.", // POS Unit - With Customer Facing Display
   "339229355762": "A dual-screen countertop point-of-sale station with a card terminal included.", // POS (Dual Screen) + Payment Terminal
   "223511653101": "A handheld point of sale for taking orders and payments anywhere in the restaurant.", // mPOS
-  "335279520447": "A handheld device your staff use to take orders and payments at the table.", // AIO Tableside POS
+  "335279520447": "A tableside display that shows your marketing content to guests.", // AIO Tableside POS ("Nugget"), a marketing display since 2026-11-18
   "318736467644": "A screen at the counter that shows customers their order and total.", // Customer Facing Display
   "223511653105": "A card terminal for chip, tap and swipe payments.", // Payment Terminal - AMS1
   "222497165011": "A locking cash drawer that opens from your point of sale.", // Cash Drawer

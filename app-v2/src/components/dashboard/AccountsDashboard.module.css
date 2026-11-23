@@ -42,53 +42,19 @@
   margin: 0;
 }
 
-/* ---------- Stat-Led hero (no card shape — sits directly on the page) ---------- */
+/* ---------- Summary line (the old stat hero, shrunk) ---------- */
 
-.stats {
-  margin-bottom: var(--space-2xl);
-  animation: statIn 500ms var(--ease-out) both;
-}
-
-@keyframes statIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.statHero {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  line-height: 1;
-  letter-spacing: -0.02em;
-  font-size: clamp(2.5rem, 4vw + 1rem, 4rem);
-  margin-bottom: var(--space-xs);
-}
-
-.statCaption {
-  color: var(--ink-2);
-  font-size: 0.95rem;
-  margin: 0 0 var(--space-lg);
-}
-
-.statTicker {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 var(--space-md);
-  padding-top: var(--space-md);
-  border-top: 1px solid var(--rule);
+.summaryLine {
+  margin: var(--space-sm) 0 0;
   font-size: 0.85rem;
   color: var(--ink-3);
 }
 
-.statTicker b {
+.summaryLine b {
   color: var(--ink);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-
-.statTicker b.statSuccess { color: var(--success); }
 
 .statDot { color: var(--rule); }
 
@@ -131,16 +97,6 @@
 }
 
 /* ---------- Table search bar (full-table view) ---------- */
-
-/* display/gap are set inline on this row in AccountsDashboard.tsx; only the wrap
-   is ours. The search input's default intrinsic min-width (~180px) plus the gap
-   plus a nowrap "Export CSV" needs 292px and the column is 272px at 320px, so
-   the button ran 19.5px past the panel edge. Wrapping drops it onto its own line
-   there and changes nothing from 375px up, where the row still fits. */
-.tableSearch {
-  margin-bottom: var(--space-sm);
-  flex-wrap: wrap;
-}
 
 .tableSearchInput {
   width: 280px;
@@ -218,7 +174,6 @@
 .tableCell--accent { color: var(--accent-text); font-variant-numeric: tabular-nums; }
 .tableCell--success { color: oklch(52% 0.14 150); font-variant-numeric: tabular-nums; }
 
-.merchantName { font-weight: 600; margin-bottom: 2px; }
 .merchantSub  { font-size: 0.78rem; color: var(--ink-3); }
 
 .badge {
@@ -242,8 +197,8 @@
 
 .splitLayout {
   display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: var(--space-lg);
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--space-md);
   align-items: start;
 }
 
@@ -257,12 +212,6 @@
   flex-direction: column;
   position: sticky;
   top: calc(var(--space-md) + 60px);
-}
-
-.splitSearch {
-  padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--rule);
-  background: var(--paper);
 }
 
 .splitSearchInput {
@@ -342,25 +291,25 @@
    the panel drift into eighteen ungrouped fields under one unlabelled grid. */
 
 .detail {
-  padding: var(--space-lg) var(--space-xl) var(--space-xl);
+  padding: var(--space-md) var(--space-lg) var(--space-lg);
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--space-sm);
 }
 
 .detailHeader {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: var(--space-md);
+  gap: var(--space-sm);
 }
 
 .detailTitleRow {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-2xs) var(--space-xs);
   flex-wrap: wrap;
-  margin-bottom: var(--space-2xs);
+  margin-bottom: var(--space-3xs);
 }
 
 .detailTitle {
@@ -395,21 +344,6 @@
 .detailClose:hover { background: var(--rule); color: var(--ink); }
 .detailClose:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-.detailActions {
-  display: flex;
-  gap: var(--space-xs);
-  flex-wrap: wrap;
-}
-
-/* Closed-lost lives here, away from the forward actions — it's the one
-   irreversible-ish thing on the panel and it was sitting next to Close. */
-.detailFooter {
-  display: flex;
-  justify-content: flex-end;
-  border-top: 1px solid var(--rule);
-  padding-top: var(--space-md);
-}
-
 .detailGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -431,10 +365,10 @@
 
 .section {
   border-top: 1px solid var(--rule);
-  padding-top: var(--space-md);
+  padding-top: var(--space-sm);
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--space-sm);
 }
 
 .sectionHead {
@@ -468,44 +402,6 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: var(--space-2xs);
-}
-
-/* ---------- Money snapshot (replaces the Volume/Fees/Savings columns the
-   table drops the moment a row is selected) ---------- */
-
-.snapshot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-md) var(--space-xl);
-  border-top: 1px solid var(--rule);
-  padding-top: var(--space-md);
-}
-
-.snapshotItem {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.snapshotValue {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.1rem;
-  line-height: 1.1;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-}
-
-.snapshotValue--accent  { color: var(--accent-text); }
-.snapshotValue--success { color: var(--success); }
-
-.snapshotLabel {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-3);
 }
 
 /* Quoted amounts — one-time and recurring are different units, so they stay
@@ -673,27 +569,6 @@ details[open] > .disclosureSummary::before { transform: rotate(90deg); }
 .btnPrimary:active { transform: scale(0.97); }
 .btnPrimary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-.btnApprove {
-  font-family: var(--font-body);
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: white;
-  background: var(--accent-2);
-  border: none;
-  border-radius: var(--radius-pill);
-  padding: var(--space-sm) var(--space-lg);
-  cursor: pointer;
-  white-space: nowrap;
-  box-shadow: var(--shadow-whisper);
-  transition: opacity 150ms var(--ease-out);
-}
-.btnApprove:hover { opacity: 0.92; }
-.btnApprove:active { transform: scale(0.97); }
-.btnApprove:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-.statusChip { text-transform: none; margin-left: var(--space-2xs); background: var(--paper); color: var(--ink-2); }
-.statusChip[data-status="pending_approval"] { background: oklch(63% 0.140 278 / 0.14); color: var(--accent-2-text); }
-.statusChip[data-status="approved"] { background: var(--success-bg); color: var(--success); }
 
 .overrideList { margin: var(--space-xs) 0; padding-left: var(--space-md); font-size: 0.85rem; color: var(--ink); }
 
@@ -860,11 +735,6 @@ details[open] > .disclosureSummary::before { transform: rotate(90deg); }
 /* ---------- Reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  .stats {
-    animation: none;
-    opacity: 1;
-    transform: none;
-  }
   .tableRow,
   .btnGhost,
   .btnPrimary,
@@ -879,61 +749,11 @@ details[open] > .disclosureSummary::before { transform: rotate(90deg); }
 
 /* ---------- Approval card + Contacts & HubSpot drawer (2026-11-09) ---------- */
 
-.approvalCard {
-  border: 1px solid var(--accent-2);
-  background: oklch(63% 0.140 278 / 0.08);
-  border-radius: var(--radius-md);
-  padding: var(--space-md);
-}
-
-.approvalHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-  flex-wrap: wrap;
-}
-
-.approvalTitle {
-  font-weight: 700;
-  color: var(--accent-2-text);
-}
-
 .approvalError {
   margin-top: var(--space-xs);
   font-size: 0.8125rem;
   color: var(--danger);
 }
-
-.drawer {
-  border-top: 1px solid var(--rule);
-  padding-top: var(--space-md);
-}
-
-.drawerSummary {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-sm);
-  cursor: pointer;
-  list-style: none;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--ink-2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.drawerSummary::-webkit-details-marker { display: none; }
-
-.drawerSummary::before {
-  content: "›";
-  display: inline-block;
-  color: var(--ink-3);
-  transition: transform 150ms var(--ease-out);
-}
-
-details[open] > .drawerSummary::before { transform: rotate(90deg); }
-.drawerSummary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .drawerHint {
   font-weight: 400;
@@ -953,4 +773,459 @@ details[open] > .drawerSummary::before { transform: rotate(90deg); }
   flex-direction: column;
   gap: var(--space-md);
   margin-top: var(--space-md);
+}
+
+/* ---------- Dashboard revamp, phases 1 + 2 (2026-11-11) ----------
+   Filter tabs with counts, a search + sort toolbar, one status badge from
+   lib/accountStatus.ts with flag chips, a next-step button per row, and in
+   the detail panel the status ladder, the next-step card and the Admin card. */
+
+.tabs {
+  display: flex;
+  gap: var(--space-2xs);
+  border-bottom: 1px solid var(--rule);
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-bottom: var(--space-sm);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-family: var(--font-body);
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--space-xs) var(--space-sm);
+  margin-bottom: -1px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--accent-text); border-bottom-color: var(--accent); }
+.tab:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.tabCount {
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-3);
+}
+
+.tab[aria-selected="true"] .tabCount {
+  background: oklch(69% 0.17 32 / 0.14);
+  color: var(--accent-text);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.toolbar .tableSearchInput {
+  flex: 1 1 16rem;
+  width: auto;
+  min-width: 0;
+}
+
+.sortGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+}
+
+.sortLabel {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  padding: 0 var(--space-xs);
+}
+
+.sortBtn {
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: var(--space-3xs) var(--space-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortBtn[aria-pressed="true"] {
+  background: var(--paper-2);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.sortBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* The row is a div (it holds a button); the name is the keyboard target. */
+.rowNameBtn {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+
+.rowNameBtn:hover { color: var(--accent-text); }
+.rowNameBtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+.tableCell { min-width: 0; }
+
+.merchantSub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cellMuted { color: var(--ink-3); }
+
+.statusCell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+/* One status, one colour family per step. */
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px var(--space-sm);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  background: var(--paper);
+  color: var(--ink-2);
+  border: 1px solid var(--rule);
+}
+
+.statusBadge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.statusBadge[data-status="needs_approval"] { background: var(--warning-bg); color: var(--warning); border-color: transparent; }
+.statusBadge[data-status="ready_to_send"]  { background: oklch(69% 0.17 32 / 0.14); color: var(--accent-text); border-color: transparent; }
+.statusBadge[data-status="sent"],
+.statusBadge[data-status="signed"],
+.statusBadge[data-status="onboarding"]     { background: oklch(63% 0.140 278 / 0.14); color: var(--accent-2-text); border-color: transparent; }
+.statusBadge[data-status="live"]           { background: var(--success-bg); color: var(--success); border-color: transparent; }
+.statusBadge[data-status="closed_lost"]    { color: var(--ink-3); }
+
+.flagChip {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px var(--space-xs);
+  border-radius: 4px;
+  white-space: nowrap;
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.flagChip[data-flag="sync_error"] { background: var(--danger-bg); color: var(--danger); }
+
+/* "Waiting on admin": a button-shaped state, not an action. */
+.btnWaiting {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  background: var(--paper);
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2xs) var(--space-md);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.btnGhost:disabled { opacity: 0.6; cursor: default; }
+
+.splitRowSub {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detailHeaderMain { min-width: 0; }
+
+/* ---------- Next-step card ---------- */
+
+.nextCard {
+  border: 1px solid var(--accent);
+  background: oklch(69% 0.17 32 / 0.05);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.nextCard .nextRow { margin-top: var(--space-2xs); }
+
+.nextMeta { font-size: 0.75rem; color: var(--ink-3); }
+
+.nextCard .overrideList { margin: var(--space-3xs) 0 0; }
+
+.nextCard[data-status="live"],
+.nextCard[data-status="closed_lost"] { border-color: var(--rule); background: var(--paper); }
+
+.nextLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.nextTitle {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--ink);
+}
+
+.nextBody {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.nextRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+}
+
+.nextCaption {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  line-height: 1.45;
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+/* Scroll target for the quote editor / HubSpot drawer next steps. */
+.anchor { scroll-margin-top: calc(var(--nav-offset, 4.5rem) + var(--space-md)); }
+.railDrawer { scroll-margin-top: calc(var(--nav-offset, 4.5rem) + var(--space-md)); }
+
+@media (max-width: 60rem) {
+  .rowNameBtn,
+  .merchantSub { white-space: normal; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab { transition-duration: 1ms; }
+}
+
+/* ---------- Detail layout, round 2 (product owner 2026-11-11: "a lot of
+   empty space and things feel crammed") ----------
+   The page widens to the two-pane measure while an account is open, the list
+   narrows, and the detail splits into the work column and a facts rail. */
+
+.main[data-wide="true"],
+.mainEmbedded[data-wide="true"] { max-width: var(--measure-wide); }
+
+.splitDetailPanel { container-type: inline-size; }
+
+/* Compact ladder: dot + label inline, short connectors, wraps if it must. */
+.ladder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: var(--space-2xs);
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2xs) 0 var(--space-xs);
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.75rem;
+}
+
+.ladderStep {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.ladderStep + .ladderStep::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  margin: 0 6px;
+  border-radius: 1px;
+  background: var(--rule);
+}
+
+.ladderStep[data-state="done"]::before,
+.ladderStep[data-state="current"]::before,
+.ladderStep[data-state="skipped"]::before { background: var(--accent-2); }
+
+.ladderDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--rule);
+  background: var(--paper-2);
+  flex-shrink: 0;
+}
+
+.ladderStep[data-state="done"] { color: var(--ink-2); }
+.ladderStep[data-state="done"] .ladderDot { background: var(--accent-2); border-color: var(--accent-2); }
+.ladderStep[data-state="current"] { color: var(--accent-text); font-weight: 700; }
+.ladderStep[data-state="current"] .ladderDot {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px oklch(69% 0.17 32 / 0.18);
+}
+.ladderStep[data-state="skipped"] { opacity: 0.55; }
+.ladderStep[data-state="skipped"] .ladderLabel { text-decoration: line-through; }
+
+.ladderNote {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+}
+
+/* Two columns: work + rail. */
+.detailColumns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 272px;
+  gap: var(--space-md);
+  align-items: start;
+}
+
+.detailMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+/* The first section under the next-step card doesn't need a rule above it. */
+.detailMain > .nextCard + .section,
+.detailMain > .nextCard + .anchor > .section { border-top: none; padding-top: 0; }
+
+.detailRail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.railCard {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  font-size: 0.82rem;
+}
+
+.railCard[data-tone="admin"] {
+  border-color: oklch(63% 0.140 278 / 0.45);
+  background: oklch(63% 0.140 278 / 0.05);
+}
+
+.railTitle {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.railCard[data-tone="admin"] .railTitle { color: var(--accent-2-text); }
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2xs) var(--space-sm);
+  margin: 0;
+}
+
+.facts dt { color: var(--ink-3); }
+
+.facts dd {
+  margin: 0;
+  text-align: right;
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts dd.factAccent  { color: var(--accent-text); }
+.facts dd.factSuccess { color: var(--success); }
+
+.railDrawer {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-xs);
+}
+
+.railDrawer .drawerBody { margin-top: var(--space-sm); gap: var(--space-sm); }
+.railDrawer .linkedRowMain { min-width: 0; }
+
+.railCard .moreRow {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2xs);
+}
+
+/* Split list row: name, then status + second line. */
+.splitRow { flex-direction: column; align-items: stretch; gap: 3px; padding: var(--space-xs) var(--space-md); }
+
+.splitRowMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.splitRowMeta .statusBadge { font-size: 0.66rem; padding: 1px var(--space-xs); }
+
+@container (max-width: 44rem) {
+  .detailColumns { grid-template-columns: 1fr; }
 }

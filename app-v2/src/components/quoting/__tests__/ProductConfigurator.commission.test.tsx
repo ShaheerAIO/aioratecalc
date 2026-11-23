@@ -33,7 +33,8 @@ import styles from "@/components/quoting/ProductConfigurator.module.css";
 // Real ids and real 2026-10-14 figures, so a change to the live catalog that
 // breaks an assumption here shows up as a failing test rather than as a wrong
 // number on a quote. Mega Kiosk: $2,250 at a $1,495 cost and a 60% rep rate
-// -> $453.00. Customer Facing Display is one of the five products with NO
+// -> $453.00 a unit at list. The FIRST Mega on a quote is $1,500 since
+// 2026-11-24, so it earns (1,500 - 1,495) x 60% = $3.00. Customer Facing Display is one of the five products with NO
 // cost on file.
 const MEGA_KIOSK = "260674226888";
 const DISPLAY = "318736467644";
@@ -84,10 +85,13 @@ describe("the AE's hardware commission in the document layout", () => {
 
     // Since 2026-10-14 it is a COLUMN beside the price, so the cell carries
     // the figure alone and the group's column head says whose it is.
-    const note = container.querySelector(`.${styles.docCommission}`);
-    expect(note?.textContent).toBe("$453.00");
+    // Install and training are charged at list since 2026-11-11 and carry their
+    // own ($0-floored) figure, so pick the hardware row's note, not the first.
+    const notes = Array.from(container.querySelectorAll(`.${styles.docCommission}`));
+    const note = notes.find(n => n.textContent === "$3.00");
+    expect(note?.textContent).toBe("$3.00");
     const docCol = container.querySelector(`.${styles.docCol}`);
-    expect(docCol?.textContent).toContain("$453.00");
+    expect(docCol?.textContent).toContain("$3.00");
   });
 
   it("marks the per-line figure internal on the line itself, not only in the totals", async () => {
@@ -95,9 +99,12 @@ describe("the AE's hardware commission in the document layout", () => {
     await waitFor(() => expect(listQuotableProductsAction).toHaveBeenCalled());
     await screen.findByTestId("mirror-heading");
 
-    const note = container.querySelector(`.${styles.docCommission}`);
+    // Install and training are charged at list since 2026-11-11 and carry their
+    // own ($0-floored) figure, so pick the hardware row's note, not the first.
+    const notes = Array.from(container.querySelectorAll(`.${styles.docCommission}`));
+    const note = notes.find(n => n.textContent?.includes("$3.00"));
     expect(note).toBeTruthy();
-    expect(note?.textContent).toContain("$453.00");
+    expect(note?.textContent).toContain("$3.00");
     // A bare figure in a column needs the column to name it — otherwise the
     // only thing saying it isn't the merchant's is the totals block below.
     const head = container.querySelector(`.${styles.docCommissionHead}`);
@@ -111,7 +118,7 @@ describe("the AE's hardware commission in the document layout", () => {
 
     const docTotals = container.querySelector(`.${styles.docTotals}`);
     expect(docTotals?.textContent).toContain("Your hardware commission (est.)");
-    expect(docTotals?.textContent).toContain("$906.00"); // 2 × $453
+    expect(docTotals?.textContent).toContain("$456.00"); // the first Mega's $3 + one at list, $453
     expect(docTotals?.textContent).toMatch(/not shown to merchant/i);
   });
 
@@ -125,8 +132,8 @@ describe("the AE's hardware commission in the document layout", () => {
     expect(docCol?.textContent).toContain("Onsite Installation");
     expect(docCol?.textContent).toContain("System Onboarding and Training");
     // …and neither drags the total down. Were they counted as a loss, this
-    // quote would read −$224.55 instead of $453.00.
-    expect(container.querySelector(`.${styles.docTotals}`)?.textContent).toContain("$453.00");
+    // quote would read −$224.55 instead of $3.00 (the first Mega's own).
+    expect(container.querySelector(`.${styles.docTotals}`)?.textContent).toContain("$3.00");
     expect(screen.queryByText(/-\$/)).toBeNull();
   });
 
@@ -137,7 +144,10 @@ describe("the AE's hardware commission in the document layout", () => {
 
     // In the column it reads "n/a" rather than nothing — the full reason is
     // on the cell, but an empty cell would read as "this earns $0".
-    const note = container.querySelector(`.${styles.docCommission}`);
+    // Install and training are charged at list since 2026-11-11 and carry their
+    // own ($0-floored) figure, so pick the hardware row's note, not the first.
+    const notes = Array.from(container.querySelectorAll(`.${styles.docCommission}`));
+    const note = notes.find(n => n.getAttribute("data-commission") === "unknown");
     expect(note?.getAttribute("data-commission")).toBe("unknown");
     expect(note?.textContent).toBe("n/a");
     expect(note?.getAttribute("title")).toMatch(/No cost on file/);
@@ -145,10 +155,8 @@ describe("the AE's hardware commission in the document layout", () => {
     // knows a product on this quote wasn't counted.
     const docTotals = container.querySelector(`.${styles.docTotals}`);
     expect(docTotals?.textContent).toContain("Customer Facing Display");
-    // Since 2026-10-28 install AND training are both comped, so nothing else
-    // on this quote earns a figure and the total row is omitted entirely: the
-    // footnote above is the only commission line, rather than a misleading
-    // "$0.00" beside the missing display.
-    expect(docTotals?.textContent).not.toContain("Your hardware commission (est.)");
+    // Since 2026-11-11 install and training are charged, so they earn a figure
+    // of their own and the total row is back alongside the display's footnote.
+    expect(docTotals?.textContent).toContain("Your hardware commission (est.)");
   });
 });
