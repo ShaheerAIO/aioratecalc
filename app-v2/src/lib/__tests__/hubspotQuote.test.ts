@@ -357,3 +357,16 @@ describe("EMPTY_HUBSPOT_IDS", () => {
     expect(EMPTY_HUBSPOT_IDS).not.toHaveProperty("dealId");
   });
 });
+
+describe("toLineItemProperties — the first Mega Kiosk", () => {
+  it("sends its $1,500 as the line's price, with no discount and no marker property", () => {
+    const props = toLineItemProperties(line({
+      hubspotProductId: "260674226888", name: "Mega Kiosk (Marketing Only)",
+      unitPrice: 1500, billingFrequency: "one_time", firstMega: true,
+    }));
+    expect(props.price).toBe("1500");
+    expect(props.discount).toBeUndefined();
+    expect(props.hs_discount_percentage).toBeUndefined();
+    expect(Object.keys(props).some(k => /mega/i.test(k))).toBe(false);
+  });
+});

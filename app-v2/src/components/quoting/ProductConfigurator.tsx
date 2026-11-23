@@ -18,6 +18,7 @@ import {
   MAX_BILLING_DELAY_DAYS,
   PAYROLL_PRODUCT_ID,
   PLAN_DEFAULT_BILLING_DELAY_DAYS,
+  FIRST_MEGA_PRICE,
   PLATFORM_PRODUCTS,
   PROCESSING_DISCLOSURE_PRODUCT,
   PRODUCT_GROUP_LABELS,
@@ -553,6 +554,8 @@ export default function ProductConfigurator({
     const map = new Map<string, QuoteLine & { discountGiven: number; mixedDiscount?: boolean }>();
     for (const l of quoteLines) {
       if (l.coveredByPackage) continue;
+      // The first Mega's $1,500 is held by buildQuote; no control for it.
+      if (l.firstMega) continue;
       // The pre-authorization is not the rep's to adjust, so it gets no entry
       // — which is also what keeps the quote-wide discount and billing-start
       // sweeps from ever naming it.
@@ -1824,6 +1827,9 @@ export default function ProductConfigurator({
       // instead of a per-line "In package" chip (2026-10-15, product owner).
       // The derived plan line is a single row, so it keeps its own chip.
       if (l.coveredByPackage === planName) return { tag: "In plan" };
+      if (l.firstMega) {
+        return { tag: "First Mega", why: `The first Mega Kiosk on a quote is ${fmt$(FIRST_MEGA_PRICE)}; each one after is at list.` };
+      }
       if (platform.line && l.hubspotProductId === platform.line.hubspotProductId) return { tag: "Plan" };
       if (isPreAuthProduct(l.hubspotProductId, l.name)) {
         return { tag: "Pre-auth", why: "Nothing else is due at checkout, so the card is pre-authorized. Can't be removed." };

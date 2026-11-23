@@ -574,7 +574,10 @@ describe("buildQuote with the kit on it", () => {
     const mega = built.quoteLines.find(l => l.hubspotProductId === ID.mega)!;
     expect(mega.coveredByPackage).toBeUndefined();
     expect(mega.discountPercent).toBeUndefined();
-    expect(built.totals.oneTime).toBe(3957);
+    // Uncovered and undiscounted — at the first Mega's own $1,500 since
+    // 2026-11-24, not this catalog's $2,459 (3957 before).
+    expect(mega.unitPrice).toBe(1500);
+    expect(built.totals.oneTime).toBe(2998);
   });
 
   it("does not refuse the quote over the 100% on a covered line", () => {

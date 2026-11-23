@@ -17,6 +17,8 @@ import {
   PROCESSING_DISCLOSURE_PRODUCT,
   ORDER_POINT_RULES,
   SCREEN_PRODUCT_IDS,
+  FIRST_MEGA_PRICE,
+  MEGA_PRODUCT_ID,
   PICKER_EXCLUDED_PRODUCT_NAMES,
   PLATFORM_PRODUCTS,
   QUOTE_TYPES,
@@ -1702,5 +1704,50 @@ describe("the marketing line on Marketing Partial Ordering", () => {
     const { unclassified, orderPoints } = deriveOrderPoints([line("Marketing (Partial Ordering)", 1)], []);
     expect(unclassified).toEqual([]);
     expect(orderPoints.total).toBe(0);
+  });
+});
+
+// 2026-11-24 (Elizabeth Phillips): "the mega kiosk is 1500 for the first one
+// and then anything after the 1st one is 2250". First on each quote, bought
+// Megas only, held by buildQuote.
+describe("the first Mega Kiosk at $1,500", () => {
+  const megas = (q: ReturnType<typeof buildQuote>) => q.quoteLines.filter(l => l.hubspotProductId === MEGA_PRODUCT_ID);
+
+  it("prices a lone Mega at $1,500, as a price rather than a discount", () => {
+    const [mega, ...rest] = megas(buildQuote("marketing_only", [line("Mega Kiosk (Marketing Only)", 1)], [], CATALOG));
+    expect(rest).toEqual([]);
+    expect(mega).toMatchObject({ qty: 1, unitPrice: FIRST_MEGA_PRICE, firstMega: true });
+    expect(mega.discountPercent ?? null).toBeNull();
+    expect(mega.discountAmount ?? null).toBeNull();
+  });
+
+  it("bills every Mega after the first at list", () => {
+    const lines = megas(buildQuote("all_in_one", [line("Mega Kiosk (Marketing Only)", 3)], [], CATALOG));
+    expect(lines.map(l => [l.qty, l.unitPrice, l.firstMega ?? false])).toEqual([[1, 1500, true], [2, 2250, false]]);
+  });
+
+  it("keeps a rep's discount off the first Mega and on the rest, inside the cap", () => {
+    const q = buildQuote(
+      "all_in_one", [line("Mega Kiosk (Marketing Only)", 2)], [], CATALOG,
+      { [MEGA_PRODUCT_ID]: { discountPercent: 10 } }
+    );
+    const [first, second] = megas(q);
+    expect(first).toMatchObject({ unitPrice: 1500, firstMega: true });
+    expect(first.discountPercent ?? null).toBeNull();
+    expect(second).toMatchObject({ unitPrice: 2250, discountPercent: 10 });
+    expect(q.overrides).toEqual([]);
+  });
+
+  it("is not used up by a Mega Kiosk Loaner", () => {
+    const q = buildQuote(
+      "marketing_only", [line("Mega Kiosk Loaner", 1), line("Mega Kiosk (Marketing Only)", 1)], [], CATALOG
+    );
+    expect(megas(q)[0]).toMatchObject({ unitPrice: 1500, firstMega: true });
+  });
+
+  it("reopens as the rep's quantity with no adjustment, and rebuilds the same", () => {
+    const q = buildQuote("all_in_one", [line("Mega Kiosk (Marketing Only)", 3)], [], CATALOG);
+    expect(picksFromQuoteLines(q.quoteLines, "all_in_one")).toContainEqual({ hubspotProductId: MEGA_PRODUCT_ID, qty: 3 });
+    expect(adjustmentsFromQuoteLines(q.quoteLines)[MEGA_PRODUCT_ID]).toBeUndefined();
   });
 });

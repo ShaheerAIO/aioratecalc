@@ -149,6 +149,39 @@ export const MARKETING_ADDON_PRODUCT: NamedProduct = { name: "Marketing (Partial
 /** The Mega Kiosk on loan, $100/mo each, on any plan. Created 2026-10-27. */
 export const MEGA_LOANER_PRODUCT_ID = "343373224660";
 
+/** The Mega Kiosk bought: "Mega Kiosk (Marketing Only)", $2,250 in HubSpot. */
+export const MEGA_PRODUCT_ID = "260674226888";
+
+/**
+ * What the FIRST bought Mega on a quote costs (2026-11-24, Elizabeth Phillips:
+ * "the mega kiosk is 1500 for the first one and then anything after the 1st
+ * one is 2250 ... we need to make it automated"). Settled with the product
+ * owner the same day: the first on EACH quote (a second location's quote gets
+ * its own), bought Megas only (a Loaner doesn't use it up), and at the Mega's
+ * own commission rate on whatever margin $1,500 leaves.
+ */
+export const FIRST_MEGA_PRICE = 1500;
+
+/**
+ * Split one bought Mega off the quote's first Mega line at `FIRST_MEGA_PRICE`.
+ * The rest stay at the catalog price. A PRICE rather than a discount, so the
+ * merchant reads "$1,500" on the quote, and the rep's discount cap — which
+ * bounds rep discretion — never sees a 33% give-away the rep didn't make.
+ * Never raises a price: a catalog Mega already at or under $1,500 is left alone.
+ */
+export function applyFirstMegaPrice(lines: QuoteLine[]): QuoteLine[] {
+  let done = false;
+  return lines.flatMap(line => {
+    if (
+      done || line.hubspotProductId !== MEGA_PRODUCT_ID || line.coveredByPackage ||
+      line.qty < 1 || line.unitPrice <= FIRST_MEGA_PRICE
+    ) return [line];
+    done = true;
+    const first: QuoteLine = { ...line, qty: 1, unitPrice: FIRST_MEGA_PRICE, firstMega: true };
+    return line.qty > 1 ? [first, { ...line, qty: line.qty - 1 }] : [first];
+  });
+}
+
 /** Whether this quote carries AIO's marketing, which is what brings the three menu boards. */
 export function includesMarketing(
   quoteType: QuoteType,
@@ -1186,7 +1219,7 @@ export function splitByUnits(line: QuoteLine, adjustment: LineAdjustment & { uni
 export function unitsFromQuoteLines(lines: QuoteLine[] | null | undefined, productId: string): UnitAdjustment[] {
   const out: UnitAdjustment[] = [];
   for (const line of lines ?? []) {
-    if (line.hubspotProductId !== productId || line.coveredByPackage) continue;
+    if (line.hubspotProductId !== productId || line.coveredByPackage || line.firstMega) continue;
     const unit: UnitAdjustment = {};
     if (line.discountPercent) unit.discountPercent = line.discountPercent;
     if (line.billingStart) unit.billingStart = line.billingStart;
@@ -2681,7 +2714,9 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
   // exists to prevent, in the other direction.
   const chargeable = new Map<string, number>();
   for (const line of lines ?? []) {
-    if (line.coveredByPackage) continue;
+    // The first Mega is held at its price by `buildQuote`, so it is neither a
+    // rep edit to carry back nor a unit the rep's edits count across.
+    if (line.coveredByPackage || line.firstMega) continue;
     chargeable.set(line.hubspotProductId, (chargeable.get(line.hubspotProductId) ?? 0) + line.qty);
   }
 
@@ -2692,7 +2727,7 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
   // shape could say still reopens the old way, so existing quotes are untouched.
   const shape = new Map<string, { starts: Set<string>; discounts: Set<number>; discounted: number }>();
   for (const line of lines ?? []) {
-    if (line.coveredByPackage) continue;
+    if (line.coveredByPackage || line.firstMega) continue;
     const s = shape.get(line.hubspotProductId) ?? { starts: new Set(), discounts: new Set(), discounted: 0 };
     s.starts.add(startSignature(line.billingStart));
     // A cash discount counts as a distinct discount for shape purposes, so a
@@ -2710,7 +2745,7 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
   const out: QuoteAdjustments = {};
   for (const id of perUnit) out[id] = { units: unitsFromQuoteLines(lines, id) };
   for (const line of lines ?? []) {
-    if (line.coveredByPackage || perUnit.has(line.hubspotProductId)) continue;
+    if (line.coveredByPackage || line.firstMega || perUnit.has(line.hubspotProductId)) continue;
     const adjustment: LineAdjustment = {};
     if (isBilledSeparately(line)) {
       // Its 100% is policy, re-applied by `applyBilledSeparately` on the way
@@ -2880,8 +2915,12 @@ export function buildQuote(
   const adjustedLines = [
     ...(platform.line ? [platform.line] : []),
     ...softwareLicense.lines,
-    ...packages.lines,
+    ...applyFirstMegaPrice(packages.lines),
   ].flatMap(line => {
+    // The first Mega's $1,500 is policy, held like a covered line: no rep
+    // adjustment reaches it, and it owns no unit in "adjust each unit" mode.
+    // The rep's edits land on the Megas after it.
+    if (line.firstMega) return [line];
     const adjustment = adjustments[line.hubspotProductId];
     // "Adjust each unit" mode: the units are numbered across every chargeable
     // line of the product, so the cursor carries on from where the last one
