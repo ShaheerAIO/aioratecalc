@@ -277,12 +277,17 @@ export function isRetiredPick(hubspotProductId: string): boolean {
  *
  * 2026-11-11 (product owner): "Remove website option from order and pay only"
  * (the Website, on Order & Pay).
+ *
+ * 2026-11-18 (Elizabeth Phillips): "remove Mega Kiosk loaner from Order and Pay
+ * only", and the Nugget (AIO Tableside POS) with it, a marketing display for now.
  */
 export const PLAN_HIDDEN_PICK_PRODUCT_IDS: Partial<Record<QuoteType, readonly string[]>> = {
   order_pay_only: [
     ONLINE_ORDERING_PRODUCT.hubspotProductId,
     "260674226888", // Mega Kiosk (Marketing Only)
     WEBSITE_PRODUCT_ID,
+    MEGA_LOANER_PRODUCT_ID,
+    "335279520447", // AIO Tableside POS ("Nugget")
   ],
   all_in_one: [ONLINE_ORDERING_PRODUCT.hubspotProductId],
 };
@@ -469,6 +474,8 @@ export const MARKETING_PRODUCTS = [
   { name: "Marketing Kit - Mega Kiosk", hubspotProductId: "332617109238" },
   { name: "Marketing Kit - 27\" Kiosk", hubspotProductId: "332793212658" },
   { name: "Mega Kiosk Loaner", hubspotProductId: MEGA_LOANER_PRODUCT_ID },
+  // The "Nugget": a marketing display since 2026-11-18, despite the name.
+  { name: "AIO Tableside POS", hubspotProductId: "335279520447" },
   { name: "Website", hubspotProductId: "333275576048" },
   { name: "Menu Board Computer", hubspotProductId: "223511653103" },
 ] as const;
@@ -494,6 +501,7 @@ const PARTIAL_ORDERING_PRODUCT_IDS: readonly string[] = [
   "260674226888", // Mega Kiosk (Marketing Only)
   "332617109238", // Marketing Kit - Mega Kiosk (retired; drafts still save)
   MEGA_LOANER_PRODUCT_ID,
+  "335279520447", // AIO Tableside POS ("Nugget"), a marketing display since 2026-11-18
   WEBSITE_PRODUCT_ID,
   "223511653103", // Menu Board Computer
 ];
@@ -507,7 +515,7 @@ const POS_DEVICE_PRODUCT_IDS: readonly string[] = [
   "223452690130", // POS Unit - With Customer Facing Display
   "339229355762", // POS (Dual Screen) + Payment Terminal
   "223511653101", // mPOS
-  "335279520447", // AIO Tableside POS
+  // NOT the AIO Tableside POS ("Nugget"): a marketing display since 2026-11-18.
 ];
 
 /** A POS on a Marketing Partial Ordering quote. Reports, like the other ceilings. */
@@ -760,6 +768,8 @@ export const SCREEN_PRODUCT_IDS = [
   // "The Mega counts as one of the 3 licenses").
   "332617109238", // Marketing Kit - Mega Kiosk
   MEGA_LOANER_PRODUCT_ID,
+  // The "Nugget" takes a license like the Mega, display or not (product owner, 2026-11-18).
+  "335279520447", // AIO Tableside POS
   // NOT the Menu Board Computer: it drives a TV, it is not a screen anyone
   // works on, and it takes no license (product owner, 2026-10-18).
   // Both tablets run an AIO app, so each one takes a license like any other
@@ -1792,8 +1802,6 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "mPOS": { pointsPerUnit: 1, hubspotProductId: "223511653101" },
   "Kiosk 27\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "222497165009" },
   "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount": { pointsPerUnit: 1, hubspotProductId: "223519571666" },
-  // Steve's list counts a "Tableside AI Device"; this is that product.
-  "AIO Tableside POS": { pointsPerUnit: 1, hubspotProductId: "335279520447" },
   // Resolved by Shaheer 2026-08-20: the bundle contains exactly one POS, so it
   // counts one point like a bare POS Unit. Was 0-with-needsReview while the
   // contents were unknown.
@@ -1831,6 +1839,9 @@ export const ORDER_POINT_RULES: Record<string, OrderPointRule> = {
   "Marketing Kit - 27\" Kiosk": { pointsPerUnit: 0, hubspotProductId: "332793212658" },
   // Display only — the loaned Mega can't take an order or a payment.
   "Mega Kiosk Loaner": { pointsPerUnit: 0, hubspotProductId: MEGA_LOANER_PRODUCT_ID },
+  // The "Nugget". Was 1 point (Steve's "Tableside AI Device"); it takes no
+  // orders today and is a marketing display (product owner, 2026-11-18).
+  "AIO Tableside POS": { pointsPerUnit: 0, hubspotProductId: "335279520447" },
   "Menu Board Computer": { pointsPerUnit: 0, hubspotProductId: "223511653103" },
   "Thermal Printer": { pointsPerUnit: 0, hubspotProductId: "223511653104" },
   "Epson Sticky Printer": { pointsPerUnit: 0, hubspotProductId: "250458906315" },
@@ -2172,7 +2183,10 @@ export const MAX_BILLING_DELAY_DAYS = 365;
 export const DEFAULT_MAX_APPROVED_DELAY_DAYS = 90;
 
 /**
- * The billing delay a plan starts with — 45 days on the two POS plans
+ * The billing delay a plan starts with — 45 days on EVERY plan. Marketing Only
+ * billed at checkout until 2026-11-18 (Elizabeth Phillips: "switch marketing
+ * to say billing at 45 days since we will charge after they have their
+ * marketing call"). Before that, 45 on the processing plans
  * (45 since 2026-10-29, product owner: "45 day default billing delay"; it was 60 when
  * the product owner asked for it, 2026-10-09: "automatically add in billing after 60 days for
  * all-in-one and order/pay only, then let them adjust if needed").
@@ -2187,10 +2201,8 @@ export const DEFAULT_MAX_APPROVED_DELAY_DAYS = 90;
 export const PLAN_DEFAULT_BILLING_DELAY_DAYS = 45;
 
 /** The billing start a newly chosen plan seeds onto its recurring lines, if any. */
-export function planDefaultBillingStart(quoteType: QuoteType): BillingStart | null {
-  return isProcessingQuote(quoteType)
-    ? { mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS }
-    : null;
+export function planDefaultBillingStart(_quoteType: QuoteType): BillingStart | null {
+  return { mode: "days", days: PLAN_DEFAULT_BILLING_DELAY_DAYS };
 }
 
 /**
@@ -2235,7 +2247,7 @@ export function longestBillingDelayDays(lines: Array<{ billingStart?: BillingSta
 
 /**
  * The one billing delay this plan's quotes carry silently: its own default.
- * 45 days on the two POS plans, "at checkout" on the marketing plans.
+ * 45 days on every plan since 2026-11-18 (Marketing Only was "at checkout").
  */
 export function planDefaultBillingDelayDays(quoteType: QuoteType): number {
   return billingStartDelayDays(planDefaultBillingStart(quoteType));
@@ -2258,10 +2270,10 @@ export function planDefaultBillingDelayDays(quoteType: QuoteType): number {
  *
  * Three things are load-bearing about how it's measured:
  *
- *  - **It compares against the PLAN's default, not against 45.** A marketing
- *    quote has no 45-day default — `planDefaultBillingStart` returns null for
- *    one — so a flat "must be 45" would have demanded a note on every
- *    marketing quote ever sent, for billing exactly when its plan says to.
+ *  - **It compares against the PLAN's default, not against 45.** Every plan
+ *    defaults to 45 since 2026-11-18, but until then a marketing quote billed
+ *    at checkout, and a flat "must be 45" would have demanded a note on every
+ *    one of them. Keep reading the plan's default if the plans diverge again.
  *  - **It reads the LONGEST delay, the same scalar the rep-facing control and
  *    the HubSpot preamble read**, rather than asking each line separately. A
  *    rep who seeds the plan's 45 days and then adds a monthly line that bills

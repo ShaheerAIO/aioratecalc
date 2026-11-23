@@ -170,15 +170,18 @@ describe("the first kiosk's discount (2026-10-29)", () => {
   });
 });
 
-describe("the Mega Kiosk Loaner in the picker (back on the POS plans 2026-11-11)", () => {
+describe("the Mega Kiosk Loaner in the picker (off Order & Pay again 2026-11-18)", () => {
   const row = () => screen.queryByRole("button", { name: "Add one Mega Kiosk Loaner" });
 
-  it("is offered on All-in-One and Order & Pay", async () => {
-    for (const plan of ["all_in_one", "order_pay_only"] as const) {
-      render(<Host initialType={plan} />);
-      await waitFor(() => expect(row(), plan).toBeTruthy());
-      cleanup();
-    }
+  it("is offered on All-in-One", async () => {
+    render(<Host initialType="all_in_one" />);
+    await waitFor(() => expect(row()).toBeTruthy());
+  });
+
+  it("is not offered on Order & Pay", async () => {
+    render(<Host initialType="order_pay_only" />);
+    await screen.findByRole("button", { name: "Add one POS Unit" });
+    expect(row()).toBeNull();
   });
 
   it("is still offered on Marketing Partial Ordering", async () => {

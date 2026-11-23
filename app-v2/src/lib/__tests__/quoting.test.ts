@@ -16,6 +16,7 @@ import {
   planIncludesWebsite,
   PROCESSING_DISCLOSURE_PRODUCT,
   ORDER_POINT_RULES,
+  SCREEN_PRODUCT_IDS,
   PICKER_EXCLUDED_PRODUCT_NAMES,
   PLATFORM_PRODUCTS,
   QUOTE_TYPES,
@@ -273,11 +274,16 @@ describe("quote types", () => {
     }
   });
 
-  it("offers the Mega Kiosk Loaner on every plan again (hidden on the POS plans 2026-10-29, back 2026-11-11)", () => {
-    const loaner = find("Mega Kiosk Loaner");
-    for (const plan of ["order_pay_only", "all_in_one", "marketing_only", "marketing_partial"] as const) {
-      expect(isHiddenPick(loaner.hubspotProductId, plan), plan).toBe(false);
-      expect(isAllowedForQuoteType(loaner, plan), plan).toBe(true);
+  it("offers the Mega Kiosk Loaner and the Nugget on every plan but Order & Pay (2026-11-18)", () => {
+    for (const name of ["Mega Kiosk Loaner", "AIO Tableside POS"]) {
+      const product = find(name);
+      for (const plan of ["all_in_one", "marketing_only", "marketing_partial"] as const) {
+        expect(isHiddenPick(product.hubspotProductId, plan), `${name} on ${plan}`).toBe(false);
+        expect(isAllowedForQuoteType(product, plan), `${name} on ${plan}`).toBe(true);
+      }
+      // Visibility only: a draft that already carries one still saves.
+      expect(isHiddenPick(product.hubspotProductId, "order_pay_only"), name).toBe(true);
+      expect(isAllowedForQuoteType(product, "order_pay_only"), name).toBe(true);
     }
     // The plan-wide retirements still hide everywhere; the Mega bought is still offered.
     expect(isHiddenPick("332793212658", "marketing_only")).toBe(true);
@@ -307,6 +313,7 @@ describe("quote types", () => {
       "KDS (Kitchen Display System)",
       "Kiosk 27\" + Payment Terminal (AMS1) and Mount",
       "Kiosk Mini 15.6\" + Payment Terminal (AMS1) and Mount",
+      "AIO Tableside POS",
       "Marketing (Partial Ordering)",
       "Marketing Kit - Mega Kiosk",
       "Mega Kiosk (Marketing Only)",
@@ -582,11 +589,15 @@ describe("deriveOrderPoints", () => {
     }
   });
 
-  it("counts a tableside POS, which Steve's list calls a Tableside AI Device", () => {
-    expect(ORDER_POINT_RULES["AIO Tableside POS"].pointsPerUnit).toBe(1);
+  // Was 1 point (Steve's "Tableside AI Device"); the "Nugget" takes no orders
+  // today and is a marketing display (product owner, 2026-11-18). It still
+  // takes a software license, like the Mega.
+  it("counts no ordering point for the Nugget (AIO Tableside POS), but still a screen", () => {
+    expect(ORDER_POINT_RULES["AIO Tableside POS"].pointsPerUnit).toBe(0);
     const { orderPoints, unclassified } = deriveOrderPoints([line("AIO Tableside POS", 2)], []);
-    expect(orderPoints.total).toBe(2);
+    expect(orderPoints.total).toBe(0);
     expect(unclassified).toEqual([]);
+    expect(SCREEN_PRODUCT_IDS).toContain("335279520447");
   });
 
   it("counts neither marketing kit, and calls neither of them a mystery", () => {

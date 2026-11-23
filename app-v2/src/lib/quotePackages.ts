@@ -96,7 +96,8 @@ export const SHEET_ITEMS: Record<SheetKey, SheetItem> = {
   // Not `orders` since the same day: "Mega Kiosk (Marketing Only)" is a marketing display.
   mega:      { label: "Mega Kiosk",                           msrp: 2250 },
   // suggested MSRP $603 (finalized $399, list $330)
-  tableside: { label: "AIO Tableside POS",                    msrp: 603, orders: true },
+  // Not `orders` since 2026-11-18: the "Nugget" is a marketing display for now.
+  tableside: { label: "AIO Tableside POS",                    msrp: 603 },
   // HubSpot $199. Not on the sheet. It is the partial-ordering plan's order
   // tablet — the scenario sheet's "Samsung tablet" — and the device that
   // makes that kit a system, so it counts as ordering here.

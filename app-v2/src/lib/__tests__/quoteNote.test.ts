@@ -54,12 +54,13 @@ describe("quoteNoteBlockers", () => {
     expect(quoteNoteBlockers([line({ billingStart: days(90) })], "ok", "all_in_one")).toHaveLength(1);
   });
 
-  // A flat "must be 45" would have demanded a note on every marketing quote
-  // ever sent, for billing exactly when its own plan says to.
-  it("measures a marketing quote against ITS plan's default, which is checkout", () => {
-    expect(planDefaultBillingDelayDays("marketing_only")).toBe(0);
-    expect(quoteNoteBlockers([line({ billingStart: null })], null, "marketing_only")).toEqual([]);
-    expect(quoteNoteBlockers([line({ billingStart: days(45) })], null, "marketing_only")).toHaveLength(1);
+  // Marketing Only billed at checkout until 2026-11-18 (Elizabeth Phillips:
+  // "billing at 45 days since we will charge after they have their marketing
+  // call"); now it is measured against 45 like every other plan.
+  it("measures a marketing quote against ITS plan's default, which is 45 days", () => {
+    expect(planDefaultBillingDelayDays("marketing_only")).toBe(45);
+    expect(quoteNoteBlockers([line({ billingStart: days(45) })], null, "marketing_only")).toEqual([]);
+    expect(quoteNoteBlockers([line({ billingStart: null })], null, "marketing_only")).toHaveLength(1);
   });
 
   // A one-time line can't carry a billing start at all (HubSpot refuses to
