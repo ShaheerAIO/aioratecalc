@@ -485,8 +485,8 @@ describe("preselecting the kit", () => {
       for (const s of KIT.slots) expect(filled.get(s.item) ?? 0, s.item).toBe(s.qty);
 
       // And so there is no hardware left over to charge for — only the
-      // nothing: install and training are both comped to $0 again (2026-10-28).
-      expect(built.totals.oneTime).toBe(0);
+      // install ($999) and training ($499), at list again (2026-11-11).
+      expect(built.totals.oneTime).toBe(1498);
       expect(built.blockers).toEqual([]);
       const wifi = built.quoteLines.find(l => l.hubspotProductId === ID.wifi)!;
       expect(wifi.coveredByPackage).toBe("QSR Kit");
@@ -546,18 +546,18 @@ describe("buildQuote with the kit on it", () => {
     expect(built.quoteLines.some(l => l.name === "QSR Kit")).toBe(false);
   });
 
-  it("never covers the install and training — not kit hardware; both are the standing service comp", () => {
+  it("never covers the install and training — not kit hardware; both are charged at list (2026-11-11)", () => {
     const built = build();
     for (const id of [ID.install, ID.training]) {
       const l = built.quoteLines.find(x => x.hubspotProductId === id)!;
-      expect(l.discountPercent ?? 0).toBe(100);
+      expect(l.discountPercent ?? 0).toBe(0);
       expect(l.coveredByPackage).toBeUndefined();
     }
   });
 
   it("charges only the platform fee and the services when the kit covers all of the hardware", () => {
     const built = build();
-    expect(built.totals.oneTime).toBe(0);
+    expect(built.totals.oneTime).toBe(1498);
     expect(built.totals.recurring).toEqual([{ frequency: "monthly", amount: 399 }]);
   });
 
@@ -574,7 +574,7 @@ describe("buildQuote with the kit on it", () => {
     const mega = built.quoteLines.find(l => l.hubspotProductId === ID.mega)!;
     expect(mega.coveredByPackage).toBeUndefined();
     expect(mega.discountPercent).toBeUndefined();
-    expect(built.totals.oneTime).toBe(2459);
+    expect(built.totals.oneTime).toBe(3957);
   });
 
   it("does not refuse the quote over the 100% on a covered line", () => {
@@ -665,10 +665,9 @@ describe("buildQuote with the kit on it", () => {
     expect(reopened[ID.pos]).toBeUndefined();
     expect(reopened[ID.wifi]).toBeUndefined();
     expect(reopened[ID.ams1]).toBeUndefined();
-    // The standing install comp (2026-10-28) comes back, as it did before
-    // 2026-10-18; it is re-applied anyway, so nothing changes on rebuild.
-    expect(reopened[ID.install]).toEqual({ discountPercent: 100 });
-    expect(reopened[ID.training]).toEqual({ discountPercent: 100 });
+    // Install and training are at list since 2026-11-11: no discount to read back.
+    expect(reopened[ID.install]).toBeUndefined();
+    expect(reopened[ID.training]).toBeUndefined();
   });
 });
 

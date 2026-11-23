@@ -30,7 +30,7 @@ vi.mock("@/lib/adapters/email", () => ({ sendMagicLinkEmail }));
 vi.mock("@/lib/billing/quoteSummaryAttachment", () => ({ attachQuoteSummaryToDeal }));
 vi.mock("@/lib/storage/postgresAdapter", () => ({ postgresStorage: { getApplication } }));
 vi.mock("@/lib/auth/getEffectiveRole", () => ({
-  getEffectiveRole: async () => ({ userId: "rep-1", role: "rep" }),
+  getEffectiveRole: async () => ({ userId: "rep-1", role: "admin" }),
 }));
 
 const { bypassBillingAction } = await import("@/lib/actions/debugBilling");

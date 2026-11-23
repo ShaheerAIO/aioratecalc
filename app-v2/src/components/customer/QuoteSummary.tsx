@@ -2,7 +2,8 @@
 
 import { lineDescription } from "@/lib/lineDescriptions";
 import {
-  CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, isInvoicedLine, lineListAmount, lineNetAmount,
+  CHANNEL_LABELS, CHARGEBACK_FEE, RETRIEVAL_FEE, describeBillingStart, isBilledSeparately, isInvoicedLine, lineListAmount,
+  lineNetAmount,
 } from "@/lib/quoting";
 import { displayName, splitRecurringLines } from "@/lib/quoteSummarySections";
 import { fmt$, fmt$0, fmtCycle, fmtFrequency, fmtPct2, monthlyEquivalent } from "@/lib/utils";
@@ -90,8 +91,10 @@ export default function QuoteSummary({ quote }: Props) {
   // 100% is "Included" either way: on a comped or package-covered line that
   // is what it means, and a percentage nobody chose is not worth printing.
   // Except on the first kiosk, which is meant to read as a discount
-  // (2026-10-29, product owner: "It needs to feel like a discount").
+  // (2026-10-29, product owner: "It needs to feel like a discount"). And
+  // except payroll, which AIO bills outside this quote (2026-11-11).
   const discountLabel = (l: QuoteLine) => {
+    if (isBilledSeparately(l) && l.discountPercent === 100) return "Billed separately";
     if (l.discountPercent === 100 && !l.firstKiosk) return "Included";
     if ((l.discountAmount ?? 0) > 0) return `${fmt$(l.discountAmount!)} off`;
     return `${l.discountPercent}% off`;

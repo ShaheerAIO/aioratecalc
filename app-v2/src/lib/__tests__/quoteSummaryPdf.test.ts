@@ -167,6 +167,20 @@ describe("quoteSummarySections — payroll and display names (2026-10-29)", () =
   });
 });
 
+describe("quoteSummarySections — payroll is billed separately (2026-11-11)", () => {
+  it("prints payroll at $0 as 'Billed separately', not 'Included'", () => {
+    const payroll: QuoteLine = {
+      name: "AIO Payroll", hubspotProductId: PAYROLL_PRODUCT_ID, qty: 12, unitPrice: 8,
+      billingFrequency: "monthly", productType: "Software", discountPercent: 100,
+    };
+    const rows = quoteSummarySections({ ...QUOTE, lines: [PLATFORM, payroll], orderPoints: null } as CustomerSafeQuote)
+      .find(s => s.title === "Payroll")!.rows;
+    expect(rows[0]).toMatchObject({ label: "AIO Payroll ×12", value: "$0.00/mo" });
+    expect(rows[0].notes).toContain("List $96.00/mo, Billed separately");
+    expect(rows.flatMap(r => [r.value ?? "", ...(r.notes ?? [])]).join("\n")).not.toContain("Included");
+  });
+});
+
 describe("renderQuoteSummaryPdf", () => {
   it("renders a non-empty, loadable PDF containing the summary", async () => {
     const bytes = await renderQuoteSummaryPdf({ quote: QUOTE, businessName: "Torta Palace", acceptedAt: "2026-10-29T18:00:00.000Z" });

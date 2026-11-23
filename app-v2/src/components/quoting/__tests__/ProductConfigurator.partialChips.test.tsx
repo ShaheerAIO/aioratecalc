@@ -170,22 +170,15 @@ describe("the first kiosk's discount (2026-10-29)", () => {
   });
 });
 
-describe("the Mega Kiosk Loaner in the picker (2026-10-29)", () => {
-  const LOANER = "343373224660";
+describe("the Mega Kiosk Loaner in the picker (back on the POS plans 2026-11-11)", () => {
   const row = () => screen.queryByRole("button", { name: "Add one Mega Kiosk Loaner" });
 
-  it("isn't offered on All-in-One or Order & Pay", async () => {
+  it("is offered on All-in-One and Order & Pay", async () => {
     for (const plan of ["all_in_one", "order_pay_only"] as const) {
       render(<Host initialType={plan} />);
-      await waitFor(() => expect(screen.getByText("POS Unit")).toBeTruthy());
-      expect(row(), plan).toBeNull();
+      await waitFor(() => expect(row(), plan).toBeTruthy());
       cleanup();
     }
-  });
-
-  it("stays listed on a POS plan when a draft already carries one", async () => {
-    render(<Host initialType="all_in_one" initialPicks={[{ hubspotProductId: LOANER, qty: 1 }]} />);
-    await waitFor(() => expect(row()).toBeTruthy());
   });
 
   it("is still offered on Marketing Partial Ordering", async () => {

@@ -104,4 +104,10 @@ describe("derivePricingForRole with a saved table", () => {
     expect(p.marginFloor).toBeCloseTo(20_000 * 0.02, 6);
     expect(p.belowMarginFloor).toBe(true); // the default 2.49% rate leaves < 2% over interchange here
   });
+
+  // 2026-11-11: reps never see the true Adyen cost, even with the hide setting off.
+  it("never exposes adyenCostRate to a rep, even when paddingAdyenCostHide is false", () => {
+    const p = derivePricingForRole(analysis, null, "2-tier", fees, "rep", null, { paddingAdyenCostHide: false }, null);
+    expect(p.adyenCostRate).toBeNull();
+  });
 });

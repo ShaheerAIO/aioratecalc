@@ -106,3 +106,13 @@
   flex-direction: column;
   gap: var(--space-3xs);
 }
+
+/* Admin-only "Billing details" disclosure (BillingDetails), in the dashboard's Admin card. */
+.details { display: block; }
+
+.detailsBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: var(--space-sm);
+}

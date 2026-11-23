@@ -286,3 +286,50 @@ describe("RateFields — freshQuote (closing the no-basis CNP gap)", () => {
     });
   });
 });
+
+// 2026-11-11, product owner: "Allow a user to select a button for standard
+// rates", then "if the button is clicked the entry boxes for volume and size
+// should be hidden away. if unclicked it should clear the old rate". RateFields
+// renders a host-driven TOGGLE; applying the card is the host's job.
+describe("RateFields — Standard rates toggle", () => {
+  beforeEach(() => { getCnpPolicyRateAction.mockResolvedValue(0.033); });
+  afterEach(() => { cleanup(); getCnpPolicyRateAction.mockReset(); });
+
+  const toggle = () => screen.getByRole("button", { name: "Standard rates" }) as HTMLButtonElement;
+
+  it("is only shown when the host handles it", () => {
+    render(<RateFields value={STORED} onChange={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Standard rates" })).toBeNull();
+  });
+
+  it("can't be turned on until the policy CNP is confirmed", () => {
+    getCnpPolicyRateAction.mockReturnValue(new Promise(() => {}));
+    render(<RateFields value={STORED} onChange={() => {}} onStandardRatesChange={() => {}} />);
+    expect(toggle().disabled).toBe(true);
+  });
+
+  it("shows its pressed state and reports the press, changing no rate itself", async () => {
+    const onChange = vi.fn();
+    const onStandardRatesChange = vi.fn();
+    const { rerender } = render(
+      <RateFields value={STORED} onChange={onChange} onStandardRatesChange={onStandardRatesChange} />
+    );
+    await waitFor(() => expect(toggle().disabled).toBe(false));
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle());
+    expect(onStandardRatesChange).toHaveBeenLastCalledWith(true);
+    expect(onChange).not.toHaveBeenCalled();
+
+    rerender(<RateFields value={STORED} onChange={onChange} standardRates onStandardRatesChange={onStandardRatesChange} />);
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expect(toggle().textContent).toContain("✓");
+    fireEvent.click(toggle());
+    expect(onStandardRatesChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("can always be turned OFF, even before the policy CNP is known", () => {
+    getCnpPolicyRateAction.mockReturnValue(new Promise(() => {}));
+    render(<RateFields value={STORED} onChange={() => {}} standardRates onStandardRatesChange={() => {}} />);
+    expect(toggle().disabled).toBe(false);
+  });
+});

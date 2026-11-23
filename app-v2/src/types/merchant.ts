@@ -1211,6 +1211,8 @@ export type MerchantApplication = {
   // it's the moment the quote was agreed, and it belongs with the frozen
   // quoteConfig/quoteLines rather than with the live deal state.
   quoteAcceptedAt: string | null;
+  /** Last staff (rep/admin) edit of the quote or details; not bumped by webhooks, provisioning, link sends or customer actions. */
+  lastEditedAt: string | null;
   /**
    * When the MERCHANT confirmed their own details and so authorised the
    * HubSpot quote to be built (2026-10-15, product owner). A moment, not a

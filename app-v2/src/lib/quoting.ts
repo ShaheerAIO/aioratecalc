@@ -265,23 +265,26 @@ export function isRetiredPick(hubspotProductId: string): boolean {
  * RETIRED_PICK_PRODUCT_IDS and visibility only in the same way: a draft that
  * already carries one still saves, and the row stays while it is on the quote.
  *
- * The Mega Kiosk Loaner is off the two POS plans (2026-10-29, product owner:
- * hide it on Order & Pay and All-in-One); Marketing Only and Marketing
- * Partial Ordering keep it.
+ * The Mega Kiosk Loaner was off the two POS plans from 2026-10-29 until
+ * 2026-11-11 (product owner: "turn back on the 100/month mega"); every plan
+ * offers it again.
  *
  * 2026-10-30 (product owner): "remove kiosk ordering and online ordering from
  * all in one and order and pay" (Online Ordering on both POS plans) and "hide
  * mega kiosk from O&P" (the Mega, "Mega Kiosk (Marketing Only)", on Order &
  * Pay; All-in-One, MPO and Marketing Only offer it). Online Ordering stays on
  * MPO, where its chip selects it.
+ *
+ * 2026-11-11 (product owner): "Remove website option from order and pay only"
+ * (the Website, on Order & Pay).
  */
 export const PLAN_HIDDEN_PICK_PRODUCT_IDS: Partial<Record<QuoteType, readonly string[]>> = {
   order_pay_only: [
-    MEGA_LOANER_PRODUCT_ID,
     ONLINE_ORDERING_PRODUCT.hubspotProductId,
     "260674226888", // Mega Kiosk (Marketing Only)
+    WEBSITE_PRODUCT_ID,
   ],
-  all_in_one: [MEGA_LOANER_PRODUCT_ID, ONLINE_ORDERING_PRODUCT.hubspotProductId],
+  all_in_one: [ONLINE_ORDERING_PRODUCT.hubspotProductId],
 };
 
 /** Whether the picker should stop offering this product on this plan. */
@@ -897,6 +900,41 @@ export function payrollBlockers(lines: Array<{ hubspotProductId: string; qty: nu
   return ["Payroll needs a POS unit on the quote. Add one, or take payroll off."];
 }
 
+/**
+ * Products that ride on the quote at list but 100% off, because AIO bills them
+ * OUTSIDE the sale (product owner, 2026-11-11: "Payroll should be discounted
+ * on the quote to 100% off but can show on easyOB for commission purposes but
+ * we bill them separately outside of the sale"). Payroll is invoiced monthly
+ * off Check's usage export (`/admin/payroll-billing`), so charging it on the
+ * subscription as well would bill it twice. It earns no commission (decided
+ * the same day): a recurring line earns none anyway, and at $0 net it adds
+ * nothing to the ARR estimate.
+ *
+ * Deliberately NOT `coveredByPackage`: that tag groups lines under a package
+ * banner and reads "Included with X" on the HubSpot line item, and payroll is
+ * neither in a package nor included.
+ */
+export const BILLED_SEPARATELY_PRODUCT_IDS: readonly string[] = [PAYROLL_PRODUCT_ID];
+
+export function isBilledSeparately(line: Pick<QuoteLine, "hubspotProductId">): boolean {
+  return BILLED_SEPARATELY_PRODUCT_IDS.includes(line.hubspotProductId);
+}
+
+/**
+ * Hold a billed-separately line at 100% off, whatever the rep sent. Same shape
+ * as `applyPackageComp` and run beside it, after the rep's edits: a discount
+ * a rep types on payroll is ignored rather than refused, because the line is
+ * $0 on this quote either way. The billing start is left alone — the
+ * quote-wide "Billing starts" control moves every recurring line together,
+ * and stripping it here would make that control read "Mixed".
+ */
+export function applyBilledSeparately(line: QuoteLine): QuoteLine {
+  if (!isBilledSeparately(line)) return line;
+  const separate = { ...line, discountPercent: 100 };
+  delete separate.discountAmount;
+  return separate;
+}
+
 function isSoftwareLicenseProduct(id: string, name: string): boolean {
   return id === SOFTWARE_LICENSE_PRODUCT.hubspotProductId || name.trim() === SOFTWARE_LICENSE_PRODUCT.name;
 }
@@ -941,8 +979,13 @@ export function screenCount(lines: Array<{ hubspotProductId: string; qty: number
  * automatically discounted to 100% off", then the same day extended to
  * System Onboarding and Training). Onsite Installation and System Onboarding
  * and Training are both on the list.
+ *
+ * ENDED AGAIN 2026-11-11 (product owner: "Default onsite installation and
+ * system onboarding/training to cost money and let them add in the
+ * discount"). The list is empty: both lines default to list price and a rep
+ * discounts them like any other line.
  */
-export const COMPED_SERVICE_PRODUCT_IDS: string[] = ["223452690133", "223152695032"];
+export const COMPED_SERVICE_PRODUCT_IDS: string[] = [];
 
 export function isCompedService(line: Pick<QuoteLine, "hubspotProductId">): boolean {
   return COMPED_SERVICE_PRODUCT_IDS.includes(line.hubspotProductId);
@@ -1066,6 +1109,8 @@ export function splitPartialDiscount(line: QuoteLine, adjustment: LineAdjustment
     !want || !Number.isInteger(want) || want <= 0 ||
     want >= line.qty ||
     line.coveredByPackage ||
+    // Wholly 100% off too (2026-11-11); splitting would put units back at list.
+    isBilledSeparately(line) ||
     !(line.discountPercent || line.discountAmount)
   ) return [line];
 
@@ -2436,7 +2481,7 @@ export function adjustmentBlockers(
           blockers.push(`"${line.name}" has a discount of ${pct}%, which isn't a percentage between 0 and 100.`);
         } else if (
           pct > lineCap &&
-          !((isCompedService(line) || line.coveredByPackage) && pct === 100) &&
+          !((isCompedService(line) || line.coveredByPackage || isBilledSeparately(line)) && pct === 100) &&
           !firstKioskUnit
         ) {
           // A comped service or a package-covered line sitting at exactly 100%
@@ -2449,6 +2494,8 @@ export function adjustmentBlockers(
           // "allow the discount to be 100"): a rep allowed to give it away
           // can't sensibly be refused 30% off it. Several kiosks on the marked
           // line are capped as usual — only the first one is AIO's to give.
+          // A billed-separately line (payroll, 2026-11-11) is forced to 100%
+          // by `applyBilledSeparately`, so it is policy too, not discretion.
           overCap(
             isSpecific
               ? `"${line.name}" is discounted ${pct}%, over the ${lineCap}% limit admin set for this product. ` +
@@ -2653,7 +2700,11 @@ export function adjustmentsFromQuoteLines(lines: QuoteLine[] | null | undefined)
   for (const line of lines ?? []) {
     if (line.coveredByPackage || perUnit.has(line.hubspotProductId)) continue;
     const adjustment: LineAdjustment = {};
-    if (line.discountAmount) {
+    if (isBilledSeparately(line)) {
+      // Its 100% is policy, re-applied by `applyBilledSeparately` on the way
+      // out — not a rep discount to carry back (2026-11-11). Only its billing
+      // start is the rep's.
+    } else if (line.discountAmount) {
       adjustment.discountAmount = line.discountAmount;
       if (line.qty < (chargeable.get(line.hubspotProductId) ?? 0)) adjustment.discountQty = line.qty;
     } else if (line.discountPercent) {
@@ -2681,7 +2732,7 @@ function isRetiredWifiLine(line: { hubspotProductId: string; name: string }): bo
 export function describeBillingStart(start: BillingStart): string {
   return start.mode === "date"
     ? `Billing starts ${start.date}`
-    : `Billing starts ${start.days} days after checkout`;
+    : `Billing starts ${start.days} days after checkout or on Go Live`;
 }
 
 // ── The one derivation ──────────────────────────────────────────────────────
@@ -2824,7 +2875,9 @@ export function buildQuote(
     // line of the product, so the cursor carries on from where the last one
     // stopped. Covered lines are skipped here and fall through to the package
     // comp below — they are already wholly paid for and own no units.
-    if (hasUnitAdjustments(adjustment) && !line.coveredByPackage) {
+    // A billed-separately line has no per-unit discount to give, so it never
+    // takes this path (2026-11-11).
+    if (hasUnitAdjustments(adjustment) && !line.coveredByPackage && !isBilledSeparately(line)) {
       const offset = unitCursor.get(line.hubspotProductId) ?? 0;
       unitCursor.set(line.hubspotProductId, offset + line.qty);
       return splitByUnits(line, adjustment, offset);
@@ -2833,7 +2886,10 @@ export function buildQuote(
     // not clear them. An explicit discount from the rep beats the service comp
     // (see applyServiceComp) but never the package one (see applyPackageComp),
     // because a covered line is hardware the package price already bought.
-    const adjusted = applyPackageComp(applyServiceComp(applyLineAdjustment(line, adjustment), adjustment));
+    // Payroll is held at 100% the same way: it is billed outside the sale.
+    const adjusted = applyBilledSeparately(
+      applyPackageComp(applyServiceComp(applyLineAdjustment(line, adjustment), adjustment))
+    );
     // Last: scoping a discount to part of the quantity splits the line in two.
     return splitPartialDiscount(adjusted, adjustment);
   });

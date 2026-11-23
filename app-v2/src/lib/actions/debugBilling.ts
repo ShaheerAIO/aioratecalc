@@ -18,6 +18,8 @@ export async function bypassBillingAction(applicationId: string): Promise<{ ok: 
 
   const effective = await getEffectiveRole();
   if (!effective) throw new Error("Not authenticated");
+  // 2026-11-11: product owner — skip billing is admin-only.
+  if (effective.role !== "admin") return { ok: false, error: "Only admins can skip billing" };
 
   // Same ownership rule as sendQuoteAction: admin sees every row, rep only their own.
   const app = await postgresStorage.getApplication(

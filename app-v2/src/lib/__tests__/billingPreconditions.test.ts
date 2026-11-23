@@ -93,6 +93,7 @@ function app(extra: Partial<MerchantApplication> = {}): MerchantApplication {
     quoteLines: LINES,
     orderPoints: { hardware: { "POS Unit": 1 }, channels: [], total: 1 },
     quoteAcceptedAt: "2026-08-21T00:00:00.000Z",
+    lastEditedAt: null,
     detailsConfirmedAt: "2026-08-21T00:00:00.000Z",
     quoteNote: null,
     quoteRates: null,
